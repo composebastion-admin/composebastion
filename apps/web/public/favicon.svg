@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-label="Dockermender">
+  <rect width="48" height="48" rx="11" fill="#17120b"/>
+  <rect x="0.75" y="0.75" width="46.5" height="46.5" rx="10.25" fill="none" stroke="#e0a23f" stroke-opacity="0.22" stroke-width="1.5"/>
+  <path d="M16 8 L32 8 L42 24 L32 40 L16 40 L6 24 Z" fill="none" stroke="#e0a23f" stroke-width="3.6" stroke-linejoin="round"/>
+  <rect x="16" y="21" width="16" height="6" rx="3" fill="#e0a23f"/>
+</svg>

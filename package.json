@@ -1,0 +1,38 @@
+{
+  "name": "dockermender",
+  "version": "0.9.0",
+  "private": true,
+  "description": "Multi-host Docker management console deployed with Docker Compose.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Admin-DockerMender/dockermender.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Admin-DockerMender/dockermender/issues"
+  },
+  "homepage": "https://github.com/Admin-DockerMender/dockermender#readme",
+  "workspaces": [
+    "apps/api",
+    "apps/agent",
+    "apps/web",
+    "packages/shared"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace @dockermender/shared && npm run build --workspace @dockermender/api && npm run build --workspace @dockermender/agent && npm run build --workspace @dockermender/web",
+    "dev": "concurrently -n shared,api,web -c cyan,green,magenta \"npm run dev --workspace @dockermender/shared\" \"npm run dev --workspace @dockermender/api\" \"npm run dev --workspace @dockermender/web\"",
+    "lint:migrations": "npm run lint:migrations --workspace @dockermender/api",
+    "openapi:check": "npm run openapi:check --workspace @dockermender/api",
+    "smoke:web": "npm run build --workspace @dockermender/shared && npm run smoke --workspace @dockermender/web",
+    "test": "npm run build --workspace @dockermender/shared && npm run test --workspaces --if-present",
+    "typecheck": "npm run build --workspace @dockermender/shared && npm run typecheck --workspace @dockermender/api && npm run typecheck --workspace @dockermender/agent && npm run typecheck --workspace @dockermender/web",
+    "docker:up": "docker compose up --build",
+    "docker:down": "docker compose down"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  },
+  "engines": {
+    "node": ">=20.11.0",
+    "npm": ">=10.0.0"
+  }
+}

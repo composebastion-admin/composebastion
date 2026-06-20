@@ -1,0 +1,27 @@
+FROM node:20-bookworm-slim AS deps
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends docker.io ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY package.json package-lock.json* ./
+COPY apps/agent/package.json apps/agent/package.json
+RUN npm install --workspace @dockermender/agent
+
+FROM deps AS build
+WORKDIR /app
+COPY apps/agent apps/agent
+COPY tsconfig.base.json tsconfig.base.json
+RUN npm run build --workspace @dockermender/agent
+RUN npm prune --omit=dev
+
+FROM node:20-bookworm-slim AS runtime
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends docker.io wget gnupg lsb-release ca-certificates && \
+    wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor | tee /usr/share/keyrings/trivy.gpg > /dev/null && \
+    echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb bookworm main" | tee /etc/apt/sources.list.d/trivy.list && \
+    apt-get update && apt-get install -y trivy && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/apps/agent/package.json ./apps/agent/package.json
+COPY --from=build /app/apps/agent/dist ./apps/agent/dist
+EXPOSE 8090
+CMD ["node", "apps/agent/dist/server.js"]

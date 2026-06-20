@@ -1,0 +1,200 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Typecheck, tests & audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Migration naming
+        run: npm run lint:migrations
+      - name: OpenAPI docs
+        run: npm run openapi:check
+      - name: Unit tests
+        run: npm test
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+  integration:
+    name: Postgres integration tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: dockermender
+          POSTGRES_USER: dockermender
+          POSTGRES_PASSWORD: dockermender
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U dockermender -d dockermender"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DOCKERMENDER_INTEGRATION: "1"
+      DATABASE_URL: postgres://dockermender:dockermender@localhost:5432/dockermender
+      REDIS_URL: redis://localhost:6379
+      APP_SECRET: ci-test-secret-which-is-at-least-32-chars-long
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      - name: Build shared package
+        run: npm run build --workspace @dockermender/shared
+      # The API integration tests share one database, so the test files must run
+      # serially (each resets its tables in beforeAll); parallel files collide.
+      - name: Run API integration tests
+        run: npm run test --workspace @dockermender/api -- --no-file-parallelism
+
+  browser-smoke:
+    name: Browser smoke & accessibility
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+      - name: Run web smoke tests
+        run: npm run smoke:web
+
+  production-build:
+    name: Production image smoke
+    runs-on: ubuntu-latest
+    env:
+      APP_SECRET: ci-test-secret-which-is-at-least-32-chars-long
+      POSTGRES_PASSWORD: dockermender-ci-password
+      DOCKERMENDER_BACKUP_DIR: /tmp/dockermender-backups
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate production compose config
+        run: docker compose -f docker-compose.yml -f docker-compose.prod.example.yml config
+      - name: Build app runtime image
+        run: docker build --target runtime -t dockermender-app:ci .
+      - name: Build agent runtime image
+        run: docker build -f Dockerfile.agent --target runtime -t dockermender-agent:ci .
+
+  ssh-integration:
+    name: Ephemeral SSH Docker host integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      - name: Start SSH Docker host fixture
+        run: |
+          set -euo pipefail
+          key_dir="${RUNNER_TEMP}/dockermender-ssh"
+          key_path="${key_dir}/id_ed25519"
+          mkdir -p "${key_dir}"
+          ssh-keygen -t ed25519 -N "" -f "${key_path}" -C "dockermender-ci" >/dev/null
+
+          docker build -f infra/dev/sshhost.Dockerfile -t dockermender-dev-sshhost .
+          docker rm -f dockermender-ci-sshhost >/dev/null 2>&1 || true
+          docker run -d \
+            --name dockermender-ci-sshhost \
+            -p 127.0.0.1:2222:22 \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -e "DOCKERMENDER_SSH_AUTHORIZED_KEYS=$(cat "${key_path}.pub")" \
+            dockermender-dev-sshhost
+
+          for attempt in {1..30}; do
+            if ssh -i "${key_path}" \
+              -p 2222 \
+              -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
+              -o ConnectTimeout=2 \
+              root@127.0.0.1 true; then
+              break
+            fi
+            if [ "${attempt}" = "30" ]; then
+              docker logs dockermender-ci-sshhost
+              exit 1
+            fi
+            sleep 1
+          done
+
+          {
+            echo "DOCKERMENDER_SSH_TEST_HOST=127.0.0.1"
+            echo "DOCKERMENDER_SSH_TEST_PORT=2222"
+            echo "DOCKERMENDER_SSH_TEST_USER=root"
+            echo "DOCKERMENDER_SSH_TEST_KEY<<EOF"
+            cat "${key_path}"
+            echo "EOF"
+          } >> "${GITHUB_ENV}"
+      - name: Run SSH integration test
+        run: npm run test --workspace @dockermender/api -- ssh.integration.test.ts
+      - name: Stop SSH Docker host fixture
+        if: always()
+        run: docker rm -f dockermender-ci-sshhost >/dev/null 2>&1 || true
+
+  external-ssh-integration:
+    name: External SSH integration (optional secrets)
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'pull_request' && vars.DOCKERMENDER_RUN_EXTERNAL_SSH_TESTS == 'true' }}
+    env:
+      DOCKERMENDER_SSH_TEST_HOST: ${{ secrets.DOCKERMENDER_SSH_TEST_HOST }}
+      DOCKERMENDER_SSH_TEST_PORT: ${{ secrets.DOCKERMENDER_SSH_TEST_PORT }}
+      DOCKERMENDER_SSH_TEST_USER: ${{ secrets.DOCKERMENDER_SSH_TEST_USER }}
+      DOCKERMENDER_SSH_TEST_KEY: ${{ secrets.DOCKERMENDER_SSH_TEST_KEY }}
+      DOCKERMENDER_SSH_TEST_KEY_PASSPHRASE: ${{ secrets.DOCKERMENDER_SSH_TEST_KEY_PASSPHRASE }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      - name: Validate SSH secrets
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in DOCKERMENDER_SSH_TEST_HOST DOCKERMENDER_SSH_TEST_USER DOCKERMENDER_SSH_TEST_KEY; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Missing required GitHub secret ${name}"
+              missing=1
+            fi
+          done
+          exit "${missing}"
+      - name: Run external SSH integration test
+        run: npm run test --workspace @dockermender/api -- ssh.integration.test.ts

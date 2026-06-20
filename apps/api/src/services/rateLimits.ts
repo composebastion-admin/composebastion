@@ -1,0 +1,6 @@
+export const sensitiveMutationRateLimit = { max: 60, timeWindow: "1 minute" } as const;
+export const hostFileRateLimit = { max: 90, timeWindow: "1 minute" } as const;
+export const streamRateLimit = { max: 30, timeWindow: "1 minute" } as const;
+export const downloadRateLimit = { max: 20, timeWindow: "1 minute" } as const;
+export const configBackupRateLimit = { max: 10, timeWindow: "10 minutes" } as const;
+export const terminalRateLimit = { max: 8, timeWindow: "1 minute" } as const;
