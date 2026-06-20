@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { GitCompare, RotateCcw } from "lucide-react";
-import type { ComposeStack, ComposeStackVersion } from "@dockermender/shared";
+import type { ComposeStack, ComposeStackVersion } from "@composebastion/shared";
 import { api, postJson } from "../../api.js";
 import { useConfirm } from "../ConfirmProvider.js";
 import { useAsyncAction } from "../../hooks/useAsyncAction.js";

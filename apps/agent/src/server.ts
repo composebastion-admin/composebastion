@@ -21,7 +21,7 @@ const env = z.object({
 const runSchema = z.object({
   command: z.string().min(1).max(8000)
     .refine((command) => !/[\0\r]/.test(command), "Command contains invalid control characters")
-    .refine((command) => isPermittedDockerCommand(command), "Agent only accepts Dockermender Docker commands")
+    .refine((command) => isPermittedDockerCommand(command), "Agent only accepts ComposeBastion Docker commands")
 });
 
 const containerLogParamsSchema = z.object({
@@ -79,7 +79,7 @@ async function execDocker(parsed: ParsedDockerCommand, timeout: number) {
 
 async function run(command: string, timeout = 120_000) {
   const parsed = parsePermittedDockerCommand(command);
-  if (!parsed) return { stdout: "", stderr: "Agent only accepts Dockermender Docker commands", code: 1 };
+  if (!parsed) return { stdout: "", stderr: "Agent only accepts ComposeBastion Docker commands", code: 1 };
   return execDocker(parsed, timeout);
 }
 

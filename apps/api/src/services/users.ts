@@ -1,6 +1,6 @@
 import bcrypt from "bcryptjs";
 import { v4 as uuid } from "uuid";
-import { userCreateSchema, userUpdateSchema } from "@dockermender/shared";
+import { userCreateSchema, userUpdateSchema } from "@composebastion/shared";
 import { query } from "../db/pool.js";
 import { destroyAllSessionsForUser } from "./auth.js";
 import { mapAdmin } from "./mappers.js";

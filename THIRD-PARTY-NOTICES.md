@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-Dockermender may include or depend on third-party software components.
+ComposeBastion may include or depend on third-party software components.
 Third-party components are governed by their own license terms and are not relicensed by LICENSE.md.
 
 This inventory was generated from package-lock.json and installed package metadata on 2026-06-20. It is a best-effort dependency notice for the npm workspace and should be reviewed before commercial distribution.
@@ -407,6 +407,6 @@ No missing, GPL, AGPL, SSPL, UNKNOWN, or UNLICENSED package entries were found i
 
 ## Notes
 
-- Local Dockermender workspace packages are covered by LICENSE.md and are excluded from this third-party inventory.
+- Local ComposeBastion workspace packages are covered by LICENSE.md and are excluded from this third-party inventory.
 - Dependency license metadata can change between package versions. Regenerate and review this file whenever dependencies change.
 - This file is not legal advice and does not replace review of dependency license texts, package repositories, or distributed artifacts.

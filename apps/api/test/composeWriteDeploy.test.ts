@@ -86,7 +86,7 @@ describe("compose.writeDeployPath", () => {
     recordStackVersion.mockResolvedValue({});
     checkImageUpdatesForHost.mockResolvedValue(undefined);
     findRegistryAuthForReference.mockResolvedValue(null);
-    statAgentRemoteFile.mockResolvedValue({ exists: false, path: "/tmp/dockermender/apps/sampleapp/docker-compose.yml", type: null, size: null });
+    statAgentRemoteFile.mockResolvedValue({ exists: false, path: "/tmp/composebastion/apps/sampleapp/docker-compose.yml", type: null, size: null });
     writeAgentRemoteFile.mockResolvedValue(undefined);
     runAgentDockerCommand.mockResolvedValue(sshOk("ok\n"));
     readRemoteFile.mockImplementation(async (_ssh: unknown, remotePath: string) => {
@@ -217,7 +217,7 @@ describe("compose.writeDeployPath", () => {
       ssh: null,
       agent: { url: "http://agent.local", token: "token" }
     });
-    statAgentRemoteFile.mockRejectedValue(new Error("Agent file access is limited to /tmp/dockermender"));
+    statAgentRemoteFile.mockRejectedValue(new Error("Agent file access is limited to /tmp/composebastion"));
     const { executeDockerAction } = await import("../src/services/docker.js");
 
     await expect(executeDockerAction({
@@ -231,7 +231,7 @@ describe("compose.writeDeployPath", () => {
         overwrite: false,
         pullBeforeDeploy: false
       }
-    })).rejects.toThrow("/tmp/dockermender");
+    })).rejects.toThrow("/tmp/composebastion");
     expect(writeAgentRemoteFile).not.toHaveBeenCalled();
   });
 });

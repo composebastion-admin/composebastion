@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AdminUser } from "@dockermender/shared";
+import type { AdminUser } from "@composebastion/shared";
 import {
   assertHostTerminalAccess,
   assertHostTerminalOrigin,

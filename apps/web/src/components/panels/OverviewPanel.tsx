@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { AlertCircle, Box, Layers, Server } from "lucide-react";
 import type { ComponentType } from "react";
-import type { Backup, DockerApp, DockerHost, HostSpecs, HostStats, OperationJob, ResourceSnapshot } from "@dockermender/shared";
-import { containerData, containerStateLabel, publishedWebLinks } from "@dockermender/shared";
+import type { Backup, DockerApp, DockerHost, HostSpecs, HostStats, OperationJob, ResourceSnapshot } from "@composebastion/shared";
+import { containerData, containerStateLabel, publishedWebLinks } from "@composebastion/shared";
 import { api } from "../../api.js";
 import { formatBytes, formatDate } from "../../lib/format.js";
 import { metricDelta, metricSeries } from "../../lib/dockerMetrics.js";

@@ -13,7 +13,7 @@ import type {
   RecoveryReadiness,
   RecoverySchedule,
   ResourceSnapshot
-} from "@dockermender/shared";
+} from "@composebastion/shared";
 import type { Jobish } from "../../lib/dashboardTypes.js";
 import { api } from "../../api.js";
 import { recoveryReadinessClass, recoveryReadinessLabel } from "../../lib/recovery.js";

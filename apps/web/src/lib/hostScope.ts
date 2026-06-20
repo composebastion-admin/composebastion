@@ -1,4 +1,4 @@
-import type { DockerHost } from "@dockermender/shared";
+import type { DockerHost } from "@composebastion/shared";
 import { emptyToUndefined } from "./format.js";
 import type { HostScope } from "./navigation.js";
 

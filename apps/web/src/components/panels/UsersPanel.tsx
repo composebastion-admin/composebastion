@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Trash2, Users } from "lucide-react";
-import type { AdminUser } from "@dockermender/shared";
+import type { AdminUser } from "@composebastion/shared";
 import { api, deleteJson, postJson, putJson } from "../../api.js";
 import { emptyToUndefined } from "../../lib/format.js";
 import { roleLabel } from "../../lib/hostScope.js";

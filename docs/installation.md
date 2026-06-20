@@ -1,11 +1,11 @@
 # Installation Guide
 
-This guide gets Dockermender running locally first, then hardens it for a
+This guide gets ComposeBastion running locally first, then hardens it for a
 server deployment.
 
 ## Requirements
 
-- Linux host or VM for the Dockermender manager.
+- Linux host or VM for the ComposeBastion manager.
 - Docker Engine and Docker Compose v2.
 - Git.
 - OpenSSL for generating secrets.
@@ -16,8 +16,8 @@ server deployment.
 Clone the repository:
 
 ```bash
-git clone https://github.com/Admin-DockerMender/dockermender.git
-cd dockermender
+git clone https://github.com/composebastion-admin/composebastion.git
+cd composebastion
 cp .env.example .env
 ```
 
@@ -60,9 +60,9 @@ docker compose down
 Create a persistent backup directory on the manager host:
 
 ```bash
-sudo mkdir -p /srv/dockermender/backups
-sudo chown -R root:root /srv/dockermender
-sudo chmod 750 /srv/dockermender /srv/dockermender/backups
+sudo mkdir -p /srv/composebastion/backups
+sudo chown -R root:root /srv/composebastion
+sudo chmod 750 /srv/composebastion /srv/composebastion/backups
 ```
 
 Set production environment values in `.env`:
@@ -70,9 +70,9 @@ Set production environment values in `.env`:
 ```bash
 APP_SECRET=<unique random value>
 POSTGRES_PASSWORD=<unique database password>
-DOCKERMENDER_BACKUP_DIR=/srv/dockermender/backups
+COMPOSEBASTION_BACKUP_DIR=/srv/composebastion/backups
 SECURE_COOKIES=true
-CORS_ORIGINS=https://dockermender.example.com
+CORS_ORIGINS=https://composebastion.example.com
 BACKUP_HOST_PATH_ALLOWED_ROOTS=/srv,/home/docker
 ```
 
@@ -96,7 +96,7 @@ docker compose -f docker-compose.yml -f docker-compose.prod.example.yml logs -f 
 
 ## Reverse Proxy Notes
 
-Dockermender listens on `8080` in the base Compose file. In production, the
+ComposeBastion listens on `8080` in the base Compose file. In production, the
 override removes the public port binding so your reverse proxy can be the only
 public entry point.
 
@@ -107,7 +107,7 @@ Your proxy should:
 - Preserve websocket upgrades for the host terminal route.
 - Preserve standard forwarding headers.
 
-Set `SECURE_COOKIES=true` only when the browser reaches Dockermender through
+Set `SECURE_COOKIES=true` only when the browser reaches ComposeBastion through
 HTTPS.
 
 ## First Live Test

@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { configExportSchema, configImportSchema } from "@dockermender/shared";
+import { configExportSchema, configImportSchema } from "@composebastion/shared";
 import { exportConfigBackup, importConfigBackup } from "../services/configBackup.js";
 import { requireRole } from "../services/auth.js";
 import { writeAuditEvent } from "../services/audit.js";

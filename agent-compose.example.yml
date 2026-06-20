@@ -1,5 +1,5 @@
 services:
-  dockermender-agent:
+  composebastion-agent:
     build:
       context: .
       dockerfile: Dockerfile.agent

@@ -1,13 +1,13 @@
 # Licensing Summary
 
-Dockermender is source-available, not open source.
+ComposeBastion is source-available, not open source.
 
 This summary is provided for convenience only. If there is any conflict,
 LICENSE.md controls.
 
 ## Free Use Allowed
 
-You may use Dockermender for free for:
+You may use ComposeBastion for free for:
 
 - home labs;
 - home use;
@@ -61,7 +61,7 @@ projects require prior written approval or a purchased license.
 
 For approval, commercial licensing, written permission, or support, contact:
 
-https://github.com/Admin-DockerMender/dockermender/issues
+https://github.com/composebastion-admin/composebastion/issues
 
 Do not include secrets, credentials, customer data, or confidential commercial
 terms in public issues. Ask for a private contact path when needed.

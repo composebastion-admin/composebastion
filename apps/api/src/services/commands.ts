@@ -1,4 +1,4 @@
-import type { DockerActionRequest } from "@dockermender/shared";
+import type { DockerActionRequest } from "@composebastion/shared";
 
 export function shQuote(value: string) {
   return `'${value.replace(/'/g, `'\\''`)}'`;
@@ -20,7 +20,7 @@ export function dockerCommandFailureMessage(output: string, fallback: string) {
     return "Docker CLI was not found on the remote host. Install Docker, or make sure the docker command is available to non-interactive SSH sessions.";
   }
   if (/permission denied/i.test(message) && /(docker daemon socket|docker api|\/var\/run\/docker\.sock|unix:\/\/)/i.test(message)) {
-    return "The SSH user cannot access the Docker socket. Add the user to the docker group, connect as a Docker-capable user, or use the Dockermender agent.";
+    return "The SSH user cannot access the Docker socket. Add the user to the docker group, connect as a Docker-capable user, or use the ComposeBastion agent.";
   }
   return message || fallback;
 }

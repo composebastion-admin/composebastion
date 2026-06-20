@@ -1,5 +1,5 @@
 import { v4 as uuid } from "uuid";
-import { backupScheduleCreateSchema } from "@dockermender/shared";
+import { backupScheduleCreateSchema } from "@composebastion/shared";
 import { query } from "../db/pool.js";
 import { enqueueJob } from "./jobs.js";
 import { withTransaction } from "../db/pool.js";

@@ -1,0 +1,30 @@
+name: Other / General Issue
+description: Ask about something that does not fit the other templates.
+title: "[General]: "
+labels: ["status: needs info"]
+body:
+  - type: markdown
+    attributes:
+      value: "Please redact secrets, credentials, tokens, private hostnames, customer data, and registry credentials."
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: What are you trying to do, and what should maintainers know?
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or branch
+      placeholder: "v0.9.4, main, beta, or commit SHA"
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Browser, OS, Docker/deployment details, and any relevant host setup.
+  - type: textarea
+    id: screenshots_logs
+    attributes:
+      label: Screenshots/logs
+      description: Attach screenshots, logs, safe samples, or links to related issues if useful.

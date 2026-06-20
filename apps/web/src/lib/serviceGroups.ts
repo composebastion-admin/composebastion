@@ -1,5 +1,5 @@
-import type { ComposeStack, DockerApp, DockerHost, ResourceSnapshot } from "@dockermender/shared";
-import { containerData, containerStateLabel } from "@dockermender/shared";
+import type { ComposeStack, DockerApp, DockerHost, ResourceSnapshot } from "@composebastion/shared";
+import { containerData, containerStateLabel } from "@composebastion/shared";
 
 // A "service" is every container that came up from one compose file (one
 // `docker compose up`) or one standalone `docker run`. Compose containers are
@@ -299,7 +299,7 @@ export function findAppForServiceGroup(group: ServiceGroup, apps: DockerApp[]) {
 export function isSelfManagementServiceGroup(group: ServiceGroup) {
   const projectName = group.projectName?.toLowerCase() ?? "";
   const groupName = group.name.toLowerCase();
-  const looksLikeSelfManagedProject = ["dockermender", "docker-manager", "docker_manager"].includes(projectName || groupName);
+  const looksLikeSelfManagedProject = ["composebastion", "docker-manager", "docker_manager"].includes(projectName || groupName);
   if (!looksLikeSelfManagedProject) return false;
 
   return group.members.some((member) => {
@@ -309,10 +309,10 @@ export function isSelfManagementServiceGroup(group: ServiceGroup) {
     return (
       serviceName === "app" ||
       serviceName === "worker" ||
-      containerName.includes("dockermender-app") ||
-      containerName.includes("dockermender-worker") ||
-      image.includes("dockermender-app") ||
-      image.includes("dockermender-worker")
+      containerName.includes("composebastion-app") ||
+      containerName.includes("composebastion-worker") ||
+      image.includes("composebastion-app") ||
+      image.includes("composebastion-worker")
     );
   });
 }

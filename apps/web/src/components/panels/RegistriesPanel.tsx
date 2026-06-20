@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { KeyRound, Trash2 } from "lucide-react";
-import type { DockerHost, Registry } from "@dockermender/shared";
+import type { DockerHost, Registry } from "@composebastion/shared";
 import { api, deleteJson, postJson } from "../../api.js";
 import { useAsyncAction } from "../../hooks/useAsyncAction.js";
 import type { Jobish, JobResult } from "../../lib/dashboardTypes.js";

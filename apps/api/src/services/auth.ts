@@ -2,13 +2,13 @@ import { createHash, randomBytes } from "node:crypto";
 import bcrypt from "bcryptjs";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { v4 as uuid } from "uuid";
-import type { AdminUser } from "@dockermender/shared";
+import type { AdminUser } from "@composebastion/shared";
 import { env } from "../config/env.js";
 import { query } from "../db/pool.js";
 import { sendApiError } from "./apiError.js";
 import { mapAdmin } from "./mappers.js";
 
-const SESSION_COOKIE = "dm_session";
+const SESSION_COOKIE = "cb_session";
 const SESSION_DAYS = 7;
 
 type SessionContext = {
@@ -31,7 +31,7 @@ export async function createAdmin(input: { email?: string; username?: string; pa
   }
 
   const username = input.username?.trim().toLowerCase() || null;
-  const email = input.email?.trim().toLowerCase() || (username ? `${username}@local.dockermender` : null);
+  const email = input.email?.trim().toLowerCase() || (username ? `${username}@local.composebastion` : null);
   if (!email) throw new Error("Username or email is required");
 
   const passwordHash = await bcrypt.hash(input.password, 12);

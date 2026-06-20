@@ -1,6 +1,6 @@
 # Architecture
 
-Dockermender is an npm workspace monorepo:
+ComposeBastion is an npm workspace monorepo:
 
 | Package | Role |
 |---------|------|

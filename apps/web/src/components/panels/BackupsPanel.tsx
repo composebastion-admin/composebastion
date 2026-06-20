@@ -8,7 +8,7 @@ import type {
   DockerHost,
   OperationJob,
   RecoveryPointListItem
-} from "@dockermender/shared";
+} from "@composebastion/shared";
 import { api, deleteJson, postJson } from "../../api.js";
 import { useAsyncAction } from "../../hooks/useAsyncAction.js";
 import type { Jobish, JobResult } from "../../lib/dashboardTypes.js";

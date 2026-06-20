@@ -1,4 +1,4 @@
-import type { ProxySnippet } from "@dockermender/shared";
+import type { ProxySnippet } from "@composebastion/shared";
 
 type ProxyInput = {
   domains: string[];

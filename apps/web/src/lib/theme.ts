@@ -1,6 +1,6 @@
 export type Theme = "light" | "dark";
 
-const STORAGE_KEY = "dockermender.theme";
+const STORAGE_KEY = "composebastion.theme";
 
 export function getInitialTheme(): Theme {
   const stored = window.localStorage.getItem(STORAGE_KEY);

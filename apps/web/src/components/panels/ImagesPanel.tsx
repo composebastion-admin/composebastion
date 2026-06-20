@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Copy, Download, Play, RefreshCw, Search, ShieldAlert, Star, Trash2 } from "lucide-react";
-import type { DockerHost, FavoriteImage, ImageCleanupCandidate, ImageCleanupTarget, ImageScanResult, ImageUpdateCheck, ResourceSnapshot } from "@dockermender/shared";
-import { containerData, containerStateLabel, imageReference } from "@dockermender/shared";
+import type { DockerHost, FavoriteImage, ImageCleanupCandidate, ImageCleanupTarget, ImageScanResult, ImageUpdateCheck, ResourceSnapshot } from "@composebastion/shared";
+import { containerData, containerStateLabel, imageReference } from "@composebastion/shared";
 import { api, deleteJson, postJson } from "../../api.js";
 import { useConfirm } from "../ConfirmProvider.js";
 import { useToast } from "../ToastProvider.js";

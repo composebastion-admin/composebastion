@@ -1,5 +1,5 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
-import type { OperationJob } from "@dockermender/shared";
+import type { OperationJob } from "@composebastion/shared";
 
 export function errorCode(error: unknown) {
   const explicit = (error as { code?: unknown })?.code;

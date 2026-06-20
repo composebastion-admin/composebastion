@@ -1,4 +1,4 @@
-# Dockermender OpenAPI
+# ComposeBastion OpenAPI
 
 Generated from `apps/api/src/openapi/document.ts`.
 

@@ -1,4 +1,4 @@
-import type { RecoveryAppIdentity } from "@dockermender/shared";
+import type { RecoveryAppIdentity } from "@composebastion/shared";
 import { query } from "../db/pool.js";
 import { getContainerVolumeMounts } from "./docker.js";
 

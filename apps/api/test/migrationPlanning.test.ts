@@ -73,7 +73,7 @@ describe("migration planning warnings", () => {
       label: "DemoApp",
       projectName: "demoapp",
       stackId: null,
-      composeYaml: "services:\n  demoapp:\n    image: ghcr.io/admin-dockermender/demo-app:beta\n",
+      composeYaml: "services:\n  demoapp:\n    image: ghcr.io/composebastion-admin/demo-app:beta\n",
       env: "",
       workingDir: "/home/docker/DemoApp",
       composePath: "docker-compose.release.yml",

@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import { CONFIG_BACKUP_FORMAT_VERSION } from "@dockermender/shared";
+import { CONFIG_BACKUP_FORMAT_VERSION } from "@composebastion/shared";
 import { query, withTransaction } from "../db/pool.js";
 import { decryptConfigPayload, decryptSecret, encryptConfigPayload, encryptSecret, type EncryptedConfigPayload } from "./crypto.js";
 import { exportBackupTargetSecrets } from "./recoveryBackupTargets.js";
@@ -7,7 +7,7 @@ import { exportBackupTargetSecrets } from "./recoveryBackupTargets.js";
 const require = createRequire(import.meta.url);
 const packageJson = require("../../package.json") as { version?: string };
 const appVersion = process.env.npm_package_version || packageJson.version || "unknown";
-const CONFIG_BACKUP_APP_NAME = "Dockermender";
+const CONFIG_BACKUP_APP_NAME = "ComposeBastion";
 
 type ConfigBackupPayload = {
   app: string;
@@ -164,7 +164,7 @@ export async function exportConfigBackup(passphrase: string) {
 export async function importConfigBackup(backup: Record<string, unknown>, passphrase: string) {
   const payload = decryptConfigPayload<ConfigBackupPayload>(backup as unknown as EncryptedConfigPayload, passphrase);
   if (payload.app !== CONFIG_BACKUP_APP_NAME) {
-    throw new Error("This is not a Dockermender config backup");
+    throw new Error("This is not a ComposeBastion config backup");
   }
 
   const summary = await withTransaction(async (client) => {

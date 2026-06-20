@@ -149,7 +149,7 @@ export function DataTable<T extends { id: string }>({
   tableClassName
 }: DataTableProps<T>) {
   if (rows.length === 0) {
-    return <EmptyState headline="Nothing here yet" hint="Dockermender refreshes inventory automatically when hosts are reachable." />;
+    return <EmptyState headline="Nothing here yet" hint="ComposeBastion refreshes inventory automatically when hosts are reachable." />;
   }
   const checkboxWidth = compact ? 28 : 40;
   const tableWrapClassName = ["tableWrap", compact ? "compactTableWrap" : "", tableClassName].filter(Boolean).join(" ");

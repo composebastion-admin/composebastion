@@ -45,13 +45,13 @@ describe("host-path backup helpers", () => {
   });
 
   it("parses and applies optional host-path allowlist roots", () => {
-    const roots = parseHostPathAllowedRoots("/srv,/var/lib/dockermender/data/");
-    expect(roots).toEqual(["/srv", "/var/lib/dockermender/data"]);
+    const roots = parseHostPathAllowedRoots("/srv,/var/lib/composebastion/data/");
+    expect(roots).toEqual(["/srv", "/var/lib/composebastion/data"]);
     expect(assertHostBackupPathAllowed("/srv", "Source path", roots)).toBe("/srv");
     expect(assertHostBackupPathAllowed("/srv/app/data", "Source path", roots)).toBe("/srv/app/data");
-    expect(assertHostBackupPathAllowed("/var/lib/dockermender/data/app", "Target path", roots)).toBe("/var/lib/dockermender/data/app");
+    expect(assertHostBackupPathAllowed("/var/lib/composebastion/data/app", "Target path", roots)).toBe("/var/lib/composebastion/data/app");
     expect(() => assertHostBackupPathAllowed("/srvish/app", "Source path", roots)).toThrow("outside configured");
-    expect(() => assertHostBackupPathAllowed("/var/lib/dockermender/database", "Target path", roots)).toThrow("outside configured");
+    expect(() => assertHostBackupPathAllowed("/var/lib/composebastion/database", "Target path", roots)).toThrow("outside configured");
   });
 
   it("keeps the allowlist opt-in and rejects invalid roots", () => {

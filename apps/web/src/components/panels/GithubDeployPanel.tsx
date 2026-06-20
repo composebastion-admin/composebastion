@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { FileText, FolderOpen, GitBranch, Github, Pencil, Play, RefreshCw, Save, Trash2, Wand2, X } from "lucide-react";
-import type { ComposeStack, DockerHost, GithubRepository, OperationJob } from "@dockermender/shared";
+import type { ComposeStack, DockerHost, GithubRepository, OperationJob } from "@composebastion/shared";
 import { api, deleteJson, postJson, putJson } from "../../api.js";
 import { useConfirm } from "../ConfirmProvider.js";
 import { useAsyncAction } from "../../hooks/useAsyncAction.js";
@@ -20,7 +20,7 @@ function repoNameFromUrl(url: string) {
 }
 
 function defaultDeployRoot(host: DockerHost) {
-  return host.connectionMode === "agent" ? "/tmp/dockermender/apps" : remoteJoin(defaultHostDirectory(host), "apps");
+  return host.connectionMode === "agent" ? "/tmp/composebastion/apps" : remoteJoin(defaultHostDirectory(host), "apps");
 }
 
 function defaultDeployDirectory(host: DockerHost, projectName: string) {
@@ -207,7 +207,7 @@ function FolderComposeDeployForm({
       <ImageComposeGenerator onGenerate={applyGenerated} />
       <form className="subPanel composeForm" onSubmit={deploy}>
         <h3><FolderOpen size={16} /> Compose YAML to Folder</h3>
-        <div className="formHint">Writes Compose YAML to the selected host folder, then runs docker compose from that folder. Agent hosts deploy under /tmp/dockermender.</div>
+        <div className="formHint">Writes Compose YAML to the selected host folder, then runs docker compose from that folder. Agent hosts deploy under /tmp/composebastion.</div>
         <div className="two">
           <HostSelect hosts={hosts} value={hostId} onChange={(nextHostId) => {
             setHostId(nextHostId);
@@ -221,7 +221,7 @@ function FolderComposeDeployForm({
         <div className="two">
           <input
             className="monoText"
-            placeholder={host?.connectionMode === "agent" ? "/tmp/dockermender/apps/app" : "/home/user/apps/app"}
+            placeholder={host?.connectionMode === "agent" ? "/tmp/composebastion/apps/app" : "/home/user/apps/app"}
             value={form.workingDir}
             onChange={(event) => { setForm({ ...form, workingDir: event.target.value }); setWorkingDirTouched(true); }}
             required
@@ -539,7 +539,7 @@ export function GithubDeployPanel({
       <div className="formHint">
         Track a GitHub repository to deploy its compose file straight from the GitHub API (no clone on the host),
         preview and customize the YAML before deploying, and get commit-based update checks. Private repositories work
-        with a fine-grained GitHub token that has read-only Contents access; Dockermender encrypts the token and never
+        with a fine-grained GitHub token that has read-only Contents access; ComposeBastion encrypts the token and never
         shows it again. When editing a repo, leave the token blank to keep the saved token.
       </div>
       <form className="composeForm" onSubmit={save}>
@@ -602,7 +602,7 @@ export function GithubDeployPanel({
             </label>
           )}
           <textarea className="monoTextarea composeEditor" value={deployPreview.composeYaml} onChange={(event) => setDeployPreview({ ...deployPreview, composeYaml: event.target.value })} />
-          <div className="formHint">This edited Compose YAML is what Dockermender deploys. Variable override fields only write .env values; delete or change placeholders in the YAML when you want the YAML itself to control ports, images, volumes, or build settings.</div>
+          <div className="formHint">This edited Compose YAML is what ComposeBastion deploys. Variable override fields only write .env values; delete or change placeholders in the YAML when you want the YAML itself to control ports, images, volumes, or build settings.</div>
           {deployVariableOverrides.length > 0 && (
             <div className="variableOverridePanel">
               <div>

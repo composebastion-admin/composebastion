@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
-import type { BackupHealthSummary, OperationJob, RecoveryPointListItem } from "@dockermender/shared";
+import type { BackupHealthSummary, OperationJob, RecoveryPointListItem } from "@composebastion/shared";
 import { api, parseApiJson } from "../../api.js";
 import { formatDate } from "../../lib/format.js";
 import { activeJobPhase, jobProgressSteps, jobRecoveryHint } from "../../lib/jobProgress.js";

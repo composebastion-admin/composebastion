@@ -11,8 +11,8 @@ import type {
   RecoveryPointListItem,
   RecoverySchedule,
   ResourceSnapshot
-} from "@dockermender/shared";
-import { migrationPlanSchema, recoveryAppIdentitySchema } from "@dockermender/shared";
+} from "@composebastion/shared";
+import { migrationPlanSchema, recoveryAppIdentitySchema } from "@composebastion/shared";
 import { mapBackupTargetFields } from "./recoveryBackupTargets.js";
 
 const iso = (value: Date | string | null | undefined) => {

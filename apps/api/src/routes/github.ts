@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { githubRepositoryBranchesRequestSchema, githubRepositoryDeploySchema } from "@dockermender/shared";
+import { githubRepositoryBranchesRequestSchema, githubRepositoryDeploySchema } from "@composebastion/shared";
 import { createGithubRepository, deleteGithubRepository, deployGithubRepository, listGithubBranchesForRepository, listGithubBranchesForUrl, listGithubRepositories, previewGithubRepositoryCompose, updateGithubRepository } from "../services/github.js";
 import { requireRole } from "../services/auth.js";
 import { writeAuditEvent } from "../services/audit.js";

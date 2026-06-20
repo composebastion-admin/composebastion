@@ -50,7 +50,7 @@ describe("API contracts", () => {
         url: "/api/auth/logout",
         headers: {
           "x-request-id": "contract-origin-block",
-          host: "dockermender.example.com",
+          host: "composebastion.example.com",
           origin: "https://evil.example"
         }
       });
@@ -65,8 +65,8 @@ describe("API contracts", () => {
         method: "POST",
         url: "/api/auth/logout",
         headers: {
-          host: "dockermender.example.com",
-          origin: "https://dockermender.example.com"
+          host: "composebastion.example.com",
+          origin: "https://composebastion.example.com"
         }
       });
       expect(sameOrigin.statusCode).toBe(200);
@@ -75,7 +75,7 @@ describe("API contracts", () => {
         method: "GET",
         url: "/api/health",
         headers: {
-          host: "dockermender.example.com",
+          host: "composebastion.example.com",
           origin: "https://evil.example"
         }
       });

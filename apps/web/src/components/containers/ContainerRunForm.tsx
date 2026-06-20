@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Play, Plus } from "lucide-react";
-import type { DockerHost, ResourceSnapshot } from "@dockermender/shared";
+import type { DockerHost, ResourceSnapshot } from "@composebastion/shared";
 import { useAsyncAction } from "../../hooks/useAsyncAction.js";
 
 export function ContainerRunForm({

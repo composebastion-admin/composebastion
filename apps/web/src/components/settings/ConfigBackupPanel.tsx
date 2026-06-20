@@ -20,7 +20,7 @@ export function ConfigBackupPanel({ onImported }: { onImported: () => Promise<vo
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
-      anchor.download = `dockermender-config-${new Date().toISOString().slice(0, 10)}.json`;
+      anchor.download = `composebastion-config-${new Date().toISOString().slice(0, 10)}.json`;
       anchor.click();
       URL.revokeObjectURL(url);
     });
@@ -34,7 +34,7 @@ export function ConfigBackupPanel({ onImported }: { onImported: () => Promise<vo
       try {
         backup = JSON.parse(text) as Record<string, unknown>;
       } catch {
-        throw new Error("Config restore JSON is invalid. Paste the full Dockermender export file contents.");
+        throw new Error("Config restore JSON is invalid. Paste the full ComposeBastion export file contents.");
       }
       const result = await postJson<{ imported: Record<string, number> }>("/api/config/import", { passphrase, backup });
       setMessage(`Imported ${Object.values(result.imported).reduce((sum, value) => sum + value, 0)} records`);

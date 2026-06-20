@@ -1,12 +1,12 @@
 # Commercial Licensing
 
-Dockermender is source-available software, not open-source software.
+ComposeBastion is source-available software, not open-source software.
 
 Free use is allowed only for home labs, home use, private use, personal
 learning, and private non-commercial testing.
 
 Prior written approval or a purchased license is required before using
-Dockermender in any business, company, employer, client, customer, MSP, SaaS,
+ComposeBastion in any business, company, employer, client, customer, MSP, SaaS,
 hosted, government, school, nonprofit, production, non-production, testing,
 staging, proof-of-concept, evaluation, or organizational environment.
 
@@ -30,7 +30,7 @@ Approval or a paid license is required for:
 
 To request approval, written permission, or a commercial license, contact:
 
-https://github.com/Admin-DockerMender/dockermender/issues
+https://github.com/composebastion-admin/composebastion/issues
 
 Do not include secrets, credentials, customer data, pricing expectations, or
 confidential commercial terms in public issues. Ask for a private contact path

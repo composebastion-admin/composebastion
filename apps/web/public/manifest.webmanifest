@@ -1,6 +1,6 @@
 {
-  "name": "Dockermender",
-  "short_name": "Dockermender",
+  "name": "ComposeBastion",
+  "short_name": "ComposeBastion",
   "description": "Multi-host Docker management console",
   "start_url": "/",
   "display": "standalone",

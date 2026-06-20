@@ -1,6 +1,6 @@
 # Notices
 
-Dockermender
+ComposeBastion
 
 Multi-host Docker management console deployed with Docker Compose.
 
@@ -18,7 +18,7 @@ Use of this Software is governed by LICENSE.md.
 
 For support, approval, or licensing, contact:
 
-https://github.com/Admin-DockerMender/dockermender/issues
+https://github.com/composebastion-admin/composebastion/issues
 
 Third-party components, dependencies, trademarks, and services are the property
 of their respective owners and may be subject to their own license terms.

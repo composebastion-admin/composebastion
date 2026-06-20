@@ -1,6 +1,6 @@
 import { v4 as uuid } from "uuid";
 import path from "node:path";
-import type { DockerActionRequest, ImageCleanupCandidate, ImageCleanupTarget, ResourceKind } from "@dockermender/shared";
+import type { DockerActionRequest, ImageCleanupCandidate, ImageCleanupTarget, ResourceKind } from "@composebastion/shared";
 import { query, withTransaction } from "../db/pool.js";
 import { buildComposeCommand, buildDockerActionCommand, dockerCommandFailureMessage, inventoryCommands, shQuote, withDockerEnv } from "./commands.js";
 import { checkAgent, runAgentDockerCommand, streamAgentContainerLogs } from "./agent.js";
@@ -262,7 +262,7 @@ function titleCaseProject(project: string) {
 
 // Keeps compose_stacks aligned with what is actually running on the host:
 // updates stack status from container states, registers compose projects that
-// were deployed outside Dockermender as "external" stacks, and drops external
+// were deployed outside ComposeBastion as "external" stacks, and drops external
 // stacks whose containers are gone.
 async function reconcileComposeStacks(hostId: string) {
   const containers = await query<any>(
@@ -305,7 +305,7 @@ async function reconcileComposeStacks(hostId: string) {
       continue;
     }
 
-    let composeYaml = `# Compose project "${project}" was discovered running on this host.\n# Dockermender could not read its compose file${info.configFile ? ` at ${info.configFile}` : ""}.\n`;
+    let composeYaml = `# Compose project "${project}" was discovered running on this host.\n# ComposeBastion could not read its compose file${info.configFile ? ` at ${info.configFile}` : ""}.\n`;
     if (info.configFile) {
       try {
         const content = await readHostTextFileFromWorker(hostId, info.configFile);
@@ -338,7 +338,7 @@ async function reconcileComposeStacks(hostId: string) {
   for (const row of stacks.rows) {
     if (!projects.has(String(row.project_name))) {
       if (row.source_type === "external") {
-        // Discovered projects with no containers left were removed outside Dockermender.
+        // Discovered projects with no containers left were removed outside ComposeBastion.
         await query("DELETE FROM compose_stacks WHERE id = $1", [row.id]);
       } else if (row.status === "deployed") {
         await query("UPDATE compose_stacks SET status = 'stopped', updated_at = now() WHERE id = $1", [row.id]);
@@ -642,7 +642,7 @@ async function getDemoContainerInspect(hostId: string, containerId: string): Pro
     })),
     networks: data.Network ? [{ name: String(data.Network), aliases: [String(data.Names ?? "")].filter(Boolean) }] : [],
     ports: [],
-    labels: { "dockermender.demo": "true" }
+    labels: { "composebastion.demo": "true" }
   };
 }
 

@@ -9,7 +9,7 @@ services:
       API_HOST: 0.0.0.0
       API_PORT: 8080
       APP_SECRET: ${APP_SECRET:?Set APP_SECRET to a unique random value of at least 32 characters}
-      DATABASE_URL: postgres://dockermender:dockermender@postgres:5432/dockermender
+      DATABASE_URL: postgres://composebastion:composebastion@postgres:5432/composebastion
       REDIS_URL: redis://redis:6379
       BACKUP_DIR: /data/backups
       WEB_DIST_DIR: /app/apps/web/dist
@@ -42,7 +42,7 @@ services:
     environment:
       NODE_ENV: production
       APP_SECRET: ${APP_SECRET:?Set APP_SECRET to a unique random value of at least 32 characters}
-      DATABASE_URL: postgres://dockermender:dockermender@postgres:5432/dockermender
+      DATABASE_URL: postgres://composebastion:composebastion@postgres:5432/composebastion
       REDIS_URL: redis://redis:6379
       BACKUP_DIR: /data/backups
       ALLOW_PRIVATE_WEBHOOK_URLS: ${ALLOW_PRIVATE_WEBHOOK_URLS:-false}
@@ -58,13 +58,13 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: dockermender
-      POSTGRES_USER: dockermender
-      POSTGRES_PASSWORD: dockermender
+      POSTGRES_DB: composebastion
+      POSTGRES_USER: composebastion
+      POSTGRES_PASSWORD: composebastion
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U dockermender -d dockermender"]
+      test: ["CMD-SHELL", "pg_isready -U composebastion -d composebastion"]
       interval: 10s
       timeout: 5s
       retries: 10

@@ -9,7 +9,7 @@ import {
   type CatalogTemplate,
   type ExternalCatalogCandidate,
   type ExternalCatalogQuery
-} from "@dockermender/shared";
+} from "@composebastion/shared";
 import { query } from "../db/pool.js";
 import { enqueueJob } from "./jobs.js";
 import { mapStack } from "./mappers.js";
@@ -220,7 +220,7 @@ async function fetchJson<T>(url: string): Promise<T> {
   const response = await fetch(url, {
     headers: {
       Accept: "application/vnd.github+json",
-      "User-Agent": "Dockermender"
+      "User-Agent": "ComposeBastion"
     }
   });
   if (!response.ok) throw new Error(`External catalog returned ${response.status}`);
@@ -229,7 +229,7 @@ async function fetchJson<T>(url: string): Promise<T> {
 
 async function fetchText(url: string): Promise<string> {
   const response = await fetch(url, {
-    headers: { "User-Agent": "Dockermender" }
+    headers: { "User-Agent": "ComposeBastion" }
   });
   if (!response.ok) throw new Error(`External catalog returned ${response.status}`);
   return response.text();

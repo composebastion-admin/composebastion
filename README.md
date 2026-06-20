@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="apps/web/public/brand/dockermender-lockup.svg" alt="Dockermender" width="420">
+  <img src="apps/web/public/brand/composebastion-lockup.svg" alt="ComposeBastion" width="420">
 </p>
 
-<h1 align="center">Dockermender</h1>
+<h1 align="center">ComposeBastion</h1>
 
 <p align="center">
   A self-hosted control room for Docker hosts, Compose apps, recovery points,
@@ -10,21 +10,21 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Admin-DockerMender/dockermender/releases"><img alt="Release" src="https://img.shields.io/badge/release-v0.9.4-e0a23f"></a>
-  <a href="https://github.com/Admin-DockerMender/dockermender/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Admin-DockerMender/dockermender/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/composebastion-admin/composebastion/releases"><img alt="Release" src="https://img.shields.io/badge/release-v0.9.4-e0a23f"></a>
+  <a href="https://github.com/composebastion-admin/composebastion/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/composebastion-admin/composebastion/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE.md"><img alt="License" src="https://img.shields.io/badge/license-source--available-df7d27"></a>
   <img alt="Node" src="https://img.shields.io/badge/node-%3E%3D20.11-3f7f5f">
   <img alt="Docker" src="https://img.shields.io/badge/docker-compose-2496ed">
 </p>
 
-Dockermender gives you one private web console for operating multiple Docker
+ComposeBastion gives you one private web console for operating multiple Docker
 servers. Add hosts over SSH or the optional host agent, see what is running,
 deploy Compose apps from GitHub, create recovery points, test restores, and keep
 operators out of raw shell work for routine actions.
 
 ## Product Screenshots
 
-![Dockermender fleet dashboard](docs/assets/screenshots/dashboard-overview.png)
+![ComposeBastion fleet dashboard](docs/assets/screenshots/dashboard-overview.png)
 
 | Services and recovery | Containers and image cleanup |
 |-----------------------|------------------------------|
@@ -46,8 +46,8 @@ operators out of raw shell work for routine actions.
 Prerequisites: Docker Engine, Docker Compose v2, Git, and OpenSSL.
 
 ```bash
-git clone https://github.com/Admin-DockerMender/dockermender.git
-cd dockermender
+git clone https://github.com/composebastion-admin/composebastion.git
+cd composebastion
 cp .env.example .env
 ```
 
@@ -58,7 +58,7 @@ APP_SECRET=<unique random value from: openssl rand -base64 48>
 POSTGRES_PASSWORD=<unique database password>
 ```
 
-Start Dockermender:
+Start ComposeBastion:
 
 ```bash
 docker compose up -d --build
@@ -75,7 +75,7 @@ the [installation guide](docs/installation.md).
 
 ## Why Operators Use It
 
-| Need | Dockermender gives you |
+| Need | ComposeBastion gives you |
 |------|------------------------|
 | Multi-host visibility | Containers, images, networks, volumes, Compose stacks, host metrics, and job history across all connected hosts. |
 | Safer Docker actions | Typed jobs for start, stop, restart, remove, pull, prune, deploy, backup, restore, and migration workflows. |
@@ -129,8 +129,8 @@ The full screenshot tour is in the [how-to guide](docs/how-to.md).
 
 - Use a unique `APP_SECRET` and `POSTGRES_PASSWORD`.
 - Mount recovery storage outside the container, for example
-  `/srv/dockermender/backups`.
-- Put Dockermender behind HTTPS and set `SECURE_COOKIES=true`.
+  `/srv/composebastion/backups`.
+- Put ComposeBastion behind HTTPS and set `SECURE_COOKIES=true`.
 - Set `CORS_ORIGINS` when the UI and API are served from different origins.
 - Restrict agent port `8090` to the manager network.
 - Configure `BACKUP_HOST_PATH_ALLOWED_ROOTS` for production host-path recovery.
@@ -151,15 +151,15 @@ The full screenshot tour is in the [how-to guide](docs/how-to.md).
 
 ## Repository Rules
 
-- Canonical repository: `https://github.com/Admin-DockerMender/dockermender`.
+- Canonical repository: `https://github.com/composebastion-admin/composebastion`.
 - Pushes, tags, releases, and version updates must use the
-  `admin-dockermender` GitHub account.
+  `composebastion-admin` GitHub account.
 - `v0.9` is the first public version for this repository.
-- Do not reintroduce old personal owner, repository, image, or user fixtures.
+- Do not reintroduce personal owner, repository, image, or user fixtures.
 
 ## License
 
-Dockermender is source-available, not open source. Free use is allowed for home
+ComposeBastion is source-available, not open source. Free use is allowed for home
 labs, home use, private use, personal learning, and private non-commercial
 testing.
 

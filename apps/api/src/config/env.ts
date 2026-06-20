@@ -27,7 +27,7 @@ export const envSchema = z.object({
   API_HOST: z.string().default("0.0.0.0"),
   API_PORT: z.coerce.number().int().min(1).max(65535).default(8080),
   APP_SECRET: z.string().min(32).default(DEFAULT_APP_SECRET),
-  DATABASE_URL: z.string().url().default("postgres://dockermender:dockermender@localhost:5432/dockermender"),
+  DATABASE_URL: z.string().url().default("postgres://composebastion:composebastion@localhost:5432/composebastion"),
   REDIS_URL: z.string().url().optional(),
   BACKUP_DIR: z.string().default("/data/backups"),
   BACKUP_ENCRYPTION_KEYS: z.preprocess(optionalString, z.string()).default(""),
@@ -39,7 +39,7 @@ export const envSchema = z.object({
   SMTP_PORT: z.coerce.number().int().min(1).max(65535).default(587),
   SMTP_USER: z.string().optional(),
   SMTP_PASS: z.string().optional(),
-  SMTP_FROM: z.string().email().default("dockermender@example.com"),
+  SMTP_FROM: z.string().email().default("composebastion@example.com"),
   HOST_CHECK_INTERVAL_MS: z.coerce.number().int().min(10_000).default(60_000),
   INVENTORY_SYNC_INTERVAL_MS: z.coerce.number().int().min(60_000).default(300_000),
   SECURE_COOKIES: z

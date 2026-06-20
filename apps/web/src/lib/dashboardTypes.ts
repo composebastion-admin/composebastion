@@ -1,4 +1,4 @@
-import type { OperationJob } from "@dockermender/shared";
+import type { OperationJob } from "@composebastion/shared";
 
 export type JobResult = { job: OperationJob };
 export type MultiJobResult = { jobs: OperationJob[] };

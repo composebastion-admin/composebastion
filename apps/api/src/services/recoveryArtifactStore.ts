@@ -1,5 +1,5 @@
 import { readFile, rm, stat } from "node:fs/promises";
-import type { RecoveryArtifact, RecoveryPointDetail } from "@dockermender/shared";
+import type { RecoveryArtifact, RecoveryPointDetail } from "@composebastion/shared";
 import { loadWorkerBackupTarget } from "./recoveryBackupTargets.js";
 import { downloadRemoteArtifactAtomically } from "./recoveryRemoteStorage.js";
 import { hashFile, safeRecoveryPointFile } from "./recoveryStorage.js";

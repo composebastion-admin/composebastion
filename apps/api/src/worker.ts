@@ -1,4 +1,4 @@
-import { dockerActionSchema } from "@dockermender/shared";
+import { dockerActionSchema } from "@composebastion/shared";
 import { env } from "./config/env.js";
 import { runMigrations } from "./db/migrate.js";
 import { pool } from "./db/pool.js";
@@ -177,7 +177,7 @@ async function main() {
   const shutdown = async (signal: string) => {
     if (shuttingDown) return;
     shuttingDown = true;
-    console.info(`Dockermender worker received ${signal}, draining...`);
+    console.info(`ComposeBastion worker received ${signal}, draining...`);
     const deadline = Date.now() + 30_000;
     while (processing && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 250));
@@ -190,7 +190,7 @@ async function main() {
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
   process.on("SIGINT", () => void shutdown("SIGINT"));
 
-  console.info(`Dockermender worker started for ${env.DATABASE_URL.replace(/:\/\/.*@/, "://***@")}`);
+  console.info(`ComposeBastion worker started for ${env.DATABASE_URL.replace(/:\/\/.*@/, "://***@")}`);
 }
 
 main().catch((error) => {

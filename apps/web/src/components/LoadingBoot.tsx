@@ -7,7 +7,7 @@ export function LoadingBoot() {
         <span className="bootMark">
           <BrandMark size={36} />
         </span>
-        <span className="bootWord">Dockermender</span>
+        <span className="bootWord">ComposeBastion</span>
       </div>
     </div>
   );

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Download, Play, RefreshCw, RotateCcw, Square, Terminal, X } from "lucide-react";
-import type { DockerHost, ResourceSnapshot } from "@dockermender/shared";
+import type { DockerHost, ResourceSnapshot } from "@composebastion/shared";
 import { api, postJson } from "../../api.js";
 import { useAsyncAction } from "../../hooks/useAsyncAction.js";
 import { findUsageRow } from "../../lib/dockerMetrics.js";

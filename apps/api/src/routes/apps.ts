@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { appGithubVersionSelectSchema, appSourceLinkInputSchema } from "@dockermender/shared";
+import { appGithubVersionSelectSchema, appSourceLinkInputSchema } from "@composebastion/shared";
 import { auditContextFromRequest, writeAuditEvent } from "../services/audit.js";
 import { requireRole } from "../services/auth.js";
 import { checkAppUpdates, deleteAppSourceLink, listAppGithubVersions, listApps, selectAppGithubVersion, updateApp, upsertAppSourceLink } from "../services/apps.js";

@@ -7,7 +7,7 @@ import {
   backupVerifySchema,
   hostPathBackupCreateSchema,
   hostPathBackupRestoreSchema
-} from "@dockermender/shared";
+} from "@composebastion/shared";
 import {
   createBackupRecord,
   createHostPathBackupRecord,

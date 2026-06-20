@@ -1,5 +1,5 @@
-import type { MigrationPlan, MigrationPlanRequest } from "@dockermender/shared";
-import { migrationPlanSchema } from "@dockermender/shared";
+import type { MigrationPlan, MigrationPlanRequest } from "@composebastion/shared";
+import { migrationPlanSchema } from "@composebastion/shared";
 import { query } from "../db/pool.js";
 import { getHost } from "./hosts.js";
 import { isDemoHost } from "./demo.js";

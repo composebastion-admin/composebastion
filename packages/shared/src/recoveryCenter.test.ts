@@ -33,7 +33,7 @@ describe("recovery center schemas", () => {
       config: {
         endpoint: "https://s3.example.com",
         bucket: "recovery",
-        prefix: "dockermender/"
+        prefix: "composebastion/"
       },
       accessKeyId: "key",
       secretAccessKey: "secret"

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { DockerApp, RecoveryPointListItem } from "@dockermender/shared";
+import type { DockerApp, RecoveryPointListItem } from "@composebastion/shared";
 import {
   dockerAppRecoveryKey,
   dockerAppToRecoveryIdentity,

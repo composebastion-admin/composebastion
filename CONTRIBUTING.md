@@ -1,8 +1,8 @@
 # Contributing
 
-Thank you for your interest in Dockermender.
+Thank you for your interest in ComposeBastion.
 
-Dockermender is source-available but not open source.
+ComposeBastion is source-available but not open source.
 
 Free use is allowed for home labs, home use, private use, personal learning,
 and private non-commercial testing.
@@ -32,4 +32,4 @@ compensation.
 
 For support or licensing questions, contact:
 
-https://github.com/Admin-DockerMender/dockermender/issues
+https://github.com/composebastion-admin/composebastion/issues

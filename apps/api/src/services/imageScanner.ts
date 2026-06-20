@@ -1,7 +1,7 @@
 import { execFile, execSync } from "node:child_process";
 import { promisify } from "node:util";
 import { v4 as uuid } from "uuid";
-import type { ImageScanResult } from "@dockermender/shared";
+import type { ImageScanResult } from "@composebastion/shared";
 import { query } from "../db/pool.js";
 
 const execFileAsync = promisify(execFile);
@@ -79,7 +79,7 @@ export class TrivyImageScannerProvider implements ImageScannerProvider {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (message.includes("ENOENT")) {
-        throw new Error("Trivy is not installed on the Dockermender host");
+        throw new Error("Trivy is not installed on the ComposeBastion host");
       }
       throw error;
     }
@@ -116,7 +116,7 @@ export async function getImageScannerStatus(preferred: "auto" | "mock" | "trivy"
     error,
     guidance: trivyVersion
       ? "Trivy is available for real image vulnerability scans."
-      : "Install Trivy on the Dockermender server or set IMAGE_SCANNER_PROVIDER=mock for simulated scan results."
+      : "Install Trivy on the ComposeBastion server or set IMAGE_SCANNER_PROVIDER=mock for simulated scan results."
   };
 }
 

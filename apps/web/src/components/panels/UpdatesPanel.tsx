@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Download, Play, RefreshCw, ShieldAlert, X } from "lucide-react";
-import type { DockerHost, ImageScannerStatus, ImageUpdateCheck, ImageUpdatePreview } from "@dockermender/shared";
+import type { DockerHost, ImageScannerStatus, ImageUpdateCheck, ImageUpdatePreview } from "@composebastion/shared";
 import { api, postJson } from "../../api.js";
 import { useAsyncAction } from "../../hooks/useAsyncAction.js";
 import { formatDate } from "../../lib/format.js";

@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Copy, Play, Plus, ShieldCheck } from "lucide-react";
-import type { BackupTarget, DockerApp, DockerHost, RecoveryAnalysis, RecoveryDataMount, RecoveryPointListItem, RecoveryReadiness } from "@dockermender/shared";
+import type { BackupTarget, DockerApp, DockerHost, RecoveryAnalysis, RecoveryDataMount, RecoveryPointListItem, RecoveryReadiness } from "@composebastion/shared";
 import { api, postJson, putJson } from "../../../api.js";
 import { useAsyncAction } from "../../../hooks/useAsyncAction.js";
 import type { Jobish, JobResult } from "../../../lib/dashboardTypes.js";

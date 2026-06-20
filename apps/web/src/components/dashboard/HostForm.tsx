@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Plus, Server } from "lucide-react";
-import type { DockerHost, OperationJob } from "@dockermender/shared";
+import type { DockerHost, OperationJob } from "@composebastion/shared";
 import { postJson } from "../../api.js";
 import { useAsyncAction } from "../../hooks/useAsyncAction.js";
 import { hostFormPayload } from "../../lib/hostScope.js";
@@ -13,7 +13,7 @@ export function HostForm({
   runJob,
   defaultConnectionMode = "ssh",
   allowedConnectionModes = ["ssh", "agent"],
-  intro = "Add a real SSH/agent host, or load the built-in demo workspace to explore Dockermender without a server.",
+  intro = "Add a real SSH/agent host, or load the built-in demo workspace to explore ComposeBastion without a server.",
   showDemoWorkspace = true,
   submitLabel = "Save"
 }: {

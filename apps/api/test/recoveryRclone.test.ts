@@ -103,13 +103,13 @@ describe("recovery rclone adapter", () => {
       rclone: {
         provider: "drive",
         remoteName: "gdrive",
-        remotePath: "/Dockermender/backups/",
+        remotePath: "/ComposeBastion/backups/",
         configText: "[gdrive]\ntype = drive\n",
         credentials: {}
       }
     } as any;
 
     expect(buildRcloneObjectPath(target, "/points/rp-1/manifest.json"))
-      .toBe("gdrive:Dockermender/backups/points/rp-1/manifest.json");
+      .toBe("gdrive:ComposeBastion/backups/points/rp-1/manifest.json");
   });
 });

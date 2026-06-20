@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { backupTargetCreateSchema } from "@dockermender/shared";
+import { backupTargetCreateSchema } from "@composebastion/shared";
 import {
   assertBackupTargetS3EndpointAllowed,
   mapBackupTargetFields,
@@ -81,7 +81,7 @@ describe("recovery backup targets", () => {
     expect(row.localCachePolicy).toBe("remote_only");
     expect(row.config).toMatchObject({
       provider: "smb",
-      remoteName: "dockermender",
+      remoteName: "composebastion",
       remotePath: "Backups/docker",
       smb: {
         server: "nas.local",
@@ -102,7 +102,7 @@ describe("recovery backup targets", () => {
       type: "rclone",
       provider: "drive",
       rcloneConfig: "[gdrive]\ntype = drive\n",
-      remotePath: "Dockermender",
+      remotePath: "ComposeBastion",
       localCachePolicy: "keep",
       enabled: true
     }));
@@ -128,7 +128,7 @@ describe("recovery backup targets", () => {
     expect(mapped.kind).toBe("rclone");
     expect(mapped.rcloneProvider).toBe("drive");
     expect(mapped.remoteName).toBe("gdrive");
-    expect(mapped.remotePath).toBe("Dockermender");
+    expect(mapped.remotePath).toBe("ComposeBastion");
     expect(mapped.healthStatus).toBe("healthy");
     expect(mapped.hasGenericConfig).toBe(true);
     expect(mapped).not.toHaveProperty("rcloneConfig");

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Copy } from "lucide-react";
-import type { DockerHost, ResourceSnapshot } from "@dockermender/shared";
+import type { DockerHost, ResourceSnapshot } from "@composebastion/shared";
 import { postJson } from "../../api.js";
 import { useAsyncAction } from "../../hooks/useAsyncAction.js";
 import type { Jobish, JobResult } from "../../lib/dashboardTypes.js";

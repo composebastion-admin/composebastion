@@ -235,7 +235,7 @@ describe("runRecoveryCreate stop-first restart behavior", () => {
       stackId: null,
       workingDir: "/home/docker/DemoApp",
       composePath: "docker-compose.release.yml",
-      composeYaml: "services:\n  demoapp:\n    image: ghcr.io/admin-dockermender/demo-app:beta\n",
+      composeYaml: "services:\n  demoapp:\n    image: ghcr.io/composebastion-admin/demo-app:beta\n",
       env: null,
       containerIds: ["source-web"],
       volumeNames: []

@@ -1,5 +1,5 @@
-import type { RecoveryAnalysis, RecoveryAnalysisRequest, RecoveryDataMount } from "@dockermender/shared";
-import { recoveryAnalysisSchema } from "@dockermender/shared";
+import type { RecoveryAnalysis, RecoveryAnalysisRequest, RecoveryDataMount } from "@composebastion/shared";
+import { recoveryAnalysisSchema } from "@composebastion/shared";
 import { getContainerInspect } from "./docker.js";
 import { composeWorkingDirHostFolder } from "./recoveryManifest.js";
 import { resolveAppContext } from "./recoveryAppContext.js";

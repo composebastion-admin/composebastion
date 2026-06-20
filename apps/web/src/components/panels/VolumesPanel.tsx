@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Database, Plus, ShieldCheck, Trash2 } from "lucide-react";
-import type { DockerHost, ResourceSnapshot } from "@dockermender/shared";
+import type { DockerHost, ResourceSnapshot } from "@composebastion/shared";
 import { postJson } from "../../api.js";
 import { useConfirm } from "../ConfirmProvider.js";
 import { useAsyncAction } from "../../hooks/useAsyncAction.js";

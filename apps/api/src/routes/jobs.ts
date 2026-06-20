@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { idSchema } from "@dockermender/shared";
+import { idSchema } from "@composebastion/shared";
 import { cancelQueuedJob, getJob, getWorkerStatus, listJobs, retryJob } from "../services/jobs.js";
 import { requireRole } from "../services/auth.js";
 import { sendApiError } from "../services/apiError.js";

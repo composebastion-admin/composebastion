@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
-const STORAGE_KEY = "dockermender.selectedHostId";
+const STORAGE_KEY = "composebastion.selectedHostId";
 
 export function useHostPreference(hostIds: string[]) {
   const [selectedHostId, setSelectedHostId] = useState<string | null>(() => window.localStorage.getItem(STORAGE_KEY));

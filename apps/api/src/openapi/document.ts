@@ -651,7 +651,7 @@ export function buildOpenApiDocument() {
   return {
     openapi: "3.1.0",
     info: {
-      title: "Dockermender API",
+      title: "ComposeBastion API",
       version: OPENAPI_VERSION,
       description: "Pre-1.0 API contract. Stable JSON endpoints are available under /api/v1 while legacy /api routes remain compatible."
     },
@@ -661,7 +661,7 @@ export function buildOpenApiDocument() {
         cookieSession: {
           type: "apiKey",
           in: "cookie",
-          name: "dm_session"
+          name: "cb_session"
         }
       },
       schemas: componentSchemas
@@ -672,7 +672,7 @@ export function buildOpenApiDocument() {
 
 export function buildOpenApiMarkdown() {
   const lines = [
-    "# Dockermender OpenAPI",
+    "# ComposeBastion OpenAPI",
     "",
     "Generated from `apps/api/src/openapi/document.ts`.",
     "",

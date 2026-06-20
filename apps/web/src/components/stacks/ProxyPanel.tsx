@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Copy, Save, Wand2 } from "lucide-react";
-import type { ComposeStack } from "@dockermender/shared";
+import type { ComposeStack } from "@composebastion/shared";
 import { api, postJson, putJson } from "../../api.js";
 import { useAsyncAction } from "../../hooks/useAsyncAction.js";
 import { ButtonRow, Panel } from "../ui/primitives.js";

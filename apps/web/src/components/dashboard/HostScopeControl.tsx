@@ -1,4 +1,4 @@
-import type { DockerHost } from "@dockermender/shared";
+import type { DockerHost } from "@composebastion/shared";
 import type { HostScope } from "../../lib/navigation.js";
 import { getScopedHostIds } from "../../lib/hostScope.js";
 import { HostSelect } from "./HostSelect.js";

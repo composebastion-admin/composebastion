@@ -1,4 +1,4 @@
-import type { AdminUser, DockerHost } from "@dockermender/shared";
+import type { AdminUser, DockerHost } from "@composebastion/shared";
 
 const DEMO_TAG = "demo";
 

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Search } from "lucide-react";
-import type { DockerHost, ResourceSnapshot } from "@dockermender/shared";
+import type { DockerHost, ResourceSnapshot } from "@composebastion/shared";
 import { searchScope, type SearchResult } from "../../lib/globalSearch.js";
 import { hostName } from "../../lib/hostScope.js";
 

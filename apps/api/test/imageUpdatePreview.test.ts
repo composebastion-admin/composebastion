@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ImageUpdateCheck } from "@dockermender/shared";
+import type { ImageUpdateCheck } from "@composebastion/shared";
 import { buildImageUpdatePreview, resolveImageUpdateOutcome } from "../src/services/imageUpdates.js";
 
 const hostId = "11111111-1111-4111-8111-111111111111";

@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { idSchema } from "@dockermender/shared";
+import { idSchema } from "@composebastion/shared";
 import { z } from "zod";
 import { requireRole } from "../services/auth.js";
 import { createAlertRule, createAlertSilence, createChannel, deleteAlertRule, deleteAlertSilence, deleteChannel, listAlertChannelTestEvents, listAlertEvents, listAlertRules, listAlertSilences, listChannels, listRecentAlertChannelTestEvents, sendTestNotification } from "../services/alerts.js";

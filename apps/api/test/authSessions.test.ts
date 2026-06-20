@@ -59,7 +59,7 @@ describe("session metadata", () => {
           id: "00000000-0000-4000-8000-000000000001",
           name: "Admin User",
           username: "admin",
-          email: "admin@dockermender.local",
+          email: "admin@composebastion.local",
           role: "owner",
           is_active: true,
           last_login_at: null,
@@ -68,9 +68,9 @@ describe("session metadata", () => {
       })
       .mockResolvedValueOnce({ rows: [] });
 
-    const user = await readSession({ cookies: { dm_session: token } } as unknown as FastifyRequest);
+    const user = await readSession({ cookies: { cb_session: token } } as unknown as FastifyRequest);
 
-    expect(user?.email).toBe("admin@dockermender.local");
+    expect(user?.email).toBe("admin@composebastion.local");
     expect(query.mock.calls[1]?.[0]).toContain("last_seen_at < now() - interval '60 seconds'");
     expect(query.mock.calls[1]?.[1]).toEqual([hashToken(token)]);
   });

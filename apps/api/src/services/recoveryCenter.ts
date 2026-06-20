@@ -4,7 +4,7 @@ import type {
   MigrationPlanRequest,
   RecoveryPointDetail,
   RecoveryRestoreRequest
-} from "@dockermender/shared";
+} from "@composebastion/shared";
 import {
   backupTargetCreateSchema,
   backupTargetUpdateSchema,
@@ -12,7 +12,7 @@ import {
   recoveryPointCreateSchema,
   recoveryPointListQuerySchema,
   recoveryScheduleCreateSchema
-} from "@dockermender/shared";
+} from "@composebastion/shared";
 import { query, withTransaction } from "../db/pool.js";
 import type pg from "pg";
 import { enqueueJob } from "./jobs.js";

@@ -1,4 +1,4 @@
-import type { AdminUser } from "@dockermender/shared";
+import type { AdminUser } from "@composebastion/shared";
 
 declare module "fastify" {
   interface FastifyRequest {

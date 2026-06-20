@@ -28,8 +28,8 @@ vi.mock("../src/services/ssh.js", () => ({
 const hostId = "00000000-0000-4000-8000-000000000001";
 const blockedImage = {
   external_id: "sha256:old",
-  name: "ghcr.io/admin-dockermender/demo-app:beta",
-  data: { ID: "sha256:old", Repository: "ghcr.io/admin-dockermender/demo-app", Tag: "beta", Size: "560MB" }
+  name: "ghcr.io/composebastion-admin/demo-app:beta",
+  data: { ID: "sha256:old", Repository: "ghcr.io/composebastion-admin/demo-app", Tag: "beta", Size: "560MB" }
 };
 const unusedImage = {
   external_id: "sha256:unused",
@@ -39,7 +39,7 @@ const unusedImage = {
 const stoppedContainer = {
   external_id: "container-old",
   name: "demoapp-old",
-  data: { ID: "container-old", Names: "demoapp-old", Image: "ghcr.io/admin-dockermender/demo-app:beta", State: "exited" }
+  data: { ID: "container-old", Names: "demoapp-old", Image: "ghcr.io/composebastion-admin/demo-app:beta", State: "exited" }
 };
 
 function sshOk(stdout = "") {
@@ -76,7 +76,7 @@ describe("image cleanup", () => {
         return sshOk(JSON.stringify([{
           Name: "/demoapp-old",
           Image: "sha256:old",
-          Config: { Image: "ghcr.io/admin-dockermender/demo-app:beta" },
+          Config: { Image: "ghcr.io/composebastion-admin/demo-app:beta" },
           State: { Running: false, Status: "exited" }
         }]));
       }
@@ -105,7 +105,7 @@ describe("image cleanup", () => {
     await expect(executeDockerAction({
       type: "image.cleanup",
       hostId,
-      payload: { targets: [{ imageId: "sha256:old", reference: "ghcr.io/admin-dockermender/demo-app:beta" }] }
+      payload: { targets: [{ imageId: "sha256:old", reference: "ghcr.io/composebastion-admin/demo-app:beta" }] }
     })).rejects.toThrow("held by stopped container demoapp-old");
 
     await expect(executeDockerAction({

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { AuditEvent } from "@dockermender/shared";
+import type { AuditEvent } from "@composebastion/shared";
 import { api } from "../../api.js";
 import { formatDate } from "../../lib/format.js";
 import { Panel, VirtualDataTable } from "../ui/primitives.js";

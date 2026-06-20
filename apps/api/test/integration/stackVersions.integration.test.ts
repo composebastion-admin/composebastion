@@ -4,7 +4,7 @@ import { buildServer } from "../../src/server.js";
 import { runMigrations } from "../../src/db/migrate.js";
 import { pool } from "../../src/db/pool.js";
 
-const integrationEnabled = process.env.DOCKERMENDER_INTEGRATION === "1";
+const integrationEnabled = process.env.COMPOSEBASTION_INTEGRATION === "1";
 const strongPassword = "Very-Secure-Pass1";
 
 describe.skipIf(!integrationEnabled)("stack versions API integration", () => {

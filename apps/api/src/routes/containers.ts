@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { containerCloneSchema, containerExecRequestSchema, volumeCloneSchema } from "@dockermender/shared";
+import { containerCloneSchema, containerExecRequestSchema, volumeCloneSchema } from "@composebastion/shared";
 import { z } from "zod";
 import { createBackupRecord } from "../services/backups.js";
 import { execInContainer, getContainerInspect, getContainerLogs, getContainerStats, getContainerUsage, getContainerVolumeMounts, redactInspectEnv, streamContainerLogs, streamContainerUsage } from "../services/docker.js";

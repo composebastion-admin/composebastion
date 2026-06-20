@@ -2,24 +2,24 @@ import { describe, expect, it } from "vitest";
 import { runSshCommand } from "../src/services/ssh.js";
 
 const required = [
-  "DOCKERMENDER_SSH_TEST_HOST",
-  "DOCKERMENDER_SSH_TEST_USER",
-  "DOCKERMENDER_SSH_TEST_KEY"
+  "COMPOSEBASTION_SSH_TEST_HOST",
+  "COMPOSEBASTION_SSH_TEST_USER",
+  "COMPOSEBASTION_SSH_TEST_KEY"
 ] as const;
 
 const hasSshFixture = required.every((key) => Boolean(process.env[key]));
 
 describe.skipIf(!hasSshFixture)("SSH Docker host integration", () => {
   it("connects to a real host and verifies Docker/Compose are available", async () => {
-    const port = process.env.DOCKERMENDER_SSH_TEST_PORT?.trim()
-      ? Number(process.env.DOCKERMENDER_SSH_TEST_PORT)
+    const port = process.env.COMPOSEBASTION_SSH_TEST_PORT?.trim()
+      ? Number(process.env.COMPOSEBASTION_SSH_TEST_PORT)
       : 22;
     const target = {
-      hostname: process.env.DOCKERMENDER_SSH_TEST_HOST!,
+      hostname: process.env.COMPOSEBASTION_SSH_TEST_HOST!,
       port,
-      username: process.env.DOCKERMENDER_SSH_TEST_USER!,
-      privateKey: process.env.DOCKERMENDER_SSH_TEST_KEY!.replace(/\\n/g, "\n"),
-      passphrase: process.env.DOCKERMENDER_SSH_TEST_KEY_PASSPHRASE || undefined
+      username: process.env.COMPOSEBASTION_SSH_TEST_USER!,
+      privateKey: process.env.COMPOSEBASTION_SSH_TEST_KEY!.replace(/\\n/g, "\n"),
+      passphrase: process.env.COMPOSEBASTION_SSH_TEST_KEY_PASSPHRASE || undefined
     };
 
     const docker = await runSshCommand(target, "docker version --format '{{.Server.Version}}'", { timeoutMs: 30_000 });

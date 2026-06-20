@@ -1,0 +1,42 @@
+name: Beta Test Feedback
+description: Report findings from beta or staging test releases.
+title: "[Beta]: "
+labels: ["release: beta", "status: needs info"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Beta/staging version or branch
+      placeholder: "beta, v0.9.5-beta.1, or commit SHA"
+    validations:
+      required: true
+  - type: dropdown
+    id: result
+    attributes:
+      label: Test result
+      options:
+        - Passed
+        - Passed with notes
+        - Blocked
+        - Failed
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment tested
+      description: OS, Docker Engine/Compose versions, browser, deployment mode, and host types.
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: What was tested
+      description: Summarize the user-facing workflow, expected result, actual result, and anything that needs release-note attention.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Screenshots, logs, or safe samples
+      description: Attach relevant screenshots, logs, traces, or redacted sample data.

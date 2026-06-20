@@ -1,5 +1,5 @@
 {
-  "name": "@dockermender/api",
+  "name": "@composebastion/api",
   "version": "0.9.4",
   "private": true,
   "license": "SEE LICENSE IN ../../LICENSE.md",
@@ -19,7 +19,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1068.0",
-    "@dockermender/shared": "*",
+    "@composebastion/shared": "*",
     "@fastify/cookie": "^11.0.1",
     "@fastify/cors": "^10.1.0",
     "@fastify/helmet": "^13.0.2",

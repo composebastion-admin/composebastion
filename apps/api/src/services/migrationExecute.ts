@@ -1,5 +1,5 @@
-import type { MigrationStrategy, RecoveryPointDetail } from "@dockermender/shared";
-import type { RecoveryNetworkMode } from "@dockermender/shared";
+import type { MigrationStrategy, RecoveryPointDetail } from "@composebastion/shared";
+import type { RecoveryNetworkMode } from "@composebastion/shared";
 import { query } from "../db/pool.js";
 import { writeAuditEvent } from "./audit.js";
 import { buildComposeCommand, shQuote, withDockerEnv } from "./commands.js";

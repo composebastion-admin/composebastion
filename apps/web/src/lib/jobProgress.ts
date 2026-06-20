@@ -1,4 +1,4 @@
-import type { OperationJob } from "@dockermender/shared";
+import type { OperationJob } from "@composebastion/shared";
 import type { ProgressStep } from "../components/ui/primitives.js";
 
 function progressStatus(status: unknown): ProgressStep["status"] | null {

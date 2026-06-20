@@ -1,4 +1,4 @@
-import type { BackupTarget, BackupTargetCreate, BackupTargetUpdate, LocalCachePolicy, RcloneProvider } from "@dockermender/shared";
+import type { BackupTarget, BackupTargetCreate, BackupTargetUpdate, LocalCachePolicy, RcloneProvider } from "@composebastion/shared";
 import { env } from "../config/env.js";
 import { query } from "../db/pool.js";
 import { decryptSecret, encryptSecret } from "./crypto.js";
@@ -97,13 +97,13 @@ function rcloneConfigFromFlat(input: {
 }) {
   const remoteName = emptyToNull(input.remoteName)
     ?? parseFirstRcloneRemote(input.rcloneConfig)
-    ?? "dockermender";
+    ?? "composebastion";
   const provider = input.provider;
   const subPath = emptyToNull(input.subPath);
   const share = emptyToNull(input.share);
   const remotePath = emptyToNull(input.remotePath)
     ?? (provider === "smb" && share ? [share, subPath].filter(Boolean).join("/") : null)
-    ?? "dockermender";
+    ?? "composebastion";
   const config: Record<string, unknown> = { provider, remoteName, remotePath };
   if (provider === "smb") {
     config.smb = {
@@ -392,7 +392,7 @@ export function toWorkerBackupTarget(row: {
     }
     target.rclone = {
       provider: (row.provider ?? row.config?.provider ?? "custom") as RcloneProvider,
-      remoteName: String(row.config?.remoteName ?? "dockermender"),
+      remoteName: String(row.config?.remoteName ?? "composebastion"),
       remotePath: String(row.remote_path ?? row.config?.remotePath ?? ""),
       configText: row.generic_config_encrypted ? decryptSecret(row.generic_config_encrypted) : null,
       credentials

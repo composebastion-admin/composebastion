@@ -17,7 +17,7 @@ if (check) {
     readFile(mdPath, "utf8")
   ]);
   if (currentJson !== json || currentMarkdown !== markdown) {
-    console.error("OpenAPI docs are stale. Run npm run openapi:write --workspace @dockermender/api.");
+    console.error("OpenAPI docs are stale. Run npm run openapi:write --workspace @composebastion/api.");
     process.exitCode = 1;
   }
 } else {

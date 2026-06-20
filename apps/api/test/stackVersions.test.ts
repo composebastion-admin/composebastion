@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { diffText } from "@dockermender/shared";
+import { diffText } from "@composebastion/shared";
 
 describe("stack version diff helper", () => {
   it("reports env-agnostic compose line changes", () => {

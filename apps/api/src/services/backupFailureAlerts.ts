@@ -30,7 +30,7 @@ export async function notifyBackupScheduleFailure(
     if (!schedule) return;
     const target = scheduleTarget(schedule);
     const host = schedule.host_name ?? schedule.host_hostname ?? schedule.host_id;
-    const subject = `Dockermender scheduled ${phase} ${status}: ${target}`;
+    const subject = `ComposeBastion scheduled ${phase} ${status}: ${target}`;
     const message = [
       `Scheduled ${phase} finished with status: ${status}`,
       `Host: ${host}`,

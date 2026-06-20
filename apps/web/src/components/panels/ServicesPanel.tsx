@@ -20,8 +20,8 @@ import {
   Unlink,
   UploadCloud
 } from "lucide-react";
-import type { AppGithubVersionKind, AppGithubVersionOption, AppGithubVersions, ComposeStack, DockerApp, DockerHost, RecoveryReadiness, ResourceSnapshot } from "@dockermender/shared";
-import { publishedWebLinks } from "@dockermender/shared";
+import type { AppGithubVersionKind, AppGithubVersionOption, AppGithubVersions, ComposeStack, DockerApp, DockerHost, RecoveryReadiness, ResourceSnapshot } from "@composebastion/shared";
+import { publishedWebLinks } from "@composebastion/shared";
 import { api, deleteJson, postJson, putJson } from "../../api.js";
 import { useConfirm } from "../ConfirmProvider.js";
 import { useToast } from "../ToastProvider.js";
@@ -540,7 +540,7 @@ export function ServicesPanel({
             const links = publishedWebLinks(group.hostHostname, group.ports);
             const hasContainers = group.totalCount > 0;
             const selfManaged = isSelfManagementServiceGroup(group);
-            const selfManagedTitle = "Lifecycle actions are disabled for Dockermender itself.";
+            const selfManagedTitle = "Lifecycle actions are disabled for ComposeBastion itself.";
             const app = appByGroupKey.get(group.key) ?? null;
             const appReadinessKey = app ? readinessKeyForApp(app) : "";
             const appReadiness = appReadinessKey ? readinessByAppKey.get(appReadinessKey) ?? null : null;
@@ -637,7 +637,7 @@ export function ServicesPanel({
                     {selfManaged && (
                       <div className="serviceSafetyWarning">
                         <ShieldAlert size={13} />
-                        Dockermender is running here. Lifecycle actions are disabled to avoid stopping this console.
+                        ComposeBastion is running here. Lifecycle actions are disabled to avoid stopping this console.
                       </div>
                     )}
                   </div>

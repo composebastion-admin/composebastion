@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { v4 as uuid } from "uuid";
-import type { ImageUpdateCheck, ImageUpdatePreview } from "@dockermender/shared";
+import type { ImageUpdateCheck, ImageUpdatePreview } from "@composebastion/shared";
 import { query } from "../db/pool.js";
 import { isDemoHostId } from "./demo.js";
 import { listLatestScans } from "./imageScanner.js";

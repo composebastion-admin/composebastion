@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Pencil, Plus, ShieldCheck } from "lucide-react";
-import type { BackupTarget } from "@dockermender/shared";
+import type { BackupTarget } from "@composebastion/shared";
 import { patchJson, postJson } from "../../../api.js";
 import { useAsyncAction } from "../../../hooks/useAsyncAction.js";
 import { formatDate, emptyToUndefined } from "../../../lib/format.js";
@@ -73,7 +73,7 @@ function formFromTarget(target: BackupTarget): TargetForm {
     accessKeyId: target.accessKeyId ?? "",
     secretAccessKey: "",
     provider: target.rcloneProvider ?? "smb",
-    remoteName: target.remoteName ?? "dockermender",
+    remoteName: target.remoteName ?? "composebastion",
     remotePath: target.remotePath ?? "",
     rcloneConfig: "",
     server: "",

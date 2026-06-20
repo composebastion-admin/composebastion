@@ -4,7 +4,7 @@ import type { ContainerManifest } from "./recoveryManifest.js";
 import { isAllowedBindMountPath, normalizeBindMountPath } from "./recoveryManifest.js";
 import { shQuote } from "./commands.js";
 
-export const MANAGED_RESTORE_ROOT = "/var/lib/dockermender/restores";
+export const MANAGED_RESTORE_ROOT = "/var/lib/composebastion/restores";
 
 export type PublishedPort = {
   hostPort: string;

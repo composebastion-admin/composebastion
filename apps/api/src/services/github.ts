@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer";
 import { v4 as uuid } from "uuid";
-import { githubRepositoryCreateSchema, githubRepositoryUpdateSchema, type AppGithubVersionOption, type AppGithubVersions } from "@dockermender/shared";
+import { githubRepositoryCreateSchema, githubRepositoryUpdateSchema, type AppGithubVersionOption, type AppGithubVersions } from "@composebastion/shared";
 import { query } from "../db/pool.js";
 import { decryptSecret, encryptSecret } from "./crypto.js";
 import { isDemoHostId } from "./demo.js";
@@ -66,7 +66,7 @@ export function parseGithubUrl(repositoryUrl: string) {
 function githubHeaders(token?: string | null) {
   const headers: Record<string, string> = {
     "Accept": "application/vnd.github+json",
-    "User-Agent": "Dockermender"
+    "User-Agent": "ComposeBastion"
   };
   if (token) headers.Authorization = `Bearer ${token}`;
   return headers;

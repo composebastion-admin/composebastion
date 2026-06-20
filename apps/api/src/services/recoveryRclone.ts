@@ -38,7 +38,7 @@ async function buildSmbConfig(target: WorkerBackupTarget) {
     ? target.rclone.credentials.password
     : "";
   const lines = [
-    `[${target.rclone?.remoteName ?? "dockermender"}]`,
+    `[${target.rclone?.remoteName ?? "composebastion"}]`,
     "type = smb",
     `host = ${quoteConfigValue(smb.server)}`
   ];
@@ -57,7 +57,7 @@ async function resolveConfigText(target: WorkerBackupTarget) {
 }
 
 async function withConfigFile<T>(target: WorkerBackupTarget, work: (configPath: string) => Promise<T>) {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "dockermender-rclone-"));
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "composebastion-rclone-"));
   const configPath = path.join(tempDir, "rclone.conf");
   try {
     await writeFile(configPath, await resolveConfigText(target), { mode: 0o600 });

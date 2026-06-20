@@ -1,6 +1,6 @@
 # Recovery, Backups, And Restore Drills
 
-Dockermender recovery is app-focused. It captures the data an app needs, tracks
+ComposeBastion recovery is app-focused. It captures the data an app needs, tracks
 where artifacts live, and helps you prove a restore before you need it.
 
 ## Recovery Terms
@@ -33,7 +33,7 @@ providers.
 
 Always run the target test before using a target for important recovery points.
 
-For remote-only targets, Dockermender stages artifacts locally during capture,
+For remote-only targets, ComposeBastion stages artifacts locally during capture,
 uploads and verifies them, then removes the local cache for that recovery point.
 Only use remote-only after at least one verify and restore drill has passed.
 
@@ -55,7 +55,7 @@ to approved directories.
 
 ## Clone Restore
 
-Clone restore keeps the original app untouched. Dockermender creates suffixed
+Clone restore keeps the original app untouched. ComposeBastion creates suffixed
 clone resources where needed and starts the restored app as a separate project.
 
 Use clone restore for:

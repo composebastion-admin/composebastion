@@ -1,4 +1,4 @@
-import type { AppGithubVersionKind, AppGithubVersionOption } from "@dockermender/shared";
+import type { AppGithubVersionKind, AppGithubVersionOption } from "@composebastion/shared";
 
 export const githubVersionKinds: AppGithubVersionKind[] = ["branch", "tag", "release"];
 

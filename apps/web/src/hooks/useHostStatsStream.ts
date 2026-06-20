@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { HostStats } from "@dockermender/shared";
+import type { HostStats } from "@composebastion/shared";
 
 export type HostStatsStreamState = "idle" | "connecting" | "open" | "reconnecting" | "closed";
 

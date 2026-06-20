@@ -1,7 +1,7 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "Dockermender API",
+    "title": "ComposeBastion API",
     "version": "0.9.4",
     "description": "Pre-1.0 API contract. Stable JSON endpoints are available under /api/v1 while legacy /api routes remain compatible."
   },
@@ -15,7 +15,7 @@
       "cookieSession": {
         "type": "apiKey",
         "in": "cookie",
-        "name": "dm_session"
+        "name": "cb_session"
       }
     },
     "schemas": {

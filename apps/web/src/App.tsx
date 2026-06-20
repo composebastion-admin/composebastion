@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
-import type { AdminUser } from "@dockermender/shared";
+import type { AdminUser } from "@composebastion/shared";
 import { api } from "./api.js";
 import { AuthPanel } from "./components/AuthPanel.js";
 import { ConfirmProvider } from "./components/ConfirmProvider.js";

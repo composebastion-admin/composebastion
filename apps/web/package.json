@@ -1,5 +1,5 @@
 {
-  "name": "@dockermender/web",
+  "name": "@composebastion/web",
   "version": "0.9.4",
   "private": true,
   "license": "SEE LICENSE IN ../../LICENSE.md",
@@ -13,7 +13,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@dockermender/shared": "*",
+    "@composebastion/shared": "*",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "^5.5.0",
     "lucide-react": "^0.468.0",

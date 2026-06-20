@@ -304,7 +304,7 @@ describe("recovery standalone restore cleanup", () => {
         stackId: null,
         workingDir: "/home/docker/DemoApp",
         composePath: "docker-compose.release.yml",
-        yaml: "services:\n  demoapp:\n    image: ghcr.io/admin-dockermender/demo-app:beta\n    volumes:\n      - data:/app/data\nvolumes:\n  data:\n",
+        yaml: "services:\n  demoapp:\n    image: ghcr.io/composebastion-admin/demo-app:beta\n    volumes:\n      - data:/app/data\nvolumes:\n  data:\n",
         env: ""
       }
     };

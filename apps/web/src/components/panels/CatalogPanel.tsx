@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Download, Play, Plus, RefreshCw, Save, Search, Star, Trash2, X } from "lucide-react";
-import type { CatalogTemplate, DockerHost, ExternalCatalogCandidate, ExternalCatalogResponse } from "@dockermender/shared";
+import type { CatalogTemplate, DockerHost, ExternalCatalogCandidate, ExternalCatalogResponse } from "@composebastion/shared";
 import { api, deleteJson, postJson } from "../../api.js";
 import { useAsyncAction } from "../../hooks/useAsyncAction.js";
 import type { Jobish, JobResult } from "../../lib/dashboardTypes.js";

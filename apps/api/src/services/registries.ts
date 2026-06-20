@@ -1,5 +1,5 @@
 import { v4 as uuid } from "uuid";
-import { registryCreateSchema } from "@dockermender/shared";
+import { registryCreateSchema } from "@composebastion/shared";
 import { query } from "../db/pool.js";
 import { decryptSecret, encryptSecret } from "./crypto.js";
 

@@ -32,12 +32,12 @@ describe("HTTP security configuration", () => {
     expect(isUnsafeHttpMethod("GET")).toBe(false);
     expect(isUnsafeHttpMethod("POST")).toBe(true);
     expect(isUnsafeHttpMethod("delete")).toBe(true);
-    expect(isSameHostOrigin("https://dockermender.example.com/app", "dockermender.example.com")).toBe(true);
-    expect(isSameHostOrigin("https://evil.example", "dockermender.example.com")).toBe(false);
-    expect(isTrustedUnsafeRequestOrigin(undefined, "dockermender.example.com", [], "production")).toBe(true);
-    expect(isTrustedUnsafeRequestOrigin("https://dockermender.example.com", "dockermender.example.com", [], "production")).toBe(true);
+    expect(isSameHostOrigin("https://composebastion.example.com/app", "composebastion.example.com")).toBe(true);
+    expect(isSameHostOrigin("https://evil.example", "composebastion.example.com")).toBe(false);
+    expect(isTrustedUnsafeRequestOrigin(undefined, "composebastion.example.com", [], "production")).toBe(true);
+    expect(isTrustedUnsafeRequestOrigin("https://composebastion.example.com", "composebastion.example.com", [], "production")).toBe(true);
     expect(isTrustedUnsafeRequestOrigin("https://console.example.com", "api.example.com", ["https://console.example.com"], "production")).toBe(true);
-    expect(isTrustedUnsafeRequestOrigin("https://evil.example", "dockermender.example.com", [], "production")).toBe(false);
+    expect(isTrustedUnsafeRequestOrigin("https://evil.example", "composebastion.example.com", [], "production")).toBe(false);
     expect(isTrustedUnsafeRequestOrigin("http://localhost:5173", "127.0.0.1:8080", [], "development")).toBe(true);
   });
 

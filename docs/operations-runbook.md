@@ -1,6 +1,6 @@
 # Operations Runbook
 
-This runbook is the minimum production checklist for a Dockermender deployment.
+This runbook is the minimum production checklist for a ComposeBastion deployment.
 
 ## Daily Checks
 

@@ -1,0 +1,65 @@
+name: Bug Report
+description: Report reproducible ComposeBastion behavior.
+title: "[Bug]: "
+labels: ["type: bug", "status: needs info"]
+body:
+  - type: markdown
+    attributes:
+      value: "Thanks for helping improve ComposeBastion. Please redact secrets, tokens, private hostnames, customer data, and registry credentials."
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: What happened?
+      description: Describe the broken behavior and the user-visible impact.
+    validations:
+      required: true
+  - type: textarea
+    id: expected_behavior
+    attributes:
+      label: Expected behavior
+      description: What should have happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps_to_reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Start from a fresh page/app state where possible.
+      placeholder: "1. Open...\n2. Click...\n3. Observe..."
+    validations:
+      required: true
+  - type: textarea
+    id: screenshots_logs
+    attributes:
+      label: Screenshots/logs
+      description: Attach screenshots, browser console output, API logs, Docker logs, scanner output, or redacted stack traces where relevant.
+  - type: input
+    id: app_version
+    attributes:
+      label: App version
+      description: "Example: v0.9.4, main, beta, or a commit SHA."
+      placeholder: "v0.9.4"
+    validations:
+      required: true
+  - type: textarea
+    id: browser_os_environment
+    attributes:
+      label: Browser/OS/environment
+      description: Browser, OS, device, deployment mode, database/Redis setup, and whether this is local, beta/staging, or production.
+      placeholder: "Chrome on macOS, Ubuntu 24.04 host, docker compose deployment..."
+    validations:
+      required: true
+  - type: textarea
+    id: docker_deployment_details
+    attributes:
+      label: Docker/deployment details
+      description: Include Docker Engine/Compose versions, reverse proxy, host agent vs SSH, Compose overrides, and relevant redacted env values when applicable.
+  - type: checkboxes
+    id: reproducibility
+    attributes:
+      label: Reproducibility
+      options:
+        - label: I can reproduce this more than once.
+          required: true
+        - label: I included enough steps, screenshots, logs, or safe sample data for maintainers to investigate.
+          required: true

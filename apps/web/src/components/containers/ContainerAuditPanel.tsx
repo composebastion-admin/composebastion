@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { DockerHost, ResourceSnapshot } from "@dockermender/shared";
+import type { DockerHost, ResourceSnapshot } from "@composebastion/shared";
 import { api } from "../../api.js";
 import { formatDate } from "../../lib/format.js";
 import { DataTable, Panel } from "../ui/primitives.js";

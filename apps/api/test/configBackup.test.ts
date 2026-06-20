@@ -1,4 +1,4 @@
-import { CONFIG_BACKUP_FORMAT_VERSION } from "@dockermender/shared";
+import { CONFIG_BACKUP_FORMAT_VERSION } from "@composebastion/shared";
 import { createRequire } from "node:module";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { decryptConfigPayload, encryptConfigPayload } from "../src/services/crypto.js";
@@ -42,11 +42,11 @@ describe("config backup product identity", () => {
     );
   });
 
-  it("exports new config backups as Dockermender", async () => {
+  it("exports new config backups as ComposeBastion", async () => {
     const encrypted = await exportConfigBackup("long-test-passphrase");
     const payload = decryptConfigPayload<{ app: string; version: string }>(encrypted, "long-test-passphrase");
 
-    expect(payload.app).toBe("Dockermender");
+    expect(payload.app).toBe("ComposeBastion");
     expect(payload.version).toBe(packageJson.version);
   });
 
@@ -54,7 +54,7 @@ describe("config backup product identity", () => {
     const encrypted = encryptConfigPayload(emptyConfigPayload("OtherApp"), "long-test-passphrase");
 
     await expect(importConfigBackup(encrypted as unknown as Record<string, unknown>, "long-test-passphrase"))
-      .rejects.toThrow("This is not a Dockermender config backup");
+      .rejects.toThrow("This is not a ComposeBastion config backup");
     expect(withTransaction).not.toHaveBeenCalled();
   });
 });

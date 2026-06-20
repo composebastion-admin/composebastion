@@ -6,10 +6,10 @@ reviewed.
 Preferred reporting path:
 
 - Use GitHub private vulnerability reporting if it is enabled for
-  `Admin-DockerMender/dockermender`.
+  `composebastion-admin/composebastion`.
 - If private reporting is not available, open a minimal public Security Report
   issue and ask for a private contact path before sharing sensitive details:
-  https://github.com/Admin-DockerMender/dockermender/issues
+  https://github.com/composebastion-admin/composebastion/issues
 
 Do not include secrets, credentials, customer data, exploit details for active
 systems, or confidential commercial information in public issues. Ask for a
@@ -27,7 +27,7 @@ We will review reports as soon as practical.
 
 ## Supported Versions
 
-Dockermender is pre-1.0. Security fixes are expected to target the current main
+ComposeBastion is pre-1.0. Security fixes are expected to target the current main
 branch and the latest public release unless a separate written support agreement
 applies.
 

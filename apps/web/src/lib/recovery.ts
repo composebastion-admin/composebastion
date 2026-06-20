@@ -1,4 +1,4 @@
-import type { DockerApp, RecoveryAppIdentity, RecoveryPointListItem, RecoveryReadiness } from "@dockermender/shared";
+import type { DockerApp, RecoveryAppIdentity, RecoveryPointListItem, RecoveryReadiness } from "@composebastion/shared";
 
 export function dockerAppToRecoveryIdentity(app: DockerApp): RecoveryAppIdentity {
   if (app.stackId) {

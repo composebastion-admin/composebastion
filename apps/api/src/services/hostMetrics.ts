@@ -1,4 +1,4 @@
-import type { DockerHost, HostDisk, HostSpecs, HostStats } from "@dockermender/shared";
+import type { DockerHost, HostDisk, HostSpecs, HostStats } from "@composebastion/shared";
 import { query } from "../db/pool.js";
 import { getAgentHostStats } from "./agent.js";
 import { runDocker } from "./docker.js";

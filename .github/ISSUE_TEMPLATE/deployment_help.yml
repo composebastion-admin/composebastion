@@ -1,0 +1,55 @@
+name: Deployment Help / Support
+description: Ask for help with installation, Docker, SSH, upgrades, or runtime setup.
+title: "[Deployment]: "
+labels: ["type: support", "area: docker", "status: needs info"]
+body:
+  - type: markdown
+    attributes:
+      value: "Do not post secrets, private keys, tokens, passwords, registry credentials, or unredacted customer data."
+  - type: dropdown
+    id: install_method
+    attributes:
+      label: Install method
+      options:
+        - Docker Compose from this repository
+        - Production compose override
+        - Existing local development checkout
+        - Host agent
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: app_version
+    attributes:
+      label: App version
+      placeholder: "v0.9.4, main, beta, or commit SHA"
+    validations:
+      required: true
+  - type: textarea
+    id: compose_env_details
+    attributes:
+      label: Docker compose/env details
+      description: Include redacted Compose overrides, env variable names, reverse proxy notes, Postgres/Redis setup, and host-agent vs SSH details.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Attach redacted `docker compose logs`, browser screenshots, API logs, `docker compose config`, or host-agent logs where relevant.
+    validations:
+      required: true
+  - type: input
+    id: host_os
+    attributes:
+      label: Host OS
+      placeholder: "Ubuntu 24.04, Debian 12, macOS, etc."
+    validations:
+      required: true
+  - type: textarea
+    id: what_was_tried
+    attributes:
+      label: What was tried
+      description: List commands, UI steps, documentation pages, and changes already attempted.
+    validations:
+      required: true

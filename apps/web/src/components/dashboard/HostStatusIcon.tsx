@@ -1,5 +1,5 @@
 import { Wifi, WifiOff } from "lucide-react";
-import type { DockerHost } from "@dockermender/shared";
+import type { DockerHost } from "@composebastion/shared";
 
 export function HostStatusIcon({ status }: { status: DockerHost["lastStatus"] }) {
   if (status === "online") return <Wifi size={16} className="ok" />;

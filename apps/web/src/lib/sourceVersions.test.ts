@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AppGithubVersionOption } from "@dockermender/shared";
+import type { AppGithubVersionOption } from "@composebastion/shared";
 import { compareGithubVersionOptions, countGithubVersionUpdates, groupGithubVersionOptions, shortVersionSha } from "./sourceVersions.js";
 
 const option = (kind: AppGithubVersionOption["kind"], ref: string, updateAvailable = false): AppGithubVersionOption => ({

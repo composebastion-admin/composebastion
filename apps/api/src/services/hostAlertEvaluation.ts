@@ -1,4 +1,4 @@
-import type { HostMetricAlertCondition, HostStats, HostThresholdParams } from "@dockermender/shared";
+import type { HostMetricAlertCondition, HostStats, HostThresholdParams } from "@composebastion/shared";
 
 export type HostThresholdEvaluation = {
   value: number | null;

@@ -1,6 +1,6 @@
 # Deploy Compose Apps From GitHub
 
-Dockermender can track GitHub repositories that contain Docker Compose files,
+ComposeBastion can track GitHub repositories that contain Docker Compose files,
 then deploy or redeploy them to connected hosts.
 
 ## Public Repository
@@ -21,14 +21,14 @@ Create a fine-grained GitHub token:
 - Grant read-only `Contents` permission.
 - Do not grant write permissions.
 
-In Dockermender:
+In ComposeBastion:
 
 1. Paste the repository URL.
 2. Paste the token into the private repository token field.
 3. Click `Branches`.
 4. Save the repository.
 
-Dockermender encrypts the token with `APP_SECRET`. When editing the repository,
+ComposeBastion encrypts the token with `APP_SECRET`. When editing the repository,
 leave the token field blank to keep the saved token.
 
 ## Compose Path And Project Name
@@ -51,7 +51,7 @@ internal-tools
 
 ## Redeploy Flow
 
-After a repository is deployed, Dockermender records the current commit and can
+After a repository is deployed, ComposeBastion records the current commit and can
 compare it with the selected branch or tag.
 
 Typical update flow:

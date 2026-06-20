@@ -1,6 +1,6 @@
 import { v4 as uuid } from "uuid";
-import type { StackVersionSource } from "@dockermender/shared";
-import { diffText } from "@dockermender/shared";
+import type { StackVersionSource } from "@composebastion/shared";
+import { diffText } from "@composebastion/shared";
 import { query } from "../db/pool.js";
 import { enqueueJob } from "./jobs.js";
 

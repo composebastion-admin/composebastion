@@ -1,6 +1,6 @@
 import { v4 as uuid } from "uuid";
-import type { DockerHost } from "@dockermender/shared";
-import { dockerHostCreateSchema, dockerHostUpdateSchema } from "@dockermender/shared";
+import type { DockerHost } from "@composebastion/shared";
+import { dockerHostCreateSchema, dockerHostUpdateSchema } from "@composebastion/shared";
 import { query } from "../db/pool.js";
 import { decryptSecret, encryptSecret } from "./crypto.js";
 import { mapHost } from "./mappers.js";
@@ -74,7 +74,7 @@ export async function createHost(input: unknown) {
     if (env.NODE_ENV === "production" && !env.ALLOW_PRIVATE_AGENT_URLS) {
       const isValid = await validateAgentUrl(parsed.agentUrl);
       if (!isValid) {
-        throw Object.assign(new Error("This agent URL points at a private network address, which is blocked by default to prevent request forgery. If your agent really lives on a private LAN (typical for homelabs), set ALLOW_PRIVATE_AGENT_URLS=true on the Dockermender server and try again."), { statusCode: 400 });
+        throw Object.assign(new Error("This agent URL points at a private network address, which is blocked by default to prevent request forgery. If your agent really lives on a private LAN (typical for homelabs), set ALLOW_PRIVATE_AGENT_URLS=true on the ComposeBastion server and try again."), { statusCode: 400 });
       }
     }
   }
@@ -113,7 +113,7 @@ export async function updateHost(id: string, input: unknown) {
     if (env.NODE_ENV === "production" && !env.ALLOW_PRIVATE_AGENT_URLS) {
       const isValid = await validateAgentUrl(parsed.agentUrl);
       if (!isValid) {
-        throw Object.assign(new Error("This agent URL points at a private network address, which is blocked by default to prevent request forgery. If your agent really lives on a private LAN (typical for homelabs), set ALLOW_PRIVATE_AGENT_URLS=true on the Dockermender server and try again."), { statusCode: 400 });
+        throw Object.assign(new Error("This agent URL points at a private network address, which is blocked by default to prevent request forgery. If your agent really lives on a private LAN (typical for homelabs), set ALLOW_PRIVATE_AGENT_URLS=true on the ComposeBastion server and try again."), { statusCode: 400 });
       }
     }
   }

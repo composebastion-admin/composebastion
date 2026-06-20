@@ -6,7 +6,7 @@ describe("agent command policy", () => {
     expect(isPermittedDockerCommand("docker ps --all")).toBe(true);
     expect(isPermittedDockerCommand("printf %s 'token' | docker login registry.example.com --username user --password-stdin")).toBe(true);
     expect(isPermittedDockerCommand("docker compose -p 'sampleapp' -f '/tmp/compose.yml' up -d --remove-orphans --force-recreate")).toBe(true);
-    expect(isPermittedDockerCommand("cd '/tmp/dockermender/apps/sampleapp' && docker compose -p 'sampleapp' -f '/tmp/dockermender/apps/sampleapp/docker-compose.yml' pull")).toBe(true);
+    expect(isPermittedDockerCommand("cd '/tmp/composebastion/apps/sampleapp' && docker compose -p 'sampleapp' -f '/tmp/composebastion/apps/sampleapp/docker-compose.yml' pull")).toBe(true);
     expect(isPermittedDockerCommand("docker run -d --name 'web app' 'nginx:latest'")).toBe(true);
     expect(isPermittedDockerCommand("docker pull 'postgres:16'")).toBe(true);
   });

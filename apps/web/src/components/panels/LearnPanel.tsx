@@ -1,4 +1,4 @@
-import { networkDriverExplanations, type NetworkDriver } from "@dockermender/shared";
+import { networkDriverExplanations, type NetworkDriver } from "@composebastion/shared";
 import { Panel } from "../ui/primitives.js";
 
 export function LearnPanel() {
@@ -28,7 +28,7 @@ export function LearnPanel() {
       points: [
         "Services groups Compose projects and standalone containers into the operational view you use day to day.",
         "Current and latest versions come from existing git commit checks or image digest checks.",
-        "Standalone containers can be linked to an image tag, Compose folder, or Git folder so Dockermender knows how to check and update them.",
+        "Standalone containers can be linked to an image tag, Compose folder, or Git folder so ComposeBastion knows how to check and update them.",
         "Private GitHub repositories are supported from Deploy -> Tracked GitHub repositories by adding a fine-grained token with read-only Contents access.",
         "The old Apps information now lives in Services so source, status, versions, ports, and lifecycle actions stay together."
       ]
@@ -38,7 +38,7 @@ export function LearnPanel() {
       points: [
         "In Compose, the left side is the host port and the right side is the container port: 3100:3000 exposes the app at host:3100.",
         "If a port line uses ${APP_PORT:-3000}:3000, the public port comes from APP_PORT in .env. Changing an environment variable named PORT inside the service may only change the app process.",
-        "After a deploy, Dockermender refreshes inventory automatically. Use the host refresh action only if Docker changed outside the app and the table still looks stale."
+        "After a deploy, ComposeBastion refreshes inventory automatically. Use the host refresh action only if Docker changed outside the app and the table still looks stale."
       ]
     },
     {
@@ -47,7 +47,7 @@ export function LearnPanel() {
         "Container backup only backs up named Docker volumes attached to that container.",
         "Bind mounts like /home/user/app:/config are host folders, not named Docker volumes, so they are skipped.",
         "Use Recovery -> Backups when you need to back up or restore a named volume directly.",
-        "Backup files are stored in the Dockermender backup volume under /data/backups.",
+        "Backup files are stored in the ComposeBastion backup volume under /data/backups.",
         "Scheduled backups live under Recovery -> Schedules on a minimum five-minute interval."
       ]
     },

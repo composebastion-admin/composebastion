@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Moon, Sun } from "lucide-react";
-import type { AdminUser, Backup, DockerHost, OperationJob, ResourceSnapshot } from "@dockermender/shared";
+import type { AdminUser, Backup, DockerHost, OperationJob, ResourceSnapshot } from "@composebastion/shared";
 import type { Jobish } from "../../lib/dashboardTypes.js";
 import type { Theme } from "../../lib/theme.js";
 import { AuditPanel } from "./AuditPanel.js";

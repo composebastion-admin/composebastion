@@ -1,6 +1,6 @@
 # RBAC Matrix
 
-Dockermender uses four roles: `owner`, `admin`, `operator`, and `viewer`.
+ComposeBastion uses four roles: `owner`, `admin`, `operator`, and `viewer`.
 Permissions are additive from right to left: owner and admin include operator
 capabilities, and operator includes viewer capabilities.
 

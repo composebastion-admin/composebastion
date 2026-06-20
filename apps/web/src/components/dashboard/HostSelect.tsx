@@ -1,4 +1,4 @@
-import type { DockerHost } from "@dockermender/shared";
+import type { DockerHost } from "@composebastion/shared";
 
 export function HostSelect({ hosts, value, onChange }: { hosts: DockerHost[]; value: string; onChange: (value: string) => void }) {
   return (

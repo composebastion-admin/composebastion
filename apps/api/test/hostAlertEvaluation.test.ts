@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { HostStats } from "@dockermender/shared";
+import type { HostStats } from "@composebastion/shared";
 import { evaluateHostThreshold } from "../src/services/hostAlertEvaluation.js";
 
 const now = new Date("2026-06-16T12:00:00.000Z");

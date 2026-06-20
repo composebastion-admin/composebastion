@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { imageScanRequestSchema } from "@dockermender/shared";
+import { imageScanRequestSchema } from "@composebastion/shared";
 import { requireRole } from "../services/auth.js";
 import { checkImageUpdatesForHost, findRegistryAuthForReference, getImageUpdatePreview, listImageUpdateChecks } from "../services/imageUpdates.js";
 import {
@@ -95,7 +95,7 @@ export async function registerImageIntelligenceRoutes(app: FastifyInstance) {
     if (preferred === "auto" && !isTrivyAvailable()) {
       reply.code(503);
       return {
-        error: "Vulnerability scanning needs Trivy on the Dockermender server. The official Docker image ships with it; for manual installs see trivy.dev, or set IMAGE_SCANNER_PROVIDER=mock for simulated results."
+        error: "Vulnerability scanning needs Trivy on the ComposeBastion server. The official Docker image ships with it; for manual installs see trivy.dev, or set IMAGE_SCANNER_PROVIDER=mock for simulated results."
       };
     }
     const provider = createImageScannerProvider(preferred);

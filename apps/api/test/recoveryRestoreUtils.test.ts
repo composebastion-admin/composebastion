@@ -32,13 +32,13 @@ describe("recovery restore naming", () => {
   });
 
   it("places bind mounts under a managed restore root", () => {
-    expect(buildManagedRestoreBindPath("/var/lib/dockermender/restores", "rp-1", "/srv/app/data"))
-      .toBe("/var/lib/dockermender/restores/rp-1/srv_app_data");
+    expect(buildManagedRestoreBindPath("/var/lib/composebastion/restores", "rp-1", "/srv/app/data"))
+      .toBe("/var/lib/composebastion/restores/rp-1/srv_app_data");
   });
 
   it("restores compose working directory artifacts to their original path", () => {
     expect(resolveHostFolderRestorePath({
-      restoreRoot: "/var/lib/dockermender/restores",
+      restoreRoot: "/var/lib/composebastion/restores",
       recoveryPointId: "rp-1",
       sourcePath: "/home/docker/DemoApp",
       restorePath: "/home/docker/DemoApp"
@@ -47,15 +47,15 @@ describe("recovery restore naming", () => {
 
   it("keeps ordinary bind mounts under the managed restore root", () => {
     expect(resolveHostFolderRestorePath({
-      restoreRoot: "/var/lib/dockermender/restores",
+      restoreRoot: "/var/lib/composebastion/restores",
       recoveryPointId: "rp-1",
       sourcePath: "/srv/app/data"
-    })).toBe("/var/lib/dockermender/restores/rp-1/srv_app_data");
+    })).toBe("/var/lib/composebastion/restores/rp-1/srv_app_data");
   });
 
   it("rejects unsafe same-path host folder restore targets", () => {
     expect(() => resolveHostFolderRestorePath({
-      restoreRoot: "/var/lib/dockermender/restores",
+      restoreRoot: "/var/lib/composebastion/restores",
       recoveryPointId: "rp-1",
       sourcePath: "/var/run/docker.sock",
       restorePath: "/var/run/docker.sock"
@@ -134,13 +134,13 @@ describe("port conflict behavior", () => {
 
     const result = remapComposeYaml(yaml, {
       volumes: { data: "demo-restore_data" },
-      bindMounts: { "/srv/app": "/var/lib/dockermender/restores/rp-1/srv_app" },
+      bindMounts: { "/srv/app": "/var/lib/composebastion/restores/rp-1/srv_app" },
       portRemap: { "8080": "18081" },
       networks: { frontend: "demo-restore_frontend" }
     });
 
     expect(result).toContain("demo-restore_data:/data");
-    expect(result).toContain("source: /var/lib/dockermender/restores/rp-1/srv_app");
+    expect(result).toContain("source: /var/lib/composebastion/restores/rp-1/srv_app");
     expect(result).toMatch(/published: ["']?18081["']?/);
     expect(result).toContain("demo-restore_data:");
     expect(result).toContain("demo-restore_frontend:");

@@ -1,4 +1,4 @@
-import type { AdminUser, DockerHost } from "@dockermender/shared";
+import type { AdminUser, DockerHost } from "@composebastion/shared";
 import { isDemoHost } from "./demo.js";
 import { isAllowedCorsOrigin, isSameHostOrigin } from "./httpSecurity.js";
 

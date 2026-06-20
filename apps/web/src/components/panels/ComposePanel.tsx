@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { History, Play, Plus, Square, Trash2, X } from "lucide-react";
-import type { ComposeStack, DockerHost } from "@dockermender/shared";
+import type { ComposeStack, DockerHost } from "@composebastion/shared";
 import { deleteJson, postJson } from "../../api.js";
 import { useConfirm } from "../ConfirmProvider.js";
 import { useAsyncAction } from "../../hooks/useAsyncAction.js";
@@ -54,7 +54,7 @@ export function ComposePanel({ host, hosts, stacks, refresh, runJob }: { host: D
       title: "Forget stack",
       tone: "danger",
       confirmLabel: "Forget",
-      message: `Forget stack "${stack.name}"? This only removes the Dockermender record.`
+      message: `Forget stack "${stack.name}"? This only removes the ComposeBastion record.`
     })) return;
     await action.run(async () => {
       await deleteJson(`/api/compose/${stack.id}`);

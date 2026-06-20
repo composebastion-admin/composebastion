@@ -3,7 +3,7 @@ import { AlertTriangle, Terminal, X } from "lucide-react";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal as XTerm } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import type { DockerHost } from "@dockermender/shared";
+import type { DockerHost } from "@composebastion/shared";
 import { hostTerminalUrl } from "../../lib/hostTerminal.js";
 
 type DrawerPhase = "warning" | "connecting" | "ready" | "error";

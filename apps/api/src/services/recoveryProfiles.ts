@@ -1,6 +1,6 @@
 import { v4 as uuid } from "uuid";
-import type { RecoveryAppIdentity, RecoveryProfile, RecoveryProfileInput } from "@dockermender/shared";
-import { recoveryProfileInputSchema } from "@dockermender/shared";
+import type { RecoveryAppIdentity, RecoveryProfile, RecoveryProfileInput } from "@composebastion/shared";
+import { recoveryProfileInputSchema } from "@composebastion/shared";
 import { query } from "../db/pool.js";
 
 function iso(value: Date | string | null | undefined) {

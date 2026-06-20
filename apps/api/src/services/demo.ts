@@ -1,12 +1,12 @@
 import path from "node:path";
 import { v4 as uuid } from "uuid";
-import type { DockerActionRequest, DockerHost, ResourceKind } from "@dockermender/shared";
+import type { DockerActionRequest, DockerHost, ResourceKind } from "@composebastion/shared";
 import { query, withTransaction } from "../db/pool.js";
 import { encryptSecret } from "./crypto.js";
 import { mapHost } from "./mappers.js";
 
 export const DEMO_TAG = "demo";
-const DEMO_HOSTNAME = "demo.dockermender.local";
+const DEMO_HOSTNAME = "demo.composebastion.local";
 const DEMO_FILE_KIND = "demo_file";
 
 type Queryable = {
@@ -118,7 +118,7 @@ function containerData(input: {
     Size: input.size ?? "4.1kB (virtual 128MB)",
     Mounts: input.mounts ?? [],
     Network: input.network ?? "demo_frontend",
-    Labels: input.labels ?? { "dockermender.demo": "true" },
+    Labels: input.labels ?? { "composebastion.demo": "true" },
     Env: input.env ?? [],
     Health: input.health
   };
@@ -144,7 +144,7 @@ function networkData(name: string, driver = "bridge", scope = "local") {
     Scope: scope,
     Internal: false,
     IPv6: false,
-    Labels: { "dockermender.demo": "true" }
+    Labels: { "composebastion.demo": "true" }
   };
 }
 
@@ -154,7 +154,7 @@ function volumeData(name: string, sizeBytes = 134_217_728) {
     Driver: "local",
     Mountpoint: `/var/lib/docker/volumes/${name}/_data`,
     Scope: "local",
-    Labels: { "dockermender.demo": "true" },
+    Labels: { "composebastion.demo": "true" },
     UsageData: { Size: sizeBytes, RefCount: 1 }
   };
 }
@@ -167,7 +167,7 @@ const demoComposeYaml = `services:
     volumes:
       - demo_web_content:/usr/share/nginx/html
   api:
-    image: ghcr.io/admin-dockermender/showcase-api:0.9
+    image: ghcr.io/composebastion-admin/showcase-api:0.9
     environment:
       NODE_ENV: production
     ports:
@@ -198,7 +198,7 @@ function composeLabels(project: string, service: string) {
     "com.docker.compose.project": project,
     "com.docker.compose.service": service,
     "com.docker.compose.config-hash": demoHex(`${project}:${service}`, 16),
-    "dockermender.demo": "true"
+    "composebastion.demo": "true"
   };
 }
 
@@ -223,11 +223,11 @@ export async function seedDemoWorkspace(createdBy?: string | null) {
       {
         key: "edge",
         name: "Demo Edge Agent",
-        hostname: "demo.edge.dockermender.local",
+        hostname: "demo.edge.composebastion.local",
         port: 443,
         username: "agent",
         connectionMode: "agent",
-        agentUrl: "https://edge-agent.demo.dockermender.local",
+        agentUrl: "https://edge-agent.demo.composebastion.local",
         lastStatus: "online",
         lastSeenOffset: "3 minutes",
         lastError: null,
@@ -239,7 +239,7 @@ export async function seedDemoWorkspace(createdBy?: string | null) {
       {
         key: "recovery",
         name: "Demo Recovery Target",
-        hostname: "demo.dr.dockermender.local",
+        hostname: "demo.dr.composebastion.local",
         port: 22,
         username: "demo",
         connectionMode: "ssh",
@@ -400,7 +400,7 @@ export async function seedDemoWorkspace(createdBy?: string | null) {
     depends_on:
       - api
   api:
-    image: ghcr.io/admin-dockermender/showcase-api:0.9
+    image: ghcr.io/composebastion-admin/showcase-api:0.9
     restart: unless-stopped
     environment:
       NODE_ENV: production
@@ -414,7 +414,7 @@ export async function seedDemoWorkspace(createdBy?: string | null) {
       - postgres
       - redis
   worker:
-    image: ghcr.io/admin-dockermender/showcase-worker:0.9
+    image: ghcr.io/composebastion-admin/showcase-worker:0.9
     restart: unless-stopped
     environment:
       QUEUE_URL: redis://redis:6379/0
@@ -446,7 +446,7 @@ volumes:
 `;
     const showcaseEnv = `WEB_PORT=8088
 API_PORT=9090
-SHOWCASE_DOMAIN=portal.demo.dockermender.local
+SHOWCASE_DOMAIN=portal.demo.composebastion.local
 `;
     const observabilityComposeYaml = `services:
   prometheus:
@@ -491,7 +491,7 @@ volumes:
     volumes:
       - demo_edge_caddy:/data
   camera-relay:
-    image: ghcr.io/admin-dockermender/camera-relay:0.9
+    image: ghcr.io/composebastion-admin/camera-relay:0.9
     restart: unless-stopped
     volumes:
       - demo_edge_clips:/clips
@@ -608,14 +608,14 @@ volumes:
       composeYaml: showcaseComposeYaml,
       env: showcaseEnv,
       status: "deployed",
-      domains: ["portal.demo.dockermender.local", "api.demo.dockermender.local"],
+      domains: ["portal.demo.composebastion.local", "api.demo.composebastion.local"],
       exposedService: "web",
       exposedPort: 80,
       tlsDesired: true,
       updatePolicyEnabled: true,
       updatePolicyChannel: "patch",
       sourceType: "github",
-      sourceRepositoryUrl: "https://github.com/Admin-DockerMender/dockermender",
+      sourceRepositoryUrl: "https://github.com/composebastion-admin/composebastion",
       sourceBranch: "main",
       sourceWorkingDir: "/srv/apps/customer-portal",
       sourceComposePath: "examples/customer-portal/compose.yaml",
@@ -632,7 +632,7 @@ volumes:
       composeYaml: observabilityComposeYaml,
       env: observabilityEnv,
       status: "deployed",
-      domains: ["metrics.demo.dockermender.local"],
+      domains: ["metrics.demo.composebastion.local"],
       exposedService: "grafana",
       exposedPort: 3000,
       tlsDesired: true,
@@ -652,7 +652,7 @@ volumes:
       composeYaml: aiComposeYaml,
       env: "OPEN_WEBUI_PORT=3000",
       status: "created",
-      domains: ["ai.demo.dockermender.local"],
+      domains: ["ai.demo.composebastion.local"],
       exposedService: "open-webui",
       exposedPort: 8080,
       tlsDesired: true,
@@ -669,14 +669,14 @@ volumes:
       composeYaml: edgeComposeYaml,
       env: "EDGE_HTTP_PORT=8081",
       status: "deployed",
-      domains: ["edge.demo.dockermender.local"],
+      domains: ["edge.demo.composebastion.local"],
       exposedService: "edge-proxy",
       exposedPort: 80,
       tlsDesired: false,
       updatePolicyEnabled: true,
       updatePolicyChannel: "digest",
       sourceType: "git",
-      sourceRepositoryUrl: "https://github.com/Admin-DockerMender/dockermender",
+      sourceRepositoryUrl: "https://github.com/composebastion-admin/composebastion",
       sourceBranch: "main",
       sourceWorkingDir: "/srv/edge/gateway",
       sourceComposePath: "edge/docker-compose.yml",
@@ -691,7 +691,7 @@ volumes:
         hostId: primaryHostId,
         data: containerData({
           id: "demo-web-000000000001",
-          name: "dm-portal-web",
+          name: "cb-portal-web",
           image: "nginx:1.27-alpine",
           state: "running",
           ports: "0.0.0.0:8088->80/tcp, [::]:8088->80/tcp",
@@ -706,8 +706,8 @@ volumes:
         hostId: primaryHostId,
         data: containerData({
           id: "demo-api-000000000002",
-          name: "dm-portal-api",
-          image: "ghcr.io/admin-dockermender/showcase-api:0.9",
+          name: "cb-portal-api",
+          image: "ghcr.io/composebastion-admin/showcase-api:0.9",
           state: "running",
           ports: "0.0.0.0:9090->8080/tcp",
           size: "31.8MB (virtual 228MB)",
@@ -722,8 +722,8 @@ volumes:
         hostId: primaryHostId,
         data: containerData({
           id: "demo-worker-000000003",
-          name: "dm-portal-worker",
-          image: "ghcr.io/admin-dockermender/showcase-worker:0.9",
+          name: "cb-portal-worker",
+          image: "ghcr.io/composebastion-admin/showcase-worker:0.9",
           state: "running",
           status: "Up 38 minutes (health: starting)",
           size: "19.5MB (virtual 174MB)",
@@ -736,7 +736,7 @@ volumes:
         hostId: primaryHostId,
         data: containerData({
           id: "demo-postgres-0000004",
-          name: "dm-portal-postgres",
+          name: "cb-portal-postgres",
           image: "postgres:16-alpine",
           state: "running",
           ports: "5432/tcp",
@@ -751,7 +751,7 @@ volumes:
         hostId: primaryHostId,
         data: containerData({
           id: "demo-redis-000000005",
-          name: "dm-portal-redis",
+          name: "cb-portal-redis",
           image: "redis:7-alpine",
           state: "running",
           ports: "6379/tcp",
@@ -766,7 +766,7 @@ volumes:
         hostId: primaryHostId,
         data: containerData({
           id: "demo-prometheus-000006",
-          name: "dm-prometheus",
+          name: "cb-prometheus",
           image: "prom/prometheus:v2.54.1",
           state: "running",
           ports: "0.0.0.0:9095->9090/tcp",
@@ -781,7 +781,7 @@ volumes:
         hostId: primaryHostId,
         data: containerData({
           id: "demo-grafana-0000007",
-          name: "dm-grafana",
+          name: "cb-grafana",
           image: "grafana/grafana:11.5.2",
           state: "running",
           ports: "0.0.0.0:3001->3000/tcp",
@@ -796,14 +796,14 @@ volumes:
         hostId: primaryHostId,
         data: containerData({
           id: "demo-registry-cache-08",
-          name: "dm-registry-cache",
+          name: "cb-registry-cache",
           image: "registry:2",
           state: "running",
           ports: "127.0.0.1:5000->5000/tcp",
           size: "64.1MB (virtual 86.3MB)",
           mounts: [{ Type: "volume", Name: "demo_registry_cache", Destination: "/var/lib/registry", RW: true }],
           network: "demo_frontend",
-          labels: { "dockermender.demo": "true", "dockermender.source": "image" },
+          labels: { "composebastion.demo": "true", "composebastion.source": "image" },
           health: "healthy"
         })
       },
@@ -811,20 +811,20 @@ volumes:
         hostId: primaryHostId,
         data: containerData({
           id: "demo-legacy-cron-0009",
-          name: "dm-legacy-cron",
+          name: "cb-legacy-cron",
           image: "alpine:3.20",
           state: "exited",
           status: "Exited (0) 17 minutes ago",
           size: "2.1kB (virtual 7.8MB)",
           network: "none",
-          labels: { "dockermender.demo": "true", "dockermender.source": "git" }
+          labels: { "composebastion.demo": "true", "composebastion.source": "git" }
         })
       },
       {
         hostId: edgeHostId,
         data: containerData({
           id: "demo-edge-proxy-0001",
-          name: "dm-edge-proxy",
+          name: "cb-edge-proxy",
           image: "caddy:2-alpine",
           state: "running",
           ports: "0.0.0.0:8081->80/tcp",
@@ -839,8 +839,8 @@ volumes:
         hostId: edgeHostId,
         data: containerData({
           id: "demo-camera-relay-02",
-          name: "dm-camera-relay",
-          image: "ghcr.io/admin-dockermender/camera-relay:0.9",
+          name: "cb-camera-relay",
+          image: "ghcr.io/composebastion-admin/camera-relay:0.9",
           state: "running",
           status: "Up 6 hours (health: unhealthy)",
           ports: "8554/tcp",
@@ -855,14 +855,14 @@ volumes:
         hostId: recoveryHostId,
         data: containerData({
           id: "demo-standby-proxy-01",
-          name: "dm-standby-proxy",
+          name: "cb-standby-proxy",
           image: "nginx:1.27-alpine",
           state: "paused",
           status: "Paused 2 days",
           ports: "0.0.0.0:18080->80/tcp",
           size: "4.4kB (virtual 49.6MB)",
           network: "demo_recovery",
-          labels: { "dockermender.demo": "true", "dockermender.role": "standby" }
+          labels: { "composebastion.demo": "true", "composebastion.role": "standby" }
         })
       }
     ];
@@ -874,9 +874,9 @@ volumes:
     const imageSpecs = [
       [primaryHostId, "nginx:1.27-alpine", "49.6MB"],
       [primaryHostId, "nginx:alpine", "49.6MB"],
-      [primaryHostId, "ghcr.io/admin-dockermender/showcase-api:0.9", "228MB"],
-      [primaryHostId, "ghcr.io/admin-dockermender/showcase-api:0.10", "236MB"],
-      [primaryHostId, "ghcr.io/admin-dockermender/showcase-worker:0.9", "174MB"],
+      [primaryHostId, "ghcr.io/composebastion-admin/showcase-api:0.9", "228MB"],
+      [primaryHostId, "ghcr.io/composebastion-admin/showcase-api:0.10", "236MB"],
+      [primaryHostId, "ghcr.io/composebastion-admin/showcase-worker:0.9", "174MB"],
       [primaryHostId, "postgres:16-alpine", "396MB"],
       [primaryHostId, "redis:7-alpine", "57.8MB"],
       [primaryHostId, "prom/prometheus:v2.54.1", "272MB"],
@@ -885,8 +885,8 @@ volumes:
       [primaryHostId, "alpine:3.20", "7.8MB"],
       [primaryHostId, "ghcr.io/open-webui/open-webui:main", "6.68GB"],
       [edgeHostId, "caddy:2-alpine", "49.1MB"],
-      [edgeHostId, "ghcr.io/admin-dockermender/camera-relay:0.9", "163MB"],
-      [edgeHostId, "ghcr.io/admin-dockermender/camera-relay:0.10", "168MB"],
+      [edgeHostId, "ghcr.io/composebastion-admin/camera-relay:0.9", "163MB"],
+      [edgeHostId, "ghcr.io/composebastion-admin/camera-relay:0.10", "168MB"],
       [recoveryHostId, "nginx:1.27-alpine", "49.6MB"],
       [recoveryHostId, "postgres:16-alpine", "396MB"]
     ] as const;
@@ -928,9 +928,9 @@ volumes:
       {
         key: "showcase",
         name: "Demo Showcase App",
-        repositoryUrl: "https://github.com/Admin-DockerMender/dockermender",
-        owner: "Admin-DockerMender",
-        repo: "dockermender",
+        repositoryUrl: "https://github.com/composebastion-admin/composebastion",
+        owner: "composebastion-admin",
+        repo: "composebastion",
         branch: "main",
         composePath: "examples/customer-portal/compose.yaml",
         projectName: "demo_showcase",
@@ -976,9 +976,9 @@ volumes:
       {
         key: "edge",
         name: "Demo Edge Playbook",
-        repositoryUrl: "https://github.com/Admin-DockerMender/dockermender",
-        owner: "Admin-DockerMender",
-        repo: "dockermender",
+        repositoryUrl: "https://github.com/composebastion-admin/composebastion",
+        owner: "composebastion-admin",
+        repo: "composebastion",
         branch: "main",
         composePath: "examples/edge-gateway/compose.yaml",
         projectName: "demo_edge_gateway",
@@ -1052,7 +1052,7 @@ volumes:
         containerId: "demo-legacy-cron-0009",
         sourceType: "git",
         name: "Legacy Cleanup Job",
-        repositoryUrl: "https://github.com/Admin-DockerMender/dockermender",
+        repositoryUrl: "https://github.com/composebastion-admin/composebastion",
         branch: "main",
         workingDir: "/srv/jobs/legacy-cleanup",
         composePath: "compose.yml",
@@ -1107,7 +1107,7 @@ volumes:
         name: "Demo Local Vault",
         kind: "local",
         enabled: true,
-        config: { demo: true, basePath: "/var/lib/dockermender/demo-backups" },
+        config: { demo: true, basePath: "/var/lib/composebastion/demo-backups" },
         accessKeyId: null,
         secret: null,
         provider: null,
@@ -1123,13 +1123,13 @@ volumes:
         name: "Demo SMB Remote",
         kind: "rclone",
         enabled: true,
-        config: { demo: true, provider: "smb", remoteName: "demo-smb", smb: { server: "nas.demo.local", share: "dockermender", subPath: "showcase" } },
+        config: { demo: true, provider: "smb", remoteName: "demo-smb", smb: { server: "nas.demo.local", share: "composebastion", subPath: "showcase" } },
         accessKeyId: null,
         secret: null,
         provider: "smb",
-        remotePath: "demo-smb:dockermender/showcase",
+        remotePath: "demo-smb:composebastion/showcase",
         cache: "remote_only",
-        genericConfig: encryptSecret("[demo-smb]\ntype = smb\nhost = nas.demo.local\nshare = dockermender\n"),
+        genericConfig: encryptSecret("[demo-smb]\ntype = smb\nhost = nas.demo.local\nshare = composebastion\n"),
         genericCredentials: encryptSecret("username=demo\npassword=demo"),
         health: "healthy",
         healthError: null
@@ -1139,7 +1139,7 @@ volumes:
         name: "Demo S3 Archive",
         kind: "s3",
         enabled: true,
-        config: { demo: true, endpoint: "https://s3.example.invalid", bucket: "dockermender-demo", region: "us-east-1", prefix: "v0.9-showcase", forcePathStyle: true },
+        config: { demo: true, endpoint: "https://s3.example.invalid", bucket: "composebastion-demo", region: "us-east-1", prefix: "v0.9-showcase", forcePathStyle: true },
         accessKeyId: "DEMOACCESSKEY",
         secret: encryptSecret("demo-secret-access-key"),
         provider: null,
@@ -1195,7 +1195,7 @@ volumes:
         includePaths: ["/srv/apps/customer-portal", "/var/lib/docker/volumes/demo_api_uploads/_data"],
         excludePatterns: ["**/node_modules/**", "**/.cache/**", "**/tmp/**"],
         restorePaths: { "/srv/apps/customer-portal": "/srv/restored/customer-portal" },
-        pre: "docker compose exec -T postgres pg_start_backup('dockermender-demo', true)",
+        pre: "docker compose exec -T postgres pg_start_backup('composebastion-demo', true)",
         post: "docker compose exec -T postgres pg_stop_backup()",
         mode: "stop_first"
       },
@@ -1636,7 +1636,7 @@ volumes:
             sourceComposeAvailable: true,
             targetComposeAvailable: true
           },
-          portConflicts: [{ hostPort: "8088", protocol: "tcp", sourceContainer: "dm-portal-web", reason: "Target host already reserves the demo web port." }],
+          portConflicts: [{ hostPort: "8088", protocol: "tcp", sourceContainer: "cb-portal-web", reason: "Target host already reserves the demo web port." }],
           volumeCollisions: [],
           nameCollisions: [],
           missingNetworks: ["demo_backend"],
@@ -1650,7 +1650,7 @@ volumes:
 
     const channelIds: Record<string, string> = {};
     for (const channel of [
-      { key: "webhook", name: "Demo operations webhook", type: "webhook", email: null, webhook: "https://example.invalid/dockermender-webhook", enabled: true },
+      { key: "webhook", name: "Demo operations webhook", type: "webhook", email: null, webhook: "https://example.invalid/composebastion-webhook", enabled: true },
       { key: "email", name: "Demo email digest", type: "email", email: "ops@example.invalid", webhook: null, enabled: false }
     ]) {
       const id = uuid();
@@ -1715,11 +1715,11 @@ volumes:
     }
 
     for (const [targetHostId, imageReference, status, riskNote, containersAffected, stacksAffected, severities] of [
-      [primaryHostId, "ghcr.io/admin-dockermender/showcase-api:0.9", "update_available", "v0.10 is available; redeploy the Customer Portal stack after reviewing migrations.", [{ id: "demo-api-000000000002", name: "dm-portal-api" }], [{ id: stackIds.showcase!, name: "Customer Portal" }], { critical: 0, high: 1, medium: 3, low: 8 }],
-      [primaryHostId, "postgres:16-alpine", "up_to_date", "Database image digest matches the remote registry.", [{ id: "demo-postgres-0000004", name: "dm-portal-postgres" }], [{ id: stackIds.showcase!, name: "Customer Portal" }], { critical: 0, high: 0, medium: 1, low: 6 }],
+      [primaryHostId, "ghcr.io/composebastion-admin/showcase-api:0.9", "update_available", "v0.10 is available; redeploy the Customer Portal stack after reviewing migrations.", [{ id: "demo-api-000000000002", name: "cb-portal-api" }], [{ id: stackIds.showcase!, name: "Customer Portal" }], { critical: 0, high: 1, medium: 3, low: 8 }],
+      [primaryHostId, "postgres:16-alpine", "up_to_date", "Database image digest matches the remote registry.", [{ id: "demo-postgres-0000004", name: "cb-portal-postgres" }], [{ id: stackIds.showcase!, name: "Customer Portal" }], { critical: 0, high: 0, medium: 1, low: 6 }],
       [primaryHostId, "ghcr.io/open-webui/open-webui:main", "unknown", "Mutable main tag; pin a release before production use.", [], [{ id: stackIds.ai!, name: "AI Tools" }], { critical: 2, high: 4, medium: 11, low: 20 }],
-      [edgeHostId, "ghcr.io/admin-dockermender/camera-relay:0.9", "update_available", "Patch image includes a health probe fix for RTSP reconnects.", [{ id: "demo-camera-relay-02", name: "dm-camera-relay" }], [{ id: stackIds.edge!, name: "Edge Gateway" }], { critical: 0, high: 0, medium: 2, low: 5 }],
-      [primaryHostId, "registry:2", "local", "Local cache image is not checked against a remote registry.", [{ id: "demo-registry-cache-08", name: "dm-registry-cache" }], [], { critical: 0, high: 0, medium: 0, low: 2 }]
+      [edgeHostId, "ghcr.io/composebastion-admin/camera-relay:0.9", "update_available", "Patch image includes a health probe fix for RTSP reconnects.", [{ id: "demo-camera-relay-02", name: "cb-camera-relay" }], [{ id: stackIds.edge!, name: "Edge Gateway" }], { critical: 0, high: 0, medium: 2, low: 5 }],
+      [primaryHostId, "registry:2", "local", "Local cache image is not checked against a remote registry.", [{ id: "demo-registry-cache-08", name: "cb-registry-cache" }], [], { critical: 0, high: 0, medium: 0, low: 2 }]
     ] as const) {
       await client.query(
         `INSERT INTO image_update_checks (
@@ -1768,8 +1768,8 @@ volumes:
     }
 
     for (const registry of [
-      { name: "Demo GHCR", url: "ghcr.io", username: "admin-dockermender", password: "demo-ghcr-token", insecure: false },
-      { name: "Demo Docker Hub Mirror", url: "registry-1.docker.io", username: "dockermender-demo", password: "demo-docker-token", insecure: false },
+      { name: "Demo GHCR", url: "ghcr.io", username: "composebastion-admin", password: "demo-ghcr-token", insecure: false },
+      { name: "Demo Docker Hub Mirror", url: "registry-1.docker.io", username: "composebastion-demo", password: "demo-docker-token", insecure: false },
       { name: "Demo Insecure Lab Registry", url: "registry.demo.local:5000", username: "demo", password: "demo", insecure: true }
     ]) {
       await client.query(
@@ -1789,7 +1789,7 @@ volumes:
         defaultEnv: { WEB_PORT: "8088", API_PORT: "9090", SHOWCASE_DOMAIN: "portal.example.com" },
         volumes: ["demo_web_content", "demo_api_uploads", "demo_postgres_data", "demo_redis_data"],
         ports: ["8088:80", "9090:8080"],
-        docs: "https://github.com/Admin-DockerMender/dockermender"
+        docs: "https://github.com/composebastion-admin/composebastion"
       },
       {
         id: "demo-observability",
@@ -1824,7 +1824,7 @@ volumes:
         defaultEnv: {},
         volumes: ["demo_worker_redis", "demo_worker_artifacts"],
         ports: [],
-        docs: "https://github.com/Admin-DockerMender/dockermender"
+        docs: "https://github.com/composebastion-admin/composebastion"
       }
     ] as const) {
       await client.query(
@@ -1867,7 +1867,7 @@ volumes:
           ["/home/demo/apps/customer-portal/README.md", "# Customer Portal Demo\n\nThis stack shows git deployments, proxy metadata, updates, backups, and recovery readiness.\n"],
           ["/home/demo/apps/customer-portal/runbook.md", "## Demo Runbook\n\n1. Check image updates.\n2. Review recovery readiness.\n3. Start a migration plan to the recovery target.\n"],
           ["/home/demo/apps/observability/docker-compose.yml", observabilityComposeYaml],
-          ["/home/demo/apps/observability/prometheus.yml", "global:\n  scrape_interval: 15s\nscrape_configs:\n  - job_name: dockermender-demo\n    static_configs:\n      - targets: ['dm-portal-api:8080']\n"],
+          ["/home/demo/apps/observability/prometheus.yml", "global:\n  scrape_interval: 15s\nscrape_configs:\n  - job_name: composebastion-demo\n    static_configs:\n      - targets: ['cb-portal-api:8080']\n"],
           ["/home/demo/backups/README.md", "Demo backup artifacts are represented in the Backups and Recovery Center panels.\n"],
           ["/home/demo/playbooks/recovery-drill.md", "# Recovery Drill\n\nUse the Portal nightly verified recovery point and restore to Demo Recovery Target.\n"],
           ["/home/demo/secrets/secrets.example.env", "POSTGRES_PASSWORD=demo\nAPI_TOKEN=change-me-before-production\n"]
@@ -1878,7 +1878,7 @@ volumes:
         [
           ["/home/demo/edge/docker-compose.yml", edgeComposeYaml],
           ["/home/demo/edge/README.md", "# Edge Gateway Demo\n\nThis host uses agent mode and includes an unhealthy camera relay for alert showcases.\n"],
-          ["/home/demo/edge/caddy/Caddyfile", ":80 {\n  respond \"Dockermender edge demo\"\n}\n"]
+          ["/home/demo/edge/caddy/Caddyfile", ":80 {\n  respond \"ComposeBastion edge demo\"\n}\n"]
         ]
       ],
       [
@@ -1942,7 +1942,7 @@ volumes:
         type: "image.pull",
         status: "failed",
         hostId: edgeHostId,
-        payload: { demo: true, image: "ghcr.io/admin-dockermender/camera-relay:0.10" },
+        payload: { demo: true, image: "ghcr.io/composebastion-admin/camera-relay:0.10" },
         result: null,
         error: "Demo failure: registry token does not allow edge image pulls.",
         offset: "13 minutes",

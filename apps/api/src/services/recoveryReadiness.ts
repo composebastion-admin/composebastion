@@ -6,8 +6,8 @@ import type {
   RecoveryPointDetail,
   RecoveryReadiness,
   RecoveryReadinessReason
-} from "@dockermender/shared";
-import { recoveryReadinessSchema } from "@dockermender/shared";
+} from "@composebastion/shared";
+import { recoveryReadinessSchema } from "@composebastion/shared";
 import { listApps } from "./apps.js";
 import { assertHostBackupPathAllowed } from "./backupHostPaths.js";
 import { analyzeRecovery } from "./recoveryAnalysis.js";

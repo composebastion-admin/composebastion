@@ -1,6 +1,6 @@
 # Security Hardening
 
-Use this checklist before exposing Dockermender outside a trusted private network.
+Use this checklist before exposing ComposeBastion outside a trusted private network.
 
 ## Required
 

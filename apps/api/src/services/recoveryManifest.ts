@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { RecoveryAppIdentity } from "@dockermender/shared";
+import type { RecoveryAppIdentity } from "@composebastion/shared";
 
 export type ContainerRunningState = {
   id: string;

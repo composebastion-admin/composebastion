@@ -1,13 +1,13 @@
-# Dockermender Source Available Private Use License v1.0
+# ComposeBastion Source Available Private Use License v1.0
 
 Copyright (c) 2026. All rights reserved.
 
-This license governs access to and use of Dockermender, a multi-host Docker
+This license governs access to and use of ComposeBastion, a multi-host Docker
 management console deployed with Docker Compose, including its source code,
 binaries, documentation, assets, configuration files, and related materials,
 collectively referred to as the "Software".
 
-Dockermender is source-available software. It is not open-source software and is
+ComposeBastion is source-available software. It is not open-source software and is
 not licensed under MIT, Apache, GPL, AGPL, BSD, MPL, or any other standard
 open-source or free-software license.
 
@@ -63,7 +63,7 @@ commercial activity requires prior written approval or a purchased license.
 
 To request approval or purchase a license, contact:
 
-https://github.com/Admin-DockerMender/dockermender/issues
+https://github.com/composebastion-admin/composebastion/issues
 
 Do not include secrets, credentials, customer data, or confidential commercial
 terms in public issues. Ask for a private contact path when needed.
@@ -219,4 +219,4 @@ prior versions unless explicitly stated in writing.
 For support, approval, business use, commercial licensing, or written
 permission, contact:
 
-https://github.com/Admin-DockerMender/dockermender/issues
+https://github.com/composebastion-admin/composebastion/issues

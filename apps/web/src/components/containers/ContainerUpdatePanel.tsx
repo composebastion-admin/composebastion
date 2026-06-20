@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Download, Search } from "lucide-react";
-import type { ResourceSnapshot } from "@dockermender/shared";
-import { imageRepository, imageTag, imageWithTag } from "@dockermender/shared";
+import type { ResourceSnapshot } from "@composebastion/shared";
+import { imageRepository, imageTag, imageWithTag } from "@composebastion/shared";
 import { api } from "../../api.js";
 import { filterImageTags, uniqueSortedImageTags } from "../../lib/imageTagOptions.js";
 import { ButtonRow } from "../ui/primitives.js";

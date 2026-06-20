@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AdminUser, DockerHost } from "@dockermender/shared";
+import type { AdminUser, DockerHost } from "@composebastion/shared";
 import { canOpenHostTerminal, isDemoHost } from "../src/lib/hostTerminal.js";
 
 const baseHost: DockerHost = {

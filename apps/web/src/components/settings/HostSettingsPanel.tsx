@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Settings, Trash2 } from "lucide-react";
-import type { DockerHost } from "@dockermender/shared";
+import type { DockerHost } from "@composebastion/shared";
 import { deleteJson, putJson } from "../../api.js";
 import { useConfirm } from "../ConfirmProvider.js";
 import { useAsyncAction } from "../../hooks/useAsyncAction.js";
@@ -60,7 +60,7 @@ export function HostSettingsPanel({ host, onChanged }: { host: DockerHost; onCha
       title: "Delete host",
       tone: "danger",
       confirmLabel: "Delete host",
-      message: `Delete ${host.name} from Dockermender? This removes saved inventory, stacks, alerts, and backup records for this host, but it does not remove containers from the server.`
+      message: `Delete ${host.name} from ComposeBastion? This removes saved inventory, stacks, alerts, and backup records for this host, but it does not remove containers from the server.`
     });
     if (!confirmed) return;
     await action.run(async () => {

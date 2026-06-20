@@ -4,7 +4,7 @@ import { mkdir, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { Readable, Transform, type TransformCallback } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { backupListQuerySchema, paginatedResponse, type Backup, type BackupHealthSummary } from "@dockermender/shared";
+import { backupListQuerySchema, paginatedResponse, type Backup, type BackupHealthSummary } from "@composebastion/shared";
 import { v4 as uuid } from "uuid";
 import { env } from "../config/env.js";
 import { query } from "../db/pool.js";
@@ -33,7 +33,7 @@ import { hashFile } from "./recoveryStorage.js";
 import { pipeReadableToSshCommand, runSshCommand, streamSshCommandToFile } from "./ssh.js";
 import { sanitizeDockerName } from "./recoveryRestoreUtils.js";
 
-export const BACKUP_DRILL_ROOT = "/var/lib/dockermender/drills";
+export const BACKUP_DRILL_ROOT = "/var/lib/composebastion/drills";
 const BACKUP_HEALTH_WINDOW_MS = 24 * 60 * 60 * 1000;
 const BACKUP_PROOF_STALE_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -672,7 +672,7 @@ export async function runVolumeBackup(hostId: string, backupId: string, volumeNa
     if (isDemoHost(host.public)) {
       const targetPath = safeBackupPath(backup.fileName);
       await mkdir(path.dirname(targetPath), { recursive: true });
-      const content = `Dockermender demo backup for ${volumeName}\nCreated: ${new Date().toISOString()}\n`;
+      const content = `ComposeBastion demo backup for ${volumeName}\nCreated: ${new Date().toISOString()}\n`;
       const sizeBytes = await writeBackupBytes(targetPath, content, normalizeBackupEncryption(backup.encryption));
       return { ...(await completeBackupAfterCapture(backupId, sizeBytes, { demo: true, volumeName })), demo: true };
     }
@@ -718,7 +718,7 @@ export async function runHostPathBackup(hostId: string, backupId: string, source
     const host = await getHostForWorker(hostId);
     if (isDemoHost(host.public)) {
       const targetPath = safeBackupPath(backup.fileName);
-      const content = `Dockermender demo host-path backup for ${normalizedSourcePath}\nCreated: ${new Date().toISOString()}\n`;
+      const content = `ComposeBastion demo host-path backup for ${normalizedSourcePath}\nCreated: ${new Date().toISOString()}\n`;
       const sizeBytes = await writeBackupBytes(targetPath, content, normalizeBackupEncryption(backup.encryption));
       return { ...(await completeBackupAfterCapture(backupId, sizeBytes, { demo: true, sourcePath: normalizedSourcePath })), demo: true };
     }
@@ -802,7 +802,7 @@ export async function runVolumeRestore(hostId: string, backupId: string, targetV
           Driver: "local",
           Mountpoint: `/var/lib/docker/volumes/${targetVolumeName}/_data`,
           Scope: "local",
-          Labels: { "dockermender.demo.restore": backupId }
+          Labels: { "composebastion.demo.restore": backupId }
         }
       ]
     );

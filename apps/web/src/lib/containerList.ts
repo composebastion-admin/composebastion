@@ -1,5 +1,5 @@
-import type { ResourceSnapshot } from "@dockermender/shared";
-import { containerData } from "@dockermender/shared";
+import type { ResourceSnapshot } from "@composebastion/shared";
+import { containerData } from "@composebastion/shared";
 import { containerStateLabel } from "./dockerMetrics.js";
 
 export type ContainerSortKey = "name" | "state" | "image";

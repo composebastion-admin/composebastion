@@ -1,4 +1,4 @@
-import type { DockerHost, MigrationRun, OperationJob } from "@dockermender/shared";
+import type { DockerHost, MigrationRun, OperationJob } from "@composebastion/shared";
 import { formatDate } from "../../../lib/format.js";
 import { hostName } from "../../../lib/hostScope.js";
 import { DataTable, Panel, StatusPill } from "../../ui/primitives.js";

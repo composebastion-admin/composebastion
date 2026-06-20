@@ -1,5 +1,5 @@
 import { Activity, Plus, RefreshCw, Server, Settings, Terminal } from "lucide-react";
-import type { AdminUser, DockerHost } from "@dockermender/shared";
+import type { AdminUser, DockerHost } from "@composebastion/shared";
 import { formatDate } from "../../lib/format.js";
 import { describeAgentCompatibility } from "../../lib/agentCompatibility.js";
 import { canOpenHostTerminal } from "../../lib/hostTerminal.js";
@@ -33,7 +33,7 @@ export function HostsPanel({
       <div className="resourceHeader">
         <div>
           <h3>Hosts</h3>
-          <p>Add a server once, then let Dockermender keep inventory fresh in the background.</p>
+          <p>Add a server once, then let ComposeBastion keep inventory fresh in the background.</p>
         </div>
         <ButtonRow>
           <button type="button" className="primary" onClick={onAddHost}><Plus size={16} />Add host</button>

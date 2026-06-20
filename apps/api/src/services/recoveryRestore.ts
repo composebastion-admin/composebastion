@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { RecoveryArtifact, RecoveryPointDetail, RecoveryRestoreRequest } from "@dockermender/shared";
+import type { RecoveryArtifact, RecoveryPointDetail, RecoveryRestoreRequest } from "@composebastion/shared";
 import { query } from "../db/pool.js";
 import { getHostForWorker } from "./hosts.js";
 import { mapRecoveryArtifact, mapRecoveryPoint } from "./mappers.js";

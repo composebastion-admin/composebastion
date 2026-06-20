@@ -10,7 +10,7 @@ import {
   recoveryPointCreateSchema,
   recoveryPointListQuerySchema,
   recoveryRestoreRequestSchema
-} from "@dockermender/shared";
+} from "@composebastion/shared";
 import { requireRole } from "../services/auth.js";
 import { writeAuditEvent } from "../services/audit.js";
 import {

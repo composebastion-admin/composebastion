@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { idSchema, loginRequestSchema, setupRequestSchema } from "@dockermender/shared";
+import { idSchema, loginRequestSchema, setupRequestSchema } from "@composebastion/shared";
 import { z } from "zod";
 import {
   adminCount,
@@ -71,7 +71,7 @@ export async function registerAuthRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/auth/logout", async (request, reply) => {
-    await destroySession(request.cookies.dm_session);
+    await destroySession(request.cookies.cb_session);
     clearSessionCookie(reply);
     return { ok: true };
   });
@@ -99,7 +99,7 @@ export async function registerAuthRoutes(app: FastifyInstance) {
     if (!user) {
       return sendApiError(reply, 401, "AUTH_REQUIRED", "Authentication required");
     }
-    const currentHash = request.cookies.dm_session ? hashToken(request.cookies.dm_session) : "";
+    const currentHash = request.cookies.cb_session ? hashToken(request.cookies.cb_session) : "";
     return { sessions: await listSessionsForUser(user.id, currentHash) };
   });
 
@@ -109,7 +109,7 @@ export async function registerAuthRoutes(app: FastifyInstance) {
       return sendApiError(reply, 401, "AUTH_REQUIRED", "Authentication required");
     }
     const { id } = sessionParamSchema.parse(request.params);
-    const currentHash = request.cookies.dm_session ? hashToken(request.cookies.dm_session) : "";
+    const currentHash = request.cookies.cb_session ? hashToken(request.cookies.cb_session) : "";
     const result = await revokeSessionForUser(id, user.id, currentHash);
     if (!result.revoked) {
       return sendApiError(reply, 404, "NOT_FOUND", "Session not found");

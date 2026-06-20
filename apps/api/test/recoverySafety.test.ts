@@ -37,8 +37,8 @@ const standaloneContainer = {
 describe("restore root validation", () => {
   it("accepts the managed restore root and descendants", () => {
     expect(assertAllowedRestoreRoot()).toBe(MANAGED_RESTORE_ROOT);
-    expect(assertAllowedRestoreRoot("/var/lib/dockermender/restores/rp-1")).toBe(
-      "/var/lib/dockermender/restores/rp-1"
+    expect(assertAllowedRestoreRoot("/var/lib/composebastion/restores/rp-1")).toBe(
+      "/var/lib/composebastion/restores/rp-1"
     );
   });
 
@@ -51,8 +51,8 @@ describe("restore root validation", () => {
 
 describe("bind mount capture and restore paths", () => {
   it("builds managed restore bind paths for clone restore", () => {
-    expect(buildManagedRestoreBindPath("/var/lib/dockermender/restores", "rp-1", "/srv/app/data"))
-      .toBe("/var/lib/dockermender/restores/rp-1/srv_app_data");
+    expect(buildManagedRestoreBindPath("/var/lib/composebastion/restores", "rp-1", "/srv/app/data"))
+      .toBe("/var/lib/composebastion/restores/rp-1/srv_app_data");
   });
 
   it("captures and restores bind archives into the exact managed target directory", () => {
@@ -60,7 +60,7 @@ describe("bind mount capture and restore paths", () => {
     const target = buildManagedRestoreBindPath(MANAGED_RESTORE_ROOT, "rp-1", source);
     expect(buildBindMountCaptureCommand(source)).toBe("tar czf - -C '/srv/app/data' .");
     expect(buildBindMountRestoreCommand(target)).toBe(
-      "mkdir -p '/var/lib/dockermender/restores/rp-1/srv_app_data' && tar xzf - -C '/var/lib/dockermender/restores/rp-1/srv_app_data'"
+      "mkdir -p '/var/lib/composebastion/restores/rp-1/srv_app_data' && tar xzf - -C '/var/lib/composebastion/restores/rp-1/srv_app_data'"
     );
   });
 });
@@ -81,7 +81,7 @@ describe("standalone container restore commands", () => {
 
     expect(command).toContain(`--name '${name}'`);
     expect(command).toContain(`${projectName}_demoapp_data:/data`);
-    expect(command).toContain("/var/lib/dockermender/restores/rp-1/srv_app_data:/data");
+    expect(command).toContain("/var/lib/composebastion/restores/rp-1/srv_app_data:/data");
     expect(command).toContain("-p '18081:80/tcp'");
     expect(command).toContain("'nginx:alpine'");
     expect(command).toContain("'nginx'");

@@ -1,6 +1,6 @@
 # Trademarks
 
-Dockermender and associated branding may not be used as your own product,
+ComposeBastion and associated branding may not be used as your own product,
 service, company, domain, logo, or project branding without written permission.
 
 This project may reference third-party products, services, platforms, APIs, or
@@ -15,4 +15,4 @@ not affiliated with, sponsored by, or endorsed by Docker, Inc.
 
 For trademark or branding questions, contact:
 
-https://github.com/Admin-DockerMender/dockermender/issues
+https://github.com/composebastion-admin/composebastion/issues

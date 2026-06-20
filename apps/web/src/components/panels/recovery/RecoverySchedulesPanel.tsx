@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
-import type { BackupTarget, DockerApp, DockerHost, RecoverySchedule } from "@dockermender/shared";
+import type { BackupTarget, DockerApp, DockerHost, RecoverySchedule } from "@composebastion/shared";
 import { deleteJson, postJson } from "../../../api.js";
 import { useAsyncAction } from "../../../hooks/useAsyncAction.js";
 import { formatDate } from "../../../lib/format.js";

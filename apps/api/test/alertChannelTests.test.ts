@@ -56,7 +56,7 @@ describe("alert channel test history", () => {
     expect(event).toMatchObject({ channelId, status: "success", testedBy: userId });
     expect(postJsonWebhook).toHaveBeenCalledWith(
       "https://example.com/hook",
-      { subject: "Dockermender test notification", message: "This is a test notification from Dockermender.", source: "Dockermender" },
+      { subject: "ComposeBastion test notification", message: "This is a test notification from ComposeBastion.", source: "ComposeBastion" },
       expect.objectContaining({ allowPrivateNetwork: true })
     );
     expect(query.mock.calls[1]?.[0]).toContain("INSERT INTO alert_channel_test_events");

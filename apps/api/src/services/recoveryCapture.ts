@@ -1,8 +1,8 @@
 import path from "node:path";
 import { rm } from "node:fs/promises";
 import { v4 as uuid } from "uuid";
-import type { RecoveryPointDetail } from "@dockermender/shared";
-import type { RecoveryProfile } from "@dockermender/shared";
+import type { RecoveryPointDetail } from "@composebastion/shared";
+import type { RecoveryProfile } from "@composebastion/shared";
 import { query } from "../db/pool.js";
 import { loadWorkerBackupTarget } from "./recoveryBackupTargets.js";
 import { shQuote, withDockerEnv } from "./commands.js";
@@ -242,7 +242,7 @@ async function captureNamedVolume(
     const written = await writeRecoveryPointFile(
       recoveryPointId,
       storageKey,
-      `Dockermender demo recovery volume for ${volumeName}\n`
+      `ComposeBastion demo recovery volume for ${volumeName}\n`
     );
     await updateArtifactStatus(artifactId, "completed", written);
     return written;
@@ -274,7 +274,7 @@ async function captureBindMount(
     const written = await writeRecoveryPointFile(
       recoveryPointId,
       storageKey,
-      `Dockermender demo bind mount backup for ${sourcePath}\n`
+      `ComposeBastion demo bind mount backup for ${sourcePath}\n`
     );
     await updateArtifactStatus(artifactId, "completed", written);
     return written;

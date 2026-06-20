@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Activity, Plus, RefreshCw, Server, Settings, Terminal } from "lucide-react";
-import type { AdminUser, DockerHost } from "@dockermender/shared";
+import type { AdminUser, DockerHost } from "@composebastion/shared";
 import { formatDate } from "../../lib/format.js";
 import { canOpenHostTerminal } from "../../lib/hostTerminal.js";
 import type { Jobish } from "../../lib/dashboardTypes.js";
@@ -78,7 +78,7 @@ export function SshAccessPanel({
             defaultConnectionMode="ssh"
             allowedConnectionModes={["ssh"]}
             showDemoWorkspace={false}
-            intro="Add a Docker host reachable over SSH. Dockermender will use this same connection for inventory, actions, and terminal access."
+            intro="Add a Docker host reachable over SSH. ComposeBastion will use this same connection for inventory, actions, and terminal access."
             submitLabel="Save SSH connection"
           />
         </section>

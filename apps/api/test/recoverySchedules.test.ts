@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { recoveryScheduleCreateSchema } from "@dockermender/shared";
+import { recoveryScheduleCreateSchema } from "@composebastion/shared";
 
 describe("recovery schedule capture mode", () => {
   it("accepts hot and stop_first capture modes", () => {

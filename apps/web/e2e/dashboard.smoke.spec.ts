@@ -4,7 +4,7 @@ const user = {
   id: "11111111-1111-4111-8111-111111111111",
   name: "Admin User",
   username: "admin",
-  email: "admin@dockermender.local",
+  email: "admin@composebastion.local",
   role: "owner",
   isActive: true,
   createdAt: new Date(0).toISOString()
@@ -202,7 +202,7 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
       mounts: [{ type: "volume", name: "web-data", destination: "/usr/share/nginx/html", readOnly: false }],
       networks: [{ name: "bridge", ipAddress: "172.17.0.2", aliases: ["web"] }],
       ports: [{ containerPort: "80", protocol: "tcp", hostIp: "0.0.0.0", hostPort: "8080" }],
-      labels: { "com.dockermender.app": "web" }
+      labels: { "com.composebastion.app": "web" }
     } });
     if (path === `/api/hosts/${host.id}/compose`) return json({ stacks: [] });
     if (path === "/api/hosts/metrics") return json([{
@@ -514,8 +514,8 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
       reason: "unused tagged image"
     }, {
       imageId: "sha256:held",
-      reference: "ghcr.io/admin-dockermender/demo-app:old",
-      repository: "ghcr.io/admin-dockermender/demo-app",
+      reference: "ghcr.io/composebastion-admin/demo-app:old",
+      repository: "ghcr.io/composebastion-admin/demo-app",
       tag: "old",
       size: "560MB",
       usedBy: [{ id: "demoapp-old", name: "demoapp-old", state: "exited" }],
@@ -571,7 +571,7 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
 test("first-run setup reaches the dashboard", async ({ page }) => {
   await mockApi(page, { needsSetup: true, hosts: [] });
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "Dockermender" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "ComposeBastion" })).toBeVisible();
   await page.getByLabel("Username").fill("admin");
   await page.getByLabel("Password").fill("long-enough-password");
   await page.getByRole("button", { name: "Create Admin" }).click();
@@ -852,9 +852,9 @@ test("images cleanup preview explains blocked stopped-container images", async (
   await page.goto("/images");
   await page.getByRole("button", { name: "Clean unused" }).click();
   await expect(page.getByText("held by stopped container demoapp-old")).toBeVisible();
-  await expect(page.getByText("ghcr.io/admin-dockermender/demo-app:old")).toBeVisible();
+  await expect(page.getByText("ghcr.io/composebastion-admin/demo-app:old")).toBeVisible();
   await expect(page.getByLabel("Select nginx:old")).toBeChecked();
-  await expect(page.getByLabel("Select ghcr.io/admin-dockermender/demo-app:old")).toBeDisabled();
+  await expect(page.getByLabel("Select ghcr.io/composebastion-admin/demo-app:old")).toBeDisabled();
   await expect(page.getByRole("button", { name: "Delete selected" })).toBeEnabled();
 });
 

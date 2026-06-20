@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { dockerActionSchema, resourceKindSchema } from "@dockermender/shared";
+import { dockerActionSchema, resourceKindSchema } from "@composebastion/shared";
 import { createHost, deleteHost, getHost, listHosts, restoreHost, updateHost } from "../services/hosts.js";
 import { auditContextFromRequest } from "../services/audit.js";
 import { sendApiError } from "../services/apiError.js";

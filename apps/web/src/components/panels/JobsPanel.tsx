@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { AdminUser, OperationJob } from "@dockermender/shared";
+import type { AdminUser, OperationJob } from "@composebastion/shared";
 import { postJson } from "../../api.js";
 import { formatDate } from "../../lib/format.js";
 import { activeJobPhase, jobProgressSteps, jobRecoveryHint } from "../../lib/jobProgress.js";

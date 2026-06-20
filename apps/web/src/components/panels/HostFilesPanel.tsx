@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Database, FilePlus, Github, Pencil, Play, Plus, RefreshCw, Save, X } from "lucide-react";
-import type { DockerHost } from "@dockermender/shared";
+import type { DockerHost } from "@composebastion/shared";
 import { api, postJson } from "../../api.js";
 import { useAsyncAction } from "../../hooks/useAsyncAction.js";
 import { formatBytes } from "../../lib/format.js";

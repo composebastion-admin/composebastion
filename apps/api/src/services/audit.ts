@@ -1,6 +1,6 @@
 import { v4 as uuid } from "uuid";
-import type { AuditEvent } from "@dockermender/shared";
-import { paginationQuerySchema, paginatedResponse } from "@dockermender/shared";
+import type { AuditEvent } from "@composebastion/shared";
+import { paginationQuerySchema, paginatedResponse } from "@composebastion/shared";
 import type { FastifyRequest } from "fastify";
 import { query } from "../db/pool.js";
 function mapAudit(row: any): AuditEvent {

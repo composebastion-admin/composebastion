@@ -1,6 +1,9 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-label="Dockermender">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-label="ComposeBastion">
   <rect width="48" height="48" rx="11" fill="#17120b"/>
   <rect x="0.75" y="0.75" width="46.5" height="46.5" rx="10.25" fill="none" stroke="#e0a23f" stroke-opacity="0.22" stroke-width="1.5"/>
-  <path d="M16 8 L32 8 L42 24 L32 40 L16 40 L6 24 Z" fill="none" stroke="#e0a23f" stroke-width="3.6" stroke-linejoin="round"/>
-  <rect x="16" y="21" width="16" height="6" rx="3" fill="#e0a23f"/>
+  <g transform="translate(24 24) scale(1.18) translate(-16 -16.3)">
+    <path d="M6 5 H10 V8 H14 V5 H18 V8 H22 V5 H26 V16 C26 22 22 26 16 29 C10 26 6 22 6 16 Z" fill="none" stroke="#e0a23f" stroke-width="2.4" stroke-linejoin="round"/>
+    <rect x="10.5" y="12.6" width="11" height="2.7" rx="1.35" fill="#e0a23f"/>
+    <rect x="10.5" y="17.2" width="11" height="2.7" rx="1.35" fill="#e0a23f"/>
+  </g>
 </svg>

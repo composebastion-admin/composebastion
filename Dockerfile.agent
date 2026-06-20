@@ -3,13 +3,13 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends docker.io ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json* ./
 COPY apps/agent/package.json apps/agent/package.json
-RUN npm install --workspace @dockermender/agent
+RUN npm install --workspace @composebastion/agent
 
 FROM deps AS build
 WORKDIR /app
 COPY apps/agent apps/agent
 COPY tsconfig.base.json tsconfig.base.json
-RUN npm run build --workspace @dockermender/agent
+RUN npm run build --workspace @composebastion/agent
 RUN npm prune --omit=dev
 
 FROM node:20-bookworm-slim AS runtime

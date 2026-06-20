@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Activity, Cpu, Database, HardDrive, MemoryStick, Network, Server, Timer } from "lucide-react";
-import type { DockerHost, HostSpecs, HostStats } from "@dockermender/shared";
+import type { DockerHost, HostSpecs, HostStats } from "@composebastion/shared";
 import { api } from "../../api.js";
 import { useHostMetricHistory } from "../../hooks/useHostMetricHistory.js";
 import { useHostStatsStream } from "../../hooks/useHostStatsStream.js";

@@ -1,6 +1,6 @@
 # Upgrade Guide
 
-Dockermender is still pre-1.0. Upgrade carefully and keep rollback paths simple.
+ComposeBastion is still pre-1.0. Upgrade carefully and keep rollback paths simple.
 
 ## Version Policy
 

@@ -5,7 +5,7 @@ import { buildServer } from "../../src/server.js";
 import { runMigrations } from "../../src/db/migrate.js";
 import { pool } from "../../src/db/pool.js";
 
-const integrationEnabled = process.env.DOCKERMENDER_INTEGRATION === "1";
+const integrationEnabled = process.env.COMPOSEBASTION_INTEGRATION === "1";
 const strongPassword = "Very-Secure-Pass1";
 
 describe.skipIf(!integrationEnabled)("auth API integration", () => {
@@ -46,7 +46,7 @@ describe.skipIf(!integrationEnabled)("auth API integration", () => {
     });
     expect(response.statusCode).toBe(200);
     expect(response.json().user.username).toBe("admin");
-    expect(response.headers["set-cookie"]).toMatch(/dm_session=/);
+    expect(response.headers["set-cookie"]).toMatch(/cb_session=/);
 
     const me = await app.inject({
       method: "GET",
@@ -75,7 +75,7 @@ describe.skipIf(!integrationEnabled)("auth API integration", () => {
     });
     expect(setup.statusCode).toBe(200);
     const setupCookie = firstSetCookie(setup);
-    expect(setupCookie).toMatch(/dm_session=/);
+    expect(setupCookie).toMatch(/cb_session=/);
 
     const setupSession = await pool.query(
       "SELECT id, token_hash, ip_address, user_agent, last_seen_at FROM sessions ORDER BY created_at ASC LIMIT 1"
@@ -92,7 +92,7 @@ describe.skipIf(!integrationEnabled)("auth API integration", () => {
     });
     expect(login.statusCode).toBe(200);
     const loginCookie = firstSetCookie(login);
-    expect(loginCookie).toMatch(/dm_session=/);
+    expect(loginCookie).toMatch(/cb_session=/);
 
     const listed = await app.inject({
       method: "GET",
@@ -166,7 +166,7 @@ describe.skipIf(!integrationEnabled)("auth API integration", () => {
       headers: { cookie: loginCookie }
     });
     expect(revokeCurrent.statusCode).toBe(200);
-    expect(firstSetCookie(revokeCurrent)).toMatch(/dm_session=/);
+    expect(firstSetCookie(revokeCurrent)).toMatch(/cb_session=/);
 
     const meAfterCurrentRevoke = await app.inject({
       method: "GET",

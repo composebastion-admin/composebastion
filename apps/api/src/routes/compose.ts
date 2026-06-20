@@ -5,7 +5,7 @@ import {
   composeStackProxyUpdateSchema,
   composeStackUpdateSchema,
   stackRollbackSchema
-} from "@dockermender/shared";
+} from "@composebastion/shared";
 import { query } from "../db/pool.js";
 import { requireRole } from "../services/auth.js";
 import { enqueueJob } from "../services/jobs.js";

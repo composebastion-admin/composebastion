@@ -1,6 +1,6 @@
 # Connect Docker Hosts
 
-Dockermender can manage hosts through SSH or through the optional host agent.
+ComposeBastion can manage hosts through SSH or through the optional host agent.
 Use SSH when you already have trusted admin access to the host. Use the agent
 when you want Docker-only operations exposed to the manager.
 
@@ -32,7 +32,7 @@ Recommended SSH host settings:
 
 ## Agent Mode
 
-The Dockermender agent is a small Docker-only command proxy for hosts where you
+The ComposeBastion agent is a small Docker-only command proxy for hosts where you
 prefer not to give the manager direct SSH access.
 
 Start from `agent-compose.example.yml`:
@@ -44,7 +44,7 @@ cp agent-compose.example.yml agent-compose.yml
 Set a long `AGENT_TOKEN`, deploy the agent on the target host, and expose port
 `8090` only to the manager network.
 
-In Dockermender, add the host with connection mode `Host agent`, the agent URL,
+In ComposeBastion, add the host with connection mode `Host agent`, the agent URL,
 and the same token.
 
 ## Security Notes
@@ -63,5 +63,5 @@ If a host stays offline:
 1. Run the SSH preflight command from the manager network.
 2. Check the Docker socket path.
 3. Confirm Docker Compose v2 is installed as `docker compose`.
-4. Run a host check from the Dockermender UI.
+4. Run a host check from the ComposeBastion UI.
 5. Check `docker compose logs -f app worker` on the manager.

@@ -147,7 +147,7 @@ function target(overrides: Record<string, unknown> = {}) {
     provider: "smb",
     rcloneProvider: "smb",
     remotePath: "backups",
-    remoteName: "dockermender-smb",
+    remoteName: "composebastion-smb",
     localCachePolicy: "keep",
     healthStatus: "healthy",
     healthCheckedAt: new Date(0).toISOString(),

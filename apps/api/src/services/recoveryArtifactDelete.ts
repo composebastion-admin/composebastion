@@ -1,4 +1,4 @@
-import type { RecoveryPointDetail } from "@dockermender/shared";
+import type { RecoveryPointDetail } from "@composebastion/shared";
 import { loadWorkerBackupTarget } from "./recoveryBackupTargets.js";
 import { deleteRemoteArtifact } from "./recoveryRemoteStorage.js";
 

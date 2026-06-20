@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ComposeStack, DockerApp, DockerHost, ResourceSnapshot } from "@dockermender/shared";
+import type { ComposeStack, DockerApp, DockerHost, ResourceSnapshot } from "@composebastion/shared";
 import { filterServiceGroups, findAppForServiceGroup, groupServices, isSelfManagementServiceGroup, parseContainerLabels, summarizeServiceGroups } from "./serviceGroups.js";
 
 function container(partial: {
@@ -236,14 +236,14 @@ describe("isSelfManagementServiceGroup", () => {
     const groups = groupServices(
       [
         container({
-          id: "dm-app",
-          externalId: "dockermender-app-1",
-          name: "dockermender-app-1",
+          id: "cb-app",
+          externalId: "composebastion-app-1",
+          name: "composebastion-app-1",
           data: {
-            Names: "dockermender-app-1",
+            Names: "composebastion-app-1",
             State: "running",
-            Image: "dockermender-app",
-            Labels: "com.docker.compose.project=dockermender,com.docker.compose.service=app"
+            Image: "composebastion-app",
+            Labels: "com.docker.compose.project=composebastion,com.docker.compose.service=app"
           }
         })
       ],

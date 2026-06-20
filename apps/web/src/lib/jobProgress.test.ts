@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { OperationJob } from "@dockermender/shared";
+import type { OperationJob } from "@composebastion/shared";
 import { activeJobPhase, jobProgressSteps, jobRecoveryHint } from "./jobProgress.js";
 
 const baseJob: OperationJob = {

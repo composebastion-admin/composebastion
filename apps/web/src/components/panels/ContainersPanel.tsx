@@ -15,8 +15,8 @@ import {
   Trash2,
   Copy
 } from "lucide-react";
-import type { DockerHost, ResourceSnapshot } from "@dockermender/shared";
-import { containerData, publishedWebLinks } from "@dockermender/shared";
+import type { DockerHost, ResourceSnapshot } from "@composebastion/shared";
+import { containerData, publishedWebLinks } from "@composebastion/shared";
 import { api, postJson } from "../../api.js";
 import { useConfirm } from "../ConfirmProvider.js";
 import { useToast } from "../ToastProvider.js";

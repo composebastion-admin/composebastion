@@ -18,7 +18,7 @@ export function BrandLockup({ tagline = "Multi-host Docker ops", titleAs = "stro
         <BrandMark size={30} />
       </span>
       <span className="brandLockupText">
-        <Title className="brandLockupTitle">Dockermender</Title>
+        <Title className="brandLockupTitle">ComposeBastion</Title>
         <small>{tagline}</small>
       </span>
     </div>

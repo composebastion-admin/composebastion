@@ -1,5 +1,5 @@
 import { v4 as uuid } from "uuid";
-import { favoriteImageCreateSchema } from "@dockermender/shared";
+import { favoriteImageCreateSchema } from "@composebastion/shared";
 import { query } from "../db/pool.js";
 
 function iso(value: Date | string) {

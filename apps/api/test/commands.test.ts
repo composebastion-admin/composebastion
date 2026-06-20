@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dockerActionSchema } from "@dockermender/shared";
+import { dockerActionSchema } from "@composebastion/shared";
 import { buildComposeCommand, buildDockerActionCommand, dockerCommandFailureMessage, shQuote, withDockerEnv } from "../src/services/commands.js";
 
 describe("Docker command builders", () => {

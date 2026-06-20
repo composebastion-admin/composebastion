@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { demoSeedRequestSchema } from "@dockermender/shared";
+import { demoSeedRequestSchema } from "@composebastion/shared";
 import { seedDemoWorkspace } from "../services/demo.js";
 import { requireRole } from "../services/auth.js";
 import { writeAuditEvent } from "../services/audit.js";

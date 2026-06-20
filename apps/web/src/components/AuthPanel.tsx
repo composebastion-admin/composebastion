@@ -1,7 +1,7 @@
 import type { FormEvent } from "react";
 import { useState } from "react";
 import { Moon, ShieldCheck, Sun } from "lucide-react";
-import type { AdminUser } from "@dockermender/shared";
+import type { AdminUser } from "@composebastion/shared";
 import { postJson } from "../api.js";
 import { BrandLockup } from "./ui/BrandLockup.js";
 import { useAsyncAction } from "../hooks/useAsyncAction.js";

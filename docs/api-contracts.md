@@ -1,6 +1,6 @@
 # API Contracts
 
-Dockermender's API is pre-1.0. Existing clients can keep using `/api/*`;
+ComposeBastion's API is pre-1.0. Existing clients can keep using `/api/*`;
 stable JSON route families are also exposed through `/api/v1/*` aliases as the
 compatibility boundary for the public `v0.9` line.
 

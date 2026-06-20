@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
-import type { DockerHost, ResourceSnapshot } from "@dockermender/shared";
-import { networkDriverExplanations, type NetworkDriver } from "@dockermender/shared";
+import type { DockerHost, ResourceSnapshot } from "@composebastion/shared";
+import { networkDriverExplanations, type NetworkDriver } from "@composebastion/shared";
 import { useConfirm } from "../ConfirmProvider.js";
 import { ButtonRow, DataTable, EmptyState, InlineForm, Panel } from "../ui/primitives.js";
 import { HostSelect } from "../dashboard/HostSelect.js";

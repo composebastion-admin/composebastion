@@ -1,6 +1,6 @@
 import { v4 as uuid } from "uuid";
-import type { DockerActionRequest, JobProgressStep, OperationJob } from "@dockermender/shared";
-import { dockerActionSchema, jobProgressStepSchema, paginationQuerySchema, paginatedResponse } from "@dockermender/shared";
+import type { DockerActionRequest, JobProgressStep, OperationJob } from "@composebastion/shared";
+import { dockerActionSchema, jobProgressStepSchema, paginationQuerySchema, paginatedResponse } from "@composebastion/shared";
 import { query, withTransaction } from "../db/pool.js";
 import { createRedis } from "./redis.js";
 import { mapJob } from "./mappers.js";

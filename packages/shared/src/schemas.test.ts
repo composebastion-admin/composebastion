@@ -91,8 +91,8 @@ describe("shared schemas", () => {
 
   it("accepts tracked GitHub repository settings", () => {
     const repo = githubRepositoryCreateSchema.parse({
-      name: "Dockermender",
-      repositoryUrl: "https://github.com/Admin-DockerMender/dockermender",
+      name: "ComposeBastion",
+      repositoryUrl: "https://github.com/composebastion-admin/composebastion",
       defaultHostId: "00000000-0000-4000-8000-000000000001"
     });
     expect(repo.branch).toBe("main");

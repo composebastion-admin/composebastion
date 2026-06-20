@@ -1,4 +1,4 @@
-const COMMON_PASSWORDS = new Set(["password123456", "changeme123456", "dockermender", "dockermender"]);
+const COMMON_PASSWORDS = new Set(["password123456", "changeme123456", "composebastion", "composebastion"]);
 
 export function validatePasswordStrength(password: string) {
   const issues: string[] = [];

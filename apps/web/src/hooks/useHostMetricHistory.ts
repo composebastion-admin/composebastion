@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 
 export type HostMetricHistory = Record<string, Array<{ at: number; value: number }>>;
 
-const HOST_METRIC_HISTORY_KEY = "dockermender.hostMetrics.history.v1";
+const HOST_METRIC_HISTORY_KEY = "composebastion.hostMetrics.history.v1";
 
 function loadHostMetricHistory(): HostMetricHistory {
   try {

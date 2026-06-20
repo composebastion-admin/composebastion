@@ -1,7 +1,7 @@
 import nodemailer from "nodemailer";
 import { v4 as uuid } from "uuid";
-import { alertRuleCreateSchema, alertSilenceCreateSchema, hostMetricAlertConditionSchema, hostThresholdParamsSchema, notificationChannelCreateSchema } from "@dockermender/shared";
-import type { HostMetricAlertCondition } from "@dockermender/shared";
+import { alertRuleCreateSchema, alertSilenceCreateSchema, hostMetricAlertConditionSchema, hostThresholdParamsSchema, notificationChannelCreateSchema } from "@composebastion/shared";
+import type { HostMetricAlertCondition } from "@composebastion/shared";
 import { env } from "../config/env.js";
 import { query } from "../db/pool.js";
 import { evaluateHostThreshold } from "./hostAlertEvaluation.js";
@@ -219,7 +219,7 @@ export async function listAlertEvents(input: unknown = {}) {
 async function sendChannel(row: any, subject: string, message: string) {
   if (!row.enabled) return;
   if (row.type === "webhook") {
-    const response = await postJsonWebhook(row.webhook_url, { subject, message, source: "Dockermender" }, {
+    const response = await postJsonWebhook(row.webhook_url, { subject, message, source: "ComposeBastion" }, {
       allowPrivateNetwork: shouldAllowPrivateWebhookUrls(env.NODE_ENV, env.ALLOW_PRIVATE_WEBHOOK_URLS)
     });
     if (!response.ok) throw new Error(`Webhook failed with ${response.statusCode}`);
@@ -246,7 +246,7 @@ export async function sendTestNotification(channelId: string, testedBy?: string 
   const channel = result.rows[0];
   if (!channel) throw new Error("Notification channel not found");
   try {
-    await sendChannel(channel, "Dockermender test notification", "This is a test notification from Dockermender.");
+    await sendChannel(channel, "ComposeBastion test notification", "This is a test notification from ComposeBastion.");
     return await recordAlertChannelTestEvent(channelId, "success", null, testedBy);
   } catch (error) {
     await recordAlertChannelTestEvent(channelId, "failed", error instanceof Error ? error.message : String(error), testedBy);
@@ -376,12 +376,12 @@ export async function runAlertChecks() {
 
       const shouldNotify = !silenced && triggered && (!row.last_notified_at || Date.now() - new Date(row.last_notified_at).getTime() > 15 * 60_000);
       if (shouldNotify) {
-        await sendChannel(row, `Dockermender alert: ${row.name}`, message);
+        await sendChannel(row, `ComposeBastion alert: ${row.name}`, message);
         await query("UPDATE alert_rules SET last_notified_at = now() WHERE id = $1", [row.rule_id]);
       }
       const recovered = !silenced && row.last_state === "triggered" && nextState === "ok" && row.last_notified_at;
       if (recovered) {
-        await sendChannel(row, `Dockermender recovered: ${row.name}`, `${row.name} recovered.`);
+        await sendChannel(row, `ComposeBastion recovered: ${row.name}`, `${row.name} recovered.`);
         await query("UPDATE alert_rules SET last_notified_at = now() WHERE id = $1", [row.rule_id]);
       }
       if (row.last_state !== nextState || shouldNotify || recovered || silenced) {

@@ -1,4 +1,4 @@
-import type { RecoveryPointDetail } from "@dockermender/shared";
+import type { RecoveryPointDetail } from "@composebastion/shared";
 import { query } from "../db/pool.js";
 import { mapRecoveryArtifact, mapRecoveryPoint } from "./mappers.js";
 import { deleteRecoveryPointRemoteArtifacts } from "./recoveryArtifactDelete.js";

@@ -41,13 +41,13 @@ jobs:
       postgres:
         image: postgres:16-alpine
         env:
-          POSTGRES_DB: dockermender
-          POSTGRES_USER: dockermender
-          POSTGRES_PASSWORD: dockermender
+          POSTGRES_DB: composebastion
+          POSTGRES_USER: composebastion
+          POSTGRES_PASSWORD: composebastion
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U dockermender -d dockermender"
+          --health-cmd "pg_isready -U composebastion -d composebastion"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 10
@@ -61,8 +61,8 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      DOCKERMENDER_INTEGRATION: "1"
-      DATABASE_URL: postgres://dockermender:dockermender@localhost:5432/dockermender
+      COMPOSEBASTION_INTEGRATION: "1"
+      DATABASE_URL: postgres://composebastion:composebastion@localhost:5432/composebastion
       REDIS_URL: redis://localhost:6379
       APP_SECRET: ci-test-secret-which-is-at-least-32-chars-long
       NODE_ENV: test
@@ -74,11 +74,11 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Build shared package
-        run: npm run build --workspace @dockermender/shared
+        run: npm run build --workspace @composebastion/shared
       # The API integration tests share one database, so the test files must run
       # serially (each resets its tables in beforeAll); parallel files collide.
       - name: Run API integration tests
-        run: npm run test --workspace @dockermender/api -- --no-file-parallelism
+        run: npm run test --workspace @composebastion/api -- --no-file-parallelism
 
   browser-smoke:
     name: Browser smoke & accessibility
@@ -100,16 +100,16 @@ jobs:
     runs-on: ubuntu-latest
     env:
       APP_SECRET: ci-test-secret-which-is-at-least-32-chars-long
-      POSTGRES_PASSWORD: dockermender-ci-password
-      DOCKERMENDER_BACKUP_DIR: /tmp/dockermender-backups
+      POSTGRES_PASSWORD: composebastion-ci-password
+      COMPOSEBASTION_BACKUP_DIR: /tmp/composebastion-backups
     steps:
       - uses: actions/checkout@v4
       - name: Validate production compose config
         run: docker compose -f docker-compose.yml -f docker-compose.prod.example.yml config
       - name: Build app runtime image
-        run: docker build --target runtime -t dockermender-app:ci .
+        run: docker build --target runtime -t composebastion-app:ci .
       - name: Build agent runtime image
-        run: docker build -f Dockerfile.agent --target runtime -t dockermender-agent:ci .
+        run: docker build -f Dockerfile.agent --target runtime -t composebastion-agent:ci .
 
   ssh-integration:
     name: Ephemeral SSH Docker host integration
@@ -124,19 +124,19 @@ jobs:
       - name: Start SSH Docker host fixture
         run: |
           set -euo pipefail
-          key_dir="${RUNNER_TEMP}/dockermender-ssh"
+          key_dir="${RUNNER_TEMP}/composebastion-ssh"
           key_path="${key_dir}/id_ed25519"
           mkdir -p "${key_dir}"
-          ssh-keygen -t ed25519 -N "" -f "${key_path}" -C "dockermender-ci" >/dev/null
+          ssh-keygen -t ed25519 -N "" -f "${key_path}" -C "composebastion-ci" >/dev/null
 
-          docker build -f infra/dev/sshhost.Dockerfile -t dockermender-dev-sshhost .
-          docker rm -f dockermender-ci-sshhost >/dev/null 2>&1 || true
+          docker build -f infra/dev/sshhost.Dockerfile -t composebastion-dev-sshhost .
+          docker rm -f composebastion-ci-sshhost >/dev/null 2>&1 || true
           docker run -d \
-            --name dockermender-ci-sshhost \
+            --name composebastion-ci-sshhost \
             -p 127.0.0.1:2222:22 \
             -v /var/run/docker.sock:/var/run/docker.sock \
-            -e "DOCKERMENDER_SSH_AUTHORIZED_KEYS=$(cat "${key_path}.pub")" \
-            dockermender-dev-sshhost
+            -e "COMPOSEBASTION_SSH_AUTHORIZED_KEYS=$(cat "${key_path}.pub")" \
+            composebastion-dev-sshhost
 
           for attempt in {1..30}; do
             if ssh -i "${key_path}" \
@@ -148,36 +148,36 @@ jobs:
               break
             fi
             if [ "${attempt}" = "30" ]; then
-              docker logs dockermender-ci-sshhost
+              docker logs composebastion-ci-sshhost
               exit 1
             fi
             sleep 1
           done
 
           {
-            echo "DOCKERMENDER_SSH_TEST_HOST=127.0.0.1"
-            echo "DOCKERMENDER_SSH_TEST_PORT=2222"
-            echo "DOCKERMENDER_SSH_TEST_USER=root"
-            echo "DOCKERMENDER_SSH_TEST_KEY<<EOF"
+            echo "COMPOSEBASTION_SSH_TEST_HOST=127.0.0.1"
+            echo "COMPOSEBASTION_SSH_TEST_PORT=2222"
+            echo "COMPOSEBASTION_SSH_TEST_USER=root"
+            echo "COMPOSEBASTION_SSH_TEST_KEY<<EOF"
             cat "${key_path}"
             echo "EOF"
           } >> "${GITHUB_ENV}"
       - name: Run SSH integration test
-        run: npm run test --workspace @dockermender/api -- ssh.integration.test.ts
+        run: npm run test --workspace @composebastion/api -- ssh.integration.test.ts
       - name: Stop SSH Docker host fixture
         if: always()
-        run: docker rm -f dockermender-ci-sshhost >/dev/null 2>&1 || true
+        run: docker rm -f composebastion-ci-sshhost >/dev/null 2>&1 || true
 
   external-ssh-integration:
     name: External SSH integration (optional secrets)
     runs-on: ubuntu-latest
-    if: ${{ github.event_name != 'pull_request' && vars.DOCKERMENDER_RUN_EXTERNAL_SSH_TESTS == 'true' }}
+    if: ${{ github.event_name != 'pull_request' && vars.COMPOSEBASTION_RUN_EXTERNAL_SSH_TESTS == 'true' }}
     env:
-      DOCKERMENDER_SSH_TEST_HOST: ${{ secrets.DOCKERMENDER_SSH_TEST_HOST }}
-      DOCKERMENDER_SSH_TEST_PORT: ${{ secrets.DOCKERMENDER_SSH_TEST_PORT }}
-      DOCKERMENDER_SSH_TEST_USER: ${{ secrets.DOCKERMENDER_SSH_TEST_USER }}
-      DOCKERMENDER_SSH_TEST_KEY: ${{ secrets.DOCKERMENDER_SSH_TEST_KEY }}
-      DOCKERMENDER_SSH_TEST_KEY_PASSPHRASE: ${{ secrets.DOCKERMENDER_SSH_TEST_KEY_PASSPHRASE }}
+      COMPOSEBASTION_SSH_TEST_HOST: ${{ secrets.COMPOSEBASTION_SSH_TEST_HOST }}
+      COMPOSEBASTION_SSH_TEST_PORT: ${{ secrets.COMPOSEBASTION_SSH_TEST_PORT }}
+      COMPOSEBASTION_SSH_TEST_USER: ${{ secrets.COMPOSEBASTION_SSH_TEST_USER }}
+      COMPOSEBASTION_SSH_TEST_KEY: ${{ secrets.COMPOSEBASTION_SSH_TEST_KEY }}
+      COMPOSEBASTION_SSH_TEST_KEY_PASSPHRASE: ${{ secrets.COMPOSEBASTION_SSH_TEST_KEY_PASSPHRASE }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -189,7 +189,7 @@ jobs:
         run: |
           set -euo pipefail
           missing=0
-          for name in DOCKERMENDER_SSH_TEST_HOST DOCKERMENDER_SSH_TEST_USER DOCKERMENDER_SSH_TEST_KEY; do
+          for name in COMPOSEBASTION_SSH_TEST_HOST COMPOSEBASTION_SSH_TEST_USER COMPOSEBASTION_SSH_TEST_KEY; do
             if [ -z "${!name:-}" ]; then
               echo "::error::Missing required GitHub secret ${name}"
               missing=1
@@ -197,4 +197,4 @@ jobs:
           done
           exit "${missing}"
       - name: Run external SSH integration test
-        run: npm run test --workspace @dockermender/api -- ssh.integration.test.ts
+        run: npm run test --workspace @composebastion/api -- ssh.integration.test.ts

@@ -7,7 +7,7 @@ import "./styles/main.css";
 
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <ErrorBoundary title="Dockermender failed to start">
+    <ErrorBoundary title="ComposeBastion failed to start">
       <BrowserRouter>
         <App />
       </BrowserRouter>

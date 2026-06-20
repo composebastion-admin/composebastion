@@ -1,4 +1,4 @@
-import type { DockerHost, ResourceSnapshot } from "@dockermender/shared";
+import type { DockerHost, ResourceSnapshot } from "@composebastion/shared";
 import type { Tab } from "./navigation.js";
 
 export type SearchResult =

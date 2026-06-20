@@ -1,6 +1,6 @@
 import http from "node:http";
 import https from "node:https";
-import type { HostDisk } from "@dockermender/shared";
+import type { HostDisk } from "@composebastion/shared";
 import { env } from "../config/env.js";
 import { createAgentLookup, shouldAllowPrivateAgentUrls } from "./ssrf.js";
 

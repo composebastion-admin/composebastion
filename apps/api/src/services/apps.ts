@@ -1,5 +1,5 @@
 import { v4 as uuid } from "uuid";
-import type { AppGithubVersionSelect, AppGithubVersions, AppSourceLink, AppSourceLinkInput, ComposeStack, DockerApp, DockerAppUpdate, GithubRepository, ImageUpdateCheck, ResourceSnapshot } from "@dockermender/shared";
+import type { AppGithubVersionSelect, AppGithubVersions, AppSourceLink, AppSourceLinkInput, ComposeStack, DockerApp, DockerAppUpdate, GithubRepository, ImageUpdateCheck, ResourceSnapshot } from "@composebastion/shared";
 import { query } from "../db/pool.js";
 import { shQuote } from "./commands.js";
 import { isDemoHost } from "./demo.js";

@@ -4,7 +4,7 @@ import { readAgentRemoteFile, writeAgentRemoteFile } from "./agent.js";
 import { readRemoteFile, runSshCommand, writeRemoteFile } from "./ssh.js";
 import { shQuote } from "./commands.js";
 
-export const AGENT_STACK_ROOT = "/tmp/dockermender";
+export const AGENT_STACK_ROOT = "/tmp/composebastion";
 
 export function stackRemoteDirectory(stackId: string) {
   return path.posix.join(AGENT_STACK_ROOT, stackId);

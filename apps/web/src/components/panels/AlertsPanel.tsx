@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Bell, Clock, Trash2 } from "lucide-react";
-import type { AdminUser, AlertChannelTestEvent, AlertEvent, AlertRule, AlertRuleCondition, AlertSilence, DockerHost, HostMetricAlertCondition, NotificationChannel, ResourceSnapshot } from "@dockermender/shared";
+import type { AdminUser, AlertChannelTestEvent, AlertEvent, AlertRule, AlertRuleCondition, AlertSilence, DockerHost, HostMetricAlertCondition, NotificationChannel, ResourceSnapshot } from "@composebastion/shared";
 import { api, deleteJson, postJson } from "../../api.js";
 import { formatDate } from "../../lib/format.js";
 import { ButtonRow, DataTable, Panel, StatusPill, VirtualDataTable } from "../ui/primitives.js";

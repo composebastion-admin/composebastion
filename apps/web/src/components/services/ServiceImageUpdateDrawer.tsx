@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Download, RefreshCw, Search, X } from "lucide-react";
-import type { ResourceSnapshot } from "@dockermender/shared";
-import { imageRepository, imageTag, imageWithTag } from "@dockermender/shared";
+import type { ResourceSnapshot } from "@composebastion/shared";
+import { imageRepository, imageTag, imageWithTag } from "@composebastion/shared";
 import { api } from "../../api.js";
 import { filterImageTags, uniqueSortedImageTags } from "../../lib/imageTagOptions.js";
 import type { ServiceGroup, ServiceMember } from "../../lib/serviceGroups.js";

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { LogOut, RefreshCw, ShieldCheck, Trash2 } from "lucide-react";
-import type { Session } from "@dockermender/shared";
+import type { Session } from "@composebastion/shared";
 import { api, deleteJson, postJson } from "../../api.js";
 import { formatDate } from "../../lib/format.js";
 import { describeUserAgent } from "../../lib/userAgent.js";

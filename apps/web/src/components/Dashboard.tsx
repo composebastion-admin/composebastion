@@ -12,7 +12,7 @@ import type {
   OperationJob,
   RecoveryReadiness,
   ResourceSnapshot
-} from "@dockermender/shared";
+} from "@composebastion/shared";
 import { api, postJson } from "../api.js";
 import { useAsyncAction } from "../hooks/useAsyncAction.js";
 import { useDashboardTab } from "../hooks/useDashboardTab.js";
@@ -390,7 +390,7 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
               <BrandMark size={22} />
             </div>
             <div className="sideIdentity">
-              <strong>Dockermender</strong>
+              <strong>ComposeBastion</strong>
               <span>{user.username ?? user.email}</span>
             </div>
           </div>
@@ -524,7 +524,7 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
             {!selectedHost && !hostlessTabs.has(tab) ? (
               <section className="panel">
                 <h3>Host Inventory</h3>
-                <p>Add a Linux server reachable by SSH. Dockermender will check Docker Engine and Compose before syncing inventory.</p>
+                <p>Add a Linux server reachable by SSH. ComposeBastion will check Docker Engine and Compose before syncing inventory.</p>
                 <ButtonRow>
                   <button className="primary" onClick={() => setShowHostForm(true)}><Plus size={18} />Add Host</button>
                   <Link className="buttonLink" to={tabPath("settings")}><Upload size={18} />Restore Config</Link>

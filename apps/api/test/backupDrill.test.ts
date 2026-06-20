@@ -20,7 +20,7 @@ describe("backup restore drills", () => {
     const drillPath = buildBackupDrillPath(backupId, drillId);
     expect(drillPath).toBe(`${BACKUP_DRILL_ROOT}/000000000000/111111111111`);
     expect(assertAllowedBackupDrillPath(drillPath)).toBe(drillPath);
-    expect(() => assertAllowedBackupDrillPath("/var/lib/dockermender/not-drills/escape")).toThrow();
+    expect(() => assertAllowedBackupDrillPath("/var/lib/composebastion/not-drills/escape")).toThrow();
   });
 
   it("runs teardown after failed drill work", async () => {
