@@ -1,4 +1,4 @@
-FROM node:20-bookworm-slim AS deps
+FROM node:26-bookworm-slim AS deps
 WORKDIR /app
 COPY package.json package-lock.json* ./
 COPY apps/api/package.json apps/api/package.json
@@ -13,7 +13,7 @@ COPY . .
 RUN npm run build
 RUN npm prune --omit=dev
 
-FROM node:20-bookworm-slim AS runtime
+FROM node:26-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 RUN apt-get update && apt-get install -y --no-install-recommends wget gnupg lsb-release ca-certificates && \
