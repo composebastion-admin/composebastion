@@ -11,7 +11,7 @@
 #     --network composebastion_default composebastion-dev-sshhost
 #
 # Credentials: root / composebastion-test (never use outside local development).
-FROM alpine:3.20
+FROM alpine:3.24
 
 RUN apk add --no-cache openssh-server docker-cli docker-cli-compose git bash curl \
   && ssh-keygen -A \
