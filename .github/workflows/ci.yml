@@ -17,7 +17,7 @@ jobs:
     name: Typecheck, tests & audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -67,7 +67,7 @@ jobs:
       APP_SECRET: ci-test-secret-which-is-at-least-32-chars-long
       NODE_ENV: test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -84,7 +84,7 @@ jobs:
     name: Browser smoke & accessibility
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -103,7 +103,7 @@ jobs:
       POSTGRES_PASSWORD: composebastion-ci-password
       COMPOSEBASTION_BACKUP_DIR: /tmp/composebastion-backups
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Validate production compose config
         run: docker compose -f docker-compose.yml -f docker-compose.prod.example.yml config
       - name: Build app runtime image
@@ -115,7 +115,7 @@ jobs:
     name: Ephemeral SSH Docker host integration
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -179,7 +179,7 @@ jobs:
       COMPOSEBASTION_SSH_TEST_KEY: ${{ secrets.COMPOSEBASTION_SSH_TEST_KEY }}
       COMPOSEBASTION_SSH_TEST_KEY_PASSPHRASE: ${{ secrets.COMPOSEBASTION_SSH_TEST_KEY_PASSPHRASE }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
