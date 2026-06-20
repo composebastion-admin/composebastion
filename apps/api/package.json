@@ -37,7 +37,7 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
-    "@types/bcryptjs": "^2.4.6",
+    "@types/bcryptjs": "^3.0.0",
     "@types/node": "^22.19.20",
     "@types/nodemailer": "^6.4.23",
     "@types/pg": "^8.11.10",
