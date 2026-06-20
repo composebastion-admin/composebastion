@@ -13,7 +13,7 @@ export type OpenApiPath = {
 
 const schemaRef = (name: string) => ({ $ref: `#/components/schemas/${name}` });
 const arrayOf = (schema: Record<string, unknown>) => ({ type: "array", items: schema });
-const OPENAPI_VERSION = "0.9.0";
+const OPENAPI_VERSION = "0.9.4";
 
 export const openApiRoutes: OpenApiPath[] = [
   { method: "get", path: "/api/v1/health", summary: "Basic API health check", tags: ["Health"], auth: "public", responseSchema: schemaRef("HealthResponse") },

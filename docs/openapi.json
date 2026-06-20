@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Dockermender API",
-    "version": "0.9.0",
+    "version": "0.9.4",
     "description": "Pre-1.0 API contract. Stable JSON endpoints are available under /api/v1 while legacy /api routes remain compatible."
   },
   "servers": [

@@ -10,8 +10,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Admin-DockerMender/dockermender/releases/tag/v0.9"><img alt="Release" src="https://img.shields.io/badge/release-v0.9-e0a23f"></a>
+  <a href="https://github.com/Admin-DockerMender/dockermender/releases"><img alt="Release" src="https://img.shields.io/badge/release-v0.9.4-e0a23f"></a>
   <a href="https://github.com/Admin-DockerMender/dockermender/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Admin-DockerMender/dockermender/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="LICENSE.md"><img alt="License" src="https://img.shields.io/badge/license-source--available-df7d27"></a>
   <img alt="Node" src="https://img.shields.io/badge/node-%3E%3D20.11-3f7f5f">
   <img alt="Docker" src="https://img.shields.io/badge/docker-compose-2496ed">
 </p>
@@ -25,9 +26,20 @@ operators out of raw shell work for routine actions.
 
 ![Dockermender fleet dashboard](docs/assets/screenshots/dashboard-overview.png)
 
-| Services and updates | Recovery and restore proof |
-|----------------------|----------------------------|
-| ![Services inventory with source tracking and update status](docs/assets/screenshots/services-inventory.png) | ![Recovery Center with completed, partial, and failed recovery points](docs/assets/screenshots/recovery-center.png) |
+| Services and recovery | Containers and image cleanup |
+|-----------------------|------------------------------|
+| ![Services inventory with source tracking and update status](docs/assets/screenshots/services-inventory.png) | ![Container inventory with live usage, web links, and console actions](docs/assets/screenshots/containers-console.png) |
+| ![Recovery Center with completed, partial, and failed recovery points](docs/assets/screenshots/recovery-center.png) | ![Image cleanup preview with removable and blocked image candidates](docs/assets/screenshots/images-cleanup.png) |
+
+| Deploy and operations | Security and observability |
+|-----------------------|----------------------------|
+| ![Tracked GitHub repositories ready for branch checks and deploys](docs/assets/screenshots/github-deploy.png) | ![Host metrics across the demo fleet](docs/assets/screenshots/host-metrics.png) |
+| ![Built-in and custom app catalog templates](docs/assets/screenshots/catalog-templates.png) | ![Alert rules, silences, and notification history](docs/assets/screenshots/alerts-rules-history.png) |
+
+| Recovery workflows | Admin controls |
+|--------------------|----------------|
+| ![App migration planning and execution options](docs/assets/screenshots/recovery-move.png) | ![Operations dashboard with readiness, backup health, and failed job guidance](docs/assets/screenshots/admin-operations.png) |
+| ![Recovery backup storage targets](docs/assets/screenshots/backup-storage.png) | ![Users, sessions, and host settings](docs/assets/screenshots/users-and-sessions.png) |
 
 ## Install In 5 Minutes
 
@@ -95,6 +107,13 @@ three real servers.
 |------------------------|-------------------|
 | ![Tracked GitHub repositories ready for branch checks and deploys](docs/assets/screenshots/github-deploy.png) | ![Built-in and custom app catalog templates](docs/assets/screenshots/catalog-templates.png) |
 
+| Hosts and files | Images and updates |
+|-----------------|--------------------|
+| ![Demo host inventory with SSH and agent connection modes](docs/assets/screenshots/hosts-inventory.png) | ![Image inventory and scanner status](docs/assets/screenshots/images-inventory.png) |
+| ![Host file browser for Compose folders](docs/assets/screenshots/host-files.png) | ![Image update intelligence with affected services](docs/assets/screenshots/image-updates.png) |
+
+The full screenshot tour is in the [how-to guide](docs/how-to.md).
+
 ## Guides
 
 - [Installation and production setup](docs/installation.md)
@@ -137,6 +156,25 @@ three real servers.
   `admin-dockermender` GitHub account.
 - `v0.9` is the first public version for this repository.
 - Do not reintroduce old personal owner, repository, image, or user fixtures.
+
+## License
+
+Dockermender is source-available, not open source. Free use is allowed for home
+labs, home use, private use, personal learning, and private non-commercial
+testing.
+
+Business, company, employer, client, customer, MSP, SaaS, hosted, government,
+school, nonprofit, production, non-production, testing, staging,
+proof-of-concept, evaluation, or organizational use requires prior written
+approval or a purchased license.
+
+Public forks, mirrors, republished copies, public derivative projects, package
+republishing, and container image republishing require prior written approval or
+a purchased license.
+
+See [LICENSE.md](LICENSE.md), [LICENSING_SUMMARY.md](LICENSING_SUMMARY.md), and
+[COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md). Third-party dependency notices
+are listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
 ## Development
 

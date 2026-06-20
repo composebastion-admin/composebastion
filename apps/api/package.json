@@ -1,7 +1,8 @@
 {
   "name": "@dockermender/api",
-  "version": "0.9.0",
+  "version": "0.9.4",
   "private": true,
+  "license": "SEE LICENSE IN ../../LICENSE.md",
   "type": "module",
   "main": "dist/server.js",
   "scripts": {

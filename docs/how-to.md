@@ -1,6 +1,6 @@
 # Dockermender How-To Guide
 
-Version covered: `v0.9`.
+Version covered: `v0.9.4`.
 
 This guide covers the day-to-day workflows that are easiest to forget when you
 only use them occasionally. For installation-first docs, start with
@@ -45,6 +45,33 @@ hosts, Compose paths, last deploy state, and private-token guidance.
 
 Catalog includes built-in templates plus custom demo templates for production
 web apps, observability, and worker automation stacks.
+
+### Full Product Gallery
+
+| Fleet and hosts | Service operations |
+|-----------------|--------------------|
+| ![Demo host inventory](assets/screenshots/hosts-inventory.png) | ![Services inventory](assets/screenshots/services-inventory.png) |
+| ![SSH connection management](assets/screenshots/ssh-connections.png) | ![Container inventory and console actions](assets/screenshots/containers-console.png) |
+
+| Docker resources | Image intelligence |
+|------------------|--------------------|
+| ![Network inventory](assets/screenshots/networks-inventory.png) | ![Image inventory](assets/screenshots/images-inventory.png) |
+| ![Volume inventory](assets/screenshots/volumes-inventory.png) | ![Image cleanup preview](assets/screenshots/images-cleanup.png) |
+| ![Host metrics](assets/screenshots/host-metrics.png) | ![Image update intelligence](assets/screenshots/image-updates.png) |
+
+| Deploy workflows | Recovery workflows |
+|------------------|--------------------|
+| ![Compose stack management](assets/screenshots/compose-stacks.png) | ![Recovery points](assets/screenshots/recovery-center.png) |
+| ![GitHub deploy tracking](assets/screenshots/github-deploy.png) | ![App migration](assets/screenshots/recovery-move.png) |
+| ![Catalog templates](assets/screenshots/catalog-templates.png) | ![Recovery schedules](assets/screenshots/recovery-schedules.png) |
+| ![Host file browser](assets/screenshots/host-files.png) | ![Backup storage targets](assets/screenshots/backup-storage.png) |
+| ![Backup workflows](assets/screenshots/backups-workflows.png) | ![Restore and migration runs](assets/screenshots/restore-runs.png) |
+
+| Admin, security, and guidance | Supporting operations |
+|-------------------------------|-----------------------|
+| ![Alerts, silences, and notification history](assets/screenshots/alerts-rules-history.png) | ![Admin operations dashboard](assets/screenshots/admin-operations.png) |
+| ![Users, sessions, and host settings](assets/screenshots/users-and-sessions.png) | ![Registry credentials](assets/screenshots/registries.png) |
+| ![Audit log](assets/screenshots/audit-log.png) | ![Guided help](assets/screenshots/guided-help.png) |
 
 ## Add An SSH Docker Host
 
