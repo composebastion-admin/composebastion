@@ -21,6 +21,14 @@ servers. Add hosts over SSH or the optional host agent, see what is running,
 deploy Compose apps from GitHub, create recovery points, test restores, and keep
 operators out of raw shell work for routine actions.
 
+## Product Screenshots
+
+![Dockermender fleet dashboard](docs/assets/screenshots/dashboard-overview.png)
+
+| Services and updates | Recovery and restore proof |
+|----------------------|----------------------------|
+| ![Services inventory with source tracking and update status](docs/assets/screenshots/services-inventory.png) | ![Recovery Center with completed, partial, and failed recovery points](docs/assets/screenshots/recovery-center.png) |
+
 ## Install In 5 Minutes
 
 Prerequisites: Docker Engine, Docker Compose v2, Git, and OpenSSL.
@@ -82,6 +90,10 @@ intelligence, vulnerability scan summaries, alert history, backup schedules,
 recovery drills, and migration examples. Demo hosts are tagged `demo` and use
 simulated Docker actions, so you can click through workflows without needing
 three real servers.
+
+| GitHub deploy tracking | Catalog templates |
+|------------------------|-------------------|
+| ![Tracked GitHub repositories ready for branch checks and deploys](docs/assets/screenshots/github-deploy.png) | ![Built-in and custom app catalog templates](docs/assets/screenshots/catalog-templates.png) |
 
 ## Guides
 

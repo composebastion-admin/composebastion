@@ -1237,8 +1237,8 @@ volumes:
           profile.hostId,
           profile.identity,
           profile.name,
-          profile.includePaths,
-          profile.excludePatterns,
+          JSON.stringify(profile.includePaths),
+          JSON.stringify(profile.excludePatterns),
           profile.restorePaths,
           profile.pre,
           profile.post,
@@ -1735,8 +1735,8 @@ volumes:
           status === "local" ? null : demoDigest(`${imageReference}:remote`),
           status,
           riskNote,
-          containersAffected,
-          stacksAffected
+          JSON.stringify(containersAffected),
+          JSON.stringify(stacksAffected)
         ]
       );
       await client.query(
@@ -2003,7 +2003,7 @@ volumes:
           job.result,
           job.error,
           createdBy ?? null,
-          job.progress,
+          JSON.stringify(job.progress),
           job.offset
         ]
       );

@@ -19,6 +19,33 @@ Demo hosts are tagged `demo`, and Docker actions on them are simulated. That
 means you can start, stop, deploy, inspect logs, test backups, and walk through
 recovery flows without connecting real infrastructure.
 
+### Demo Workspace Screenshots
+
+![Dockermender demo fleet dashboard](assets/screenshots/dashboard-overview.png)
+
+The seeded dashboard opens with three online hosts, fleet KPIs, services needing
+attention, and non-running containers.
+
+![Demo services inventory](assets/screenshots/services-inventory.png)
+
+Services groups Compose projects and standalone containers with source tracking,
+image update state, recovery readiness, ports, and direct lifecycle actions.
+
+![Demo Recovery Center](assets/screenshots/recovery-center.png)
+
+Recovery Center includes completed, partial, and failed recovery points, target
+sync state, drill history, and clone/restore actions for realistic practice.
+
+![Demo GitHub deploy tracking](assets/screenshots/github-deploy.png)
+
+The Deploy area includes tracked GitHub repositories, branch selectors, default
+hosts, Compose paths, last deploy state, and private-token guidance.
+
+![Demo catalog templates](assets/screenshots/catalog-templates.png)
+
+Catalog includes built-in templates plus custom demo templates for production
+web apps, observability, and worker automation stacks.
+
 ## Add An SSH Docker Host
 
 Before adding a host in Dockermender, test the same SSH user and Docker socket that the app will use.
