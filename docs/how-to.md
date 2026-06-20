@@ -2,7 +2,9 @@
 
 Version covered: `v0.9`.
 
-This guide covers the day-to-day workflows that are easiest to forget when you only use them occasionally.
+This guide covers the day-to-day workflows that are easiest to forget when you
+only use them occasionally. For installation-first docs, start with
+[installation.md](installation.md).
 
 ## Add An SSH Docker Host
 
@@ -96,7 +98,7 @@ The terminal opens as a near full-screen audited shell. Commands are attributed 
 
 Recovery is for app-level restore and move workflows:
 
-- `Recovery Points`: capture app restore points.
+- `Recovery Points`: capture app recovery points.
 - `Move App`: plan and execute host-to-host app movement.
 - `Schedules`: automate recovery point captures.
 - `Storage Targets`: configure local or remote recovery storage.
@@ -136,14 +138,14 @@ Open `Recovery Center` -> `Backup Storage` and create a target:
   rclone's SMB backend from inside the app/worker image; it does not require a
   privileged CIFS mount in the container.
 - Use `rclone beta` for imported rclone configs such as Google Drive, OneDrive,
-  iCloud Drive, WebDAV, SFTP, or a custom rclone backend.
+  WebDAV, SFTP, or a custom rclone backend.
 
 For SMB, enter server, share, optional subpath, domain/workgroup, username,
 password, and port. Run the target test before using it for recovery points.
 
 For cloud beta targets, create and test the rclone remote outside Dockermender,
 then paste the rclone config into the target form. Guided OAuth flows are
-post-V1; V1 assumes you bring a working rclone config.
+planned for a later release; `v0.9` assumes you bring a working rclone config.
 
 ### Use `remote_only`
 
@@ -178,7 +180,7 @@ operators cannot accidentally capture or restore arbitrary system paths.
 
 ### Clone Restore And Network Reuse
 
-Clone restore is the V1 default. It creates suffixed clone resources where
+Clone restore is the default. It creates suffixed clone resources where
 needed so the original app remains untouched. Custom Docker networks are cloned
 by default, and static IPs/aliases are preserved on cloned networks when safe.
 

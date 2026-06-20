@@ -1,4 +1,4 @@
-export const MIN_COMPATIBLE_AGENT_VERSION = "0.10.0-pre.1";
+export const MIN_COMPATIBLE_AGENT_VERSION = "0.9.0";
 
 function versionParts(version: string | null | undefined) {
   const match = String(version ?? "").match(/^(\d+)\.(\d+)\.(\d+)(?:-pre\.(\d+))?$/);

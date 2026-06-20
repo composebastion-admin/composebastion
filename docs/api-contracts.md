@@ -1,14 +1,14 @@
 # API Contracts
 
-Dockermender's API is pre-v1. Existing clients can keep using `/api/*`;
+Dockermender's API is pre-1.0. Existing clients can keep using `/api/*`;
 stable JSON route families are also exposed through `/api/v1/*` aliases as the
-compatibility boundary for the 0.10 polish train.
+compatibility boundary for the public `v0.9` line.
 
 ## Compatibility Boundary
 
-- Before v1, prefer additive response changes and keep existing request fields
+- Before 1.0, prefer additive response changes and keep existing request fields
   working unless a security fix requires otherwise.
-- v1 readiness requires a stable `/api/v1` compatibility boundary, checked
+- 1.0 readiness requires a stable `/api/v1` compatibility boundary, checked
   OpenAPI artifacts, route contract tests, and explicit deprecation rules.
 - Error responses should use the existing envelope shape:
   `{ error: string, code?: string, requestId?: string | null, issues?: unknown[] }`.
@@ -29,7 +29,7 @@ compatibility boundary for the 0.10 polish train.
 | Containers/compose/apps | Stable enough for UI use; mutations are typed jobs. |
 | Backups/recovery | Active development; preserve additive behavior where possible. |
 | Metrics/alerts | Active development; stats may degrade gracefully when host data is unavailable. |
-| Admin/config/users/audit | Admin-only surfaces; document carefully before v1. |
+| Admin/config/users/audit | Admin-only surfaces; document carefully before 1.0. |
 
 ## OpenAPI Plan
 

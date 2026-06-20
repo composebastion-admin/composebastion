@@ -18,7 +18,7 @@ type AgentRequestInit = {
 };
 
 const DEFAULT_AGENT_REQUEST_TIMEOUT_MS = 30_000;
-export const MIN_COMPATIBLE_AGENT_VERSION = "0.10.0-pre.1";
+export const MIN_COMPATIBLE_AGENT_VERSION = "0.9.0";
 
 function agentUrl(target: AgentTarget, path: string) {
   return new URL(path, target.url.endsWith("/") ? target.url : `${target.url}/`).toString();

@@ -1,200 +1,131 @@
-# Dockermender
+<p align="center">
+  <img src="apps/web/public/brand/dockermender-lockup.svg" alt="Dockermender" width="420">
+</p>
 
-Dockermender is a self-hosted console for managing multiple Docker hosts from
-one place. It connects to Linux Docker servers over SSH or an optional host
-agent, tracks containers/images/networks/volumes, runs typed Docker operations
-through background jobs, and stores recovery artifacts in managed storage.
+<h1 align="center">Dockermender</h1>
 
-Current release: `v0.9`.
+<p align="center">
+  A self-hosted control room for Docker hosts, Compose apps, recovery points,
+  GitHub deploys, alerts, and day-two operations.
+</p>
 
-Canonical repository: [Admin-DockerMender/dockermender](https://github.com/Admin-DockerMender/dockermender)
+<p align="center">
+  <a href="https://github.com/Admin-DockerMender/dockermender/releases/tag/v0.9"><img alt="Release" src="https://img.shields.io/badge/release-v0.9-e0a23f"></a>
+  <a href="https://github.com/Admin-DockerMender/dockermender/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Admin-DockerMender/dockermender/actions/workflows/ci.yml/badge.svg"></a>
+  <img alt="Node" src="https://img.shields.io/badge/node-%3E%3D20.11-3f7f5f">
+  <img alt="Docker" src="https://img.shields.io/badge/docker-compose-2496ed">
+</p>
 
-## First Run
+Dockermender gives you one private web console for operating multiple Docker
+servers. Add hosts over SSH or the optional host agent, see what is running,
+deploy Compose apps from GitHub, create recovery points, test restores, and keep
+operators out of raw shell work for routine actions.
 
-1. Copy `.env.example` to `.env` and set a unique random `APP_SECRET` with at
-   least 32 characters.
-2. Start the stack:
+## Install In 5 Minutes
 
-   ```bash
-   docker compose up --build
-   ```
-
-3. Open `http://localhost:8080`.
-4. Create the first admin user. Demo data is optional during setup.
-5. Add Docker hosts using SSH credentials or the Dockermender host agent.
-
-## SSH Host Requirements
-
-Before adding an SSH-backed Docker host, verify the SSH user can run Docker
-from a non-interactive SSH session. SSH access alone is not enough.
-
-Required for SSH hosts:
-
-- Docker Engine is installed on the remote host.
-- Docker Compose v2 is available as `docker compose`.
-- The configured SSH user can run `docker` and `docker compose` without `sudo`.
-- The configured SSH user can access the configured Docker socket, usually
-  `/var/run/docker.sock`.
-- The Docker socket path entered in Dockermender matches the host's real socket
-  path.
-
-Common socket-permission fix:
+Prerequisites: Docker Engine, Docker Compose v2, Git, and OpenSSL.
 
 ```bash
-sudo usermod -aG docker <ssh-user>
+git clone https://github.com/Admin-DockerMender/dockermender.git
+cd dockermender
+cp .env.example .env
 ```
 
-After changing groups, fully log out and back in, or reboot the host. Confirm
-the requirement before adding the host:
+Edit `.env` and set at least:
 
 ```bash
-ssh <ssh-user>@<host> 'docker version --format "{{.Server.Version}}" && docker compose version --short && docker ps'
+APP_SECRET=<unique random value from: openssl rand -base64 48>
+POSTGRES_PASSWORD=<unique database password>
 ```
 
-If this command fails, fix Docker access before adding the host. If you do not
-want to grant SSH users Docker socket access, use the Dockermender host agent
-instead.
+Start Dockermender:
 
-## Production Deployment
+```bash
+docker compose up -d --build
+```
 
-Use the base compose file plus `docker-compose.prod.example.yml` as a starting
-point for server deployments. The production override keeps Dockermender behind
-your reverse proxy, enables secure cookies, and bind-mounts recovery artifacts
-to a clear host directory.
+Open `http://localhost:8080`, create the first owner account, and add your first
+Docker host.
 
-1. Create persistent backup storage:
+For production installs with a reverse proxy and persistent backup storage, use
+the [installation guide](docs/installation.md).
 
-   ```bash
-   sudo mkdir -p /srv/dockermender/backups
-   sudo chown -R root:root /srv/dockermender
-   sudo chmod 750 /srv/dockermender /srv/dockermender/backups
-   ```
+## Why Operators Use It
 
-2. Generate secrets:
+| Need | Dockermender gives you |
+|------|------------------------|
+| Multi-host visibility | Containers, images, networks, volumes, Compose stacks, host metrics, and job history across all connected hosts. |
+| Safer Docker actions | Typed jobs for start, stop, restart, remove, pull, prune, deploy, backup, restore, and migration workflows. |
+| GitHub deploys | Track private or public GitHub Compose repositories with encrypted read-only tokens, branch discovery, preview, deploy, and redeploy. |
+| Recovery confidence | Recovery points, storage targets, readiness scoring, restore drills, profiles, clone restores, and migration runs. |
+| Team operations | Owner/admin/operator/viewer roles, active sessions, audit logs, request IDs, rate limits, and alert history. |
+| Practical security | Encrypted secrets, origin checks, credentialed CORS controls, Docker-only agent endpoints, and viewer-safe inspect output. |
 
-   ```bash
-   openssl rand -base64 48
-   ```
+## Core Workflows
 
-3. Set production environment values:
+1. Add a Docker host over SSH or the host agent.
+2. Review inventory in Services, Containers, Images, Networks, and Volumes.
+3. Deploy or track Compose apps from GitHub.
+4. Create recovery points and run clone-only restore drills.
+5. Watch Admin -> Operations for worker health, backup health, and failed jobs.
+6. Add alert channels and metric thresholds for the services that matter.
 
-   ```bash
-   APP_SECRET=<unique value from openssl>
-   POSTGRES_PASSWORD=<unique database password>
-   DOCKERMENDER_BACKUP_DIR=/srv/dockermender/backups
-   BACKUP_ENCRYPTION_ACTIVE_KEY_ID=app_secret
-   BACKUP_ENCRYPTION_KEYS=
-   BACKUP_HOST_PATH_ALLOWED_ROOTS=
-   SECURE_COOKIES=true
-   CORS_ORIGINS=https://dockermender.example.com
-   ```
+## Guides
 
-4. Validate and start:
+- [Installation and production setup](docs/installation.md)
+- [Connect Docker hosts](docs/connect-hosts.md)
+- [Deploy Compose apps from GitHub](docs/deploy-from-github.md)
+- [Recovery, backups, and restore drills](docs/recovery-guide.md)
+- [Daily operations runbook](docs/operations-runbook.md)
+- [Security hardening checklist](docs/security-hardening.md)
+- [API contract notes](docs/api-contracts.md)
+- [OpenAPI summary](docs/openapi.md)
 
-   ```bash
-   docker compose -f docker-compose.yml -f docker-compose.prod.example.yml config
-   docker compose -f docker-compose.yml -f docker-compose.prod.example.yml up -d --build
-   ```
+## Production Checklist
 
-5. Watch first-start logs and confirm database migrations complete:
+- Use a unique `APP_SECRET` and `POSTGRES_PASSWORD`.
+- Mount recovery storage outside the container, for example
+  `/srv/dockermender/backups`.
+- Put Dockermender behind HTTPS and set `SECURE_COOKIES=true`.
+- Set `CORS_ORIGINS` when the UI and API are served from different origins.
+- Restrict agent port `8090` to the manager network.
+- Configure `BACKUP_HOST_PATH_ALLOWED_ROOTS` for production host-path recovery.
+- Test at least one recovery point, verify, and clone restore drill before
+  relying on a backup target.
 
-   ```bash
-   docker compose -f docker-compose.yml -f docker-compose.prod.example.yml logs -f app worker
-   ```
+## What Ships In v0.9
 
-Recommended first live test order:
-
-1. Add one disposable Docker host.
-2. Create a tiny test container with a named volume.
-3. Create a recovery point.
-4. Restore it as a clone on the same host.
-5. Add and test an SMB/rclone or S3 backup target.
-6. Test `remote_only` only after target verification succeeds.
-7. Test host-to-host clone migration.
-8. Test `safe_move` or `warm_move` only after clone restore works.
-
-## Included In v0.9
-
-- Multi-host Docker inventory for containers, images, networks, volumes, and
-  Compose stacks.
+- Multi-host Docker inventory and management.
 - SSH and optional host-agent connection modes.
-- Typed background jobs for Docker actions, Compose deploys, image pulls,
-  registry login, backups, restores, and app migration workflows.
-- Services, Containers, Images, Networks, Volumes, Jobs, Audit, Recovery,
-  Hosts, Users, Settings, and Operations views.
-- Recovery points, recovery profiles, restore drills, migration runs, local
-  and remote storage targets, and readiness scoring for app restore confidence.
-- Private GitHub repository tracking with encrypted fine-grained read-only token
-  storage.
-- Custom catalog templates and external self-hosted app discovery.
-- Host metrics, host metric alerts, email/webhook notification channels,
-  active session management, RBAC, rate limits, origin checks, request IDs, and
-  generated OpenAPI artifacts.
-- CI coverage for typechecking, migrations, OpenAPI drift, unit/integration
-  tests, browser smoke tests, production compose validation, and Docker image
-  builds.
+- Compose deploys, GitHub repository tracking, branch checks, and redeploy jobs.
+- Recovery points, recovery profiles, storage targets, restore drills, readiness
+  scoring, and migration workflows.
+- Host metrics, host metric alerts, email/webhook notifications, alert silences,
+  and alert history.
+- RBAC, active session management, audit events, route rate limits, request IDs,
+  generated OpenAPI docs, and CI gates.
 
 ## Repository Rules
 
-- The canonical repository is `https://github.com/Admin-DockerMender/dockermender`.
-- Pushes, tags, releases, and version updates must use the `admin-dockermender`
-  GitHub account.
+- Canonical repository: `https://github.com/Admin-DockerMender/dockermender`.
+- Pushes, tags, releases, and version updates must use the
+  `admin-dockermender` GitHub account.
 - `v0.9` is the first public version for this repository.
 - Do not reintroduce old personal owner, repository, image, or user fixtures.
 
-## SSH Integration Test
-
-CI starts a disposable SSH Docker host fixture and runs the SSH integration test
-automatically. The fixture uses `infra/dev/sshhost.Dockerfile`, injects a
-short-lived public key at container startup, and mounts the runner Docker socket
-so the test exercises the same SSH + Docker CLI path as a real host.
-
-To run the same test against a real SSH Docker host, set these variables:
+## Development
 
 ```bash
-DOCKERMENDER_SSH_TEST_HOST=192.0.2.10
-DOCKERMENDER_SSH_TEST_USER=dockeradmin
-DOCKERMENDER_SSH_TEST_KEY="$(cat ~/.ssh/id_ed25519)"
-DOCKERMENDER_SSH_TEST_PORT=22
+npm install
+npm run typecheck
+npm test
+npm run smoke:web
 ```
 
-Then run `npm test`. The test verifies SSH connectivity plus Docker Engine and
-Compose availability.
+Useful checks:
 
-For GitHub Actions real-host coverage, set repository variable
-`DOCKERMENDER_RUN_EXTERNAL_SSH_TESTS=true` and add these repository secrets:
-
-- `DOCKERMENDER_SSH_TEST_HOST`
-- `DOCKERMENDER_SSH_TEST_USER`
-- `DOCKERMENDER_SSH_TEST_KEY`
-- `DOCKERMENDER_SSH_TEST_PORT` (optional, defaults to `22`)
-- `DOCKERMENDER_SSH_TEST_KEY_PASSPHRASE` (optional)
-
-## Host Agent
-
-For hosts where you prefer an agent over SSH, deploy the agent with
-`agent-compose.example.yml`, set a long `AGENT_TOKEN`, expose port `8090` only
-to the manager network, and add the host in Dockermender using connection mode
-`Host agent`.
-
-## Safety Notes
-
-- SSH private keys, registry passwords, GitHub tokens, and backup target secrets
-  are encrypted with `APP_SECRET` before storage.
-- Production startup refuses the documented default `APP_SECRET`.
-- API responses include security headers, auth endpoints are rate-limited,
-  credentialed CORS is limited to same-origin plus configured `CORS_ORIGINS`,
-  and unsafe browser mutations are origin-checked.
-- The app creates typed Docker commands instead of accepting arbitrary host
-  shell commands.
-- The host agent accepts bearer-authenticated Dockermender Docker commands only;
-  expose it only to the manager network.
-- The host agent's metrics endpoint reads a fixed `/proc` allowlist and mount
-  stats directly; it does not expose shell execution or arbitrary file reads.
-- Container inspect masks environment values for viewers because env entries
-  often contain secrets. Operators, admins, and owners can still see full
-  inspect env.
-- Active sessions never expose token hashes; revocation is scoped to the
-  signed-in user and session activity writes are throttled.
-- Backups are written under `BACKUP_DIR` and path-checked before use.
-- Put the app behind HTTPS when exposing it outside a private network.
+```bash
+npm run lint:migrations
+npm run openapi:check
+npm audit --omit=dev --audit-level=high
+```

@@ -26,10 +26,10 @@ This runbook is the minimum production checklist for a Dockermender deployment.
 - Check image update intelligence, vulnerability scan setup, and preview guidance
   before updating containers or redeploying stacks.
 
-## V1 Recovery Acceptance Drill
+## Recovery Acceptance Drill
 
-Run this before tagging a V1 release candidate or trusting a new production
-backup target.
+Run this before trusting a new production backup target or making recovery
+claims for a release.
 
 1. Create a disposable app on a real Docker host with:
    - one named Docker volume,
@@ -95,4 +95,5 @@ backup target.
 - Agent-mode hosts report `agentVersion` through `/api/health` during host
   checks. Unknown or outdated agents still keep compatible Docker-only commands,
   but live logs and host `/proc` stats require the newer agent endpoints.
-- `0.11.0` treats `0.10.0-pre.1` or newer agents as compatible.
+- `v0.9` expects agents built from the same repository version for live logs and
+  host `/proc` stats.

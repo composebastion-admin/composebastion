@@ -39,5 +39,5 @@ capabilities, and operator includes viewer capabilities.
 - Viewer routes must not return secret material. Redact env values, credentials,
   tokens, private keys, archive contents, and host file contents unless the route
   is intentionally operator/admin gated.
-- Prefer additive response changes before v1; document any shape that becomes
+- Prefer additive response changes before 1.0; document any shape that becomes
   part of the compatibility contract.

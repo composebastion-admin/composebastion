@@ -4,8 +4,8 @@ Dockermender is still pre-1.0. Upgrade carefully and keep rollback paths simple.
 
 ## Version Policy
 
-- Stay below `1.0` until API contracts, browser smoke tests, accessibility checks,
-  migration discipline, and production runbooks are complete.
+- Stay below `1.0` until API contracts, browser smoke tests, accessibility
+  checks, migration discipline, and production runbooks are fully stable.
 - Use additive API changes whenever possible.
 - New database migrations must use the next clean `NNN_snake_case.sql` filename.
   The existing duplicate `018_` migration prefix is a published legacy exception;

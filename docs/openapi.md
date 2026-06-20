@@ -2,7 +2,7 @@
 
 Generated from `apps/api/src/openapi/document.ts`.
 
-Stable JSON endpoints are documented under `/api/v1/*`. Existing `/api/*` endpoints remain compatibility aliases until v1.
+Stable JSON endpoints are documented under `/api/v1/*`. Existing `/api/*` endpoints remain compatibility aliases before 1.0.
 
 | Method | Path | Auth | Summary |
 |--------|------|------|---------|
