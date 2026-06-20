@@ -6,6 +6,19 @@ This guide covers the day-to-day workflows that are easiest to forget when you
 only use them occasionally. For installation-first docs, start with
 [installation.md](installation.md).
 
+## Use The Demo Workspace
+
+During first owner setup, enable `Include demo workspace` to seed a complete
+synthetic environment for evaluation, screenshots, or team training. The demo
+includes production, edge-agent, and recovery-target hosts; Compose stacks;
+standalone containers; GitHub source links; image update and scan data; alert
+events and silences; backup targets; recovery points; restore drills; migration
+runs; and custom catalog templates.
+
+Demo hosts are tagged `demo`, and Docker actions on them are simulated. That
+means you can start, stop, deploy, inspect logs, test backups, and walk through
+recovery flows without connecting real infrastructure.
+
 ## Add An SSH Docker Host
 
 Before adding a host in Dockermender, test the same SSH user and Docker socket that the app will use.

@@ -42,7 +42,10 @@ docker compose up -d --build
 ```
 
 Open `http://localhost:8080`, create the first owner account, then add a Docker
-host.
+host. For evaluation or a guided product tour, enable `Include demo workspace`
+during owner setup. It seeds demo-tagged hosts, apps, alerts, backups, recovery
+points, image intelligence, migration history, and catalog templates that use
+simulated Docker actions.
 
 Useful commands:
 

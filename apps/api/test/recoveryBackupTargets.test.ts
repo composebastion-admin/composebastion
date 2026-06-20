@@ -102,7 +102,7 @@ describe("recovery backup targets", () => {
       type: "rclone",
       provider: "drive",
       rcloneConfig: "[gdrive]\ntype = drive\n",
-      remotePath: "Docker Manager",
+      remotePath: "Dockermender",
       localCachePolicy: "keep",
       enabled: true
     }));
@@ -128,7 +128,7 @@ describe("recovery backup targets", () => {
     expect(mapped.kind).toBe("rclone");
     expect(mapped.rcloneProvider).toBe("drive");
     expect(mapped.remoteName).toBe("gdrive");
-    expect(mapped.remotePath).toBe("Docker Manager");
+    expect(mapped.remotePath).toBe("Dockermender");
     expect(mapped.healthStatus).toBe("healthy");
     expect(mapped.hasGenericConfig).toBe(true);
     expect(mapped).not.toHaveProperty("rcloneConfig");

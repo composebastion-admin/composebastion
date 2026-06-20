@@ -44,8 +44,11 @@ Start Dockermender:
 docker compose up -d --build
 ```
 
-Open `http://localhost:8080`, create the first owner account, and add your first
-Docker host.
+Open `http://localhost:8080`, create the first owner account, and choose
+`Include demo workspace` if you want a ready-made showcase. The demo seeds
+multiple hosts, Compose apps, GitHub deployments, alerts, backups, recovery
+points, storage targets, image scans, migration runs, and catalog templates.
+You can remove it later like any other demo data.
 
 For production installs with a reverse proxy and persistent backup storage, use
 the [installation guide](docs/installation.md).
@@ -69,6 +72,16 @@ the [installation guide](docs/installation.md).
 4. Create recovery points and run clone-only restore drills.
 5. Watch Admin -> Operations for worker health, backup health, and failed jobs.
 6. Add alert channels and metric thresholds for the services that matter.
+
+## Product Demo Workspace
+
+For screenshots, sales demos, or first-run evaluation, seed the demo workspace
+during owner setup. It creates a full synthetic environment with online SSH and
+agent hosts, a recovery target, stateful app stacks, source links, image update
+intelligence, vulnerability scan summaries, alert history, backup schedules,
+recovery drills, and migration examples. Demo hosts are tagged `demo` and use
+simulated Docker actions, so you can click through workflows without needing
+three real servers.
 
 ## Guides
 

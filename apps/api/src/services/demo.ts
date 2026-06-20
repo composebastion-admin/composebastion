@@ -103,17 +103,24 @@ function containerData(input: {
   size?: string;
   mounts?: Array<Record<string, unknown>>;
   network?: string;
+  labels?: Record<string, string>;
+  env?: string[];
+  status?: string;
+  health?: "healthy" | "unhealthy" | "starting";
 }) {
   return {
     ID: input.id,
     Names: input.name,
     Image: input.image,
     State: input.state,
-    Status: input.state === "running" ? "Up 2 hours" : input.state === "exited" ? "Exited (0) 18 minutes ago" : input.state,
+    Status: input.status ?? (input.state === "running" ? "Up 2 hours" : input.state === "exited" ? "Exited (0) 18 minutes ago" : input.state),
     Ports: input.ports ?? "",
     Size: input.size ?? "4.1kB (virtual 128MB)",
     Mounts: input.mounts ?? [],
-    Network: input.network ?? "demo_frontend"
+    Network: input.network ?? "demo_frontend",
+    Labels: input.labels ?? { "dockermender.demo": "true" },
+    Env: input.env ?? [],
+    Health: input.health
   };
 }
 
@@ -141,13 +148,14 @@ function networkData(name: string, driver = "bridge", scope = "local") {
   };
 }
 
-function volumeData(name: string) {
+function volumeData(name: string, sizeBytes = 134_217_728) {
   return {
     Name: name,
     Driver: "local",
     Mountpoint: `/var/lib/docker/volumes/${name}/_data`,
     Scope: "local",
-    Labels: { "dockermender.demo": "true" }
+    Labels: { "dockermender.demo": "true" },
+    UsageData: { Size: sizeBytes, RefCount: 1 }
   };
 }
 
@@ -159,7 +167,7 @@ const demoComposeYaml = `services:
     volumes:
       - demo_web_content:/usr/share/nginx/html
   api:
-    image: ghcr.io/example/demo-api:1.4.2
+    image: ghcr.io/admin-dockermender/showcase-api:0.9
     environment:
       NODE_ENV: production
     ports:
@@ -172,207 +180,1583 @@ const demoEnv = `WEB_PORT=8088
 API_PORT=9090
 `;
 
+function demoHex(seed: string, length: number) {
+  const chunk = stableHash(seed).toString(16).padStart(8, "0");
+  return chunk.repeat(Math.ceil(length / chunk.length)).slice(0, length);
+}
+
+function demoCommit(seed: string) {
+  return demoHex(seed, 40);
+}
+
+function demoDigest(seed: string) {
+  return `sha256:${demoHex(seed, 64)}`;
+}
+
+function composeLabels(project: string, service: string) {
+  return {
+    "com.docker.compose.project": project,
+    "com.docker.compose.service": service,
+    "com.docker.compose.config-hash": demoHex(`${project}:${service}`, 16),
+    "dockermender.demo": "true"
+  };
+}
+
 export async function seedDemoWorkspace(createdBy?: string | null) {
   return withTransaction(async (client) => {
-    const existing = await client.query(
-      "SELECT * FROM docker_hosts WHERE hostname = $1 OR $2 = ANY(tags) ORDER BY created_at ASC LIMIT 1",
-      [DEMO_HOSTNAME, DEMO_TAG]
-    );
-    const hostId = existing.rows[0]?.id ?? uuid();
-
-    if (existing.rows[0]) {
-      await client.query(
-        `UPDATE docker_hosts
-         SET name = 'Demo Host',
-             hostname = $2,
-             port = 22,
-             username = 'demo',
-             connection_mode = 'ssh',
-             ssh_auth_type = 'password',
-             ssh_password_encrypted = COALESCE(ssh_password_encrypted, $3),
-             docker_socket_path = '/var/run/docker.sock',
-             tags = ARRAY['demo', 'sandbox', 'sample'],
-             last_status = 'online',
-             last_seen_at = now(),
-             last_error = null,
-             docker_version = '29.4.0-demo',
-             compose_version = '5.1.1-demo',
-             updated_at = now()
-         WHERE id = $1`,
-        [hostId, DEMO_HOSTNAME, encryptSecret("demo-password")]
-      );
-    } else {
-      await client.query(
-        `INSERT INTO docker_hosts
-          (id, name, hostname, port, username, connection_mode, ssh_auth_type, ssh_password_encrypted, docker_socket_path, tags, last_status, last_seen_at, docker_version, compose_version)
-         VALUES ($1, 'Demo Host', $2, 22, 'demo', 'ssh', 'password', $3, '/var/run/docker.sock', ARRAY['demo', 'sandbox', 'sample'], 'online', now(), '29.4.0-demo', '5.1.1-demo')`,
-        [hostId, DEMO_HOSTNAME, encryptSecret("demo-password")]
-      );
-    }
-
-    await client.query("DELETE FROM resource_snapshots WHERE host_id = $1", [hostId]);
-    await client.query("DELETE FROM compose_stacks WHERE host_id = $1", [hostId]);
-    await client.query("DELETE FROM backups WHERE host_id = $1", [hostId]);
-    await client.query("DELETE FROM alert_rules WHERE host_id = $1", [hostId]);
-    await client.query("DELETE FROM operation_jobs WHERE host_id = $1", [hostId]);
-
-    const containers = [
-      containerData({
-        id: "demo-web-000000000001",
-        name: "demo-web",
-        image: "nginx:alpine",
-        state: "running",
-        ports: "0.0.0.0:8088->80/tcp, [::]:8088->80/tcp",
-        size: "12.4kB (virtual 49.6MB)",
-        mounts: [{ Type: "volume", Name: "demo_web_content", Destination: "/usr/share/nginx/html", RW: true }],
-        network: "demo_frontend"
-      }),
-      containerData({
-        id: "demo-api-000000000002",
-        name: "demo-api",
-        image: "ghcr.io/example/demo-api:1.4.2",
-        state: "running",
-        ports: "0.0.0.0:9090->8080/tcp",
-        size: "28.1MB (virtual 212MB)",
-        mounts: [{ Type: "volume", Name: "demo_api_data", Destination: "/data", RW: true }],
-        network: "demo_backend"
-      }),
-      containerData({
-        id: "demo-postgres-0000003",
-        name: "demo-postgres",
-        image: "postgres:16-alpine",
-        state: "running",
-        ports: "5432/tcp",
-        size: "18.8kB (virtual 396MB)",
-        mounts: [{ Type: "volume", Name: "demo_postgres_data", Destination: "/var/lib/postgresql/data", RW: true }],
-        network: "demo_backend"
-      }),
-      containerData({
-        id: "demo-worker-000000004",
-        name: "demo-worker",
-        image: "redis:7-alpine",
-        state: "exited",
-        ports: "6379/tcp",
-        size: "4.1kB (virtual 57.8MB)",
-        network: "demo_backend"
-      })
-    ];
-
-    for (const item of containers) {
-      await upsertResource(client, hostId, "container", String(item.ID), String(item.Names), item);
-    }
-
-    const images = [
-      ["nginx:alpine", "49.6MB"],
-      ["ghcr.io/example/demo-api:1.4.2", "212MB"],
-      ["ghcr.io/example/demo-api:1.5.0", "218MB"],
-      ["postgres:16-alpine", "396MB"],
-      ["redis:7-alpine", "57.8MB"],
-      ["ghcr.io/open-webui/open-webui:main", "6.68GB"]
+    const hostSpecs = [
+      {
+        key: "primary",
+        name: "Demo Production Node",
+        hostname: DEMO_HOSTNAME,
+        port: 22,
+        username: "demo",
+        connectionMode: "ssh",
+        lastStatus: "online",
+        lastSeenOffset: "1 minute",
+        lastError: null,
+        dockerVersion: "29.4.0-demo",
+        composeVersion: "5.1.1-demo",
+        agentVersion: null,
+        tags: ["demo", "sandbox", "production", "showcase"]
+      },
+      {
+        key: "edge",
+        name: "Demo Edge Agent",
+        hostname: "demo.edge.dockermender.local",
+        port: 443,
+        username: "agent",
+        connectionMode: "agent",
+        agentUrl: "https://edge-agent.demo.dockermender.local",
+        lastStatus: "online",
+        lastSeenOffset: "3 minutes",
+        lastError: null,
+        dockerVersion: "28.2.1-demo",
+        composeVersion: "2.39.2-demo",
+        agentVersion: "0.9.0-demo",
+        tags: ["demo", "sandbox", "edge", "agent"]
+      },
+      {
+        key: "recovery",
+        name: "Demo Recovery Target",
+        hostname: "demo.dr.dockermender.local",
+        port: 22,
+        username: "demo",
+        connectionMode: "ssh",
+        lastStatus: "online",
+        lastSeenOffset: "8 minutes",
+        lastError: null,
+        dockerVersion: "29.4.0-demo",
+        composeVersion: "5.1.1-demo",
+        agentVersion: null,
+        tags: ["demo", "sandbox", "recovery", "standby"]
+      }
     ] as const;
-    for (const [image, size] of images) {
-      const data = imageData(image, size);
-      await upsertResource(client, hostId, "image", String(data.ID), `${data.Repository}:${data.Tag}`, data);
+
+    const demoHostnames = hostSpecs.map((host) => host.hostname);
+    const demoHostNames = ["Demo Host", ...hostSpecs.map((host) => host.name)];
+    const demoChannelNames = ["Demo webhook", "Demo operations webhook", "Demo email digest"];
+    const demoBackupTargetNames = ["Demo Local Vault", "Demo SMB Remote", "Demo S3 Archive"];
+    const demoRegistryNames = ["Demo GHCR", "Demo Docker Hub Mirror", "Demo Insecure Lab Registry"];
+    const demoRepositoryNames = ["Demo Compose App", "Demo Showcase App", "Demo Open WebUI", "Demo Edge Playbook"];
+    const demoTemplateIds = ["demo-production-web", "demo-observability", "demo-worker-suite"];
+
+    const staleHosts = await client.query<{ id: string }>(
+      `SELECT id FROM docker_hosts
+       WHERE hostname = ANY($1::text[])
+          OR ($2 = ANY(tags) AND name = ANY($3::text[]))`,
+      [demoHostnames, DEMO_TAG, demoHostNames]
+    );
+    const staleHostIds = staleHosts.rows.map((row) => row.id);
+
+    await client.query("DELETE FROM alert_events WHERE host_id = ANY($1::uuid[]) OR channel_id IN (SELECT id FROM notification_channels WHERE name = ANY($2::text[]) OR config->>'demo' = 'true')", [staleHostIds, demoChannelNames]);
+    await client.query("DELETE FROM alert_silences WHERE host_id = ANY($1::uuid[]) OR rule_id IN (SELECT id FROM alert_rules WHERE host_id = ANY($1::uuid[]) OR name LIKE 'Demo %')", [staleHostIds]);
+    await client.query("DELETE FROM alert_rules WHERE host_id = ANY($1::uuid[]) OR name LIKE 'Demo %'", [staleHostIds]);
+    await client.query("DELETE FROM alert_channel_test_events WHERE channel_id IN (SELECT id FROM notification_channels WHERE name = ANY($1::text[]) OR config->>'demo' = 'true')", [demoChannelNames]);
+    await client.query("DELETE FROM notification_channels WHERE name = ANY($1::text[]) OR config->>'demo' = 'true'", [demoChannelNames]);
+    await client.query("DELETE FROM migration_runs WHERE source_host_id = ANY($1::uuid[]) OR target_host_id = ANY($1::uuid[])", [staleHostIds]);
+    await client.query("DELETE FROM recovery_schedules WHERE host_id = ANY($1::uuid[])", [staleHostIds]);
+    await client.query("DELETE FROM recovery_points WHERE host_id = ANY($1::uuid[])", [staleHostIds]);
+    await client.query("DELETE FROM recovery_profiles WHERE host_id = ANY($1::uuid[])", [staleHostIds]);
+    await client.query("DELETE FROM backup_schedules WHERE host_id = ANY($1::uuid[])", [staleHostIds]);
+    await client.query("DELETE FROM backups WHERE host_id = ANY($1::uuid[])", [staleHostIds]);
+    await client.query("DELETE FROM app_source_links WHERE host_id = ANY($1::uuid[])", [staleHostIds]);
+    await client.query("DELETE FROM image_update_checks WHERE host_id = ANY($1::uuid[])", [staleHostIds]);
+    await client.query("DELETE FROM image_scan_results WHERE host_id = ANY($1::uuid[])", [staleHostIds]);
+    await client.query("DELETE FROM resource_snapshots WHERE host_id = ANY($1::uuid[])", [staleHostIds]);
+    await client.query("DELETE FROM compose_stacks WHERE host_id = ANY($1::uuid[])", [staleHostIds]);
+    await client.query("DELETE FROM operation_jobs WHERE host_id = ANY($1::uuid[])", [staleHostIds]);
+    await client.query("DELETE FROM github_repositories WHERE name = ANY($1::text[]) OR default_host_id = ANY($2::uuid[])", [demoRepositoryNames, staleHostIds]);
+    await client.query("DELETE FROM recovery_artifacts WHERE backup_target_id IN (SELECT id FROM backup_targets WHERE name = ANY($1::text[]) OR config->>'demo' = 'true')", [demoBackupTargetNames]);
+    await client.query("DELETE FROM backup_targets WHERE name = ANY($1::text[]) OR config->>'demo' = 'true'", [demoBackupTargetNames]);
+    await client.query("DELETE FROM registries WHERE name = ANY($1::text[])", [demoRegistryNames]);
+    await client.query("DELETE FROM custom_catalog_templates WHERE id = ANY($1::text[])", [demoTemplateIds]);
+
+    const hostIds: Record<string, string> = {};
+    for (const spec of hostSpecs) {
+      const existing = await client.query<{ id: string }>(
+        "SELECT id FROM docker_hosts WHERE hostname = $1 ORDER BY created_at ASC LIMIT 1",
+        [spec.hostname]
+      );
+      const hostId = existing.rows[0]?.id ?? uuid();
+      hostIds[spec.key] = hostId;
+      const sshPassword = spec.connectionMode === "ssh" ? encryptSecret("demo-password") : null;
+      const agentToken = spec.connectionMode === "agent" ? encryptSecret("demo-agent-token") : null;
+      const agentUrl = "agentUrl" in spec ? spec.agentUrl : null;
+      if (existing.rows[0]) {
+        await client.query(
+          `UPDATE docker_hosts
+           SET name = $2,
+               hostname = $3,
+               port = $4,
+               username = $5,
+               connection_mode = $6,
+               ssh_auth_type = $7,
+               ssh_key_encrypted = NULL,
+               ssh_password_encrypted = $8,
+               agent_url = $9,
+               agent_token_encrypted = $10,
+               docker_socket_path = '/var/run/docker.sock',
+               tags = $11,
+               last_status = $12,
+               last_seen_at = CASE WHEN $13::text IS NULL THEN NULL ELSE now() - $13::interval END,
+               last_error = $14,
+               docker_version = $15,
+               compose_version = $16,
+               agent_version = $17,
+               deleted_at = NULL,
+               updated_at = now()
+           WHERE id = $1`,
+          [
+            hostId,
+            spec.name,
+            spec.hostname,
+            spec.port,
+            spec.username,
+            spec.connectionMode,
+            spec.connectionMode === "ssh" ? "password" : "key",
+            sshPassword,
+            agentUrl,
+            agentToken,
+            spec.tags,
+            spec.lastStatus,
+            spec.lastSeenOffset,
+            spec.lastError,
+            spec.dockerVersion,
+            spec.composeVersion,
+            spec.agentVersion
+          ]
+        );
+      } else {
+        await client.query(
+          `INSERT INTO docker_hosts (
+             id, name, hostname, port, username, connection_mode, ssh_auth_type,
+             ssh_key_encrypted, ssh_password_encrypted, agent_url, agent_token_encrypted,
+             docker_socket_path, tags, last_status, last_seen_at, last_error,
+             docker_version, compose_version, agent_version
+           )
+           VALUES (
+             $1, $2, $3, $4, $5, $6, $7,
+             NULL, $8, $9, $10,
+             '/var/run/docker.sock', $11, $12,
+             CASE WHEN $13::text IS NULL THEN NULL ELSE now() - $13::interval END,
+             $14, $15, $16, $17
+           )`,
+          [
+            hostId,
+            spec.name,
+            spec.hostname,
+            spec.port,
+            spec.username,
+            spec.connectionMode,
+            spec.connectionMode === "ssh" ? "password" : "key",
+            sshPassword,
+            agentUrl,
+            agentToken,
+            spec.tags,
+            spec.lastStatus,
+            spec.lastSeenOffset,
+            spec.lastError,
+            spec.dockerVersion,
+            spec.composeVersion,
+            spec.agentVersion
+          ]
+        );
+      }
     }
 
-    for (const network of [
-      networkData("bridge"),
-      networkData("host", "host"),
-      networkData("none", "null"),
-      networkData("demo_frontend"),
-      networkData("demo_backend")
-    ]) {
-      await upsertResource(client, hostId, "network", String(network.ID), String(network.Name), network);
-    }
+    const primaryHostId = hostIds.primary!;
+    const edgeHostId = hostIds.edge!;
+    const recoveryHostId = hostIds.recovery!;
 
-    for (const volume of ["demo_web_content", "demo_api_data", "demo_postgres_data", "demo_uploads"]) {
-      await upsertResource(client, hostId, "volume", volume, volume, volumeData(volume));
-    }
-
-    await client.query(
-      `INSERT INTO compose_stacks (id, host_id, name, project_name, compose_yaml, env, status, updated_at)
-       VALUES
-         ($1, $3, 'Demo Web Stack', 'demo_web', $4, $5, 'deployed', now()),
-         ($2, $3, 'AI Tools Stack', 'demo_ai', $6, 'OPEN_WEBUI_PORT=3000', 'created', now())`,
-      [
-        uuid(),
-        uuid(),
-        hostId,
-        demoComposeYaml,
-        demoEnv,
-        `services:
+    const showcaseComposeYaml = `services:
+  web:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "\${WEB_PORT:-8088}:80"
+    volumes:
+      - demo_web_content:/usr/share/nginx/html:ro
+    depends_on:
+      - api
+  api:
+    image: ghcr.io/admin-dockermender/showcase-api:0.9
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://demo:demo@postgres:5432/showcase
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "\${API_PORT:-9090}:8080"
+    volumes:
+      - demo_api_uploads:/app/uploads
+    depends_on:
+      - postgres
+      - redis
+  worker:
+    image: ghcr.io/admin-dockermender/showcase-worker:0.9
+    restart: unless-stopped
+    environment:
+      QUEUE_URL: redis://redis:6379/0
+    depends_on:
+      - redis
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: showcase
+      POSTGRES_USER: demo
+      POSTGRES_PASSWORD: demo
+    volumes:
+      - demo_postgres_data:/var/lib/postgresql/data
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - demo_redis_data:/data
+networks:
+  default:
+    name: demo_backend
+volumes:
+  demo_web_content:
+  demo_api_uploads:
+  demo_postgres_data:
+  demo_redis_data:
+`;
+    const showcaseEnv = `WEB_PORT=8088
+API_PORT=9090
+SHOWCASE_DOMAIN=portal.demo.dockermender.local
+`;
+    const observabilityComposeYaml = `services:
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    restart: unless-stopped
+    ports:
+      - "\${PROMETHEUS_PORT:-9095}:9090"
+    volumes:
+      - demo_prometheus_data:/prometheus
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+  grafana:
+    image: grafana/grafana:11.5.2
+    restart: unless-stopped
+    ports:
+      - "\${GRAFANA_PORT:-3001}:3000"
+    volumes:
+      - demo_grafana_data:/var/lib/grafana
+volumes:
+  demo_prometheus_data:
+  demo_grafana_data:
+`;
+    const observabilityEnv = `PROMETHEUS_PORT=9095
+GRAFANA_PORT=3001
+`;
+    const aiComposeYaml = `services:
   open-webui:
     image: ghcr.io/open-webui/open-webui:main
+    restart: unless-stopped
     ports:
       - "\${OPEN_WEBUI_PORT:-3000}:8080"
     volumes:
       - demo_open_webui:/app/backend/data
 volumes:
   demo_open_webui:
-`
-      ]
-    );
-
-    // Matches the seeded "Demo Compose App" GitHub repository so the deployed
-    // repo -> stack pairing shows the full git update flow in the demo.
-    await client.query(
-      `INSERT INTO compose_stacks (
-         id, host_id, name, project_name, compose_yaml, env, status,
-         source_type, source_repository_url, source_branch,
-         source_current_commit_sha, source_latest_commit_sha, source_checked_at, updated_at
-       )
-       VALUES ($1, $2, 'Demo Compose App', 'demo_compose_app', $3, 'WEB_PORT=8088', 'deployed',
-               'github', 'https://github.com/docker/awesome-compose', 'master',
-               'd3m0c0mm1tf0rdem0c0mp0seapp0000000000001', 'd3m0c0mm1tf0rdem0c0mp0seapp0000000000001', now() - interval '5 minutes', now())`,
-      [
-        uuid(),
-        hostId,
-        `services:
-  web:
-    image: nginx:alpine
+`;
+    const edgeComposeYaml = `services:
+  edge-proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
     ports:
-      - "\${WEB_PORT:-8088}:80"
-`
-      ]
-    );
+      - "\${EDGE_HTTP_PORT:-8081}:80"
+    volumes:
+      - demo_edge_caddy:/data
+  camera-relay:
+    image: ghcr.io/admin-dockermender/camera-relay:0.9
+    restart: unless-stopped
+    volumes:
+      - demo_edge_clips:/clips
+volumes:
+  demo_edge_caddy:
+  demo_edge_clips:
+`;
 
-    await client.query(
-      `INSERT INTO backups (id, host_id, volume_name, target_volume_name, file_name, size_bytes, status, completed_at, metadata)
-       VALUES
-         ($1, $3, 'demo_postgres_data', null, $4, 7340032, 'completed', now() - interval '20 minutes', $5),
-         ($2, $3, 'demo_uploads', null, $6, null, 'failed', now() - interval '1 hour', $7)`,
-      [
-        uuid(),
-        uuid(),
-        hostId,
-        `demo-postgres-${Date.now()}.tar.gz`,
-        { demo: true, note: "Sample completed backup" },
-        `demo-uploads-${Date.now()}.tar.gz`,
-        { demo: true, note: "Sample failed backup" }
-      ]
-    );
-
-    const channel = await client.query("SELECT * FROM notification_channels WHERE name = 'Demo webhook' LIMIT 1");
-    const channelId = channel.rows[0]?.id ?? uuid();
-    if (!channel.rows[0]) {
+    const stackIds: Record<string, string> = {};
+    async function insertStack(input: {
+      key: string;
+      hostId: string;
+      name: string;
+      projectName: string;
+      composeYaml: string;
+      env: string;
+      status: string;
+      domains?: string[];
+      exposedService?: string | null;
+      exposedPort?: number | null;
+      tlsDesired?: boolean;
+      updatePolicyEnabled?: boolean;
+      updatePolicyChannel?: string | null;
+      sourceType?: string;
+      sourceRepositoryUrl?: string | null;
+      sourceBranch?: string | null;
+      sourceWorkingDir?: string | null;
+      sourceComposePath?: string | null;
+      sourceCurrentCommitSha?: string | null;
+      sourceLatestCommitSha?: string | null;
+      sourceCheckError?: string | null;
+      lastDeployError?: string | null;
+      versionSource?: string;
+      versionNote?: string;
+      previousComposeYaml?: string;
+      previousEnv?: string;
+    }) {
+      const stackId = uuid();
       await client.query(
-        `INSERT INTO notification_channels (id, name, type, webhook_url, enabled, config)
-         VALUES ($1, 'Demo webhook', 'webhook', 'https://example.invalid/dockermender-webhook', false, $2)`,
-        [channelId, { demo: true }]
+        `INSERT INTO compose_stacks (
+           id, host_id, name, project_name, compose_yaml, env, status,
+           domains, exposed_service, exposed_port, tls_desired,
+           update_policy_enabled, update_policy_channel,
+           source_type, source_repository_url, source_branch, source_working_dir,
+           source_compose_path, source_current_commit_sha, source_latest_commit_sha,
+           source_checked_at, source_check_error, last_deploy_error, updated_at
+         )
+         VALUES (
+           $1, $2, $3, $4, $5, $6, $7,
+           $8, $9, $10, $11,
+           $12, $13,
+           $14, $15, $16, $17,
+           $18, $19, $20,
+           now() - interval '6 minutes', $21, $22, now()
+         )`,
+        [
+          stackId,
+          input.hostId,
+          input.name,
+          input.projectName,
+          input.composeYaml,
+          input.env,
+          input.status,
+          input.domains ?? [],
+          input.exposedService ?? null,
+          input.exposedPort ?? null,
+          input.tlsDesired ?? false,
+          input.updatePolicyEnabled ?? false,
+          input.updatePolicyChannel ?? null,
+          input.sourceType ?? "ui",
+          input.sourceRepositoryUrl ?? null,
+          input.sourceBranch ?? null,
+          input.sourceWorkingDir ?? null,
+          input.sourceComposePath ?? null,
+          input.sourceCurrentCommitSha ?? null,
+          input.sourceLatestCommitSha ?? null,
+          input.sourceCheckError ?? null,
+          input.lastDeployError ?? null
+        ]
+      );
+      const previousVersionId = uuid();
+      const currentVersionId = uuid();
+      await client.query(
+        `INSERT INTO compose_stack_versions
+          (id, stack_id, version_number, compose_yaml, env, source, note, created_by, created_at)
+         VALUES
+          ($1, $3, 1, $4, $5, $6, $7, $8, now() - interval '2 days'),
+          ($2, $3, 2, $9, $10, $11, $12, $8, now() - interval '45 minutes')`,
+        [
+          previousVersionId,
+          currentVersionId,
+          stackId,
+          input.previousComposeYaml ?? input.composeYaml.replace(/:0\.9/g, ":0.8"),
+          input.previousEnv ?? input.env,
+          input.versionSource ?? "deploy",
+          "Initial demo baseline",
+          createdBy ?? null,
+          input.composeYaml,
+          input.env,
+          input.versionSource ?? "deploy",
+          input.versionNote ?? "Current demo deployment"
+        ]
+      );
+      await client.query("UPDATE compose_stacks SET current_version_id = $2 WHERE id = $1", [stackId, currentVersionId]);
+      stackIds[input.key] = stackId;
+      return stackId;
+    }
+
+    await insertStack({
+      key: "showcase",
+      hostId: primaryHostId,
+      name: "Customer Portal",
+      projectName: "demo_showcase",
+      composeYaml: showcaseComposeYaml,
+      env: showcaseEnv,
+      status: "deployed",
+      domains: ["portal.demo.dockermender.local", "api.demo.dockermender.local"],
+      exposedService: "web",
+      exposedPort: 80,
+      tlsDesired: true,
+      updatePolicyEnabled: true,
+      updatePolicyChannel: "patch",
+      sourceType: "github",
+      sourceRepositoryUrl: "https://github.com/Admin-DockerMender/dockermender",
+      sourceBranch: "main",
+      sourceWorkingDir: "/srv/apps/customer-portal",
+      sourceComposePath: "examples/customer-portal/compose.yaml",
+      sourceCurrentCommitSha: demoCommit("showcase-current"),
+      sourceLatestCommitSha: demoCommit("showcase-latest"),
+      versionSource: "github",
+      versionNote: "v0.9 showcase deployment with update policy enabled"
+    });
+    await insertStack({
+      key: "observability",
+      hostId: primaryHostId,
+      name: "Observability",
+      projectName: "demo_observability",
+      composeYaml: observabilityComposeYaml,
+      env: observabilityEnv,
+      status: "deployed",
+      domains: ["metrics.demo.dockermender.local"],
+      exposedService: "grafana",
+      exposedPort: 3000,
+      tlsDesired: true,
+      updatePolicyEnabled: true,
+      updatePolicyChannel: "minor",
+      sourceType: "host_files",
+      sourceWorkingDir: "/srv/apps/observability",
+      sourceComposePath: "docker-compose.yml",
+      versionSource: "host_files",
+      versionNote: "Added Grafana persistence and proxy metadata"
+    });
+    await insertStack({
+      key: "ai",
+      hostId: primaryHostId,
+      name: "AI Tools",
+      projectName: "demo_ai_tools",
+      composeYaml: aiComposeYaml,
+      env: "OPEN_WEBUI_PORT=3000",
+      status: "created",
+      domains: ["ai.demo.dockermender.local"],
+      exposedService: "open-webui",
+      exposedPort: 8080,
+      tlsDesired: true,
+      updatePolicyEnabled: false,
+      sourceType: "catalog",
+      versionSource: "catalog",
+      versionNote: "Catalog template staged but not deployed yet"
+    });
+    await insertStack({
+      key: "edge",
+      hostId: edgeHostId,
+      name: "Edge Gateway",
+      projectName: "demo_edge_gateway",
+      composeYaml: edgeComposeYaml,
+      env: "EDGE_HTTP_PORT=8081",
+      status: "deployed",
+      domains: ["edge.demo.dockermender.local"],
+      exposedService: "edge-proxy",
+      exposedPort: 80,
+      tlsDesired: false,
+      updatePolicyEnabled: true,
+      updatePolicyChannel: "digest",
+      sourceType: "git",
+      sourceRepositoryUrl: "https://github.com/Admin-DockerMender/dockermender",
+      sourceBranch: "main",
+      sourceWorkingDir: "/srv/edge/gateway",
+      sourceComposePath: "edge/docker-compose.yml",
+      sourceCurrentCommitSha: demoCommit("edge-current"),
+      sourceLatestCommitSha: demoCommit("edge-current"),
+      versionSource: "git",
+      versionNote: "Edge agent deployment"
+    });
+
+    const containers = [
+      {
+        hostId: primaryHostId,
+        data: containerData({
+          id: "demo-web-000000000001",
+          name: "dm-portal-web",
+          image: "nginx:1.27-alpine",
+          state: "running",
+          ports: "0.0.0.0:8088->80/tcp, [::]:8088->80/tcp",
+          size: "16.2kB (virtual 49.6MB)",
+          mounts: [{ Type: "volume", Name: "demo_web_content", Destination: "/usr/share/nginx/html", RW: false }],
+          network: "demo_backend",
+          labels: composeLabels("demo_showcase", "web"),
+          health: "healthy"
+        })
+      },
+      {
+        hostId: primaryHostId,
+        data: containerData({
+          id: "demo-api-000000000002",
+          name: "dm-portal-api",
+          image: "ghcr.io/admin-dockermender/showcase-api:0.9",
+          state: "running",
+          ports: "0.0.0.0:9090->8080/tcp",
+          size: "31.8MB (virtual 228MB)",
+          mounts: [{ Type: "volume", Name: "demo_api_uploads", Destination: "/app/uploads", RW: true }],
+          network: "demo_backend",
+          labels: composeLabels("demo_showcase", "api"),
+          env: ["NODE_ENV=production", "REDIS_URL=redis://redis:6379/0"],
+          health: "healthy"
+        })
+      },
+      {
+        hostId: primaryHostId,
+        data: containerData({
+          id: "demo-worker-000000003",
+          name: "dm-portal-worker",
+          image: "ghcr.io/admin-dockermender/showcase-worker:0.9",
+          state: "running",
+          status: "Up 38 minutes (health: starting)",
+          size: "19.5MB (virtual 174MB)",
+          network: "demo_backend",
+          labels: composeLabels("demo_showcase", "worker"),
+          health: "starting"
+        })
+      },
+      {
+        hostId: primaryHostId,
+        data: containerData({
+          id: "demo-postgres-0000004",
+          name: "dm-portal-postgres",
+          image: "postgres:16-alpine",
+          state: "running",
+          ports: "5432/tcp",
+          size: "18.8kB (virtual 396MB)",
+          mounts: [{ Type: "volume", Name: "demo_postgres_data", Destination: "/var/lib/postgresql/data", RW: true }],
+          network: "demo_backend",
+          labels: composeLabels("demo_showcase", "postgres"),
+          health: "healthy"
+        })
+      },
+      {
+        hostId: primaryHostId,
+        data: containerData({
+          id: "demo-redis-000000005",
+          name: "dm-portal-redis",
+          image: "redis:7-alpine",
+          state: "running",
+          ports: "6379/tcp",
+          size: "6.1kB (virtual 57.8MB)",
+          mounts: [{ Type: "volume", Name: "demo_redis_data", Destination: "/data", RW: true }],
+          network: "demo_backend",
+          labels: composeLabels("demo_showcase", "redis"),
+          health: "healthy"
+        })
+      },
+      {
+        hostId: primaryHostId,
+        data: containerData({
+          id: "demo-prometheus-000006",
+          name: "dm-prometheus",
+          image: "prom/prometheus:v2.54.1",
+          state: "running",
+          ports: "0.0.0.0:9095->9090/tcp",
+          size: "9.2MB (virtual 272MB)",
+          mounts: [{ Type: "volume", Name: "demo_prometheus_data", Destination: "/prometheus", RW: true }],
+          network: "demo_observability",
+          labels: composeLabels("demo_observability", "prometheus"),
+          health: "healthy"
+        })
+      },
+      {
+        hostId: primaryHostId,
+        data: containerData({
+          id: "demo-grafana-0000007",
+          name: "dm-grafana",
+          image: "grafana/grafana:11.5.2",
+          state: "running",
+          ports: "0.0.0.0:3001->3000/tcp",
+          size: "42.4MB (virtual 473MB)",
+          mounts: [{ Type: "volume", Name: "demo_grafana_data", Destination: "/var/lib/grafana", RW: true }],
+          network: "demo_observability",
+          labels: composeLabels("demo_observability", "grafana"),
+          health: "healthy"
+        })
+      },
+      {
+        hostId: primaryHostId,
+        data: containerData({
+          id: "demo-registry-cache-08",
+          name: "dm-registry-cache",
+          image: "registry:2",
+          state: "running",
+          ports: "127.0.0.1:5000->5000/tcp",
+          size: "64.1MB (virtual 86.3MB)",
+          mounts: [{ Type: "volume", Name: "demo_registry_cache", Destination: "/var/lib/registry", RW: true }],
+          network: "demo_frontend",
+          labels: { "dockermender.demo": "true", "dockermender.source": "image" },
+          health: "healthy"
+        })
+      },
+      {
+        hostId: primaryHostId,
+        data: containerData({
+          id: "demo-legacy-cron-0009",
+          name: "dm-legacy-cron",
+          image: "alpine:3.20",
+          state: "exited",
+          status: "Exited (0) 17 minutes ago",
+          size: "2.1kB (virtual 7.8MB)",
+          network: "none",
+          labels: { "dockermender.demo": "true", "dockermender.source": "git" }
+        })
+      },
+      {
+        hostId: edgeHostId,
+        data: containerData({
+          id: "demo-edge-proxy-0001",
+          name: "dm-edge-proxy",
+          image: "caddy:2-alpine",
+          state: "running",
+          ports: "0.0.0.0:8081->80/tcp",
+          size: "8.1MB (virtual 49.1MB)",
+          mounts: [{ Type: "volume", Name: "demo_edge_caddy", Destination: "/data", RW: true }],
+          network: "demo_edge_gateway",
+          labels: composeLabels("demo_edge_gateway", "edge-proxy"),
+          health: "healthy"
+        })
+      },
+      {
+        hostId: edgeHostId,
+        data: containerData({
+          id: "demo-camera-relay-02",
+          name: "dm-camera-relay",
+          image: "ghcr.io/admin-dockermender/camera-relay:0.9",
+          state: "running",
+          status: "Up 6 hours (health: unhealthy)",
+          ports: "8554/tcp",
+          size: "14.8MB (virtual 163MB)",
+          mounts: [{ Type: "volume", Name: "demo_edge_clips", Destination: "/clips", RW: true }],
+          network: "demo_edge_gateway",
+          labels: composeLabels("demo_edge_gateway", "camera-relay"),
+          health: "unhealthy"
+        })
+      },
+      {
+        hostId: recoveryHostId,
+        data: containerData({
+          id: "demo-standby-proxy-01",
+          name: "dm-standby-proxy",
+          image: "nginx:1.27-alpine",
+          state: "paused",
+          status: "Paused 2 days",
+          ports: "0.0.0.0:18080->80/tcp",
+          size: "4.4kB (virtual 49.6MB)",
+          network: "demo_recovery",
+          labels: { "dockermender.demo": "true", "dockermender.role": "standby" }
+        })
+      }
+    ];
+
+    for (const item of containers) {
+      await upsertResource(client, item.hostId, "container", String(item.data.ID), String(item.data.Names), item.data);
+    }
+
+    const imageSpecs = [
+      [primaryHostId, "nginx:1.27-alpine", "49.6MB"],
+      [primaryHostId, "nginx:alpine", "49.6MB"],
+      [primaryHostId, "ghcr.io/admin-dockermender/showcase-api:0.9", "228MB"],
+      [primaryHostId, "ghcr.io/admin-dockermender/showcase-api:0.10", "236MB"],
+      [primaryHostId, "ghcr.io/admin-dockermender/showcase-worker:0.9", "174MB"],
+      [primaryHostId, "postgres:16-alpine", "396MB"],
+      [primaryHostId, "redis:7-alpine", "57.8MB"],
+      [primaryHostId, "prom/prometheus:v2.54.1", "272MB"],
+      [primaryHostId, "grafana/grafana:11.5.2", "473MB"],
+      [primaryHostId, "registry:2", "86.3MB"],
+      [primaryHostId, "alpine:3.20", "7.8MB"],
+      [primaryHostId, "ghcr.io/open-webui/open-webui:main", "6.68GB"],
+      [edgeHostId, "caddy:2-alpine", "49.1MB"],
+      [edgeHostId, "ghcr.io/admin-dockermender/camera-relay:0.9", "163MB"],
+      [edgeHostId, "ghcr.io/admin-dockermender/camera-relay:0.10", "168MB"],
+      [recoveryHostId, "nginx:1.27-alpine", "49.6MB"],
+      [recoveryHostId, "postgres:16-alpine", "396MB"]
+    ] as const;
+    for (const [targetHostId, image, size] of imageSpecs) {
+      const data = imageData(image, size);
+      await upsertResource(client, targetHostId, "image", String(data.ID), `${data.Repository}:${data.Tag}`, data);
+    }
+
+    for (const [targetHostId, networks] of [
+      [primaryHostId, [networkData("bridge"), networkData("host", "host"), networkData("none", "null"), networkData("demo_frontend"), networkData("demo_backend"), networkData("demo_observability")]],
+      [edgeHostId, [networkData("bridge"), networkData("host", "host"), networkData("demo_edge_gateway")]],
+      [recoveryHostId, [networkData("bridge"), networkData("host", "host"), networkData("demo_recovery")]]
+    ] as const) {
+      for (const network of networks) {
+        await upsertResource(client, targetHostId, "network", String(network.ID), String(network.Name), network);
+      }
+    }
+
+    const volumeSpecs = [
+      [primaryHostId, "demo_web_content", 26_214_400],
+      [primaryHostId, "demo_api_uploads", 2_348_810_240],
+      [primaryHostId, "demo_postgres_data", 8_934_621_184],
+      [primaryHostId, "demo_redis_data", 174_063_616],
+      [primaryHostId, "demo_prometheus_data", 1_457_684_480],
+      [primaryHostId, "demo_grafana_data", 336_592_896],
+      [primaryHostId, "demo_registry_cache", 12_884_901_888],
+      [primaryHostId, "demo_open_webui", 3_495_253_504],
+      [edgeHostId, "demo_edge_caddy", 83_886_080],
+      [edgeHostId, "demo_edge_clips", 6_979_321_856],
+      [recoveryHostId, "demo_restored_postgres_data", 8_934_621_184],
+      [recoveryHostId, "demo_rehearsal_uploads", 2_348_810_240]
+    ] as const;
+    for (const [targetHostId, volumeName, sizeBytes] of volumeSpecs) {
+      await upsertResource(client, targetHostId, "volume", volumeName, volumeName, volumeData(volumeName, sizeBytes));
+    }
+
+    const repoIds: Record<string, string> = {};
+    for (const repo of [
+      {
+        key: "showcase",
+        name: "Demo Showcase App",
+        repositoryUrl: "https://github.com/Admin-DockerMender/dockermender",
+        owner: "Admin-DockerMender",
+        repo: "dockermender",
+        branch: "main",
+        composePath: "examples/customer-portal/compose.yaml",
+        projectName: "demo_showcase",
+        env: showcaseEnv,
+        defaultHostId: primaryHostId,
+        deployed: "22 minutes",
+        current: demoCommit("showcase-current"),
+        latest: demoCommit("showcase-latest"),
+        error: null
+      },
+      {
+        key: "awesome",
+        name: "Demo Compose App",
+        repositoryUrl: "https://github.com/docker/awesome-compose",
+        owner: "docker",
+        repo: "awesome-compose",
+        branch: "master",
+        composePath: "nginx-flask-mysql/compose.yaml",
+        projectName: "demo_compose_app",
+        env: "WEB_PORT=8088",
+        defaultHostId: primaryHostId,
+        deployed: "2 hours",
+        current: demoCommit("awesome-current"),
+        latest: demoCommit("awesome-current"),
+        error: null
+      },
+      {
+        key: "openwebui",
+        name: "Demo Open WebUI",
+        repositoryUrl: "https://github.com/open-webui/open-webui",
+        owner: "open-webui",
+        repo: "open-webui",
+        branch: "main",
+        composePath: "docker-compose.yaml",
+        projectName: "demo_ai_tools",
+        env: "OPEN_WEBUI_PORT=3000",
+        defaultHostId: primaryHostId,
+        deployed: null,
+        current: null,
+        latest: null,
+        error: "Demo: staged catalog app has not been deployed yet."
+      },
+      {
+        key: "edge",
+        name: "Demo Edge Playbook",
+        repositoryUrl: "https://github.com/Admin-DockerMender/dockermender",
+        owner: "Admin-DockerMender",
+        repo: "dockermender",
+        branch: "main",
+        composePath: "examples/edge-gateway/compose.yaml",
+        projectName: "demo_edge_gateway",
+        env: "EDGE_HTTP_PORT=8081",
+        defaultHostId: edgeHostId,
+        deployed: "1 hour",
+        current: demoCommit("edge-current"),
+        latest: demoCommit("edge-current"),
+        error: null
+      }
+    ]) {
+      const saved = await client.query<{ id: string }>(
+        `INSERT INTO github_repositories
+          (id, name, repository_url, owner, repo, branch, compose_path, project_name, env, default_host_id,
+           last_deployed_at, last_deployed_commit_sha, latest_commit_sha, update_checked_at, update_check_error, last_error)
+         VALUES
+          ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+           CASE WHEN $11::text IS NULL THEN NULL ELSE now() - $11::interval END,
+           $12, $13, now() - interval '5 minutes', $14, $14)
+         ON CONFLICT (owner, repo, branch, compose_path)
+         DO UPDATE SET name = EXCLUDED.name,
+                       repository_url = EXCLUDED.repository_url,
+                       project_name = EXCLUDED.project_name,
+                       env = EXCLUDED.env,
+                       default_host_id = EXCLUDED.default_host_id,
+                       last_deployed_at = EXCLUDED.last_deployed_at,
+                       last_deployed_commit_sha = EXCLUDED.last_deployed_commit_sha,
+                       latest_commit_sha = EXCLUDED.latest_commit_sha,
+                       update_checked_at = EXCLUDED.update_checked_at,
+                       update_check_error = EXCLUDED.update_check_error,
+                       last_error = EXCLUDED.last_error,
+                       updated_at = now()
+         RETURNING id`,
+        [
+          uuid(),
+          repo.name,
+          repo.repositoryUrl,
+          repo.owner,
+          repo.repo,
+          repo.branch,
+          repo.composePath,
+          repo.projectName,
+          repo.env,
+          repo.defaultHostId,
+          repo.deployed,
+          repo.current,
+          repo.latest,
+          repo.error
+        ]
+      );
+      repoIds[repo.key] = saved.rows[0]!.id;
+    }
+
+    for (const link of [
+      {
+        hostId: primaryHostId,
+        containerId: "demo-registry-cache-08",
+        sourceType: "image",
+        name: "Registry Cache",
+        repositoryUrl: null,
+        branch: null,
+        workingDir: null,
+        composePath: null,
+        imageReference: "registry:2",
+        current: null,
+        latest: null,
+        error: null
+      },
+      {
+        hostId: primaryHostId,
+        containerId: "demo-legacy-cron-0009",
+        sourceType: "git",
+        name: "Legacy Cleanup Job",
+        repositoryUrl: "https://github.com/Admin-DockerMender/dockermender",
+        branch: "main",
+        workingDir: "/srv/jobs/legacy-cleanup",
+        composePath: "compose.yml",
+        imageReference: "alpine:3.20",
+        current: demoCommit("legacy-current"),
+        latest: demoCommit("legacy-latest"),
+        error: null
+      }
+    ]) {
+      await client.query(
+        `INSERT INTO app_source_links (
+           id, host_id, container_external_id, source_type, name, repository_url, branch,
+           working_dir, compose_path, image_reference, current_commit_sha,
+           latest_commit_sha, checked_at, check_error, updated_at
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now() - interval '9 minutes', $13, now())
+         ON CONFLICT (host_id, container_external_id)
+         DO UPDATE SET source_type = EXCLUDED.source_type,
+                       name = EXCLUDED.name,
+                       repository_url = EXCLUDED.repository_url,
+                       branch = EXCLUDED.branch,
+                       working_dir = EXCLUDED.working_dir,
+                       compose_path = EXCLUDED.compose_path,
+                       image_reference = EXCLUDED.image_reference,
+                       current_commit_sha = EXCLUDED.current_commit_sha,
+                       latest_commit_sha = EXCLUDED.latest_commit_sha,
+                       checked_at = EXCLUDED.checked_at,
+                       check_error = EXCLUDED.check_error,
+                       updated_at = now()`,
+        [
+          uuid(),
+          link.hostId,
+          link.containerId,
+          link.sourceType,
+          link.name,
+          link.repositoryUrl,
+          link.branch,
+          link.workingDir,
+          link.composePath,
+          link.imageReference,
+          link.current,
+          link.latest,
+          link.error
+        ]
       );
     }
+
+    const targetIds: Record<string, string> = {};
+    for (const target of [
+      {
+        key: "local",
+        name: "Demo Local Vault",
+        kind: "local",
+        enabled: true,
+        config: { demo: true, basePath: "/var/lib/dockermender/demo-backups" },
+        accessKeyId: null,
+        secret: null,
+        provider: null,
+        remotePath: null,
+        cache: "keep",
+        genericConfig: null,
+        genericCredentials: null,
+        health: "healthy",
+        healthError: null
+      },
+      {
+        key: "smb",
+        name: "Demo SMB Remote",
+        kind: "rclone",
+        enabled: true,
+        config: { demo: true, provider: "smb", remoteName: "demo-smb", smb: { server: "nas.demo.local", share: "dockermender", subPath: "showcase" } },
+        accessKeyId: null,
+        secret: null,
+        provider: "smb",
+        remotePath: "demo-smb:dockermender/showcase",
+        cache: "remote_only",
+        genericConfig: encryptSecret("[demo-smb]\ntype = smb\nhost = nas.demo.local\nshare = dockermender\n"),
+        genericCredentials: encryptSecret("username=demo\npassword=demo"),
+        health: "healthy",
+        healthError: null
+      },
+      {
+        key: "s3",
+        name: "Demo S3 Archive",
+        kind: "s3",
+        enabled: true,
+        config: { demo: true, endpoint: "https://s3.example.invalid", bucket: "dockermender-demo", region: "us-east-1", prefix: "v0.9-showcase", forcePathStyle: true },
+        accessKeyId: "DEMOACCESSKEY",
+        secret: encryptSecret("demo-secret-access-key"),
+        provider: null,
+        remotePath: null,
+        cache: "keep",
+        genericConfig: null,
+        genericCredentials: null,
+        health: "failed",
+        healthError: "Demo failure: archive bucket credentials need rotation."
+      }
+    ]) {
+      const id = uuid();
+      targetIds[target.key] = id;
+      await client.query(
+        `INSERT INTO backup_targets (
+           id, name, kind, enabled, config, access_key_id, secret_access_key_encrypted,
+           provider, remote_path, local_cache_policy, generic_config_encrypted,
+           generic_credentials_encrypted, health_status, health_checked_at, health_error, created_by
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now() - interval '11 minutes', $14, $15)`,
+        [
+          id,
+          target.name,
+          target.kind,
+          target.enabled,
+          target.config,
+          target.accessKeyId,
+          target.secret,
+          target.provider,
+          target.remotePath,
+          target.cache,
+          target.genericConfig,
+          target.genericCredentials,
+          target.health,
+          target.healthError,
+          createdBy ?? null
+        ]
+      );
+    }
+
+    const portalIdentity = { kind: "stack", stackId: stackIds.showcase!, projectName: "demo_showcase", label: "Customer Portal" };
+    const observabilityIdentity = { kind: "stack", stackId: stackIds.observability!, projectName: "demo_observability", label: "Observability" };
+    const aiIdentity = { kind: "stack", stackId: stackIds.ai!, projectName: "demo_ai_tools", label: "AI Tools" };
+    const registryIdentity = { kind: "standalone", containerIds: ["demo-registry-cache-08"], label: "Registry Cache" };
+
+    const profileIds: Record<string, string> = {};
+    for (const profile of [
+      {
+        key: "portal",
+        hostId: primaryHostId,
+        identity: portalIdentity,
+        name: "Portal database-safe capture",
+        includePaths: ["/srv/apps/customer-portal", "/var/lib/docker/volumes/demo_api_uploads/_data"],
+        excludePatterns: ["**/node_modules/**", "**/.cache/**", "**/tmp/**"],
+        restorePaths: { "/srv/apps/customer-portal": "/srv/restored/customer-portal" },
+        pre: "docker compose exec -T postgres pg_start_backup('dockermender-demo', true)",
+        post: "docker compose exec -T postgres pg_stop_backup()",
+        mode: "stop_first"
+      },
+      {
+        key: "observability",
+        hostId: primaryHostId,
+        identity: observabilityIdentity,
+        name: "Metrics hot capture",
+        includePaths: ["/srv/apps/observability"],
+        excludePatterns: ["**/wal/**", "**/*.tmp"],
+        restorePaths: {},
+        pre: null,
+        post: null,
+        mode: "hot"
+      },
+      {
+        key: "registry",
+        hostId: primaryHostId,
+        identity: registryIdentity,
+        name: "Registry cache volume",
+        includePaths: ["/var/lib/docker/volumes/demo_registry_cache/_data"],
+        excludePatterns: ["**/docker/registry/v2/repositories/_layers/**"],
+        restorePaths: {},
+        pre: null,
+        post: null,
+        mode: "hot"
+      }
+    ]) {
+      const id = uuid();
+      profileIds[profile.key] = id;
+      await client.query(
+        `INSERT INTO recovery_profiles (
+           id, host_id, app_identity, name, include_paths, exclude_patterns,
+           restore_paths, pre_capture_command, post_capture_command, capture_mode, created_by
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+        [
+          id,
+          profile.hostId,
+          profile.identity,
+          profile.name,
+          profile.includePaths,
+          profile.excludePatterns,
+          profile.restorePaths,
+          profile.pre,
+          profile.post,
+          profile.mode,
+          createdBy ?? null
+        ]
+      );
+    }
+
+    const recoveryPointIds: Record<string, string> = {};
+    async function insertRecoveryPoint(input: {
+      key: string;
+      hostId: string;
+      name: string;
+      identity: Record<string, unknown>;
+      trigger: string;
+      status: string;
+      targetId: string | null;
+      profileId?: string | null;
+      error?: string | null;
+      createdOffset: string;
+      drillStatus?: string | null;
+      drillError?: string | null;
+      artifacts: Array<{
+        kind: string;
+        storageKey: string;
+        sizeBytes: number | null;
+        status: string;
+        error?: string | null;
+        metadata?: Record<string, unknown>;
+      }>;
+    }) {
+      const pointId = uuid();
+      const completed = input.artifacts.filter((artifact) => artifact.status === "completed");
+      const totalBytes = input.artifacts.reduce((total, artifact) => total + (artifact.sizeBytes ?? 0), 0);
+      await client.query(
+        `INSERT INTO recovery_points (
+           id, host_id, name, app_identity, trigger_kind, status, backup_target_id,
+           artifact_count, completed_artifact_count, total_bytes, error, metadata,
+           created_by, profile_id, created_at, started_at, completed_at,
+           last_drill_at, last_drill_status, last_drill_error, last_successful_drill_at
+         )
+         VALUES (
+           $1, $2, $3, $4, $5, $6, $7,
+           $8, $9, $10, $11, $12,
+           $13, $14, now() - $15::interval, now() - $15::interval + interval '1 minute',
+           CASE WHEN $6 IN ('completed', 'partial', 'failed') THEN now() - $15::interval + interval '8 minutes' ELSE NULL END,
+           CASE WHEN $16::text IS NULL THEN NULL ELSE now() - interval '6 hours' END,
+           $16, $17,
+           CASE WHEN $16 = 'completed' THEN now() - interval '6 hours' ELSE NULL END
+         )`,
+        [
+          pointId,
+          input.hostId,
+          input.name,
+          input.identity,
+          input.trigger,
+          input.status,
+          input.targetId,
+          input.artifacts.length,
+          completed.length,
+          totalBytes || null,
+          input.error ?? null,
+          { demo: true, verifyStatus: input.status === "completed" ? "completed" : input.status === "partial" ? "warning" : "failed" },
+          createdBy ?? null,
+          input.profileId ?? null,
+          input.createdOffset,
+          input.drillStatus ?? null,
+          input.drillError ?? null
+        ]
+      );
+      for (const artifact of input.artifacts) {
+        await client.query(
+          `INSERT INTO recovery_artifacts (
+             id, recovery_point_id, kind, backup_target_id, storage_key,
+             size_bytes, checksum, status, error, metadata, created_at, completed_at
+           )
+           VALUES (
+             $1, $2, $3, $4, $5,
+             $6, $7, $8, $9, $10, now() - $11::interval,
+             CASE WHEN $8 = 'completed' THEN now() - $11::interval + interval '7 minutes' ELSE NULL END
+           )`,
+          [
+            uuid(),
+            pointId,
+            artifact.kind,
+            input.targetId,
+            artifact.storageKey,
+            artifact.sizeBytes,
+            artifact.sizeBytes ? demoDigest(`${artifact.storageKey}:checksum`) : null,
+            artifact.status,
+            artifact.error ?? null,
+            {
+              demo: true,
+              remoteObjectKey: artifact.metadata?.remoteObjectKey ?? artifact.storageKey,
+              localCachePolicy: artifact.metadata?.localCachePolicy ?? "keep",
+              ...artifact.metadata
+            },
+            input.createdOffset
+          ]
+        );
+      }
+      recoveryPointIds[input.key] = pointId;
+      return pointId;
+    }
+
+    await insertRecoveryPoint({
+      key: "portal",
+      hostId: primaryHostId,
+      name: "Portal nightly verified recovery point",
+      identity: portalIdentity,
+      trigger: "scheduled",
+      status: "completed",
+      targetId: targetIds.smb!,
+      profileId: profileIds.portal!,
+      createdOffset: "5 hours",
+      drillStatus: "completed",
+      artifacts: [
+        { kind: "compose_yaml", storageKey: "recovery/demo_showcase/compose.yaml", sizeBytes: 8_192, status: "completed", metadata: { localCachePolicy: "remote_only" } },
+        { kind: "env_file", storageKey: "recovery/demo_showcase/.env", sizeBytes: 512, status: "completed", metadata: { localCachePolicy: "remote_only" } },
+        { kind: "volume", storageKey: "recovery/demo_showcase/demo_postgres_data.tar.zst", sizeBytes: 2_148_532_224, status: "completed", metadata: { volumeName: "demo_postgres_data", localCachePolicy: "remote_only" } },
+        { kind: "volume", storageKey: "recovery/demo_showcase/demo_api_uploads.tar.zst", sizeBytes: 751_619_276, status: "completed", metadata: { volumeName: "demo_api_uploads", localCachePolicy: "remote_only" } },
+        { kind: "image_manifest", storageKey: "recovery/demo_showcase/images.json", sizeBytes: 4_096, status: "completed", metadata: { images: ["nginx:1.27-alpine", "postgres:16-alpine"] } }
+      ]
+    });
+    await insertRecoveryPoint({
+      key: "observability",
+      hostId: primaryHostId,
+      name: "Observability partial capture",
+      identity: observabilityIdentity,
+      trigger: "manual",
+      status: "partial",
+      targetId: targetIds.local!,
+      profileId: profileIds.observability!,
+      createdOffset: "21 hours",
+      drillStatus: "failed",
+      drillError: "Demo drill found a missing Grafana plugin cache.",
+      error: "Prometheus WAL changed during capture; schedule stop-first if this matters.",
+      artifacts: [
+        { kind: "compose_yaml", storageKey: "recovery/demo_observability/compose.yaml", sizeBytes: 5_120, status: "completed" },
+        { kind: "volume", storageKey: "recovery/demo_observability/demo_prometheus_data.tar.zst", sizeBytes: 451_125_248, status: "completed", metadata: { volumeName: "demo_prometheus_data" } },
+        { kind: "volume", storageKey: "recovery/demo_observability/demo_grafana_data.tar.zst", sizeBytes: 129_261_568, status: "failed", error: "Demo failure: file changed while reading.", metadata: { volumeName: "demo_grafana_data" } }
+      ]
+    });
+    await insertRecoveryPoint({
+      key: "registry",
+      hostId: primaryHostId,
+      name: "Registry cache ad hoc snapshot",
+      identity: registryIdentity,
+      trigger: "manual",
+      status: "completed",
+      targetId: targetIds.local!,
+      profileId: profileIds.registry!,
+      createdOffset: "2 days",
+      drillStatus: null,
+      artifacts: [
+        { kind: "volume", storageKey: "recovery/registry-cache/demo_registry_cache.tar.zst", sizeBytes: 3_221_225_472, status: "completed", metadata: { volumeName: "demo_registry_cache" } },
+        { kind: "metadata", storageKey: "recovery/registry-cache/manifest.json", sizeBytes: 2_048, status: "completed" }
+      ]
+    });
+    await insertRecoveryPoint({
+      key: "ai",
+      hostId: primaryHostId,
+      name: "AI Tools failed cloud archive",
+      identity: aiIdentity,
+      trigger: "policy",
+      status: "failed",
+      targetId: targetIds.s3!,
+      createdOffset: "3 days",
+      error: "Demo failure: S3 target health is failed.",
+      artifacts: [
+        { kind: "compose_yaml", storageKey: "recovery/demo_ai_tools/compose.yaml", sizeBytes: null, status: "failed", error: "Archive bucket rejected credentials." }
+      ]
+    });
+
+    for (const schedule of [
+      {
+        hostId: primaryHostId,
+        name: "Portal nightly verified recovery",
+        identity: portalIdentity,
+        targetId: targetIds.smb!,
+        profileId: profileIds.portal!,
+        interval: 24 * 60 * 60 * 1000,
+        retention: 14,
+        mode: "stop_first",
+        lastRun: "5 hours",
+        nextRun: "19 hours",
+        drillStatus: "completed",
+        drillError: null
+      },
+      {
+        hostId: primaryHostId,
+        name: "Observability every 6 hours",
+        identity: observabilityIdentity,
+        targetId: targetIds.local!,
+        profileId: profileIds.observability!,
+        interval: 6 * 60 * 60 * 1000,
+        retention: 8,
+        mode: "hot",
+        lastRun: "21 hours",
+        nextRun: "2 hours",
+        drillStatus: "failed",
+        drillError: "Demo drill found a missing Grafana plugin cache."
+      }
+    ]) {
+      await client.query(
+        `INSERT INTO recovery_schedules (
+           id, host_id, name, app_identity, backup_target_id, profile_id,
+           interval_ms, retention_count, enabled, last_run_at, next_run_at,
+           capture_mode, last_drill_at, last_drill_status, last_drill_error,
+           last_successful_drill_at, created_by
+         )
+         VALUES (
+           $1, $2, $3, $4, $5, $6,
+           $7, $8, true, now() - $9::interval, now() + $10::interval,
+           $11, now() - interval '6 hours', $12, $13,
+           CASE WHEN $12 = 'completed' THEN now() - interval '6 hours' ELSE NULL END, $14
+         )`,
+        [
+          uuid(),
+          schedule.hostId,
+          schedule.name,
+          schedule.identity,
+          schedule.targetId,
+          schedule.profileId,
+          schedule.interval,
+          schedule.retention,
+          schedule.lastRun,
+          schedule.nextRun,
+          schedule.mode,
+          schedule.drillStatus,
+          schedule.drillError,
+          createdBy ?? null
+        ]
+      );
+    }
+
+    for (const backup of [
+      {
+        hostId: primaryHostId,
+        kind: "volume",
+        volume: "demo_postgres_data",
+        sourcePath: null,
+        file: "demo-postgres-nightly.tar.zst",
+        size: 2_148_532_224,
+        status: "completed",
+        targetId: targetIds.smb!,
+        remoteKey: "volume/demo_postgres_data/nightly.tar.zst",
+        error: null,
+        completed: "4 hours",
+        verified: "3 hours",
+        encryption: "app_secret",
+        drillStatus: "completed"
+      },
+      {
+        hostId: primaryHostId,
+        kind: "host_path",
+        volume: null,
+        sourcePath: "/srv/apps/customer-portal",
+        file: "customer-portal-files.tar.zst",
+        size: 84_459_520,
+        status: "completed",
+        targetId: targetIds.local!,
+        remoteKey: null,
+        error: null,
+        completed: "6 hours",
+        verified: "5 hours",
+        encryption: "none",
+        drillStatus: "completed"
+      },
+      {
+        hostId: edgeHostId,
+        kind: "volume",
+        volume: "demo_edge_clips",
+        sourcePath: null,
+        file: "edge-clips-incremental.tar.zst",
+        size: null,
+        status: "failed",
+        targetId: targetIds.s3!,
+        remoteKey: null,
+        error: "Demo failure: remote archive target is unhealthy.",
+        completed: "37 minutes",
+        verified: null,
+        encryption: "app_secret",
+        drillStatus: "failed"
+      }
+    ]) {
+      await client.query(
+        `INSERT INTO backups (
+           id, host_id, kind, volume_name, source_path, target_volume_name,
+           file_name, size_bytes, status, error, metadata, checksum,
+           backup_target_id, remote_object_key, verified_at, encryption,
+           encryption_key_id, encryption_key_fingerprint, last_drill_at, last_drill_status,
+           created_at, completed_at
+         )
+         VALUES (
+           $1, $2, $3, $4, $5, NULL,
+           $6, $7, $8, $9, $10, $11,
+           $12, $13,
+           CASE WHEN $14::text IS NULL THEN NULL ELSE now() - $14::interval END,
+           $15, $16, $17,
+           CASE WHEN $18::text IS NULL THEN NULL ELSE now() - interval '6 hours' END,
+           $18, now() - $19::interval - interval '8 minutes', now() - $19::interval
+         )`,
+        [
+          uuid(),
+          backup.hostId,
+          backup.kind,
+          backup.volume,
+          backup.sourcePath,
+          backup.file,
+          backup.size,
+          backup.status,
+          backup.error,
+          { demo: true, target: backup.targetId ? "configured" : "local", note: backup.status === "completed" ? "Showcase backup proof" : "Showcase failed backup" },
+          backup.size ? demoDigest(`${backup.file}:backup`) : null,
+          backup.targetId,
+          backup.remoteKey,
+          backup.verified,
+          backup.encryption,
+          backup.encryption === "app_secret" ? "app_secret" : null,
+          backup.encryption === "app_secret" ? "demo-key-fp-2026" : null,
+          backup.drillStatus,
+          backup.completed
+        ]
+      );
+    }
+
+    for (const schedule of [
+      { hostId: primaryHostId, kind: "volume", volume: "demo_postgres_data", sourcePath: null, targetId: targetIds.smb!, interval: 24 * 60 * 60 * 1000, retention: 14, status: "completed", error: null, encryption: "app_secret" },
+      { hostId: primaryHostId, kind: "host_path", volume: null, sourcePath: "/srv/apps/customer-portal", targetId: targetIds.local!, interval: 12 * 60 * 60 * 1000, retention: 20, status: "completed", error: null, encryption: "none" },
+      { hostId: edgeHostId, kind: "volume", volume: "demo_edge_clips", sourcePath: null, targetId: targetIds.s3!, interval: 6 * 60 * 60 * 1000, retention: 8, status: "failed", error: "Archive bucket credentials need rotation.", encryption: "app_secret" }
+    ]) {
+      await client.query(
+        `INSERT INTO backup_schedules (
+           id, host_id, volume_name, interval_ms, enabled, last_run_at, next_run_at,
+           created_by, kind, source_path, backup_target_id, retention_count,
+           last_status, last_error, encryption
+         )
+         VALUES (
+           $1, $2, $3, $4, true, now() - interval '4 hours', now() + interval '20 hours',
+           $5, $6, $7, $8, $9, $10, $11, $12
+         )`,
+        [
+          uuid(),
+          schedule.hostId,
+          schedule.volume,
+          schedule.interval,
+          createdBy ?? null,
+          schedule.kind,
+          schedule.sourcePath,
+          schedule.targetId,
+          schedule.retention,
+          schedule.status,
+          schedule.error,
+          schedule.encryption
+        ]
+      );
+    }
+
     await client.query(
-      `INSERT INTO alert_rules (id, name, condition, host_id, container_id, channel_id, enabled, last_state, last_checked_at)
+      `INSERT INTO migration_runs (
+         id, source_host_id, target_host_id, source_app_identity, mode, status,
+         recovery_point_id, plan, error, created_by, created_at, started_at, completed_at
+       )
        VALUES
-         ($1, 'Demo host offline', 'host.offline', $3, null, $4, true, 'ok', now()),
-         ($2, 'Demo API must run', 'container.not_running', $3, 'demo-api-000000000002', $4, true, 'ok', now())`,
-      [uuid(), uuid(), hostId, channelId]
+         ($1, $3, $4, $5, 'plan', 'completed', $6, $7, NULL, $8, now() - interval '50 minutes', now() - interval '49 minutes', now() - interval '48 minutes'),
+         ($2, $3, $4, $5, 'execute', 'completed', $6, $7, NULL, $8, now() - interval '42 minutes', now() - interval '41 minutes', now() - interval '35 minutes')`,
+      [
+        uuid(),
+        uuid(),
+        primaryHostId,
+        recoveryHostId,
+        portalIdentity,
+        recoveryPointIds.portal!,
+        {
+          sourceHostId: primaryHostId,
+          targetHostId: recoveryHostId,
+          sourceAppIdentity: portalIdentity,
+          steps: [
+            { id: "backup", title: "Capture recovery point", description: "Use the verified portal recovery profile.", kind: "backup", required: true },
+            { id: "transfer", title: "Transfer artifacts", description: "Reuse the remote-only SMB target.", kind: "transfer", required: true },
+            { id: "deploy", title: "Deploy stack on target", description: "Apply compose with remapped ports.", kind: "deploy", required: true },
+            { id: "verify", title: "Verify health", description: "Run HTTP and database smoke checks.", kind: "verify", required: true }
+          ],
+          warnings: ["Port 8088 is remapped to 18080 on the recovery host."],
+          estimatedArtifacts: 5,
+          estimatedVolumes: 2,
+          estimatedHostFolders: 1,
+          checks: {
+            sourceHostAvailable: true,
+            targetHostAvailable: true,
+            sourceDockerAvailable: true,
+            targetDockerAvailable: true,
+            sourceComposeAvailable: true,
+            targetComposeAvailable: true
+          },
+          portConflicts: [{ hostPort: "8088", protocol: "tcp", sourceContainer: "dm-portal-web", reason: "Target host already reserves the demo web port." }],
+          volumeCollisions: [],
+          nameCollisions: [],
+          missingNetworks: ["demo_backend"],
+          networkConflicts: [],
+          estimatedDataBytes: 2_900_155_596,
+          blockingIssues: []
+        },
+        createdBy ?? null
+      ]
     );
 
+    const channelIds: Record<string, string> = {};
+    for (const channel of [
+      { key: "webhook", name: "Demo operations webhook", type: "webhook", email: null, webhook: "https://example.invalid/dockermender-webhook", enabled: true },
+      { key: "email", name: "Demo email digest", type: "email", email: "ops@example.invalid", webhook: null, enabled: false }
+    ]) {
+      const id = uuid();
+      channelIds[channel.key] = id;
+      await client.query(
+        `INSERT INTO notification_channels (id, name, type, email_to, webhook_url, enabled, config)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [id, channel.name, channel.type, channel.email, channel.webhook, channel.enabled, { demo: true, purpose: channel.key }]
+      );
+    }
+
+    const alertRuleIds: Record<string, string> = {};
+    for (const rule of [
+      { key: "api", name: "Demo API must stay running", condition: "container.not_running", hostId: primaryHostId, containerId: "demo-api-000000000002", channelId: channelIds.webhook!, state: "ok", params: null, breaching: null },
+      { key: "cpu", name: "Demo production CPU sustained", condition: "host.cpu", hostId: primaryHostId, containerId: null, channelId: channelIds.webhook!, state: "ok", params: { comparator: "gte", threshold: 82, durationSeconds: 300 }, breaching: null },
+      { key: "edge", name: "Demo edge camera unhealthy", condition: "container.not_running", hostId: edgeHostId, containerId: "demo-camera-relay-02", channelId: channelIds.email!, state: "firing", params: null, breaching: "18 minutes" },
+      { key: "disk", name: "Demo recovery disk pressure", condition: "host.disk", hostId: recoveryHostId, containerId: null, channelId: channelIds.webhook!, state: "silenced", params: { comparator: "gte", threshold: 88, durationSeconds: 900, mount: "/" }, breaching: "2 hours" }
+    ]) {
+      const saved = await client.query<{ id: string }>(
+        `INSERT INTO alert_rules (
+           id, name, condition, host_id, container_id, channel_id, enabled,
+           last_state, last_checked_at, last_notified_at, params, breaching_since
+         )
+         VALUES (
+           $1, $2, $3, $4, $5, $6, true,
+           $7, now() - interval '2 minutes',
+           CASE WHEN $7 IN ('firing', 'silenced') THEN now() - interval '12 minutes' ELSE NULL END,
+           $8,
+           CASE WHEN $9::text IS NULL THEN NULL ELSE now() - $9::interval END
+         )
+         RETURNING id`,
+        [uuid(), rule.name, rule.condition, rule.hostId, rule.containerId, rule.channelId, rule.state, rule.params, rule.breaching]
+      );
+      alertRuleIds[rule.key] = saved.rows[0]!.id;
+    }
+
+    await client.query(
+      `INSERT INTO alert_silences (id, name, host_id, rule_id, starts_at, ends_at, reason, created_by)
+       VALUES ($1, 'Demo maintenance silence', $2, $3, now() - interval '20 minutes', now() + interval '3 hours', 'Showcase active silence for planned recovery drill.', $4)`,
+      [uuid(), recoveryHostId, alertRuleIds.disk!, createdBy ?? null]
+    );
+    for (const event of [
+      { ruleId: alertRuleIds.api!, hostId: primaryHostId, channelId: channelIds.webhook!, state: "ok", message: "Demo API container recovered after restart.", notified: true, silenced: false, error: null, offset: "26 minutes" },
+      { ruleId: alertRuleIds.edge!, hostId: edgeHostId, channelId: channelIds.email!, state: "firing", message: "Camera relay health check is failing.", notified: false, silenced: false, error: "Email channel is disabled in demo mode.", offset: "12 minutes" },
+      { ruleId: alertRuleIds.disk!, hostId: recoveryHostId, channelId: channelIds.webhook!, state: "firing", message: "Recovery target root disk is above 88%.", notified: false, silenced: true, error: null, offset: "6 minutes" }
+    ]) {
+      await client.query(
+        `INSERT INTO alert_events (id, rule_id, host_id, channel_id, state, message, notified, silenced, error, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now() - $10::interval)`,
+        [uuid(), event.ruleId, event.hostId, event.channelId, event.state, event.message, event.notified, event.silenced, event.error, event.offset]
+      );
+    }
+    for (const test of [
+      { channelId: channelIds.webhook!, status: "success", error: null, offset: "14 minutes" },
+      { channelId: channelIds.email!, status: "failed", error: "Demo channel is disabled; enable it after adding SMTP settings.", offset: "13 minutes" }
+    ]) {
+      await client.query(
+        `INSERT INTO alert_channel_test_events (id, channel_id, status, error, tested_by, tested_at)
+         VALUES ($1, $2, $3, $4, $5, now() - $6::interval)`,
+        [uuid(), test.channelId, test.status, test.error, createdBy ?? null, test.offset]
+      );
+    }
+
+    for (const [targetHostId, imageReference, status, riskNote, containersAffected, stacksAffected, severities] of [
+      [primaryHostId, "ghcr.io/admin-dockermender/showcase-api:0.9", "update_available", "v0.10 is available; redeploy the Customer Portal stack after reviewing migrations.", [{ id: "demo-api-000000000002", name: "dm-portal-api" }], [{ id: stackIds.showcase!, name: "Customer Portal" }], { critical: 0, high: 1, medium: 3, low: 8 }],
+      [primaryHostId, "postgres:16-alpine", "up_to_date", "Database image digest matches the remote registry.", [{ id: "demo-postgres-0000004", name: "dm-portal-postgres" }], [{ id: stackIds.showcase!, name: "Customer Portal" }], { critical: 0, high: 0, medium: 1, low: 6 }],
+      [primaryHostId, "ghcr.io/open-webui/open-webui:main", "unknown", "Mutable main tag; pin a release before production use.", [], [{ id: stackIds.ai!, name: "AI Tools" }], { critical: 2, high: 4, medium: 11, low: 20 }],
+      [edgeHostId, "ghcr.io/admin-dockermender/camera-relay:0.9", "update_available", "Patch image includes a health probe fix for RTSP reconnects.", [{ id: "demo-camera-relay-02", name: "dm-camera-relay" }], [{ id: stackIds.edge!, name: "Edge Gateway" }], { critical: 0, high: 0, medium: 2, low: 5 }],
+      [primaryHostId, "registry:2", "local", "Local cache image is not checked against a remote registry.", [{ id: "demo-registry-cache-08", name: "dm-registry-cache" }], [], { critical: 0, high: 0, medium: 0, low: 2 }]
+    ] as const) {
+      await client.query(
+        `INSERT INTO image_update_checks (
+           id, host_id, image_reference, current_digest, remote_digest, status,
+           risk_note, affected_containers, affected_stacks, last_checked_at
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now() - interval '7 minutes')`,
+        [
+          uuid(),
+          targetHostId,
+          imageReference,
+          demoDigest(`${imageReference}:current`),
+          status === "local" ? null : demoDigest(`${imageReference}:remote`),
+          status,
+          riskNote,
+          containersAffected,
+          stacksAffected
+        ]
+      );
+      await client.query(
+        `INSERT INTO image_scan_results (
+           id, host_id, image_reference, image_digest, scanner, severity_counts, raw, generated_at
+         )
+         VALUES ($1, $2, $3, $4, 'demo-trivy', $5, $6, now() - interval '6 minutes')`,
+        [uuid(), targetHostId, imageReference, demoDigest(`${imageReference}:current`), severities, { demo: true, summary: "Synthetic scan for product showcase" }]
+      );
+    }
+
     for (const favorite of [
-      ["nginx:alpine", "Nginx Alpine", "Tiny web server for quick smoke tests."],
-      ["postgres:16-alpine", "Postgres 16", "Common database base image."],
-      ["ghcr.io/open-webui/open-webui:main", "Open WebUI", "Example app for Compose deployments."]
+      ["nginx:1.27-alpine", "Nginx Alpine", "Small reverse proxy and static asset server."],
+      ["postgres:16-alpine", "Postgres 16", "Database base image used by the recovery demo."],
+      ["redis:7-alpine", "Redis 7", "Queue and cache service for app stacks."],
+      ["grafana/grafana:11.5.2", "Grafana", "Dashboards for the observability stack."],
+      ["prom/prometheus:v2.54.1", "Prometheus", "Metrics collection and alerting baseline."],
+      ["ghcr.io/open-webui/open-webui:main", "Open WebUI", "AI tools stack example for catalog deployment."],
+      ["registry:2", "Registry Cache", "Standalone container example with source linking."],
+      ["caddy:2-alpine", "Caddy", "Edge proxy example for agent-managed hosts."]
     ]) {
       await client.query(
         `INSERT INTO favorite_images (id, image, name, notes)
@@ -383,49 +1767,267 @@ volumes:
       );
     }
 
-    await client.query(
-      `INSERT INTO github_repositories
-        (id, name, repository_url, owner, repo, branch, compose_path, project_name, env, default_host_id,
-         last_deployed_at, last_deployed_commit_sha, latest_commit_sha, update_checked_at)
-       VALUES
-        ($1, 'Demo Compose App', 'https://github.com/docker/awesome-compose', 'docker', 'awesome-compose', 'master', 'nginx-flask-mysql/compose.yaml', 'demo_compose_app', 'WEB_PORT=8088', $3,
-         now() - interval '30 minutes', 'd3m0c0mm1tf0rdem0c0mp0seapp0000000000001', 'd3m0c0mm1tf0rdem0c0mp0seapp0000000000001', now() - interval '5 minutes'),
-        ($2, 'Open WebUI', 'https://github.com/open-webui/open-webui', 'open-webui', 'open-webui', 'main', 'docker-compose.yaml', 'demo_openwebui', 'OPEN_WEBUI_PORT=3000', $3,
-         null, null, null, null)
-       ON CONFLICT (owner, repo, branch, compose_path)
-       DO UPDATE SET name = EXCLUDED.name, project_name = EXCLUDED.project_name, env = EXCLUDED.env, default_host_id = EXCLUDED.default_host_id, updated_at = now()`,
-      [uuid(), uuid(), hostId]
-    );
+    for (const registry of [
+      { name: "Demo GHCR", url: "ghcr.io", username: "admin-dockermender", password: "demo-ghcr-token", insecure: false },
+      { name: "Demo Docker Hub Mirror", url: "registry-1.docker.io", username: "dockermender-demo", password: "demo-docker-token", insecure: false },
+      { name: "Demo Insecure Lab Registry", url: "registry.demo.local:5000", username: "demo", password: "demo", insecure: true }
+    ]) {
+      await client.query(
+        `INSERT INTO registries (id, name, url, username, password_encrypted, insecure)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [uuid(), registry.name, registry.url, registry.username, encryptSecret(registry.password), registry.insecure]
+      );
+    }
 
-    await ensureDemoDirectory(client, hostId, "/home/demo/apps");
-    await ensureDemoDirectory(client, hostId, "/home/demo/backups");
-    await ensureDemoDirectory(client, hostId, "/home/demo/apps/demo-web");
-    await ensureDemoDirectory(client, hostId, "/home/demo/apps/openwebui");
-    await upsertDemoFile(client, hostId, "/home/demo/apps/demo-web/docker-compose.yml", "file", demoComposeYaml);
-    await upsertDemoFile(client, hostId, "/home/demo/apps/demo-web/.env", "file", demoEnv);
-    await upsertDemoFile(client, hostId, "/home/demo/apps/demo-web/README.md", "file", "# Demo Web Stack\n\nEdit this compose file and deploy it from the Files tab.\n");
-    await upsertDemoFile(client, hostId, "/home/demo/apps/openwebui/docker-compose.yaml", "file", "services:\n  open-webui:\n    image: ghcr.io/open-webui/open-webui:main\n    ports:\n      - \"3000:8080\"\n");
-
-    for (const [type, status, result, error, createdOffset] of [
-      ["host.check", "completed", { dockerVersion: "29.4.0-demo", composeVersion: "5.1.1-demo" }, null, "4 minutes"],
-      ["host.sync", "completed", { container: 4, image: 6, network: 5, volume: 4 }, null, "3 minutes"],
-      ["compose.deploy", "completed", { projectName: "demo_web" }, null, "2 minutes"],
-      ["image.pull", "failed", null, "Demo failure: registry tag not found", "1 minute"]
+    for (const template of [
+      {
+        id: "demo-production-web",
+        name: "Demo Production Web App",
+        description: "Nginx, API, Postgres, Redis, and worker services with volumes and health checks.",
+        category: "web",
+        composeYaml: showcaseComposeYaml,
+        defaultEnv: { WEB_PORT: "8088", API_PORT: "9090", SHOWCASE_DOMAIN: "portal.example.com" },
+        volumes: ["demo_web_content", "demo_api_uploads", "demo_postgres_data", "demo_redis_data"],
+        ports: ["8088:80", "9090:8080"],
+        docs: "https://github.com/Admin-DockerMender/dockermender"
+      },
+      {
+        id: "demo-observability",
+        name: "Demo Observability Pack",
+        description: "Prometheus and Grafana with persistent storage for host and app dashboards.",
+        category: "monitoring",
+        composeYaml: observabilityComposeYaml,
+        defaultEnv: { PROMETHEUS_PORT: "9095", GRAFANA_PORT: "3001" },
+        volumes: ["demo_prometheus_data", "demo_grafana_data"],
+        ports: ["9095:9090", "3001:3000"],
+        docs: "https://github.com/prometheus/prometheus"
+      },
+      {
+        id: "demo-worker-suite",
+        name: "Demo Worker Suite",
+        description: "Background worker pattern with Redis and volume-backed job artifacts.",
+        category: "automation",
+        composeYaml: `services:
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - demo_worker_redis:/data
+  worker:
+    image: alpine:3.20
+    command: ["sh", "-c", "while true; do date; sleep 30; done"]
+    volumes:
+      - demo_worker_artifacts:/work
+volumes:
+  demo_worker_redis:
+  demo_worker_artifacts:
+`,
+        defaultEnv: {},
+        volumes: ["demo_worker_redis", "demo_worker_artifacts"],
+        ports: [],
+        docs: "https://github.com/Admin-DockerMender/dockermender"
+      }
     ] as const) {
       await client.query(
-        `INSERT INTO operation_jobs (id, type, status, host_id, payload, result, error, created_by, created_at, started_at, completed_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now() - $9::interval, now() - $9::interval, now() - $9::interval, now() - $9::interval)`,
-        [uuid(), type, status, hostId, { demo: true }, result, error, createdBy ?? null, createdOffset]
+        `INSERT INTO custom_catalog_templates (
+           id, name, description, category, compose_yaml, default_env,
+           suggested_volumes, suggested_ports, docs_url, created_by
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         ON CONFLICT (id)
+         DO UPDATE SET name = EXCLUDED.name,
+                       description = EXCLUDED.description,
+                       category = EXCLUDED.category,
+                       compose_yaml = EXCLUDED.compose_yaml,
+                       default_env = EXCLUDED.default_env,
+                       suggested_volumes = EXCLUDED.suggested_volumes,
+                       suggested_ports = EXCLUDED.suggested_ports,
+                       docs_url = EXCLUDED.docs_url,
+                       updated_at = now()`,
+        [
+          template.id,
+          template.name,
+          template.description,
+          template.category,
+          template.composeYaml,
+          template.defaultEnv,
+          template.volumes,
+          template.ports,
+          template.docs,
+          createdBy ?? null
+        ]
+      );
+    }
+
+    for (const [targetHostId, paths] of [
+      [
+        primaryHostId,
+        [
+          ["/home/demo/apps/customer-portal/docker-compose.yml", showcaseComposeYaml],
+          ["/home/demo/apps/customer-portal/.env", showcaseEnv],
+          ["/home/demo/apps/customer-portal/README.md", "# Customer Portal Demo\n\nThis stack shows git deployments, proxy metadata, updates, backups, and recovery readiness.\n"],
+          ["/home/demo/apps/customer-portal/runbook.md", "## Demo Runbook\n\n1. Check image updates.\n2. Review recovery readiness.\n3. Start a migration plan to the recovery target.\n"],
+          ["/home/demo/apps/observability/docker-compose.yml", observabilityComposeYaml],
+          ["/home/demo/apps/observability/prometheus.yml", "global:\n  scrape_interval: 15s\nscrape_configs:\n  - job_name: dockermender-demo\n    static_configs:\n      - targets: ['dm-portal-api:8080']\n"],
+          ["/home/demo/backups/README.md", "Demo backup artifacts are represented in the Backups and Recovery Center panels.\n"],
+          ["/home/demo/playbooks/recovery-drill.md", "# Recovery Drill\n\nUse the Portal nightly verified recovery point and restore to Demo Recovery Target.\n"],
+          ["/home/demo/secrets/secrets.example.env", "POSTGRES_PASSWORD=demo\nAPI_TOKEN=change-me-before-production\n"]
+        ]
+      ],
+      [
+        edgeHostId,
+        [
+          ["/home/demo/edge/docker-compose.yml", edgeComposeYaml],
+          ["/home/demo/edge/README.md", "# Edge Gateway Demo\n\nThis host uses agent mode and includes an unhealthy camera relay for alert showcases.\n"],
+          ["/home/demo/edge/caddy/Caddyfile", ":80 {\n  respond \"Dockermender edge demo\"\n}\n"]
+        ]
+      ],
+      [
+        recoveryHostId,
+        [
+          ["/home/demo/recovery/README.md", "# Recovery Target\n\nThis host receives demo migration runs and restore rehearsals.\n"],
+          ["/home/demo/recovery/restore-plan.json", JSON.stringify({ source: "Demo Production Node", app: "Customer Portal", portRemap: { "8088": "18080" } }, null, 2)]
+        ]
+      ]
+    ] as const) {
+      await ensureDemoDirectory(client, targetHostId, "/home/demo");
+      await ensureDemoDirectory(client, targetHostId, "/home/demo/apps");
+      for (const [filePath, content] of paths) {
+        await ensureDemoDirectory(client, targetHostId, parentPath(filePath));
+        await upsertDemoFile(client, targetHostId, filePath, "file", content);
+      }
+    }
+
+    const jobs = [
+      {
+        type: "host.check",
+        status: "completed",
+        hostId: primaryHostId,
+        payload: { demo: true, scope: "production" },
+        result: { dockerVersion: "29.4.0-demo", composeVersion: "5.1.1-demo" },
+        error: null,
+        offset: "35 minutes",
+        progress: [
+          { id: "connect", label: "Connect", status: "completed" },
+          { id: "inspect", label: "Inspect host", status: "completed" }
+        ]
+      },
+      {
+        type: "host.sync",
+        status: "completed",
+        hostId: primaryHostId,
+        payload: { demo: true },
+        result: { container: 9, image: 12, network: 6, volume: 8 },
+        error: null,
+        offset: "30 minutes",
+        progress: [
+          { id: "inventory", label: "Inventory", status: "completed" },
+          { id: "save", label: "Save snapshots", status: "completed" }
+        ]
+      },
+      {
+        type: "compose.deploy",
+        status: "completed",
+        hostId: primaryHostId,
+        payload: { demo: true, stackId: stackIds.showcase },
+        result: { projectName: "demo_showcase", version: 2 },
+        error: null,
+        offset: "22 minutes",
+        progress: [
+          { id: "pull", label: "Pull images", status: "completed" },
+          { id: "deploy", label: "Deploy stack", status: "completed" },
+          { id: "verify", label: "Verify health", status: "completed" }
+        ]
+      },
+      {
+        type: "image.pull",
+        status: "failed",
+        hostId: edgeHostId,
+        payload: { demo: true, image: "ghcr.io/admin-dockermender/camera-relay:0.10" },
+        result: null,
+        error: "Demo failure: registry token does not allow edge image pulls.",
+        offset: "13 minutes",
+        progress: [
+          { id: "resolve", label: "Resolve image", status: "completed" },
+          { id: "pull", label: "Pull layers", status: "failed", detail: "Registry token rejected the request." }
+        ]
+      },
+      {
+        type: "recovery.capture",
+        status: "running",
+        hostId: primaryHostId,
+        payload: { demo: true, app: "Observability" },
+        result: null,
+        error: null,
+        offset: "3 minutes",
+        progress: [
+          { id: "prepare", label: "Prepare manifest", status: "completed" },
+          { id: "capture", label: "Capture artifacts", status: "running", detail: "Saving Grafana volume." },
+          { id: "verify", label: "Verify artifacts", status: "pending" }
+        ]
+      },
+      {
+        type: "migration.execute",
+        status: "completed",
+        hostId: recoveryHostId,
+        payload: { demo: true, sourceHostId: primaryHostId, recoveryPointId: recoveryPointIds.portal },
+        result: { source: "Demo Production Node", target: "Demo Recovery Target", app: "Customer Portal" },
+        error: null,
+        offset: "35 minutes",
+        progress: [
+          { id: "backup", label: "Capture recovery point", status: "completed" },
+          { id: "transfer", label: "Transfer artifacts", status: "completed" },
+          { id: "deploy", label: "Deploy on target", status: "completed" },
+          { id: "verify", label: "Verify app", status: "completed" }
+        ]
+      }
+    ];
+    for (const job of jobs) {
+      await client.query(
+        `INSERT INTO operation_jobs (
+           id, type, status, host_id, payload, result, error, created_by,
+           progress, created_at, started_at, completed_at, updated_at
+         )
+         VALUES (
+           $1, $2, $3, $4, $5, $6, $7, $8,
+           $9, now() - $10::interval,
+           CASE WHEN $3 <> 'queued' THEN now() - $10::interval + interval '15 seconds' ELSE NULL END,
+           CASE WHEN $3 IN ('completed', 'failed', 'canceled') THEN now() - $10::interval + interval '2 minutes' ELSE NULL END,
+           now()
+         )`,
+        [
+          uuid(),
+          job.type,
+          job.status,
+          job.hostId,
+          job.payload,
+          job.result,
+          job.error,
+          createdBy ?? null,
+          job.progress,
+          job.offset
+        ]
       );
     }
 
     await client.query(
       `INSERT INTO audit_events (id, user_id, host_id, action, target_kind, target_id, details)
-       VALUES ($1, $2, $3, 'demo.seed', 'host', $4, $5)`,
-      [uuid(), createdBy ?? null, hostId, hostId, { demo: true }]
+       VALUES ($1, $2, $3, 'demo.seed', 'workspace', $4, $5)`,
+      [
+        uuid(),
+        createdBy ?? null,
+        primaryHostId,
+        primaryHostId,
+        {
+          demo: true,
+          hosts: Object.keys(hostIds).length,
+          stacks: Object.keys(stackIds).length,
+          repositories: Object.keys(repoIds).length,
+          recoveryPoints: Object.keys(recoveryPointIds).length
+        }
+      ]
     );
 
-    const host = await client.query("SELECT * FROM docker_hosts WHERE id = $1", [hostId]);
+    const host = await client.query("SELECT * FROM docker_hosts WHERE id = $1", [primaryHostId]);
     return { host: mapHost(host.rows[0]), seeded: true };
   });
 }
