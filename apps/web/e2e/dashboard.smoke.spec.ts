@@ -827,8 +827,8 @@ test("services expose service-level image tag updates", async ({ page }) => {
   await expect(dialog.getByText("Update Web images")).toBeVisible();
   await expect(dialog.getByText("latest")).toBeVisible();
   await expect(dialog.getByText("beta")).toBeVisible();
-  await dialog.getByLabel("Filter tags for nginx").fill("v1");
-  await expect(dialog.getByText("v1.1.0")).toBeVisible();
+  await dialog.getByLabel("Filter tags for nginx").fill("v0.9");
+  await expect(dialog.getByText("v0.9.7")).toBeVisible();
   await expect(dialog.getByText("main")).toHaveCount(0);
 });
 
