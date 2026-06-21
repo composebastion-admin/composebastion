@@ -1,3 +1,5 @@
+import { createRequire } from "node:module";
+
 export type OpenApiPath = {
   method: "delete" | "get" | "patch" | "post" | "put";
   path: string;
@@ -13,7 +15,9 @@ export type OpenApiPath = {
 
 const schemaRef = (name: string) => ({ $ref: `#/components/schemas/${name}` });
 const arrayOf = (schema: Record<string, unknown>) => ({ type: "array", items: schema });
-const OPENAPI_VERSION = "0.9.6";
+const require = createRequire(import.meta.url);
+const packageJson = require("../../package.json") as { version?: string };
+const OPENAPI_VERSION = packageJson.version || "unknown";
 
 export const openApiRoutes: OpenApiPath[] = [
   { method: "get", path: "/api/v1/health", summary: "Basic API health check", tags: ["Health"], auth: "public", responseSchema: schemaRef("HealthResponse") },
