@@ -1,5 +1,7 @@
-# Example production overrides. Use with:
+# Example production overrides for source-build installs. Use with:
 #   docker compose -f docker-compose.yml -f docker-compose.prod.example.yml up -d --build
+#
+# For buildless published-image installs, use docker-compose.image.yml instead.
 #
 # Required environment:
 #   APP_SECRET=<unique random value of at least 32 characters>

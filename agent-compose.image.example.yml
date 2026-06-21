@@ -1,0 +1,15 @@
+# Buildless host-agent install for a Docker host managed by ComposeBastion.
+# Copy to agent-compose.yml, set AGENT_TOKEN, then run:
+#   docker compose -f agent-compose.yml up -d
+services:
+  composebastion-agent:
+    image: ${COMPOSEBASTION_AGENT_IMAGE:-ghcr.io/composebastion-admin/composebastion-agent}:${COMPOSEBASTION_AGENT_VERSION:-latest}
+    pull_policy: always
+    environment:
+      AGENT_TOKEN: ${AGENT_TOKEN:?Set AGENT_TOKEN to a long random token}
+      AGENT_PORT: 8090
+    ports:
+      - "${COMPOSEBASTION_AGENT_PORT:-8090}:8090"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped

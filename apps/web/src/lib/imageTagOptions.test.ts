@@ -3,12 +3,12 @@ import { compareImageTags, filterImageTags, uniqueSortedImageTags } from "./imag
 
 describe("image tag options", () => {
   it("pins common channels before numbered versions", () => {
-    expect(["v1.1.0", "dev", "main", "beta", "latest"].sort(compareImageTags)).toEqual([
+    expect(["v0.9.7", "dev", "main", "beta", "latest"].sort(compareImageTags)).toEqual([
       "latest",
       "main",
       "beta",
       "dev",
-      "v1.1.0"
+      "v0.9.7"
     ]);
   });
 
@@ -23,8 +23,8 @@ describe("image tag options", () => {
   });
 
   it("deduplicates, filters, and limits tags", () => {
-    const tags = uniqueSortedImageTags(["dev", "1.0.0", "dev"], ["<none>", "1.2.0"]);
-    expect(tags).toEqual(["dev", "1.2.0", "1.0.0"]);
-    expect(filterImageTags(tags, "1.", 1)).toEqual(["1.2.0"]);
+    const tags = uniqueSortedImageTags(["dev", "0.9.6", "dev"], ["<none>", "0.9.7"]);
+    expect(tags).toEqual(["dev", "0.9.7", "0.9.6"]);
+    expect(filterImageTags(tags, "0.9", 1)).toEqual(["0.9.7"]);
   });
 });

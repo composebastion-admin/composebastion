@@ -1,12 +1,9 @@
-import { createRequire } from "node:module";
 import { CONFIG_BACKUP_FORMAT_VERSION } from "@composebastion/shared";
 import { query, withTransaction } from "../db/pool.js";
 import { decryptConfigPayload, decryptSecret, encryptConfigPayload, encryptSecret, type EncryptedConfigPayload } from "./crypto.js";
 import { exportBackupTargetSecrets } from "./recoveryBackupTargets.js";
+import { APP_VERSION } from "./version.js";
 
-const require = createRequire(import.meta.url);
-const packageJson = require("../../package.json") as { version?: string };
-const appVersion = process.env.npm_package_version || packageJson.version || "unknown";
 const CONFIG_BACKUP_APP_NAME = "ComposeBastion";
 
 type ConfigBackupPayload = {
@@ -45,6 +42,36 @@ function decryptConfigBackupPayload(backup: Record<string, unknown>, passphrase:
   }
 }
 
+const payloadArrayFields = [
+  "hosts",
+  "composeStacks",
+  "registries",
+  "notificationChannels",
+  "alertRules",
+  "favoriteImages",
+  "githubRepositories"
+] as const;
+
+function validateConfigBackupPayload(payload: ConfigBackupPayload) {
+  if (payload.app !== CONFIG_BACKUP_APP_NAME) {
+    throw configImportError("This is not a ComposeBastion config backup");
+  }
+  if (payload.formatVersion !== CONFIG_BACKUP_FORMAT_VERSION) {
+    throw configImportError(`Unsupported ComposeBastion config backup format version ${String(payload.formatVersion)}`);
+  }
+  for (const field of payloadArrayFields) {
+    if (!Array.isArray(payload[field])) {
+      throw configImportError(`Config backup is missing the ${field} list`);
+    }
+  }
+  if (payload.appSourceLinks !== undefined && !Array.isArray(payload.appSourceLinks)) {
+    throw configImportError("Config backup appSourceLinks must be a list");
+  }
+  if (payload.backupTargets !== undefined && !Array.isArray(payload.backupTargets)) {
+    throw configImportError("Config backup backupTargets must be a list");
+  }
+}
+
 export async function exportConfigBackup(passphrase: string) {
   const [hosts, composeStacks, registries, notificationChannels, alertRules, favoriteImages, githubRepositories, appSourceLinks, backupTargets] = await Promise.all([
     query("SELECT * FROM docker_hosts ORDER BY name ASC"),
@@ -61,7 +88,7 @@ export async function exportConfigBackup(passphrase: string) {
   const payload: ConfigBackupPayload = {
     app: CONFIG_BACKUP_APP_NAME,
     formatVersion: CONFIG_BACKUP_FORMAT_VERSION,
-    version: appVersion,
+    version: APP_VERSION,
     exportedAt: new Date().toISOString(),
     hosts: hosts.rows.map((row: any) => ({
       id: row.id,
@@ -180,9 +207,7 @@ export async function exportConfigBackup(passphrase: string) {
 
 export async function importConfigBackup(backup: Record<string, unknown>, passphrase: string) {
   const payload = decryptConfigBackupPayload(backup, passphrase);
-  if (payload.app !== CONFIG_BACKUP_APP_NAME) {
-    throw configImportError("This is not a ComposeBastion config backup");
-  }
+  validateConfigBackupPayload(payload);
 
   const summary = await withTransaction(async (client) => {
     const counts = {

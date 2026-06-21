@@ -1,6 +1,6 @@
 {
   "name": "@composebastion/agent",
-  "version": "0.9.5",
+  "version": "0.9.6",
   "private": true,
   "license": "SEE LICENSE IN ../../LICENSE.md",
   "type": "module",

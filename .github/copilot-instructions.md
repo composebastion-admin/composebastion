@@ -2,8 +2,8 @@
 
 ## Repository Ownership
 
-- The canonical repository is `https://github.com/Admin-ComposeBastion/composebastion`.
-- Pushes, tags, releases, and version updates must use the `admin-composebastion`
+- The canonical repository is `https://github.com/composebastion-admin/composebastion`.
+- Pushes, tags, releases, and version updates must use the `composebastion-admin`
   GitHub account.
 - Do not reintroduce personal owner or repository references.
 - Work only in the user-designated checkout. Do not create temporary worktrees,
@@ -47,6 +47,23 @@
 - Releases must update the root and workspace package versions, `package-lock`,
   relevant tests, `CHANGELOG.md` or release notes, generated OpenAPI docs when
   API contracts change, tags, and target branches according to the release plan.
+- Release and deployment work must keep the source repo and published images in
+  sync. When runtime code, dependencies, migrations, Docker files, Compose files,
+  environment variables, install docs, or version references change, update the
+  relevant repo files and make sure the GHCR image workflow will publish the
+  matching image version.
+- Published image install is a first-class path, not a secondary convenience.
+  Keep `docker-compose.image.yml`, `agent-compose.image.example.yml`,
+  `.env.example`, `README.md`, `docs/installation.md`, `docs/upgrade-guide.md`,
+  and `.github/RELEASE_PROCESS.md` aligned with the current package version and
+  image names:
+  - `ghcr.io/composebastion-admin/composebastion-app`
+  - `ghcr.io/composebastion-admin/composebastion-agent`
+- Image publishing must preserve tags for `latest`, package versions such as
+  `0.9.6`, release tags such as `v0.9.6`, branch tags, and `sha-*` tags.
+- Treat NAS devices, Proxmox Docker guests, Portainer stacks, and native Docker
+  Linux hosts as supported install targets when they run Docker Engine and
+  Docker Compose v2 on `linux/amd64` or `linux/arm64`.
 - Beta or staging changelog entries must include user-facing test notes: what
   changed, what to verify, and any known limits.
 - After release pushes, verify GitHub Actions, CodeQL, dependency review,

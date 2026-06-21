@@ -31,14 +31,14 @@ describe("GitHub version discovery", () => {
       }
       if (url.pathname.endsWith("/tags")) {
         return jsonResponse([
-          { name: "v1.0.0", commit: { sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" } },
-          { name: "v1.1.0", commit: { sha: "cccccccccccccccccccccccccccccccccccccccc" } }
+          { name: "v0.9.6", commit: { sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" } },
+          { name: "v0.9.7", commit: { sha: "cccccccccccccccccccccccccccccccccccccccc" } }
         ]);
       }
       if (url.pathname.endsWith("/releases")) {
         return jsonResponse([
-          { tag_name: "v1.1.0", name: "Version 1.1", draft: false, prerelease: false, published_at: "2026-06-17T10:00:00Z", html_url: "https://github.com/owner/repo/releases/tag/v1.1.0" },
-          { tag_name: "v1.2.0-beta", name: "Version 1.2 beta", draft: false, prerelease: true, published_at: "2026-06-17T11:00:00Z", html_url: "https://github.com/owner/repo/releases/tag/v1.2.0-beta" },
+          { tag_name: "v0.9.7", name: "Version 0.9.7", draft: false, prerelease: false, published_at: "2026-06-17T10:00:00Z", html_url: "https://github.com/owner/repo/releases/tag/v0.9.7" },
+          { tag_name: "v0.9.8-beta", name: "Version 0.9.8 beta", draft: false, prerelease: true, published_at: "2026-06-17T11:00:00Z", html_url: "https://github.com/owner/repo/releases/tag/v0.9.8-beta" },
           { tag_name: "draft", name: "Draft", draft: true, prerelease: false }
         ]);
       }
@@ -54,10 +54,10 @@ describe("GitHub version discovery", () => {
     expect(versions.options.map((option) => `${option.kind}:${option.ref}`)).toEqual([
       "branch:main",
       "branch:dev",
-      "tag:v1.0.0",
-      "tag:v1.1.0",
-      "release:v1.1.0",
-      "release:v1.2.0-beta"
+      "tag:v0.9.6",
+      "tag:v0.9.7",
+      "release:v0.9.7",
+      "release:v0.9.8-beta"
     ]);
     expect(versions.options.find((option) => option.ref === "main")).toMatchObject({
       selected: true,
@@ -69,11 +69,11 @@ describe("GitHub version discovery", () => {
       deployed: false,
       updateAvailable: true
     });
-    expect(versions.options.find((option) => option.kind === "release" && option.ref === "v1.1.0")).toMatchObject({
-      label: "Version 1.1",
+    expect(versions.options.find((option) => option.kind === "release" && option.ref === "v0.9.7")).toMatchObject({
+      label: "Version 0.9.7",
       updateAvailable: true
     });
-    expect(versions.options.find((option) => option.ref === "v1.2.0-beta")?.label).toBe("Version 1.2 beta (pre-release)");
+    expect(versions.options.find((option) => option.ref === "v0.9.8-beta")?.label).toBe("Version 0.9.8 beta (pre-release)");
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });

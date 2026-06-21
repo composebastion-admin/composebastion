@@ -3,8 +3,11 @@ import { agentCompatibilityStatus } from "../src/services/agent.js";
 
 describe("agentCompatibilityStatus", () => {
   it("maps compatible, outdated, and unknown versions", () => {
-    expect(agentCompatibilityStatus("0.9.0")).toMatchObject({ status: "compatible" });
-    expect(agentCompatibilityStatus("0.9.1")).toMatchObject({ status: "compatible" });
+    expect(agentCompatibilityStatus("0.9.0")).toMatchObject({
+      status: "compatible",
+      message: "Agent 0.9.0 supports the current pre-1.0 API surface."
+    });
+    expect(agentCompatibilityStatus("0.9.6")).toMatchObject({ status: "compatible" });
     expect(agentCompatibilityStatus("0.8.9")).toMatchObject({ status: "outdated" });
     expect(agentCompatibilityStatus(undefined)).toMatchObject({ status: "unknown" });
   });

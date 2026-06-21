@@ -43,7 +43,7 @@ services:
 
 describe("upsertEnvValue", () => {
   it("updates existing values and appends new ones", () => {
-    expect(upsertEnvValue("APP_PORT=3000\nIMAGE_TAG=1.0.0", "APP_PORT", "3100")).toBe("APP_PORT=3100\nIMAGE_TAG=1.0.0");
+    expect(upsertEnvValue("APP_PORT=3000\nIMAGE_TAG=0.9.6", "APP_PORT", "3100")).toBe("APP_PORT=3100\nIMAGE_TAG=0.9.6");
     expect(upsertEnvValue("APP_PORT=3100", "IMAGE_TAG", "1.0.1")).toBe("APP_PORT=3100\nIMAGE_TAG=1.0.1");
   });
 });

@@ -42,6 +42,7 @@ import { getWorkerStatus } from "./services/jobs.js";
 import { sendApiError } from "./services/apiError.js";
 import { apiLogFields } from "./services/operationLogs.js";
 import { healthCheckRateLimit } from "./services/rateLimits.js";
+import { runtimeVersionMetadata } from "./services/version.js";
 
 export async function buildServer() {
   const app = Fastify({ logger: true, bodyLimit: 10 * 1024 * 1024, trustProxy: env.TRUST_PROXY, requestIdHeader: "x-request-id", genReqId: (req) => {
@@ -108,7 +109,7 @@ export async function buildServer() {
     return sendApiError(reply, 403, "FORBIDDEN", "Origin is not allowed for mutating API requests");
   });
 
-  app.get("/api/health", async () => ({ ok: true }));
+  app.get("/api/health", async () => ({ ok: true, ...runtimeVersionMetadata() }));
   app.get("/api/health/db", { config: { rateLimit: healthCheckRateLimit } }, async () => {
     await pool.query("SELECT 1");
     return { ok: true };

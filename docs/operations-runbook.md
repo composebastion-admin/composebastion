@@ -95,5 +95,5 @@ claims for a release.
 - Agent-mode hosts report `agentVersion` through `/api/health` during host
   checks. Unknown or outdated agents still keep compatible Docker-only commands,
   but live logs and host `/proc` stats require the newer agent endpoints.
-- `v0.9` expects agents built from the same repository version for live logs and
-  host `/proc` stats.
+- The v0.9 line expects app and agent images from the same release for live
+  logs, queued Docker work, and host `/proc` stats.

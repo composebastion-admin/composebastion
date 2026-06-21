@@ -71,6 +71,33 @@ describe("config backup product identity", () => {
     expect(withTransaction).not.toHaveBeenCalled();
   });
 
+  it("rejects unsupported config backup formats before importing", async () => {
+    const encrypted = encryptConfigPayload({
+      ...emptyConfigPayload("ComposeBastion"),
+      formatVersion: CONFIG_BACKUP_FORMAT_VERSION + 1
+    }, "long-test-passphrase");
+
+    await expect(importConfigBackup(encrypted as unknown as Record<string, unknown>, "long-test-passphrase"))
+      .rejects.toMatchObject({
+        message: `Unsupported ComposeBastion config backup format version ${CONFIG_BACKUP_FORMAT_VERSION + 1}`,
+        statusCode: 400
+      });
+    expect(withTransaction).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed config payloads before opening a transaction", async () => {
+    const payload = emptyConfigPayload("ComposeBastion") as Record<string, unknown>;
+    delete payload.hosts;
+    const encrypted = encryptConfigPayload(payload, "long-test-passphrase");
+
+    await expect(importConfigBackup(encrypted as unknown as Record<string, unknown>, "long-test-passphrase"))
+      .rejects.toMatchObject({
+        message: "Config backup is missing the hosts list",
+        statusCode: 400
+      });
+    expect(withTransaction).not.toHaveBeenCalled();
+  });
+
   it("exports rclone backup target secrets", async () => {
     query
       .mockResolvedValueOnce({ rows: [] })

@@ -10,8 +10,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/composebastion-admin/composebastion/releases"><img alt="Release" src="https://img.shields.io/badge/release-v0.9.4-e0a23f"></a>
+  <a href="https://github.com/composebastion-admin/composebastion/releases"><img alt="Release" src="https://img.shields.io/badge/release-v0.9.6-e0a23f"></a>
   <a href="https://github.com/composebastion-admin/composebastion/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/composebastion-admin/composebastion/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/composebastion-admin/composebastion/pkgs/container/composebastion-app"><img alt="Container image" src="https://img.shields.io/badge/ghcr.io-composebastion--app-2496ed"></a>
   <a href="LICENSE.md"><img alt="License" src="https://img.shields.io/badge/license-source--available-df7d27"></a>
   <img alt="Node" src="https://img.shields.io/badge/node-%3E%3D20.11-3f7f5f">
   <img alt="Docker" src="https://img.shields.io/badge/docker-compose-2496ed">
@@ -21,6 +22,11 @@ ComposeBastion gives you one private web console for operating multiple Docker
 servers. Add hosts over SSH or the optional host agent, see what is running,
 deploy Compose apps from GitHub, create recovery points, test restores, and keep
 operators out of raw shell work for routine actions.
+
+ComposeBastion can be installed either from published container images or from a
+full source checkout. The published image path is the simplest option for NAS
+devices, Proxmox Docker VMs/LXCs, Portainer stacks, and any native Docker host on
+`linux/amd64` or `linux/arm64`.
 
 ## Product Screenshots
 
@@ -43,11 +49,16 @@ operators out of raw shell work for routine actions.
 
 ## Install In 5 Minutes
 
-Prerequisites: Docker Engine, Docker Compose v2, Git, and OpenSSL.
+Prerequisites: Docker Engine, Docker Compose v2, and OpenSSL. Git is only needed
+for the source-build install.
+
+### Option A: Pull The Published Image
 
 ```bash
-git clone https://github.com/composebastion-admin/composebastion.git
+mkdir -p composebastion
 cd composebastion
+curl -fsSLO https://raw.githubusercontent.com/composebastion-admin/composebastion/main/docker-compose.image.yml
+curl -fsSLO https://raw.githubusercontent.com/composebastion-admin/composebastion/main/.env.example
 cp .env.example .env
 ```
 
@@ -61,7 +72,8 @@ POSTGRES_PASSWORD=<unique database password>
 Start ComposeBastion:
 
 ```bash
-docker compose up -d --build
+docker compose -f docker-compose.image.yml pull
+docker compose -f docker-compose.image.yml up -d
 ```
 
 Open `http://localhost:8080`, create the first owner account, and choose
@@ -72,6 +84,51 @@ You can remove it later like any other demo data.
 
 For production installs with a reverse proxy and persistent backup storage, use
 the [installation guide](docs/installation.md).
+
+Use the published image install for NAS devices, Proxmox Docker VMs/LXCs,
+Portainer stacks, and home servers. Use the source build only when you are
+developing ComposeBastion or intentionally customizing the checkout.
+
+Published images:
+
+- `ghcr.io/composebastion-admin/composebastion-app`
+- `ghcr.io/composebastion-admin/composebastion-agent`
+
+Tags include `latest`, the package version such as `0.9.6`, release tags such as
+`v0.9.6`, branch tags, and `sha-*` tags. Use `latest` for simple homelab/NAS
+updates, or pin a version in `.env` for controlled production upgrades.
+
+### Option B: Build From Source
+
+```bash
+git clone https://github.com/composebastion-admin/composebastion.git
+cd composebastion
+cp .env.example .env
+```
+
+Set `APP_SECRET` and `POSTGRES_PASSWORD` in `.env`, then start:
+
+```bash
+docker compose up -d --build
+```
+
+## Update Commands
+
+Image install:
+
+```bash
+cd ~/composebastion
+docker compose -f docker-compose.image.yml pull
+docker compose -f docker-compose.image.yml up -d
+```
+
+Source install:
+
+```bash
+cd ~/composebastion
+git pull --ff-only
+docker compose up -d --build app worker
+```
 
 ## Why Operators Use It
 
@@ -148,13 +205,19 @@ The full screenshot tour is in the [how-to guide](docs/how-to.md).
   and alert history.
 - RBAC, active session management, audit events, route rate limits, request IDs,
   generated OpenAPI docs, and CI gates.
+- Image-only install files and published GHCR images for NAS devices, Proxmox
+  Docker guests, Portainer stacks, and native Docker hosts on `linux/amd64` or
+  `linux/arm64`.
+- v0.9 config backup/restore for hosts, tracked repos, registries, alerts, users,
+  Compose stacks, recovery schedules, storage targets, and operator settings.
 
 ## Repository Rules
 
 - Canonical repository: `https://github.com/composebastion-admin/composebastion`.
 - Pushes, tags, releases, and version updates must use the
   `composebastion-admin` GitHub account.
-- `v0.9` is the first public version for this repository.
+- `v0.9` is the first public release line for this repository; do not promote to
+  `v1.0` until the stable-release checklist is complete.
 - Do not reintroduce personal owner, repository, image, or user fixtures.
 
 ## License

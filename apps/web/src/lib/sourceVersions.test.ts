@@ -18,9 +18,9 @@ const option = (kind: AppGithubVersionOption["kind"], ref: string, updateAvailab
 describe("source version helpers", () => {
   it("groups GitHub options by kind", () => {
     const groups = groupGithubVersionOptions([
-      option("tag", "v1.0.0"),
+      option("tag", "v0.9.6"),
       option("branch", "main"),
-      option("release", "v1.0.0")
+      option("release", "v0.9.6")
     ]);
     expect(groups.map((group) => group.kind)).toEqual(["branch", "tag", "release"]);
     expect(groups[0]?.options.map((item) => item.ref)).toEqual(["main"]);
@@ -33,7 +33,7 @@ describe("source version helpers", () => {
   });
 
   it("sorts version-like refs newest first and keeps selected refs prominent", () => {
-    const selected = { ...option("tag", "v1.0.0"), selected: true };
+    const selected = { ...option("tag", "v0.9.6"), selected: true };
     expect([
       option("tag", "1.6.2-beta.1"),
       option("tag", "1.5.10"),
@@ -50,7 +50,7 @@ describe("source version helpers", () => {
 
   it("filters grouped versions by query", () => {
     const groups = groupGithubVersionOptions([
-      option("tag", "v1.0.0"),
+      option("tag", "v0.9.6"),
       option("tag", "v2.0.0"),
       option("branch", "dev")
     ], "v2");

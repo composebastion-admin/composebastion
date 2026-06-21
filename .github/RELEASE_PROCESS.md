@@ -45,13 +45,28 @@ Run the same gates CI expects before release:
 
 ## Docker And Images
 
+- ComposeBastion ships two first-party GHCR images:
+  - `ghcr.io/composebastion-admin/composebastion-app`
+  - `ghcr.io/composebastion-admin/composebastion-agent`
+- The app image is used by both the API/web service and the worker. Keep
+  `docker-compose.image.yml`, `.env.example`, README install commands, and
+  `docs/installation.md` aligned whenever runtime environment variables or
+  version defaults change.
 - Build both runtime images before release:
   - `docker build --target runtime -t composebastion-app:<version> .`
   - `docker build -f Dockerfile.agent --target runtime -t composebastion-agent:<version> .`
 - Scan both images for high/critical vulnerabilities.
-- Publish container images only when the user or release plan explicitly asks.
+- Publish container images for every public release and every merge to `main`
+  through `.github/workflows/publish-images.yml`.
+- Image tags must include `latest` for `main`, the package version such as
+  `0.9.6`, release tags such as `v0.9.6`, branch tags, and `sha-*` tags.
+- Multi-arch image publishing targets `linux/amd64` and `linux/arm64` so NAS
+  devices, Proxmox Docker guests, and native Docker servers can install without
+  building from source.
 - After publishing, verify the GitHub Actions run and the registry/package page
   instead of assuming the push succeeded.
+- After the first GHCR publish, confirm package visibility is public enough for
+  unauthenticated `docker pull` installs.
 
 ## Changelog Expectations
 
@@ -59,6 +74,32 @@ Run the same gates CI expects before release:
   migration/config changes, and known limitations.
 - Beta/staging releases should include test notes: what to verify, where to look
   for logs/screenshots, and any rollback or known-risk notes.
+
+## Pre-1.0 Release Verification
+
+Run these before tagging a public release:
+
+```bash
+npm run typecheck
+npm run lint:migrations
+npm run openapi:check --workspace @composebastion/api
+npm test
+npm run smoke:web
+npm audit --omit=dev --audit-level=high
+docker compose config
+docker compose -f docker-compose.image.yml config
+docker compose -f docker-compose.yml -f docker-compose.prod.example.yml config
+docker compose -f agent-compose.image.example.yml config
+docker build --target runtime -t composebastion-app:v0.9-local .
+docker build -f Dockerfile.agent --target runtime -t composebastion-agent:v0.9-local .
+```
+
+After publishing, verify unauthenticated pulls:
+
+```bash
+docker pull ghcr.io/composebastion-admin/composebastion-app:0.9.6
+docker pull ghcr.io/composebastion-admin/composebastion-agent:0.9.6
+```
 
 ## Post-Push Verification
 

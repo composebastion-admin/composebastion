@@ -212,7 +212,7 @@ export async function seedDemoWorkspace(createdBy?: string | null) {
         lastError: null,
         dockerVersion: "28.2.1-demo",
         composeVersion: "2.39.2-demo",
-        agentVersion: "1.0.0",
+        agentVersion: "0.9.6",
         tags: ["demo", "sandbox", "edge", "agent"]
       },
       {
@@ -379,7 +379,7 @@ export async function seedDemoWorkspace(createdBy?: string | null) {
     depends_on:
       - api
   api:
-    image: ghcr.io/composebastion-admin/showcase-api:0.9
+    image: ghcr.io/composebastion-admin/showcase-api:0.9.6
     restart: unless-stopped
     environment:
       NODE_ENV: production
@@ -393,7 +393,7 @@ export async function seedDemoWorkspace(createdBy?: string | null) {
       - postgres
       - redis
   worker:
-    image: ghcr.io/composebastion-admin/showcase-worker:0.9
+    image: ghcr.io/composebastion-admin/showcase-worker:0.9.6
     restart: unless-stopped
     environment:
       QUEUE_URL: redis://redis:6379/0
@@ -470,7 +470,7 @@ volumes:
     volumes:
       - demo_edge_caddy:/data
   camera-relay:
-    image: ghcr.io/composebastion-admin/camera-relay:0.9
+    image: ghcr.io/composebastion-admin/camera-relay:0.9.6
     restart: unless-stopped
     volumes:
       - demo_edge_clips:/clips
@@ -601,7 +601,7 @@ volumes:
       sourceCurrentCommitSha: demoCommit("showcase-current"),
       sourceLatestCommitSha: demoCommit("showcase-latest"),
       versionSource: "github",
-      versionNote: "v0.9 showcase deployment with update policy enabled"
+      versionNote: "v0.9.6 showcase deployment with update policy enabled"
     });
     await insertStack({
       key: "observability",
@@ -686,7 +686,7 @@ volumes:
         data: containerData({
           id: "demo-api-000000000002",
           name: "cb-portal-api",
-          image: "ghcr.io/composebastion-admin/showcase-api:0.9",
+          image: "ghcr.io/composebastion-admin/showcase-api:0.9.6",
           state: "running",
           ports: "0.0.0.0:9090->8080/tcp",
           size: "31.8MB (virtual 228MB)",
@@ -702,7 +702,7 @@ volumes:
         data: containerData({
           id: "demo-worker-000000003",
           name: "cb-portal-worker",
-          image: "ghcr.io/composebastion-admin/showcase-worker:0.9",
+          image: "ghcr.io/composebastion-admin/showcase-worker:0.9.6",
           state: "running",
           status: "Up 38 minutes (health: starting)",
           size: "19.5MB (virtual 174MB)",
@@ -819,7 +819,7 @@ volumes:
         data: containerData({
           id: "demo-camera-relay-02",
           name: "cb-camera-relay",
-          image: "ghcr.io/composebastion-admin/camera-relay:0.9",
+          image: "ghcr.io/composebastion-admin/camera-relay:0.9.6",
           state: "running",
           status: "Up 6 hours (health: unhealthy)",
           ports: "8554/tcp",
@@ -853,9 +853,9 @@ volumes:
     const imageSpecs = [
       [primaryHostId, "nginx:1.27-alpine", "49.6MB"],
       [primaryHostId, "nginx:alpine", "49.6MB"],
-      [primaryHostId, "ghcr.io/composebastion-admin/showcase-api:0.9", "228MB"],
-      [primaryHostId, "ghcr.io/composebastion-admin/showcase-api:0.10", "236MB"],
-      [primaryHostId, "ghcr.io/composebastion-admin/showcase-worker:0.9", "174MB"],
+      [primaryHostId, "ghcr.io/composebastion-admin/showcase-api:0.9.6", "228MB"],
+      [primaryHostId, "ghcr.io/composebastion-admin/showcase-api:0.9.7", "236MB"],
+      [primaryHostId, "ghcr.io/composebastion-admin/showcase-worker:0.9.6", "174MB"],
       [primaryHostId, "postgres:16-alpine", "396MB"],
       [primaryHostId, "redis:7-alpine", "57.8MB"],
       [primaryHostId, "prom/prometheus:v2.54.1", "272MB"],
@@ -864,8 +864,8 @@ volumes:
       [primaryHostId, "alpine:3.20", "7.8MB"],
       [primaryHostId, "ghcr.io/open-webui/open-webui:main", "6.68GB"],
       [edgeHostId, "caddy:2-alpine", "49.1MB"],
-      [edgeHostId, "ghcr.io/composebastion-admin/camera-relay:0.9", "163MB"],
-      [edgeHostId, "ghcr.io/composebastion-admin/camera-relay:0.10", "168MB"],
+      [edgeHostId, "ghcr.io/composebastion-admin/camera-relay:0.9.6", "163MB"],
+      [edgeHostId, "ghcr.io/composebastion-admin/camera-relay:0.9.7", "168MB"],
       [recoveryHostId, "nginx:1.27-alpine", "49.6MB"],
       [recoveryHostId, "postgres:16-alpine", "396MB"]
     ] as const;
@@ -1694,10 +1694,10 @@ volumes:
     }
 
     for (const [targetHostId, imageReference, status, riskNote, containersAffected, stacksAffected, severities] of [
-      [primaryHostId, "ghcr.io/composebastion-admin/showcase-api:0.9", "update_available", "v0.10 is available; redeploy the Customer Portal stack after reviewing migrations.", [{ id: "demo-api-000000000002", name: "cb-portal-api" }], [{ id: stackIds.showcase!, name: "Customer Portal" }], { critical: 0, high: 1, medium: 3, low: 8 }],
+      [primaryHostId, "ghcr.io/composebastion-admin/showcase-api:0.9.6", "update_available", "v0.9.7 is available; redeploy the Customer Portal stack after reviewing migrations.", [{ id: "demo-api-000000000002", name: "cb-portal-api" }], [{ id: stackIds.showcase!, name: "Customer Portal" }], { critical: 0, high: 1, medium: 3, low: 8 }],
       [primaryHostId, "postgres:16-alpine", "up_to_date", "Database image digest matches the remote registry.", [{ id: "demo-postgres-0000004", name: "cb-portal-postgres" }], [{ id: stackIds.showcase!, name: "Customer Portal" }], { critical: 0, high: 0, medium: 1, low: 6 }],
       [primaryHostId, "ghcr.io/open-webui/open-webui:main", "unknown", "Mutable main tag; pin a release before production use.", [], [{ id: stackIds.ai!, name: "AI Tools" }], { critical: 2, high: 4, medium: 11, low: 20 }],
-      [edgeHostId, "ghcr.io/composebastion-admin/camera-relay:0.9", "update_available", "Patch image includes a health probe fix for RTSP reconnects.", [{ id: "demo-camera-relay-02", name: "cb-camera-relay" }], [{ id: stackIds.edge!, name: "Edge Gateway" }], { critical: 0, high: 0, medium: 2, low: 5 }],
+      [edgeHostId, "ghcr.io/composebastion-admin/camera-relay:0.9.6", "update_available", "Patch image includes a health probe fix for RTSP reconnects.", [{ id: "demo-camera-relay-02", name: "cb-camera-relay" }], [{ id: stackIds.edge!, name: "Edge Gateway" }], { critical: 0, high: 0, medium: 2, low: 5 }],
       [primaryHostId, "registry:2", "local", "Local cache image is not checked against a remote registry.", [{ id: "demo-registry-cache-08", name: "cb-registry-cache" }], [], { critical: 0, high: 0, medium: 0, low: 2 }]
     ] as const) {
       await client.query(
@@ -1921,7 +1921,7 @@ volumes:
         type: "image.pull",
         status: "failed",
         hostId: edgeHostId,
-        payload: { demo: true, image: "ghcr.io/composebastion-admin/camera-relay:0.10" },
+        payload: { demo: true, image: "ghcr.io/composebastion-admin/camera-relay:0.9.7" },
         result: null,
         error: "Demo failure: registry token does not allow edge image pulls.",
         offset: "13 minutes",

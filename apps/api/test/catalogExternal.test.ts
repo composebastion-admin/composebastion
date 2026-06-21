@@ -47,7 +47,7 @@ stargazers_count: 27000
 updated_at: '2026-06-01'
 archived: false
 current_release:
-  tag: v1.0.0
+  tag: v0.9.6
   published_at: '2026-05-01'
 `);
       }

@@ -1,5 +1,36 @@
 # Changelog
 
+## [v0.9.6] - 2026-06-21
+
+### Added
+
+- Added buildless GHCR image install files for the manager and optional host
+  agent, with NAS, Proxmox Docker guest, and native Docker host guidance.
+- Added a multi-arch image publishing workflow for `linux/amd64` and
+  `linux/arm64` app and agent images.
+- Added v0.9.6 release verification commands covering typecheck, migrations,
+  OpenAPI, tests, browser smoke, audit, Compose config validation, and image
+  builds.
+
+### Changed
+
+- Bumped the workspace, runtime images, and generated OpenAPI contract to
+  `0.9.6`.
+- Updated installation, upgrade, and release documentation so source updates and
+  published images stay aligned.
+- Documented `/api/v1` as the public API compatibility boundary and exposed runtime
+  version metadata through the health endpoint.
+- Promoted local, S3-compatible, and SMB recovery storage targets as v0.9-supported
+  while labeling imported rclone cloud/custom providers as experimental.
+- Updated app/agent compatibility guidance so agent mode is a supported host
+  connection path.
+
+### Fixed
+
+- Hardened config backup import errors so bad passphrases, wrong products,
+  unsupported formats, and malformed payloads return client-facing validation
+  errors before any import transaction starts.
+
 ## [v0.9.4] - 2026-06-20
 
 ### Added

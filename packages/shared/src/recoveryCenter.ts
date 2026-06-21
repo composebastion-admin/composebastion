@@ -130,7 +130,7 @@ export const backupTargetCreateSchema = z.union([
       return;
     }
     if (!value.rcloneConfig && !value.config?.rcloneConfig) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Imported rclone config is required for cloud beta targets", path: ["rcloneConfig"] });
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Imported rclone config is required for experimental rclone targets", path: ["rcloneConfig"] });
     }
   }),
   backupTargetSharedFieldsSchema.extend({
@@ -156,7 +156,7 @@ export const backupTargetCreateSchema = z.union([
   }).superRefine((value, ctx) => {
     const provider = value.provider ?? value.config.provider;
     if (provider !== "smb" && !value.rcloneConfig && !value.config.rcloneConfig) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Imported rclone config is required for cloud beta targets", path: ["rcloneConfig"] });
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Imported rclone config is required for experimental rclone targets", path: ["rcloneConfig"] });
     }
   })
 ]);

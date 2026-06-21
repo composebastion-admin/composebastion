@@ -13,7 +13,7 @@ export type OpenApiPath = {
 
 const schemaRef = (name: string) => ({ $ref: `#/components/schemas/${name}` });
 const arrayOf = (schema: Record<string, unknown>) => ({ type: "array", items: schema });
-const OPENAPI_VERSION = "0.9.5";
+const OPENAPI_VERSION = "0.9.6";
 
 export const openApiRoutes: OpenApiPath[] = [
   { method: "get", path: "/api/v1/health", summary: "Basic API health check", tags: ["Health"], auth: "public", responseSchema: schemaRef("HealthResponse") },
@@ -161,7 +161,12 @@ const namedItemResponse = (key: string, itemSchema: Record<string, unknown>, ext
 const componentSchemas = {
   Error: errorSchema,
   OkResponse: object(["ok"], { ok: { type: "boolean" } }),
-  HealthResponse: object(["ok"], { ok: { type: "boolean" } }),
+  HealthResponse: object(["ok", "version", "revision", "buildDate"], {
+    ok: { type: "boolean" },
+    version: { type: "string" },
+    revision: { anyOf: [{ type: "string" }, { type: "null" }] },
+    buildDate: { anyOf: [{ type: "string" }, { type: "null" }] }
+  }),
   ReadinessResponse: object(["ok", "checks"], {
     ok: { type: "boolean" },
     checks: {

@@ -1,4 +1,5 @@
 ARG TRIVY_VERSION=0.71.2
+ARG APP_VERSION=0.9.6
 
 FROM node:20-bookworm-slim AS deps
 WORKDIR /app
@@ -19,6 +20,20 @@ FROM node:20-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 ARG TRIVY_VERSION
+ARG APP_VERSION
+ARG VCS_REF=unknown
+ARG BUILD_DATE=unknown
+ENV COMPOSEBASTION_VERSION="${APP_VERSION}" \
+    COMPOSEBASTION_REVISION="${VCS_REF}" \
+    COMPOSEBASTION_BUILD_DATE="${BUILD_DATE}"
+LABEL org.opencontainers.image.title="ComposeBastion" \
+      org.opencontainers.image.description="Self-hosted Docker host manager, web UI, API, worker, recovery, and operations console" \
+      org.opencontainers.image.url="https://github.com/composebastion-admin/composebastion" \
+      org.opencontainers.image.source="https://github.com/composebastion-admin/composebastion" \
+      org.opencontainers.image.version="${APP_VERSION}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.licenses="LicenseRef-ComposeBastion-SourceAvailable-PrivateUse-1.0"
 RUN set -eux; \
     apt-get update; \
     apt-get upgrade -y; \

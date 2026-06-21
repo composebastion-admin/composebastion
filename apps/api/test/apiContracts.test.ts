@@ -1,10 +1,13 @@
 import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { buildServer } from "../src/server.js";
 import { buildOpenApiDocument, buildOpenApiMarkdown } from "../src/openapi/document.js";
 
+const require = createRequire(import.meta.url);
+const packageJson = require("../package.json") as { version: string };
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
 describe("API contracts", () => {
@@ -17,7 +20,12 @@ describe("API contracts", () => {
         headers: { "x-request-id": "contract-health" }
       });
       expect(response.statusCode).toBe(200);
-      expect(response.json()).toEqual({ ok: true });
+      expect(response.json()).toMatchObject({
+        ok: true,
+        version: packageJson.version,
+        revision: null,
+        buildDate: null
+      });
     } finally {
       await app.close();
     }
@@ -127,6 +135,7 @@ describe("API contracts", () => {
     expect(operationJob.required).toContain("correlationId");
     expect(operationJob.required).toContain("progress");
     expect(dockerHost.required).toContain("agentVersion");
+    expect(document.info.version).toBe(packageJson.version);
     expect(document.components.schemas).toHaveProperty("AlertChannelTestEvent");
   });
 

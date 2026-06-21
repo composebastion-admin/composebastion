@@ -27,9 +27,9 @@ We will review reports as soon as practical.
 
 ## Supported Versions
 
-ComposeBastion is pre-1.0. Security fixes are expected to target the current main
-branch and the latest public release unless a separate written support agreement
-applies.
+ComposeBastion is still pre-1.0. Security fixes are expected to target the
+current `main` branch and the latest public release unless a separate written
+support agreement applies.
 
 ## Deployment
 

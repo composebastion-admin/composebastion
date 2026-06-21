@@ -1,0 +1,101 @@
+# Buildless image install. Download this file plus .env.example, then run:
+#   cp .env.example .env
+#   docker compose -f docker-compose.image.yml up -d
+#
+# For production, pin COMPOSEBASTION_VERSION in .env to a release tag such as
+# 0.9.6. For homelab/NAS auto-updates, leave it as latest and run pull before up.
+services:
+  app:
+    image: ${COMPOSEBASTION_IMAGE:-ghcr.io/composebastion-admin/composebastion-app}:${COMPOSEBASTION_VERSION:-latest}
+    pull_policy: always
+    command: ["node", "apps/api/dist/server.js"]
+    environment:
+      NODE_ENV: production
+      API_HOST: 0.0.0.0
+      API_PORT: 8080
+      APP_SECRET: ${APP_SECRET:?Set APP_SECRET to a unique random value of at least 32 characters}
+      DATABASE_URL: postgres://composebastion:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/composebastion
+      REDIS_URL: redis://redis:6379
+      BACKUP_DIR: /data/backups
+      WEB_DIST_DIR: /app/apps/web/dist
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      SECURE_COOKIES: ${SECURE_COOKIES:-false}
+      TRUST_PROXY: ${TRUST_PROXY:-false}
+      ALLOW_PRIVATE_AGENT_URLS: ${ALLOW_PRIVATE_AGENT_URLS:-false}
+      ALLOW_PRIVATE_WEBHOOK_URLS: ${ALLOW_PRIVATE_WEBHOOK_URLS:-false}
+      BLOCK_PRIVATE_S3_ENDPOINTS: ${BLOCK_PRIVATE_S3_ENDPOINTS:-false}
+      BACKUP_ENCRYPTION_KEYS: ${BACKUP_ENCRYPTION_KEYS:-}
+      BACKUP_ENCRYPTION_ACTIVE_KEY_ID: ${BACKUP_ENCRYPTION_ACTIVE_KEY_ID:-app_secret}
+      BACKUP_HOST_PATH_ALLOWED_ROOTS: ${BACKUP_HOST_PATH_ALLOWED_ROOTS:-}
+      IMAGE_SCANNER_PROVIDER: ${IMAGE_SCANNER_PROVIDER:-auto}
+    ports:
+      - "${COMPOSEBASTION_HTTP_PORT:-8080}:8080"
+    volumes:
+      - ${COMPOSEBASTION_BACKUP_DIR:-/srv/composebastion/backups}:/data/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/api/health/ready').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    restart: unless-stopped
+
+  worker:
+    image: ${COMPOSEBASTION_IMAGE:-ghcr.io/composebastion-admin/composebastion-app}:${COMPOSEBASTION_VERSION:-latest}
+    pull_policy: always
+    command: ["node", "apps/api/dist/worker.js"]
+    environment:
+      NODE_ENV: production
+      APP_SECRET: ${APP_SECRET:?Set APP_SECRET to a unique random value of at least 32 characters}
+      DATABASE_URL: postgres://composebastion:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/composebastion
+      REDIS_URL: redis://redis:6379
+      BACKUP_DIR: /data/backups
+      ALLOW_PRIVATE_WEBHOOK_URLS: ${ALLOW_PRIVATE_WEBHOOK_URLS:-false}
+      BACKUP_ENCRYPTION_KEYS: ${BACKUP_ENCRYPTION_KEYS:-}
+      BACKUP_ENCRYPTION_ACTIVE_KEY_ID: ${BACKUP_ENCRYPTION_ACTIVE_KEY_ID:-app_secret}
+      BACKUP_HOST_PATH_ALLOWED_ROOTS: ${BACKUP_HOST_PATH_ALLOWED_ROOTS:-}
+      IMAGE_SCANNER_PROVIDER: ${IMAGE_SCANNER_PROVIDER:-auto}
+    volumes:
+      - ${COMPOSEBASTION_BACKUP_DIR:-/srv/composebastion/backups}:/data/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: composebastion
+      POSTGRES_USER: composebastion
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U composebastion -d composebastion"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redis-data:

@@ -11,7 +11,7 @@ import { validateAgentFilePath } from "./paths.js";
 
 const require = createRequire(import.meta.url);
 const packageJson = require("../package.json") as { version?: string };
-const AGENT_VERSION = packageJson.version ?? "unknown";
+const AGENT_VERSION = process.env.COMPOSEBASTION_AGENT_VERSION || packageJson.version || "unknown";
 
 const env = z.object({
   AGENT_HOST: z.string().default("0.0.0.0"),
@@ -180,6 +180,8 @@ async function main() {
     return {
       ok: docker.code === 0,
       agentVersion: AGENT_VERSION,
+      revision: process.env.COMPOSEBASTION_AGENT_REVISION || null,
+      buildDate: process.env.COMPOSEBASTION_AGENT_BUILD_DATE || null,
       dockerVersion: docker.stdout.trim(),
       composeVersion: compose.stdout.trim(),
       dockerError: docker.code === 0 ? null : docker.stderr

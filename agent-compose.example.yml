@@ -1,3 +1,5 @@
+# Source-build host-agent example. For buildless installs on NAS/Proxmox/native
+# Docker hosts, use agent-compose.image.example.yml instead.
 services:
   composebastion-agent:
     build:

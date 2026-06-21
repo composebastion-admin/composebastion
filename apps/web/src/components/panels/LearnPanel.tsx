@@ -95,8 +95,8 @@ export function LearnPanel() {
       title: "Connection Reliability",
       points: [
         "SSH is simple and agentless, but every action opens a fresh SSH session and can time out on slow hosts or flaky links.",
-        "Agent mode is the better later-release path for always-connected hosts: one small service on each Docker server can keep heartbeats, stream logs/stats, and run queued work locally.",
-        "A good v2 agent should use a per-host token or mTLS, report online/offline state, retry short outages, and avoid exposing the Docker socket directly over the network.",
+        "Agent mode is the v0.9 path for always-connected hosts: one small service on each Docker server keeps heartbeats, streams logs/stats, and runs queued work locally.",
+        "Keep the app and agent images on the same release when possible so host metrics, logs, file actions, and queued Docker work stay in parity.",
         "Keep SSH as the fallback because it is easy to bootstrap new hosts and repair the agent when needed."
       ]
     }

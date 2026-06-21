@@ -32,6 +32,16 @@ type TargetForm = {
   port: string;
 };
 
+export const rcloneProviderOptions: Array<{ value: TargetForm["provider"]; label: string; experimental: boolean }> = [
+  { value: "smb", label: "SMB / CIFS", experimental: false },
+  { value: "drive", label: "Google Drive (experimental)", experimental: true },
+  { value: "onedrive", label: "OneDrive (experimental)", experimental: true },
+  { value: "iclouddrive", label: "iCloud Drive (experimental)", experimental: true },
+  { value: "webdav", label: "WebDAV (experimental)", experimental: true },
+  { value: "sftp", label: "SFTP (experimental)", experimental: true },
+  { value: "custom", label: "Custom rclone config (experimental)", experimental: true }
+];
+
 const emptyForm = (): TargetForm => ({
   name: "",
   type: "local",
@@ -213,13 +223,9 @@ export function StorageTargetsPanel({
         ) : (
           <>
             <select value={form.provider} onChange={(event) => setForm((current) => ({ ...current, provider: event.target.value as TargetForm["provider"] }))}>
-              <option value="smb">SMB / CIFS</option>
-              <option value="drive">Google Drive (beta)</option>
-              <option value="onedrive">OneDrive (beta)</option>
-              <option value="iclouddrive">iCloud Drive (beta)</option>
-              <option value="webdav">WebDAV (beta)</option>
-              <option value="sftp">SFTP (beta)</option>
-              <option value="custom">Custom rclone config</option>
+              {rcloneProviderOptions.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
             </select>
             <input placeholder="Remote name" value={form.remoteName} onChange={(event) => setForm((current) => ({ ...current, remoteName: event.target.value }))} />
             {form.provider === "smb" ? (

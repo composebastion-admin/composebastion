@@ -1,6 +1,6 @@
 # ComposeBastion How-To Guide
 
-Version covered: `v0.9.4`.
+Version covered: `v0.9.6`.
 
 This guide covers the day-to-day workflows that are easiest to forget when you
 only use them occasionally. For installation-first docs, start with
@@ -204,15 +204,16 @@ Open `Recovery Center` -> `Backup Storage` and create a target:
 - Use `SMB` for Windows shares, Samba shares, and NAS shares. ComposeBastion uses
   rclone's SMB backend from inside the app/worker image; it does not require a
   privileged CIFS mount in the container.
-- Use `rclone beta` for imported rclone configs such as Google Drive, OneDrive,
-  WebDAV, SFTP, or a custom rclone backend.
+- Use `rclone experimental` for imported rclone configs such as Google Drive,
+  OneDrive, WebDAV, SFTP, or a custom rclone backend.
 
 For SMB, enter server, share, optional subpath, domain/workgroup, username,
 password, and port. Run the target test before using it for recovery points.
 
-For cloud beta targets, create and test the rclone remote outside ComposeBastion,
-then paste the rclone config into the target form. Guided OAuth flows are
-planned for a later release; `v0.9` assumes you bring a working rclone config.
+For experimental rclone targets, create and test the rclone remote outside
+ComposeBastion, then paste the rclone config into the target form. Guided OAuth
+flows are not part of the pre-1.0 release line; bring a working rclone config
+and test it before using the target for important recovery points.
 
 ### Use `remote_only`
 

@@ -316,7 +316,7 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
         tags: ["Archiving and Digital Preservation (DP)"],
         stargazersCount: 27000,
         updatedAt: "2026-06-01",
-        latestRelease: { tag: "v1.0.0", publishedAt: "2026-05-01" },
+        latestRelease: { tag: "v0.9.6", publishedAt: "2026-05-01" },
         archived: false,
         importTemplate: {
           id: "awesome-archivebox",
@@ -522,7 +522,7 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
       eligible: false,
       reason: "held by stopped container demoapp-old"
     }] });
-    if (path === "/api/image-tags") return json({ image: url.searchParams.get("image"), tags: ["latest", "main", "beta", "dev", "v1.1.0", "v1.0.0"] });
+    if (path === "/api/image-tags") return json({ image: url.searchParams.get("image"), tags: ["latest", "main", "beta", "dev", "v0.9.7", "v0.9.6"] });
     if (path === "/api/image-updates/preview") return json({ preview: {
       hostId: host.id,
       imageReference: "nginx:latest",

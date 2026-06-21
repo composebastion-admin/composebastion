@@ -1,4 +1,4 @@
--- V1 recovery storage expansion: rclone targets, health checks, cache policy,
+-- v0.9 recovery storage expansion: rclone targets, health checks, cache policy,
 -- and app-level recovery profiles.
 
 ALTER TABLE backup_targets

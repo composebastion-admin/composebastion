@@ -1,12 +1,13 @@
 # Upgrade Guide
 
-ComposeBastion is still pre-1.0. Upgrade carefully and keep rollback paths simple.
+ComposeBastion is still pre-1.0. Upgrade carefully, keep rollback paths simple,
+and export a config backup before every production update.
 
 ## Version Policy
 
-- Stay below `1.0` until API contracts, browser smoke tests, accessibility
-  checks, migration discipline, and production runbooks are fully stable.
+- `/api/v1` is the pre-1.0 public compatibility boundary.
 - Use additive API changes whenever possible.
+- Keep app and agent images on the same release when possible.
 - New database migrations must use the next clean `NNN_snake_case.sql` filename.
   The existing duplicate `018_` migration prefix is a published legacy exception;
   do not create new duplicates.
@@ -16,11 +17,23 @@ ComposeBastion is still pre-1.0. Upgrade carefully and keep rollback paths simpl
 1. Read `CHANGELOG.md`.
 2. Export config from Admin -> Settings.
 3. Confirm recent backups and at least one recent successful drill for critical data.
-4. Pull the new image/source.
-5. Run `docker compose -f docker-compose.yml -f docker-compose.prod.example.yml config`.
-6. Start the stack with `docker compose ... up -d --build`.
+4. Pull the new image or source.
+5. Validate the Compose configuration.
+6. Start the stack.
 7. Watch `app` and `worker` logs until migrations and worker startup complete.
 8. Open Admin -> Operations and confirm readiness checks are healthy.
+
+For image installs:
+
+```bash
+cd ~/composebastion && docker compose -f docker-compose.image.yml pull && docker compose -f docker-compose.image.yml up -d
+```
+
+For source installs:
+
+```bash
+cd ~/composebastion && git pull --rebase origin main && docker compose -f docker-compose.yml -f docker-compose.prod.example.yml up -d --build
+```
 
 ## Rollback
 

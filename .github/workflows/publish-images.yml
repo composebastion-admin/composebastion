@@ -1,0 +1,146 @@
+name: Publish Images
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - "v*"
+    paths:
+      - "Dockerfile"
+      - "Dockerfile.agent"
+      - "docker-compose*.yml"
+      - "agent-compose*.yml"
+      - "package.json"
+      - "package-lock.json"
+      - "apps/**"
+      - "packages/**"
+      - "infra/**"
+      - ".github/workflows/publish-images.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "Dockerfile"
+      - "Dockerfile.agent"
+      - "docker-compose*.yml"
+      - "agent-compose*.yml"
+      - "package.json"
+      - "package-lock.json"
+      - "apps/**"
+      - "packages/**"
+      - "infra/**"
+      - ".github/workflows/publish-images.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-images-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  APP_IMAGE_NAME: ${{ github.repository_owner }}/composebastion-app
+  AGENT_IMAGE_NAME: ${{ github.repository_owner }}/composebastion-agent
+
+jobs:
+  publish:
+    name: Build and publish multi-arch images
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Read package version
+        id: package
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          created="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "created=${created}" >> "${GITHUB_OUTPUT}"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: App image metadata
+        id: app_meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.APP_IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ steps.package.outputs.version }},enable={{is_default_branch}}
+            type=raw,value=v${{ steps.package.outputs.version }},enable={{is_default_branch}}
+            type=ref,event=branch
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-
+          labels: |
+            org.opencontainers.image.title=ComposeBastion
+            org.opencontainers.image.version=${{ steps.package.outputs.version }}
+
+      - name: Agent image metadata
+        id: agent_meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.AGENT_IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ steps.package.outputs.version }},enable={{is_default_branch}}
+            type=raw,value=v${{ steps.package.outputs.version }},enable={{is_default_branch}}
+            type=ref,event=branch
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-
+          labels: |
+            org.opencontainers.image.title=ComposeBastion Agent
+            org.opencontainers.image.version=${{ steps.package.outputs.version }}
+
+      - name: Build and publish app image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          target: runtime
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.app_meta.outputs.tags }}
+          labels: ${{ steps.app_meta.outputs.labels }}
+          build-args: |
+            APP_VERSION=${{ steps.package.outputs.version }}
+            VCS_REF=${{ github.sha }}
+            BUILD_DATE=${{ steps.package.outputs.created }}
+          cache-from: type=gha,scope=app
+          cache-to: type=gha,mode=max,scope=app
+
+      - name: Build and publish agent image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.agent
+          target: runtime
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.agent_meta.outputs.tags }}
+          labels: ${{ steps.agent_meta.outputs.labels }}
+          build-args: |
+            APP_VERSION=${{ steps.package.outputs.version }}
+            VCS_REF=${{ github.sha }}
+            BUILD_DATE=${{ steps.package.outputs.created }}
+          cache-from: type=gha,scope=agent
+          cache-to: type=gha,mode=max,scope=agent

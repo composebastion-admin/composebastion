@@ -1,15 +1,16 @@
 # API Contracts
 
-ComposeBastion's API is pre-1.0. Existing clients can keep using `/api/*`;
-stable JSON route families are also exposed through `/api/v1/*` aliases as the
-compatibility boundary for the public `v0.9` line.
+ComposeBastion is still pre-1.0. Stable route families are exposed through
+`/api/v1/*`. Existing UI and trusted clients can keep using `/api/*`; those
+routes remain compatible aliases for the same backend behavior during the v0.9
+line.
 
 ## Compatibility Boundary
 
-- Before 1.0, prefer additive response changes and keep existing request fields
-  working unless a security fix requires otherwise.
-- 1.0 readiness requires a stable `/api/v1` compatibility boundary, checked
-  OpenAPI artifacts, route contract tests, and explicit deprecation rules.
+- Prefer additive response changes and keep existing request fields working
+  unless a security fix requires otherwise.
+- `/api/v1` is the pre-1.0 public compatibility boundary. New public route
+  families should be documented there before release.
 - Error responses should use the existing envelope shape:
   `{ error: string, code?: string, requestId?: string | null, issues?: unknown[] }`.
 - The request ID is copied from `x-request-id` when provided and is included in
@@ -27,9 +28,9 @@ compatibility boundary for the public `v0.9` line.
 | Auth/session | Stable enough for UI use; token material is never returned. |
 | Hosts/resources | Stable enough for UI use; host secrets are redacted. |
 | Containers/compose/apps | Stable enough for UI use; mutations are typed jobs. |
-| Backups/recovery | Active development; preserve additive behavior where possible. |
-| Metrics/alerts | Active development; stats may degrade gracefully when host data is unavailable. |
-| Admin/config/users/audit | Admin-only surfaces; document carefully before 1.0. |
+| Backups/recovery | Stable for documented local, S3, SMB, recovery-point, drill, and restore workflows in v0.9. |
+| Metrics/alerts | Stable enough for UI use; stats may degrade gracefully when host data is unavailable. |
+| Admin/config/users/audit | Stable for documented admin workflows and config backup/restore in v0.9. |
 
 ## OpenAPI Plan
 

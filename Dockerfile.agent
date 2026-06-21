@@ -1,3 +1,5 @@
+ARG APP_VERSION=0.9.6
+
 FROM node:20-bookworm-slim AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
@@ -13,6 +15,20 @@ RUN npm prune --omit=dev
 
 FROM node:20-bookworm-slim AS runtime
 WORKDIR /app
+ARG APP_VERSION
+ARG VCS_REF=unknown
+ARG BUILD_DATE=unknown
+ENV COMPOSEBASTION_AGENT_VERSION="${APP_VERSION}" \
+    COMPOSEBASTION_AGENT_REVISION="${VCS_REF}" \
+    COMPOSEBASTION_AGENT_BUILD_DATE="${BUILD_DATE}"
+LABEL org.opencontainers.image.title="ComposeBastion Agent" \
+      org.opencontainers.image.description="Optional Docker-only host agent for ComposeBastion" \
+      org.opencontainers.image.url="https://github.com/composebastion-admin/composebastion" \
+      org.opencontainers.image.source="https://github.com/composebastion-admin/composebastion" \
+      org.opencontainers.image.version="${APP_VERSION}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.licenses="LicenseRef-ComposeBastion-SourceAvailable-PrivateUse-1.0"
 RUN set -eux; \
     apt-get update; \
     apt-get upgrade -y; \

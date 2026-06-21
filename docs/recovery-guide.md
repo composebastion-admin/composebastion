@@ -29,7 +29,14 @@ Do this with a disposable app before trusting recovery for production data.
 
 Use `Local` for manager-local artifacts. Use `S3` for object storage. Use `SMB`
 for NAS shares and Windows/Samba shares. Use imported rclone configs for other
-providers.
+providers only when you are comfortable operating the rclone remote yourself.
+
+| Target | Current support | Required host capability | Notes |
+|--------|------------|--------------------------|-------|
+| Local filesystem | Supported | Persistent manager storage | Best for first drills and simple homelabs. |
+| S3-compatible | Supported | Network access to object storage | Use path-style mode when your provider requires it. |
+| SMB / CIFS | Supported | Reachable NAS or Samba/Windows share | Runs through rclone inside the app/worker image; no privileged CIFS mount is required. |
+| Drive, OneDrive, iCloud Drive, WebDAV, SFTP, custom rclone | Experimental | Working rclone config created and tested outside ComposeBastion | Guided OAuth/provider setup is not part of the pre-1.0 line. |
 
 Always run the target test before using a target for important recovery points.
 

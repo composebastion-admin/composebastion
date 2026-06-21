@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "ComposeBastion API",
-    "version": "0.9.5",
+    "version": "0.9.6",
     "description": "ComposeBastion pre-1.0 API contract. Stable JSON endpoints are available under /api/v1 while legacy /api routes remain compatible."
   },
   "servers": [
@@ -62,12 +62,38 @@
       "HealthResponse": {
         "type": "object",
         "required": [
-          "ok"
+          "ok",
+          "version",
+          "revision",
+          "buildDate"
         ],
         "additionalProperties": false,
         "properties": {
           "ok": {
             "type": "boolean"
+          },
+          "version": {
+            "type": "string"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "buildDate": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },

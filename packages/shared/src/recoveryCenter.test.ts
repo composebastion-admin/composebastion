@@ -46,6 +46,22 @@ describe("recovery center schemas", () => {
     })).toThrow();
   });
 
+  it("allows SMB without imported rclone config and requires configs for experimental rclone targets", () => {
+    expect(backupTargetCreateSchema.parse({
+      name: "NAS share",
+      type: "rclone",
+      provider: "smb",
+      server: "nas.local",
+      share: "backups"
+    }).provider).toBe("smb");
+
+    expect(() => backupTargetCreateSchema.parse({
+      name: "Drive",
+      type: "rclone",
+      provider: "drive"
+    })).toThrow("Imported rclone config is required for experimental rclone targets");
+  });
+
   it("validates app identity variants", () => {
     expect(recoveryAppIdentitySchema.parse({
       kind: "stack",
