@@ -33,7 +33,7 @@ function execValidatedSshCommand(
 ) {
   const safeCommand = validatedSshCommand(command);
   // Commands passed here are built by internal command builders that shell-quote untrusted arguments; this wrapper rejects control characters before invoking ssh2.
-  // codeql[js/command-line-injection]
+  // lgtm[js/command-line-injection]
   client.exec(safeCommand, callback);
 }
 

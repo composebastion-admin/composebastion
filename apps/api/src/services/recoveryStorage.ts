@@ -103,7 +103,7 @@ export async function hashFile(filePath: string) {
   const hash = createHash("sha256");
   await new Promise<void>((resolve, reject) => {
     // safePath is resolved and confined to BACKUP_DIR above.
-    // codeql[js/path-injection]
+    // lgtm[js/path-injection]
     createReadStream(safePath)
       .on("data", (chunk) => hash.update(chunk))
       .on("error", reject)
