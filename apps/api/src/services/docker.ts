@@ -24,6 +24,7 @@ import { recordStackVersion } from "./stackVersions.js";
 import { readHostTextFileFromWorker, stackRemoteDirectory, writeHostStackFiles } from "./remoteFiles.js";
 import { checkImageUpdatesForHost, findRegistryAuthForReference } from "./imageUpdates.js";
 import { extractImagesFromCompose } from "./composeImages.js";
+import { safeErrorMessage, safeLogValue } from "./operationLogs.js";
 
 function parseJsonLines(stdout: string) {
   return stdout
@@ -237,7 +238,10 @@ export async function syncDockerInventory(hostId: string) {
   }
 
   await reconcileComposeStacks(hostId).catch((error) => {
-    console.warn(`Compose stack reconcile failed for host ${hostId}:`, error instanceof Error ? error.message : error);
+    console.warn("Compose stack reconcile failed", {
+      hostId: safeLogValue(hostId),
+      error: safeErrorMessage(error)
+    });
   });
 
   return summary;

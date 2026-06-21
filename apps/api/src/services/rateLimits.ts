@@ -1,4 +1,7 @@
 export const sensitiveMutationRateLimit = { max: 60, timeWindow: "1 minute" } as const;
+export const authenticatedReadRateLimit = { max: 240, timeWindow: "1 minute" } as const;
+export const healthCheckRateLimit = { max: 120, timeWindow: "1 minute" } as const;
+export const expensiveReadRateLimit = { max: 60, timeWindow: "1 minute" } as const;
 export const hostFileRateLimit = { max: 90, timeWindow: "1 minute" } as const;
 export const streamRateLimit = { max: 30, timeWindow: "1 minute" } as const;
 export const downloadRateLimit = { max: 20, timeWindow: "1 minute" } as const;

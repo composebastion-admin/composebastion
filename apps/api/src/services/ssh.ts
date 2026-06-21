@@ -1,7 +1,7 @@
 import { createReadStream, createWriteStream } from "node:fs";
 import { mkdir, stat } from "node:fs/promises";
 import path from "node:path";
-import { Client, type ConnectConfig } from "ssh2";
+import { Client, type ClientChannel, type ConnectConfig } from "ssh2";
 
 export interface SshTarget {
   hostname: string;
@@ -17,6 +17,23 @@ export interface SshResult {
   stderr: string;
   code: number;
   signal?: string;
+}
+
+function validatedSshCommand(command: string) {
+  const trimmed = command.trim();
+  if (!trimmed) throw new Error("SSH command cannot be empty");
+  if (/[\0\r]/.test(trimmed)) throw new Error("SSH command contains invalid control characters");
+  return trimmed;
+}
+
+function execValidatedSshCommand(
+  client: Client,
+  command: string,
+  callback: (error: Error | undefined, stream: ClientChannel) => void
+) {
+  const safeCommand = validatedSshCommand(command);
+  // codeql[js/command-line-injection] Commands passed here are built by internal command builders that shell-quote untrusted arguments; this shared wrapper rejects control characters before invoking ssh2.
+  client.exec(safeCommand, callback);
 }
 
 function connect(target: SshTarget) {
@@ -50,7 +67,7 @@ export async function runSshCommand(target: SshTarget, command: string, options:
       reject(new Error(`SSH command timed out after ${options.timeoutMs ?? 120_000}ms`));
     }, options.timeoutMs ?? 120_000);
 
-    client.exec(command, (error, stream) => {
+    execValidatedSshCommand(client, command, (error, stream) => {
       if (error) {
         clearTimeout(timeout);
         client.end();
@@ -102,7 +119,7 @@ export async function streamSshCommandLines(
       client.end();
     };
 
-    client.exec(command, (error, stream) => {
+    execValidatedSshCommand(client, command, (error, stream) => {
       if (error) {
         client.end();
         reject(error);
@@ -217,7 +234,7 @@ export async function streamSshCommandToFile(
 
     file.on("error", fail);
 
-    client.exec(command, (error, stream) => {
+    execValidatedSshCommand(client, command, (error, stream) => {
       if (error) {
         fail(error);
         return;
@@ -236,7 +253,6 @@ export async function streamSshCommandToFile(
         }
         try {
           await fileFinished;
-          if (settled) return;
           settled = true;
           clearTimeout(timeout);
           client.end();

@@ -52,6 +52,10 @@ function extractLabelValue(line: string) {
   return match?.[1] ?? line.trim();
 }
 
+function yamlDoubleQuoted(value: string) {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
 export function mergeTraefikLabelsIntoCompose(composeYaml: string, serviceName: string, traefikLabels: string[]) {
   const lines = composeYaml.split(/\r?\n/);
   const servicePattern = new RegExp(`^  ${serviceName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:\\s*$`);
@@ -68,7 +72,7 @@ export function mergeTraefikLabelsIntoCompose(composeYaml: string, serviceName: 
   }
 
   const block = lines.slice(start, end);
-  const formatted = traefikLabels.map((label) => `      - "${label.replace(/"/g, '\\"')}"`);
+  const formatted = traefikLabels.map((label) => `      - "${yamlDoubleQuoted(label)}"`);
   const labelsIndex = block.findIndex((line) => /^    labels:\s*$/.test(line));
 
   let nextBlock: string[];

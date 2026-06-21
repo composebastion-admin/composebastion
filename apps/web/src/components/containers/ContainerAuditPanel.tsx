@@ -1,8 +1,5 @@
-import { useEffect, useState } from "react";
 import type { DockerHost, ResourceSnapshot } from "@composebastion/shared";
-import { api } from "../../api.js";
 import { formatDate } from "../../lib/format.js";
-import { DataTable, Panel } from "../ui/primitives.js";
 
 export function ContainerAuditPanel({ host, container, onClose }: { host: DockerHost; container: ResourceSnapshot; onClose: () => void }) {
   const data = container.data as any;

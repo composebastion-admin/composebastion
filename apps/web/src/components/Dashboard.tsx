@@ -18,7 +18,7 @@ import { useAsyncAction } from "../hooks/useAsyncAction.js";
 import { useDashboardTab } from "../hooks/useDashboardTab.js";
 import { useHostPreference } from "../hooks/useHostPreference.js";
 import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts.js";
-import { containerStateLabel, parsePercent } from "../lib/dockerMetrics.js";
+import { containerStateLabel } from "../lib/dockerMetrics.js";
 import type { Jobish, JobResult } from "../lib/dashboardTypes.js";
 import { getScopedHostIds, jobLabel, roleLabel, sleep } from "../lib/hostScope.js";
 import { hostlessTabs, type HostScope } from "../lib/navigation.js";
@@ -33,7 +33,7 @@ import { HostScopeControl } from "./dashboard/HostScopeControl.js";
 import { SideNavigation } from "./dashboard/SideNavigation.js";
 import type { SearchResult } from "../lib/globalSearch.js";
 import type { RecoverySection } from "./panels/RecoveryCenterPanel.js";
-import { ButtonRow, EmptyState, SkeletonPanel } from "./ui/primitives.js";
+import { ButtonRow, SkeletonPanel } from "./ui/primitives.js";
 
 const APP_VERSION = import.meta.env.VITE_APP_VERSION ?? "dev";
 const adminTabDefaults = {

@@ -14,7 +14,7 @@ import {
 import { isDemoHostId } from "../services/demo.js";
 import { fetchRegistryTags, RegistryLookupError } from "../services/registryManifest.js";
 import { writeAuditEvent, auditContextFromRequest } from "../services/audit.js";
-import { sensitiveMutationRateLimit } from "../services/rateLimits.js";
+import { authenticatedReadRateLimit, expensiveReadRateLimit, sensitiveMutationRateLimit } from "../services/rateLimits.js";
 import { sendApiError } from "../services/apiError.js";
 
 import { env } from "../config/env.js";
@@ -23,12 +23,12 @@ export async function registerImageIntelligenceRoutes(app: FastifyInstance) {
   const viewer = requireRole(["owner", "admin", "operator", "viewer"]);
   const operator = requireRole(["owner", "admin", "operator"]);
 
-  app.get("/api/image-updates", { preHandler: viewer }, async (request) => {
+  app.get("/api/image-updates", { preHandler: viewer, config: { rateLimit: authenticatedReadRateLimit } }, async (request) => {
     const { hostId } = request.query as { hostId?: string };
     return { updates: await listImageUpdateChecks(hostId) };
   });
 
-  app.get("/api/image-updates/preview", { preHandler: viewer }, async (request) => {
+  app.get("/api/image-updates/preview", { preHandler: viewer, config: { rateLimit: authenticatedReadRateLimit } }, async (request) => {
     const { hostId, image } = z.object({
       hostId: z.string().uuid(),
       image: z.string().trim().min(1).max(512)
@@ -36,11 +36,11 @@ export async function registerImageIntelligenceRoutes(app: FastifyInstance) {
     return { preview: await getImageUpdatePreview(hostId, image) };
   });
 
-  app.get("/api/image-scanner/status", { preHandler: viewer }, async () => ({
+  app.get("/api/image-scanner/status", { preHandler: viewer, config: { rateLimit: expensiveReadRateLimit } }, async () => ({
     status: await getImageScannerStatus((env.IMAGE_SCANNER_PROVIDER || "auto") as "auto" | "mock" | "trivy")
   }));
 
-  app.get("/api/image-tags", { preHandler: viewer }, async (request, reply) => {
+  app.get("/api/image-tags", { preHandler: viewer, config: { rateLimit: expensiveReadRateLimit } }, async (request, reply) => {
     const { image } = z.object({ image: z.string().trim().min(1).max(512) }).parse(request.query);
     try {
       const auth = await findRegistryAuthForReference(image);
@@ -78,7 +78,7 @@ export async function registerImageIntelligenceRoutes(app: FastifyInstance) {
     return { updates };
   });
 
-  app.get("/api/image-scans", { preHandler: viewer }, async (request) => {
+  app.get("/api/image-scans", { preHandler: viewer, config: { rateLimit: authenticatedReadRateLimit } }, async (request) => {
     const { hostId } = request.query as { hostId?: string };
     return { scans: await listLatestScans(hostId) };
   });

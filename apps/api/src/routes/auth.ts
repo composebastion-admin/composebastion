@@ -20,7 +20,7 @@ import { seedDemoWorkspace } from "../services/demo.js";
 import { auditContextFromRequest, writeAuditEvent } from "../services/audit.js";
 import { isLoginLocked, recordLoginAttempt } from "../services/loginAttempts.js";
 import { sendApiError } from "../services/apiError.js";
-import { sensitiveMutationRateLimit } from "../services/rateLimits.js";
+import { authenticatedReadRateLimit, sensitiveMutationRateLimit } from "../services/rateLimits.js";
 
 const sessionParamSchema = z.object({
   id: idSchema
@@ -33,7 +33,7 @@ export async function registerAuthRoutes(app: FastifyInstance) {
   // limit at or below the threshold shadows the lockout with a generic 429.
   const loginRateLimit = { max: 20, timeWindow: "5 minutes" };
 
-  app.get("/api/auth/setup-state", async () => ({
+  app.get("/api/auth/setup-state", { config: { rateLimit: authenticatedReadRateLimit } }, async () => ({
     needsSetup: (await adminCount()) === 0
   }));
 
@@ -94,7 +94,7 @@ export async function registerAuthRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
-  app.get("/api/auth/sessions", async (request, reply) => {
+  app.get("/api/auth/sessions", { config: { rateLimit: authenticatedReadRateLimit } }, async (request, reply) => {
     const user = await readSession(request);
     if (!user) {
       return sendApiError(reply, 401, "AUTH_REQUIRED", "Authentication required");
@@ -126,7 +126,7 @@ export async function registerAuthRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
-  app.get("/api/auth/me", async (request, reply) => {
+  app.get("/api/auth/me", { config: { rateLimit: authenticatedReadRateLimit } }, async (request, reply) => {
     const user = await readSession(request);
     if (!user) {
       return sendApiError(reply, 401, "AUTH_REQUIRED", "Authentication required");

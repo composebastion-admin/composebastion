@@ -1,8 +1,8 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
-import { mkdir, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, rm, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { Readable, Transform, type TransformCallback } from "node:stream";
+import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { backupListQuerySchema, paginatedResponse, type Backup, type BackupHealthSummary } from "@composebastion/shared";
 import { v4 as uuid } from "uuid";
@@ -142,33 +142,6 @@ export async function runBackupDrillWithTeardown<T>(
   }
 
   return { result: result as T, cleanupError };
-}
-
-class StoredChecksumVerifyTransform extends Transform {
-  private readonly hash = createHash("sha256");
-
-  constructor(private readonly expectedChecksum: string | null | undefined, private readonly label: string) {
-    super();
-  }
-
-  override _transform(chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback) {
-    this.hash.update(chunk);
-    this.push(chunk);
-    callback();
-  }
-
-  override _flush(callback: TransformCallback) {
-    if (!this.expectedChecksum) {
-      callback();
-      return;
-    }
-    const actual = `sha256:${this.hash.digest("hex")}`;
-    if (actual !== this.expectedChecksum) {
-      callback(new Error(`Backup ${this.label} checksum mismatch`));
-      return;
-    }
-    callback();
-  }
 }
 
 function pipeReadable(input: NodeJS.ReadableStream, transforms: Array<NodeJS.ReadWriteStream | null>) {

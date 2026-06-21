@@ -95,9 +95,14 @@ export async function deleteRecoveryPointLocalFiles(recoveryPointId: string) {
 }
 
 export async function hashFile(filePath: string) {
+  const root = path.resolve(env.BACKUP_DIR);
+  const safePath = path.resolve(filePath);
+  if (safePath !== root && !safePath.startsWith(`${root}${path.sep}`)) {
+    throw new Error("Refusing to hash outside backup directory");
+  }
   const hash = createHash("sha256");
   await new Promise<void>((resolve, reject) => {
-    createReadStream(filePath)
+    createReadStream(safePath)
       .on("data", (chunk) => hash.update(chunk))
       .on("error", reject)
       .on("end", () => resolve());

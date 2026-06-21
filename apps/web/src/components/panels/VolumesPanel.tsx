@@ -1,14 +1,12 @@
 import { useState } from "react";
-import { Database, Plus, ShieldCheck, Trash2 } from "lucide-react";
+import { Plus, ShieldCheck, Trash2 } from "lucide-react";
 import type { DockerHost, ResourceSnapshot } from "@composebastion/shared";
 import { postJson } from "../../api.js";
 import { useConfirm } from "../ConfirmProvider.js";
 import { useAsyncAction } from "../../hooks/useAsyncAction.js";
-import { formatBytes } from "../../lib/format.js";
 import type { Jobish, JobResult } from "../../lib/dashboardTypes.js";
 import { hostName } from "../../lib/hostScope.js";
-import { HostSelect } from "../dashboard/HostSelect.js";
-import { ButtonRow, DataTable, EmptyState, InlineForm, Panel } from "../ui/primitives.js";
+import { ButtonRow, DataTable, InlineForm, Panel } from "../ui/primitives.js";
 
 export function VolumesPanel({
   host,

@@ -2,17 +2,17 @@ import type { FastifyInstance } from "fastify";
 import { requireRole } from "../services/auth.js";
 import { deleteCustomCatalogTemplate, deployCatalogTemplate, listCatalogTemplates, listExternalCatalogCandidates, saveCustomCatalogTemplate } from "../services/catalog.js";
 import { writeAuditEvent, auditContextFromRequest } from "../services/audit.js";
-import { sensitiveMutationRateLimit } from "../services/rateLimits.js";
+import { authenticatedReadRateLimit, sensitiveMutationRateLimit } from "../services/rateLimits.js";
 
 export async function registerCatalogRoutes(app: FastifyInstance) {
   const viewer = requireRole(["owner", "admin", "operator", "viewer"]);
   const operator = requireRole(["owner", "admin", "operator"]);
 
-  app.get("/api/catalog/templates", { preHandler: viewer }, async () => ({
+  app.get("/api/catalog/templates", { preHandler: viewer, config: { rateLimit: authenticatedReadRateLimit } }, async () => ({
     templates: await listCatalogTemplates()
   }));
 
-  app.get("/api/catalog/external", { preHandler: viewer }, async (request) => (
+  app.get("/api/catalog/external", { preHandler: viewer, config: { rateLimit: authenticatedReadRateLimit } }, async (request) => (
     await listExternalCatalogCandidates(request.query)
   ));
 

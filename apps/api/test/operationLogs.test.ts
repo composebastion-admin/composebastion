@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { apiLogFields, errorCode, workerJobLogFields } from "../src/services/operationLogs.js";
+import { apiLogFields, errorCode, safeErrorMessage, safeLogValue, workerJobLogFields } from "../src/services/operationLogs.js";
 
 describe("operation log helpers", () => {
   it("maps status and explicit errors to stable codes", () => {
@@ -45,5 +45,10 @@ describe("operation log helpers", () => {
       status: "failed",
       errorCode: "CONFLICT"
     });
+  });
+
+  it("sanitizes log values onto one line", () => {
+    expect(safeLogValue("host-1\nforged\tline")).toBe("host-1 forged line");
+    expect(safeErrorMessage(new Error("boom\r\nnext"))).toBe("boom next");
   });
 });

@@ -2,12 +2,12 @@ import type { FastifyInstance } from "fastify";
 import { requireRole } from "../services/auth.js";
 import { createBackupSchedule, deleteBackupSchedule, listBackupSchedules } from "../services/backupSchedules.js";
 import { auditContextFromRequest, writeAuditEvent } from "../services/audit.js";
-import { sensitiveMutationRateLimit } from "../services/rateLimits.js";
+import { authenticatedReadRateLimit, sensitiveMutationRateLimit } from "../services/rateLimits.js";
 
 export async function registerBackupScheduleRoutes(app: FastifyInstance) {
   const operator = requireRole(["owner", "admin", "operator"]);
 
-  app.get("/api/backup-schedules", { preHandler: operator }, async () => ({
+  app.get("/api/backup-schedules", { preHandler: operator, config: { rateLimit: authenticatedReadRateLimit } }, async () => ({
     schedules: await listBackupSchedules()
   }));
 

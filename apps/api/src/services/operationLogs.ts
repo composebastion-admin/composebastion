@@ -13,6 +13,16 @@ export function errorCode(error: unknown) {
   return "OPERATION_ERROR";
 }
 
+export function safeLogValue(value: unknown, maxLength = 500) {
+  return String(value ?? "")
+    .replace(/[\r\n\t]+/g, " ")
+    .slice(0, maxLength);
+}
+
+export function safeErrorMessage(error: unknown) {
+  return safeLogValue(error instanceof Error ? error.message : error);
+}
+
 export function apiLogFields(request: FastifyRequest, reply: FastifyReply, startedAtMs: number) {
   const params = request.params && typeof request.params === "object" ? request.params as Record<string, unknown> : {};
   const hostId = typeof params.hostId === "string" ? params.hostId : typeof params.id === "string" && request.routeOptions.url?.startsWith("/api/hosts/") ? params.id : undefined;

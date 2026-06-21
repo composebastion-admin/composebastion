@@ -303,7 +303,7 @@ export function buildContainerManifest(inspect: Record<string, unknown>): Contai
     id: String(inspect.Id ?? ""),
     name: String(inspect.Name ?? "").replace(/^\//, ""),
     image: String(config?.Image ?? ""),
-    state: String(state?.Status ?? state?.Status ?? "unknown"),
+    state: String(state?.Status ?? (state?.Running ? "running" : "unknown")),
     running: Boolean(state?.Running),
     ports: portsFromInspect(inspect),
     networks: networksFromInspect(inspect),

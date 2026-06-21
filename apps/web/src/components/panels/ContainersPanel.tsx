@@ -16,7 +16,7 @@ import {
   Copy
 } from "lucide-react";
 import type { DockerHost, ResourceSnapshot } from "@composebastion/shared";
-import { containerData, publishedWebLinks } from "@composebastion/shared";
+import { publishedWebLinks } from "@composebastion/shared";
 import { api, postJson } from "../../api.js";
 import { useConfirm } from "../ConfirmProvider.js";
 import { useToast } from "../ToastProvider.js";
@@ -33,9 +33,8 @@ import {
   type ContainerSortKey,
   type ContainerStateFilter
 } from "../../lib/containerList.js";
-import { hostName } from "../../lib/hostScope.js";
 import type { ContainerMetricHistory, Jobish, MultiJobResult } from "../../lib/dashboardTypes.js";
-import { ButtonRow, EmptyState, Panel, VirtualDataTable } from "../ui/primitives.js";
+import { ButtonRow, Panel, VirtualDataTable } from "../ui/primitives.js";
 import { ContainerStatePill } from "../dashboard/ContainerStatePill.js";
 import { ContainerAuditPanel } from "../containers/ContainerAuditPanel.js";
 import { ContainerDetailDrawer } from "../containers/ContainerConsole.js";

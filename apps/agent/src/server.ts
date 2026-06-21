@@ -1,8 +1,9 @@
 import { timingSafeEqual } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { createRequire } from "node:module";
-import { mkdir, readFile, stat, statfs, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, stat, statfs, writeFile } from "node:fs/promises";
 import path from "node:path";
+import rateLimit from "@fastify/rate-limit";
 import Fastify from "fastify";
 import { z } from "zod";
 import { isPermittedDockerCommand, parsePermittedDockerCommand, type ParsedDockerCommand } from "./security.js";
@@ -31,6 +32,10 @@ const containerLogParamsSchema = z.object({
 const containerLogQuerySchema = z.object({
   tail: z.coerce.number().int().min(1).max(5000).default(500)
 });
+
+const agentReadRateLimit = { max: 120, timeWindow: "1 minute" } as const;
+const agentRunRateLimit = { max: 30, timeWindow: "1 minute" } as const;
+const agentFileRateLimit = { max: 60, timeWindow: "1 minute" } as const;
 
 function safeEqual(left: string, right: string) {
   const leftBuffer = Buffer.from(left);
@@ -157,6 +162,10 @@ async function collectDiskStats(mountsText: string) {
 
 async function main() {
   const app = Fastify({ logger: true, bodyLimit: 16 * 1024 });
+  await app.register(rateLimit, {
+    max: 300,
+    timeWindow: "1 minute"
+  });
 
   app.addHook("preHandler", async (request, reply) => {
     const token = bearerToken(request.headers.authorization);
@@ -177,7 +186,7 @@ async function main() {
     };
   });
 
-  app.get("/api/host-stats", async () => {
+  app.get("/api/host-stats", { config: { rateLimit: agentReadRateLimit } }, async () => {
     const [statText, meminfo, loadavg, uptime, netdev, mounts] = await Promise.all([
       readFile("/proc/stat", "utf8"),
       readFile("/proc/meminfo", "utf8"),
@@ -197,14 +206,14 @@ async function main() {
     };
   });
 
-  app.post("/api/run", async (request, reply) => {
+  app.post("/api/run", { config: { rateLimit: agentRunRateLimit } }, async (request, reply) => {
     const body = runSchema.parse(request.body);
     const result = await run(body.command);
     if (result.code !== 0) reply.code(500);
     return result;
   });
 
-  app.get("/api/containers/:id/logs-stream", async (request, reply) => {
+  app.get("/api/containers/:id/logs-stream", { config: { rateLimit: agentRunRateLimit } }, async (request, reply) => {
     const { id } = containerLogParamsSchema.parse(request.params);
     const { tail } = containerLogQuerySchema.parse(request.query);
     reply.hijack();
@@ -240,7 +249,7 @@ async function main() {
     });
   });
 
-  app.post("/api/files/write", { bodyLimit: 1024 * 1024 }, async (request) => {
+  app.post("/api/files/write", { bodyLimit: 1024 * 1024, config: { rateLimit: agentFileRateLimit } }, async (request) => {
     const body = z.object({
       path: z.string().min(1).max(1024),
       content: z.string().max(512 * 1024)
@@ -251,7 +260,7 @@ async function main() {
     return { ok: true, path: target };
   });
 
-  app.get("/api/files/stat", async (request) => {
+  app.get("/api/files/stat", { config: { rateLimit: agentFileRateLimit } }, async (request) => {
     const query = z.object({ path: z.string().min(1).max(1024) }).parse(request.query);
     const target = validateAgentFilePath(query.path);
     try {
@@ -268,15 +277,20 @@ async function main() {
     }
   });
 
-  app.get("/api/files/read", async (request, reply) => {
+  app.get("/api/files/read", { config: { rateLimit: agentFileRateLimit } }, async (request, reply) => {
     const query = z.object({ path: z.string().min(1).max(1024) }).parse(request.query);
     const target = validateAgentFilePath(query.path);
-    const info = await stat(target);
-    if (info.size > 512 * 1024) {
-      reply.code(413);
-      return { error: "File is too large to read" };
+    const file = await open(target, "r");
+    try {
+      const info = await file.stat();
+      if (info.size > 512 * 1024) {
+        reply.code(413);
+        return { error: "File is too large to read" };
+      }
+      return { path: target, content: await file.readFile("utf8") };
+    } finally {
+      await file.close();
     }
-    return { path: target, content: await readFile(target, "utf8") };
   });
 
   await app.listen({ host: env.AGENT_HOST, port: env.AGENT_PORT });

@@ -25,4 +25,13 @@ describe("buildProxySnippets", () => {
     expect(merged).toContain('traefik.enable=true');
     expect(merged).toContain("Host(`demo.local`)");
   });
+
+  it("escapes labels before writing YAML double-quoted strings", () => {
+    const yaml = `services:
+  app:
+    image: nginx:latest
+`;
+    const merged = mergeTraefikLabelsIntoCompose(yaml, "app", ["traefik.http.middlewares.demo.headers.customrequestheaders.X-Test=quoted \"and\" slash \\"]);
+    expect(merged).toContain('quoted \\"and\\" slash \\\\"');
+  });
 });

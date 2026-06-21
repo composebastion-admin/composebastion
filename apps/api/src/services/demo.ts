@@ -159,27 +159,6 @@ function volumeData(name: string, sizeBytes = 134_217_728) {
   };
 }
 
-const demoComposeYaml = `services:
-  web:
-    image: nginx:alpine
-    ports:
-      - "\${WEB_PORT:-8088}:80"
-    volumes:
-      - demo_web_content:/usr/share/nginx/html
-  api:
-    image: ghcr.io/composebastion-admin/showcase-api:0.9
-    environment:
-      NODE_ENV: production
-    ports:
-      - "\${API_PORT:-9090}:8080"
-volumes:
-  demo_web_content:
-`;
-
-const demoEnv = `WEB_PORT=8088
-API_PORT=9090
-`;
-
 function demoHex(seed: string, length: number) {
   const chunk = stableHash(seed).toString(16).padStart(8, "0");
   return chunk.repeat(Math.ceil(length / chunk.length)).slice(0, length);
@@ -233,7 +212,7 @@ export async function seedDemoWorkspace(createdBy?: string | null) {
         lastError: null,
         dockerVersion: "28.2.1-demo",
         composeVersion: "2.39.2-demo",
-        agentVersion: "0.9.0-demo",
+        agentVersion: "1.0.0",
         tags: ["demo", "sandbox", "edge", "agent"]
       },
       {

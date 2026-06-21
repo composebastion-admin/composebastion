@@ -2,7 +2,7 @@ import type { MigrationStrategy, RecoveryPointDetail } from "@composebastion/sha
 import type { RecoveryNetworkMode } from "@composebastion/shared";
 import { query } from "../db/pool.js";
 import { writeAuditEvent } from "./audit.js";
-import { buildComposeCommand, shQuote, withDockerEnv } from "./commands.js";
+import { shQuote, withDockerEnv } from "./commands.js";
 import { isDemoHost } from "./demo.js";
 import { getHostForWorker } from "./hosts.js";
 import { mapMigrationRun } from "./mappers.js";

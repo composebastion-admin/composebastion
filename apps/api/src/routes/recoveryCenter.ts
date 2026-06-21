@@ -39,13 +39,13 @@ import {
 import { analyzeRecovery } from "../services/recoveryAnalysis.js";
 import { deleteRecoveryProfile, getRecoveryProfile, getRecoveryProfileForApp, upsertRecoveryProfile } from "../services/recoveryProfiles.js";
 import { analyzeRecoveryReadiness, listRecoveryReadiness } from "../services/recoveryReadiness.js";
-import { sensitiveMutationRateLimit } from "../services/rateLimits.js";
+import { authenticatedReadRateLimit, expensiveReadRateLimit, sensitiveMutationRateLimit } from "../services/rateLimits.js";
 
 export async function registerRecoveryCenterRoutes(app: FastifyInstance) {
   const viewer = requireRole(["owner", "admin", "operator", "viewer"]);
   const operator = requireRole(["owner", "admin", "operator"]);
 
-  app.get("/api/recovery/targets", { preHandler: viewer }, async () => ({
+  app.get("/api/recovery/targets", { preHandler: viewer, config: { rateLimit: authenticatedReadRateLimit } }, async () => ({
     targets: await listBackupTargets()
   }));
 
@@ -111,22 +111,22 @@ export async function registerRecoveryCenterRoutes(app: FastifyInstance) {
     return result;
   });
 
-  app.post("/api/recovery/analyze", { preHandler: viewer }, async (request) => {
+  app.post("/api/recovery/analyze", { preHandler: viewer, config: { rateLimit: expensiveReadRateLimit } }, async (request) => {
     const body = recoveryAnalysisRequestSchema.parse(request.body);
     return { analysis: await analyzeRecovery(body) };
   });
 
-  app.get("/api/recovery/readiness", { preHandler: viewer }, async (request) => {
+  app.get("/api/recovery/readiness", { preHandler: viewer, config: { rateLimit: authenticatedReadRateLimit } }, async (request) => {
     const query = recoveryReadinessListQuerySchema.parse(request.query ?? {});
     return { readiness: await listRecoveryReadiness(query.hostId) };
   });
 
-  app.post("/api/recovery/readiness/analyze", { preHandler: viewer }, async (request) => {
+  app.post("/api/recovery/readiness/analyze", { preHandler: viewer, config: { rateLimit: expensiveReadRateLimit } }, async (request) => {
     const body = recoveryReadinessAnalyzeRequestSchema.parse(request.body);
     return { readiness: await analyzeRecoveryReadiness(body) };
   });
 
-  app.post("/api/recovery/profiles/lookup", { preHandler: viewer }, async (request) => {
+  app.post("/api/recovery/profiles/lookup", { preHandler: viewer, config: { rateLimit: authenticatedReadRateLimit } }, async (request) => {
     const body = recoveryProfileInputSchema.pick({ hostId: true, appIdentity: true }).parse(request.body);
     return { profile: await getRecoveryProfileForApp(body.hostId, body.appIdentity) };
   });
@@ -143,7 +143,7 @@ export async function registerRecoveryCenterRoutes(app: FastifyInstance) {
     return { profile };
   });
 
-  app.get("/api/recovery/profiles/:id", { preHandler: viewer }, async (request, reply) => {
+  app.get("/api/recovery/profiles/:id", { preHandler: viewer, config: { rateLimit: authenticatedReadRateLimit } }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const profile = await getRecoveryProfile(id);
     if (!profile) {
@@ -170,7 +170,7 @@ export async function registerRecoveryCenterRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
-  app.get("/api/recovery/points", { preHandler: viewer }, async (request) => ({
+  app.get("/api/recovery/points", { preHandler: viewer, config: { rateLimit: authenticatedReadRateLimit } }, async (request) => ({
     points: await listRecoveryPoints(recoveryPointListQuerySchema.parse(request.query ?? {}))
   }));
 
@@ -189,7 +189,7 @@ export async function registerRecoveryCenterRoutes(app: FastifyInstance) {
     return { point, job };
   });
 
-  app.get("/api/recovery/points/:id", { preHandler: viewer }, async (request, reply) => {
+  app.get("/api/recovery/points/:id", { preHandler: viewer, config: { rateLimit: authenticatedReadRateLimit } }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const point = await getRecoveryPoint(id);
     if (!point) {
@@ -257,7 +257,7 @@ export async function registerRecoveryCenterRoutes(app: FastifyInstance) {
     return result;
   });
 
-  app.get("/api/recovery/schedules", { preHandler: operator }, async () => ({
+  app.get("/api/recovery/schedules", { preHandler: operator, config: { rateLimit: authenticatedReadRateLimit } }, async () => ({
     schedules: await listRecoverySchedules()
   }));
 
@@ -313,11 +313,11 @@ export async function registerRecoveryCenterRoutes(app: FastifyInstance) {
     return result;
   });
 
-  app.get("/api/recovery/migrations", { preHandler: viewer }, async () => ({
+  app.get("/api/recovery/migrations", { preHandler: viewer, config: { rateLimit: authenticatedReadRateLimit } }, async () => ({
     runs: await listMigrationRuns()
   }));
 
-  app.get("/api/recovery/migrations/:id", { preHandler: viewer }, async (request, reply) => {
+  app.get("/api/recovery/migrations/:id", { preHandler: viewer, config: { rateLimit: authenticatedReadRateLimit } }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const run = await getMigrationRun(id);
     if (!run) {
@@ -327,7 +327,7 @@ export async function registerRecoveryCenterRoutes(app: FastifyInstance) {
     return { run };
   });
 
-  app.get("/api/recovery/targets/:id", { preHandler: viewer }, async (request, reply) => {
+  app.get("/api/recovery/targets/:id", { preHandler: viewer, config: { rateLimit: authenticatedReadRateLimit } }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const target = await getBackupTarget(id);
     if (!target) {

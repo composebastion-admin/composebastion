@@ -254,7 +254,6 @@ export function buildPortRemap(conflicts: PortConflict[], usedPorts: Set<string>
   const remap: Record<string, string> = {};
   let candidate = startAt;
   for (const conflict of conflicts) {
-    const oldKey = portKey(conflict.hostPort, conflict.protocol);
     while (usedPorts.has(`${candidate}/${conflict.protocol}`) || Object.values(remap).includes(String(candidate))) {
       candidate += 1;
     }

@@ -41,6 +41,7 @@ import { createRedis } from "./services/redis.js";
 import { getWorkerStatus } from "./services/jobs.js";
 import { sendApiError } from "./services/apiError.js";
 import { apiLogFields } from "./services/operationLogs.js";
+import { healthCheckRateLimit } from "./services/rateLimits.js";
 
 export async function buildServer() {
   const app = Fastify({ logger: true, bodyLimit: 10 * 1024 * 1024, trustProxy: env.TRUST_PROXY, requestIdHeader: "x-request-id", genReqId: (req) => {
@@ -108,11 +109,11 @@ export async function buildServer() {
   });
 
   app.get("/api/health", async () => ({ ok: true }));
-  app.get("/api/health/db", async () => {
+  app.get("/api/health/db", { config: { rateLimit: healthCheckRateLimit } }, async () => {
     await pool.query("SELECT 1");
     return { ok: true };
   });
-  app.get("/api/health/ready", async (_request, reply) => {
+  app.get("/api/health/ready", { config: { rateLimit: healthCheckRateLimit } }, async (_request, reply) => {
     const checks: Record<string, { ok: boolean; error?: string }> = {};
     try {
       await pool.query("SELECT 1");
@@ -153,7 +154,7 @@ export async function buildServer() {
     if (!ok) reply.code(503);
     return { ok, checks };
   });
-  app.get("/api/health/redis", async (_request, reply) => {
+  app.get("/api/health/redis", { config: { rateLimit: healthCheckRateLimit } }, async (_request, reply) => {
     const redis = createRedis();
     if (!redis) {
       reply.code(503).send({ ok: false, configured: false });

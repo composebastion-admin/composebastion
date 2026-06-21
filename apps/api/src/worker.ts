@@ -13,7 +13,7 @@ import { createRedis } from "./services/redis.js";
 import { runDueBackupSchedules } from "./services/backupSchedules.js";
 import { markRecoveryDrillResult, runDueRecoverySchedules, runMigrationExecute, runRecoveryCreate, runRecoveryRestore, runRecoveryVerify } from "./services/recoveryCenter.js";
 import { runStackUpdatePolicies } from "./services/stackUpdatePolicies.js";
-import { workerJobLogFields } from "./services/operationLogs.js";
+import { safeErrorMessage, workerJobLogFields } from "./services/operationLogs.js";
 
 let processing = false;
 
@@ -118,13 +118,13 @@ async function processAvailableJobs() {
             error instanceof Error ? error.message : String(error)
           ).catch(() => undefined);
         }
-        const failureMessage = error instanceof Error ? error.message : String(error);
+        const failureMessage = safeErrorMessage(error);
         await updateJobProgress(
           job.id,
           buildJobProgress(actionForFailure?.type ?? job.type, "failed", activeStepForFailure, failureMessage)
         ).catch(() => undefined);
         await failJob(job.id, error);
-        console.error("worker.job", workerJobLogFields(job, "failed", jobStartedAtMs, error), error instanceof Error ? error.message : String(error));
+        console.error("worker.job", workerJobLogFields(job, "failed", jobStartedAtMs, error), failureMessage);
       }
     }
   } finally {

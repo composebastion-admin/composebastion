@@ -3,12 +3,12 @@ import { createRegistry, deleteRegistry, listRegistries } from "../services/regi
 import { enqueueJob } from "../services/jobs.js";
 import { requireRole } from "../services/auth.js";
 import { writeAuditEvent } from "../services/audit.js";
-import { sensitiveMutationRateLimit } from "../services/rateLimits.js";
+import { authenticatedReadRateLimit, sensitiveMutationRateLimit } from "../services/rateLimits.js";
 
 export async function registerRegistryRoutes(app: FastifyInstance) {
   const operator = requireRole(["owner", "admin", "operator"]);
 
-  app.get("/api/registries", { preHandler: operator }, async () => ({ registries: await listRegistries() }));
+  app.get("/api/registries", { preHandler: operator, config: { rateLimit: authenticatedReadRateLimit } }, async () => ({ registries: await listRegistries() }));
   app.post("/api/registries", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
     const registry = await createRegistry(request.body);
     await writeAuditEvent({ userId: request.user?.id, action: "registry.create", targetKind: "registry", targetId: registry.id });

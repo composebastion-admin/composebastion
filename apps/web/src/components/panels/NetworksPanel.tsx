@@ -3,8 +3,7 @@ import { Plus, Trash2 } from "lucide-react";
 import type { DockerHost, ResourceSnapshot } from "@composebastion/shared";
 import { networkDriverExplanations, type NetworkDriver } from "@composebastion/shared";
 import { useConfirm } from "../ConfirmProvider.js";
-import { ButtonRow, DataTable, EmptyState, InlineForm, Panel } from "../ui/primitives.js";
-import { HostSelect } from "../dashboard/HostSelect.js";
+import { ButtonRow, DataTable, Panel } from "../ui/primitives.js";
 import { hostName } from "../../lib/hostScope.js";
 
 export function NetworksPanel({ host, hosts, networks, onAction }: { host: DockerHost; hosts: DockerHost[]; networks: ResourceSnapshot[]; onAction: (type: string, payload?: Record<string, unknown>, hostId?: string) => Promise<void> }) {

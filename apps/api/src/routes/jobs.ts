@@ -4,22 +4,22 @@ import { cancelQueuedJob, getJob, getWorkerStatus, listJobs, retryJob } from "..
 import { requireRole } from "../services/auth.js";
 import { sendApiError } from "../services/apiError.js";
 import { auditContextFromRequest, writeAuditEvent } from "../services/audit.js";
-import { sensitiveMutationRateLimit } from "../services/rateLimits.js";
+import { authenticatedReadRateLimit, sensitiveMutationRateLimit } from "../services/rateLimits.js";
 
 export async function registerJobRoutes(app: FastifyInstance) {
   const viewer = requireRole(["owner", "admin", "operator", "viewer"]);
   const operator = requireRole(["owner", "admin", "operator"]);
 
-  app.get("/api/jobs", { preHandler: viewer }, async (request) => {
+  app.get("/api/jobs", { preHandler: viewer, config: { rateLimit: authenticatedReadRateLimit } }, async (request) => {
     const page = await listJobs(request.query);
     return { jobs: page.items, ...page };
   });
 
-  app.get("/api/jobs/status", { preHandler: viewer }, async () => ({
+  app.get("/api/jobs/status", { preHandler: viewer, config: { rateLimit: authenticatedReadRateLimit } }, async () => ({
     worker: await getWorkerStatus()
   }));
 
-  app.get("/api/jobs/:id", { preHandler: viewer }, async (request, reply) => {
+  app.get("/api/jobs/:id", { preHandler: viewer, config: { rateLimit: authenticatedReadRateLimit } }, async (request, reply) => {
     const id = idSchema.parse((request.params as { id: string }).id);
     const job = await getJob(id);
     if (!job) {

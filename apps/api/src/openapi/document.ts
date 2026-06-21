@@ -13,7 +13,7 @@ export type OpenApiPath = {
 
 const schemaRef = (name: string) => ({ $ref: `#/components/schemas/${name}` });
 const arrayOf = (schema: Record<string, unknown>) => ({ type: "array", items: schema });
-const OPENAPI_VERSION = "0.9.4";
+const OPENAPI_VERSION = "0.9.5";
 
 export const openApiRoutes: OpenApiPath[] = [
   { method: "get", path: "/api/v1/health", summary: "Basic API health check", tags: ["Health"], auth: "public", responseSchema: schemaRef("HealthResponse") },
@@ -653,7 +653,7 @@ export function buildOpenApiDocument() {
     info: {
       title: "ComposeBastion API",
       version: OPENAPI_VERSION,
-      description: "Pre-1.0 API contract. Stable JSON endpoints are available under /api/v1 while legacy /api routes remain compatible."
+      description: "ComposeBastion pre-1.0 API contract. Stable JSON endpoints are available under /api/v1 while legacy /api routes remain compatible."
     },
     servers: [{ url: "/" }],
     components: {

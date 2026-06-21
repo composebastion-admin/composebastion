@@ -39,6 +39,7 @@ import { analyzeMigrationPlan, buildMigrationPlan } from "./migrationPlanning.js
 import { sanitizeArtifactName } from "./recoveryManifest.js";
 import { deleteRecoveryPointRemoteArtifacts } from "./recoveryArtifactDelete.js";
 import { artifactRelativePath, deleteRecoveryPointLocalFiles } from "./recoveryStorage.js";
+import { safeErrorMessage, safeLogValue } from "./operationLogs.js";
 
 export { resolveAppContext, buildMigrationPlan };
 export { runRecoveryCreate, runRecoveryPointCapture, runRecoveryVerify };
@@ -437,7 +438,10 @@ export async function runDueRecoverySchedules() {
         schedule.created_by
       );
     } catch (error) {
-      console.error("Recovery schedule failed", row.id, error);
+      console.error("Recovery schedule failed", {
+        scheduleId: safeLogValue(row.id),
+        error: safeErrorMessage(error)
+      });
     }
   }
 }

@@ -3,13 +3,13 @@ import { githubRepositoryBranchesRequestSchema, githubRepositoryDeploySchema } f
 import { createGithubRepository, deleteGithubRepository, deployGithubRepository, listGithubBranchesForRepository, listGithubBranchesForUrl, listGithubRepositories, previewGithubRepositoryCompose, updateGithubRepository } from "../services/github.js";
 import { requireRole } from "../services/auth.js";
 import { writeAuditEvent } from "../services/audit.js";
-import { sensitiveMutationRateLimit } from "../services/rateLimits.js";
+import { authenticatedReadRateLimit, sensitiveMutationRateLimit } from "../services/rateLimits.js";
 
 export async function registerGithubRoutes(app: FastifyInstance) {
   const viewer = requireRole(["owner", "admin", "operator", "viewer"]);
   const operator = requireRole(["owner", "admin", "operator"]);
 
-  app.get("/api/github/repos", { preHandler: viewer }, async () => ({
+  app.get("/api/github/repos", { preHandler: viewer, config: { rateLimit: authenticatedReadRateLimit } }, async () => ({
     repositories: await listGithubRepositories()
   }));
 

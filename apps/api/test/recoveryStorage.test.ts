@@ -1,7 +1,7 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { env } from "../src/config/env.js";
-import { recoveryPointDir, recoveryPointsRootDir, safeRecoveryPointFile } from "../src/services/recoveryStorage.js";
+import { hashFile, recoveryPointDir, recoveryPointsRootDir, safeRecoveryPointFile } from "../src/services/recoveryStorage.js";
 
 describe("recovery storage paths", () => {
   it("keeps recovery files under BACKUP_DIR/recovery-points/<id>", () => {
@@ -14,5 +14,9 @@ describe("recovery storage paths", () => {
 
   it("rejects path traversal", () => {
     expect(() => safeRecoveryPointFile("point-id", "../outside.tar.gz")).toThrow("escapes recovery point directory");
+  });
+
+  it("refuses to hash files outside BACKUP_DIR", async () => {
+    await expect(hashFile(path.resolve("/tmp/outside-composebastion-backups.txt"))).rejects.toThrow("outside backup directory");
   });
 });
