@@ -35,7 +35,8 @@ Recommended SSH host settings:
 The ComposeBastion agent is a small Docker-only command proxy for hosts where you
 prefer not to give the manager direct SSH access. In the v0.9 release line, the
 app and agent images are published together; keep them on the same release when
-possible.
+possible. For the latest verified release, pin both manager and agent to
+`0.9.7`.
 
 Use the published image on the target Docker host:
 
@@ -48,6 +49,7 @@ openssl rand -base64 48
 Set `AGENT_TOKEN` in the environment or in `agent-compose.yml`, then start:
 
 ```bash
+export COMPOSEBASTION_AGENT_VERSION=0.9.7
 docker compose -f agent-compose.yml pull
 docker compose -f agent-compose.yml up -d
 ```
@@ -56,6 +58,7 @@ Update the agent image with:
 
 ```bash
 cd ~/composebastion-agent
+export COMPOSEBASTION_AGENT_VERSION=0.9.7
 docker compose -f agent-compose.image.example.yml pull
 docker compose -f agent-compose.image.example.yml up -d
 ```

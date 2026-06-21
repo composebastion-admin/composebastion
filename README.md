@@ -28,6 +28,18 @@ full source checkout. The published image path is the simplest option for NAS
 devices, Proxmox Docker VMs/LXCs, Portainer stacks, and any native Docker host on
 `linux/amd64` or `linux/arm64`.
 
+## Current Release
+
+Latest verified release: `v0.9.7`.
+
+- Package and OpenAPI version: `0.9.7`.
+- GitHub release images: `0.9.7`, `v0.9.7`, and `0.9`.
+- Published platforms: `linux/amd64` and `linux/arm64` for both app and agent.
+- Verified release gates: CI, CodeQL, Container Scan, Publish Images, and 0 open
+  code-scanning alerts after the release scan refreshed.
+- `main` publishes moving image tags only: `latest`, branch tags, and `sha-*`.
+  Immutable version tags publish from `v*` release tags.
+
 ## Product Screenshots
 
 ![ComposeBastion fleet dashboard](docs/assets/screenshots/dashboard-overview.png)
@@ -94,10 +106,17 @@ Published images:
 - `ghcr.io/composebastion-admin/composebastion-app`
 - `ghcr.io/composebastion-admin/composebastion-agent`
 
+Image tags:
+
+| Tag | Use |
+|-----|-----|
+| `latest` | Simple homelab/NAS updates that intentionally follow `main`. |
+| `0.9.7` or `v0.9.7` | Exact release pin for controlled production upgrades. |
+| `0.9` | Latest patch in the public `v0.9` line. |
+| `sha-*` | Commit-level verification or rollback testing. |
+
 Main builds publish `latest`, branch tags, and `sha-*` tags. Release tags
-publish immutable version tags such as `0.9.7` and `v0.9.7`. Use `latest` for
-simple homelab/NAS updates, or pin a version in `.env` for controlled
-production upgrades.
+publish immutable version tags such as `0.9.7`, `v0.9.7`, and `0.9`.
 
 ### Option B: Build From Source
 
@@ -185,7 +204,7 @@ The full screenshot tour is in the [how-to guide](docs/how-to.md).
 
 ## Production Checklist
 
-- Use a unique `APP_SECRET` and `POSTGRES_PASSWORD`.
+- Use a unique `APP_SECRET` and a URL-safe `POSTGRES_PASSWORD`.
 - Mount recovery storage outside the container, for example
   `/srv/composebastion/backups`.
 - Put ComposeBastion behind HTTPS and set `SECURE_COOKIES=true`.

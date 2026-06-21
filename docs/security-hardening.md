@@ -5,6 +5,8 @@ Use this checklist before exposing ComposeBastion outside a trusted private netw
 ## Required
 
 - Set a unique `APP_SECRET` with at least 32 characters.
+- Set a URL-safe `POSTGRES_PASSWORD`, for example with `openssl rand -hex 32`,
+  because image installs interpolate it into `DATABASE_URL`.
 - Set `SECURE_COOKIES=true` behind HTTPS.
 - Use a reverse proxy that preserves the original client IP only from trusted
   proxy hops.
@@ -39,3 +41,7 @@ Use this checklist before exposing ComposeBastion outside a trusted private netw
 - `npm test`
 - `npm run smoke:web`
 - `npm audit --omit=dev --audit-level=high`
+
+For `v0.9.7`, CI, CodeQL, Container Scan, Publish Images, and the refreshed
+GitHub code-scanning view were verified with 0 open code-scanning alerts at
+release time.

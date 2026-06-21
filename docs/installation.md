@@ -27,6 +27,19 @@ the base images all support the device.
 - Use the agent image install on remote Docker hosts that should report
   heartbeats, live logs, host stats, and run queued Docker work locally.
 
+## Current Published Release
+
+The latest verified release is `v0.9.7`.
+
+- App image: `ghcr.io/composebastion-admin/composebastion-app`
+- Agent image: `ghcr.io/composebastion-admin/composebastion-agent`
+- Exact release tags: `0.9.7` and `v0.9.7`
+- Public `v0.9` line tag: `0.9`
+- Moving `main` tags: `latest`, branch tags, and `sha-*`
+
+Pin `COMPOSEBASTION_VERSION=0.9.7` for controlled production upgrades. Use
+`latest` only when you intentionally want the newest `main` build.
+
 ## Image Install
 
 Use this path when you want to run ComposeBastion without cloning or building the
@@ -140,7 +153,7 @@ Set production environment values in `.env`:
 
 ```bash
 APP_SECRET=<unique random value>
-POSTGRES_PASSWORD=<unique database password>
+POSTGRES_PASSWORD=<URL-safe database password from: openssl rand -hex 32>
 COMPOSEBASTION_BACKUP_DIR=/srv/composebastion/backups
 SECURE_COOKIES=true
 CORS_ORIGINS=https://composebastion.example.com

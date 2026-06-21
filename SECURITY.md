@@ -28,12 +28,14 @@ We will review reports as soon as practical.
 ## Supported Versions
 
 ComposeBastion is still pre-1.0. Security fixes are expected to target the
-current `main` branch and the latest public release unless a separate written
-support agreement applies.
+current `main` branch and the latest public release (`v0.9.7`) unless a
+separate written support agreement applies.
 
 ## Deployment
 
 - Set a unique `APP_SECRET` (32+ characters) before production use.
+- Generate `POSTGRES_PASSWORD` with a URL-safe method such as
+  `openssl rand -hex 32` for image installs.
 - Enable `SECURE_COOKIES=true` behind HTTPS.
 - Restrict agent port `8090` to the manager network only.
 - Override default Postgres credentials in production.
@@ -64,3 +66,5 @@ support agreement applies.
   ignore scanner findings.
 - Dependency and container updates from Dependabot should be reviewed as normal
   release-impact changes, not assumed to be release failures.
+- For `v0.9.7`, CI, CodeQL, Container Scan, Publish Images, and 0 open
+  code-scanning alerts were verified after the release scan refreshed.

@@ -6,7 +6,7 @@
 # `openssl rand -hex 32` or another URL-safe method.
 #
 # For production, pin COMPOSEBASTION_VERSION in .env to a release tag such as
-# 0.9.6. For homelab/NAS auto-updates, leave it as latest and run pull before up.
+# 0.9.7. For homelab/NAS auto-updates, leave it as latest and run pull before up.
 services:
   app:
     image: ${COMPOSEBASTION_IMAGE:-ghcr.io/composebastion-admin/composebastion-app}:${COMPOSEBASTION_VERSION:-latest}

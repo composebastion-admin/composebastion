@@ -1,5 +1,33 @@
 # Changelog
 
+## [v0.9.7] - 2026-06-21
+
+### Changed
+
+- Bumped the workspace, runtime image labels, README badge, and generated
+  OpenAPI contract to `0.9.7`.
+- Updated published-image documentation so production installs generate a
+  URL-safe `POSTGRES_PASSWORD` with `openssl rand -hex 32`.
+- Updated GHCR publishing so `main` publishes moving tags only (`latest`,
+  branch tags, and `sha-*`), while immutable release tags such as `0.9.7`,
+  `v0.9.7`, and the `0.9` minor tag publish only from `v*` git tags.
+
+### Fixed
+
+- Fixed image install guidance that could generate a database password with `/`
+  and produce an invalid `DATABASE_URL`.
+- Fixed OpenAPI version drift by deriving the generated API document version
+  from the API package version.
+- Added a pre-publish build pass for both app and agent images so release tags
+  are published only after both runtime images build successfully.
+
+### Verified
+
+- GitHub CI, CodeQL, Container Scan, and Publish Images passed for `main`.
+- The `v0.9.7` tag publish succeeded for both app and agent images on
+  `linux/amd64` and `linux/arm64`.
+- GitHub code scanning reported 0 open alerts after the release scan refreshed.
+
 ## [v0.9.6] - 2026-06-21
 
 ### Added

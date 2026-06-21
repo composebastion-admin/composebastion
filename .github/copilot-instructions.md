@@ -60,8 +60,10 @@
   - `ghcr.io/composebastion-admin/composebastion-app`
   - `ghcr.io/composebastion-admin/composebastion-agent`
 - Image publishing must preserve `latest`, branch tags, and `sha-*` tags on
-  main. Immutable version tags such as `0.9.7` and `v0.9.7` must only be
-  published from `v*` git tags.
+  main. Immutable version tags such as `0.9.7`, `v0.9.7`, and the `0.9` minor
+  tag must only be published from `v*` git tags.
+- The publish workflow must build both app and agent images before publishing
+  either image so release tags are not created from a partial runtime build.
 - Treat NAS devices, Proxmox Docker guests, Portainer stacks, and native Docker
   Linux hosts as supported install targets when they run Docker Engine and
   Docker Compose v2 on `linux/amd64` or `linux/arm64`.
@@ -70,6 +72,8 @@
 - After release pushes, verify GitHub Actions, CodeQL, dependency review,
   container scans, and any configured container/image publishing. Distinguish
   Dependabot or bot PRs opened after the push from actual release failures.
+- For `v0.9.7`, the verified public release state is passing CI, CodeQL,
+  Container Scan, Publish Images, and 0 open code-scanning alerts after refresh.
 
 ## Quality And Security Gates
 
