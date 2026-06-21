@@ -58,8 +58,9 @@ Run the same gates CI expects before release:
 - Scan both images for high/critical vulnerabilities.
 - Publish container images for every public release and every merge to `main`
   through `.github/workflows/publish-images.yml`.
-- Image tags must include `latest` for `main`, the package version such as
-  `0.9.6`, release tags such as `v0.9.6`, branch tags, and `sha-*` tags.
+- Main image publishes must include `latest`, branch tags, and `sha-*` tags.
+  Immutable version tags such as `0.9.7` and `v0.9.7` must only be published
+  from `v*` git tags.
 - Multi-arch image publishing targets `linux/amd64` and `linux/arm64` so NAS
   devices, Proxmox Docker guests, and native Docker servers can install without
   building from source.
@@ -97,8 +98,8 @@ docker build -f Dockerfile.agent --target runtime -t composebastion-agent:v0.9-l
 After publishing, verify unauthenticated pulls:
 
 ```bash
-docker pull ghcr.io/composebastion-admin/composebastion-app:0.9.6
-docker pull ghcr.io/composebastion-admin/composebastion-agent:0.9.6
+docker pull ghcr.io/composebastion-admin/composebastion-app:0.9.7
+docker pull ghcr.io/composebastion-admin/composebastion-agent:0.9.7
 ```
 
 ## Post-Push Verification

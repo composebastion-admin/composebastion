@@ -5,7 +5,7 @@
 #
 # Required environment:
 #   APP_SECRET=<unique random value of at least 32 characters>
-#   POSTGRES_PASSWORD=<unique database password>
+#   POSTGRES_PASSWORD=<URL-safe database password, for example openssl rand -hex 32>
 #   COMPOSEBASTION_BACKUP_DIR=/srv/composebastion/backups
 #
 # Terminate TLS at a reverse proxy and set CORS_ORIGINS to the public origin

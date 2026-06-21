@@ -45,8 +45,8 @@ cp .env.example .env
 Generate secrets:
 
 ```bash
-openssl rand -base64 48
-openssl rand -base64 32
+openssl rand -base64 48 # APP_SECRET
+openssl rand -hex 32    # POSTGRES_PASSWORD, URL-safe for DATABASE_URL
 ```
 
 Edit `.env`:
@@ -67,7 +67,7 @@ docker compose -f docker-compose.image.yml up -d
 
 Open `http://<manager-ip>:8080`, create the first owner account, then add a
 Docker host. For production change control, pin `COMPOSEBASTION_VERSION` to a
-release tag such as `0.9.6` instead of `latest`.
+release tag such as `0.9.7` instead of `latest`.
 
 ## Source Build Install
 
@@ -82,8 +82,8 @@ cp .env.example .env
 Generate secrets:
 
 ```bash
-openssl rand -base64 48
-openssl rand -base64 32
+openssl rand -base64 48 # APP_SECRET
+openssl rand -hex 32    # POSTGRES_PASSWORD, URL-safe for DATABASE_URL
 ```
 
 Edit `.env`:

@@ -59,8 +59,9 @@
   image names:
   - `ghcr.io/composebastion-admin/composebastion-app`
   - `ghcr.io/composebastion-admin/composebastion-agent`
-- Image publishing must preserve tags for `latest`, package versions such as
-  `0.9.6`, release tags such as `v0.9.6`, branch tags, and `sha-*` tags.
+- Image publishing must preserve `latest`, branch tags, and `sha-*` tags on
+  main. Immutable version tags such as `0.9.7` and `v0.9.7` must only be
+  published from `v*` git tags.
 - Treat NAS devices, Proxmox Docker guests, Portainer stacks, and native Docker
   Linux hosts as supported install targets when they run Docker Engine and
   Docker Compose v2 on `linux/amd64` or `linux/arm64`.

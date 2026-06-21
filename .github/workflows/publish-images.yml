@@ -82,8 +82,6 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.APP_IMAGE_NAME }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
-            type=raw,value=${{ steps.package.outputs.version }},enable={{is_default_branch}}
-            type=raw,value=v${{ steps.package.outputs.version }},enable={{is_default_branch}}
             type=ref,event=branch
             type=ref,event=tag
             type=semver,pattern={{version}}
@@ -100,8 +98,6 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.AGENT_IMAGE_NAME }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
-            type=raw,value=${{ steps.package.outputs.version }},enable={{is_default_branch}}
-            type=raw,value=v${{ steps.package.outputs.version }},enable={{is_default_branch}}
             type=ref,event=branch
             type=ref,event=tag
             type=semver,pattern={{version}}
@@ -111,14 +107,14 @@ jobs:
             org.opencontainers.image.title=ComposeBastion Agent
             org.opencontainers.image.version=${{ steps.package.outputs.version }}
 
-      - name: Build and publish app image
+      - name: Build app image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
           target: runtime
           platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
+          push: false
           tags: ${{ steps.app_meta.outputs.tags }}
           labels: ${{ steps.app_meta.outputs.labels }}
           build-args: |
@@ -128,14 +124,14 @@ jobs:
           cache-from: type=gha,scope=app
           cache-to: type=gha,mode=max,scope=app
 
-      - name: Build and publish agent image
+      - name: Build agent image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile.agent
           target: runtime
           platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
+          push: false
           tags: ${{ steps.agent_meta.outputs.tags }}
           labels: ${{ steps.agent_meta.outputs.labels }}
           build-args: |
@@ -144,3 +140,37 @@ jobs:
             BUILD_DATE=${{ steps.package.outputs.created }}
           cache-from: type=gha,scope=agent
           cache-to: type=gha,mode=max,scope=agent
+
+      - name: Publish app image
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          target: runtime
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.app_meta.outputs.tags }}
+          labels: ${{ steps.app_meta.outputs.labels }}
+          build-args: |
+            APP_VERSION=${{ steps.package.outputs.version }}
+            VCS_REF=${{ github.sha }}
+            BUILD_DATE=${{ steps.package.outputs.created }}
+          cache-from: type=gha,scope=app
+
+      - name: Publish agent image
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.agent
+          target: runtime
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.agent_meta.outputs.tags }}
+          labels: ${{ steps.agent_meta.outputs.labels }}
+          build-args: |
+            APP_VERSION=${{ steps.package.outputs.version }}
+            VCS_REF=${{ github.sha }}
+            BUILD_DATE=${{ steps.package.outputs.created }}
+          cache-from: type=gha,scope=agent

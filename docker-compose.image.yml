@@ -2,6 +2,9 @@
 #   cp .env.example .env
 #   docker compose -f docker-compose.image.yml up -d
 #
+# POSTGRES_PASSWORD is interpolated into DATABASE_URL, so generate it with
+# `openssl rand -hex 32` or another URL-safe method.
+#
 # For production, pin COMPOSEBASTION_VERSION in .env to a release tag such as
 # 0.9.6. For homelab/NAS auto-updates, leave it as latest and run pull before up.
 services:

@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/composebastion-admin/composebastion/releases"><img alt="Release" src="https://img.shields.io/badge/release-v0.9.6-e0a23f"></a>
+  <a href="https://github.com/composebastion-admin/composebastion/releases"><img alt="Release" src="https://img.shields.io/badge/release-v0.9.7-e0a23f"></a>
   <a href="https://github.com/composebastion-admin/composebastion/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/composebastion-admin/composebastion/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/composebastion-admin/composebastion/pkgs/container/composebastion-app"><img alt="Container image" src="https://img.shields.io/badge/ghcr.io-composebastion--app-2496ed"></a>
   <a href="LICENSE.md"><img alt="License" src="https://img.shields.io/badge/license-source--available-df7d27"></a>
@@ -66,7 +66,7 @@ Edit `.env` and set at least:
 
 ```bash
 APP_SECRET=<unique random value from: openssl rand -base64 48>
-POSTGRES_PASSWORD=<unique database password>
+POSTGRES_PASSWORD=<URL-safe database password from: openssl rand -hex 32>
 ```
 
 Start ComposeBastion:
@@ -94,9 +94,10 @@ Published images:
 - `ghcr.io/composebastion-admin/composebastion-app`
 - `ghcr.io/composebastion-admin/composebastion-agent`
 
-Tags include `latest`, the package version such as `0.9.6`, release tags such as
-`v0.9.6`, branch tags, and `sha-*` tags. Use `latest` for simple homelab/NAS
-updates, or pin a version in `.env` for controlled production upgrades.
+Main builds publish `latest`, branch tags, and `sha-*` tags. Release tags
+publish immutable version tags such as `0.9.7` and `v0.9.7`. Use `latest` for
+simple homelab/NAS updates, or pin a version in `.env` for controlled
+production upgrades.
 
 ### Option B: Build From Source
 
