@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security policy
+    url: https://github.com/Admin-ComposeBastion/composebastion/security/policy
+    about: Read private-reporting guidance before sharing vulnerability details.
+  - name: Public issues
+    url: https://github.com/Admin-ComposeBastion/composebastion/issues
+    about: Use the templates above so reports include version, environment, logs, and context.

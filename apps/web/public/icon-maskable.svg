@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-label="ComposeBastion">
+  <rect width="48" height="48" fill="#17120b"/>
+  <g transform="translate(24 24) scale(0.82) translate(-16 -16.3)">
+    <path d="M6 5 H10 V8 H14 V5 H18 V8 H22 V5 H26 V16 C26 22 22 26 16 29 C10 26 6 22 6 16 Z" fill="none" stroke="#e0a23f" stroke-width="2.4" stroke-linejoin="round"/>
+    <rect x="10.5" y="12.6" width="11" height="2.7" rx="1.35" fill="#e0a23f"/>
+    <rect x="10.5" y="17.2" width="11" height="2.7" rx="1.35" fill="#e0a23f"/>
+  </g>
+</svg>

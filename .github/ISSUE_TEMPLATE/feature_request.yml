@@ -1,0 +1,66 @@
+name: Feature Request / Suggestion
+description: Suggest a focused ComposeBastion improvement.
+title: "[Feature]: "
+labels: ["type: feature", "status: needs info"]
+body:
+  - type: markdown
+    attributes:
+      value: "Please keep suggestions practical and avoid sharing confidential infrastructure details."
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem being solved
+      description: What are you trying to do, and where does ComposeBastion fall short today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposed_solution
+    attributes:
+      label: Proposed solution
+      description: Describe the smallest useful behavior change.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Mention current workarounds or other designs you considered.
+  - type: textarea
+    id: screenshots_mockups
+    attributes:
+      label: Screenshots/mockups
+      description: Attach screenshots, sketches, examples from other tools, or safe sample data if they clarify the request.
+  - type: dropdown
+    id: priority_impact
+    attributes:
+      label: Priority/impact
+      description: Pick the closest fit.
+      options:
+        - Nice to have
+        - Useful for repeated work
+        - Blocks a workflow
+        - Security or data-safety impact
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - UI/web
+        - API
+        - database/migrations
+        - host agent
+        - Docker/containers/images
+        - SSH hosts
+        - Compose imports/deploys
+        - GitHub deploy
+        - backups/recovery
+        - alerts/metrics
+        - auth/RBAC/security
+        - CI/release
+        - docs
+        - other
+    validations:
+      required: true

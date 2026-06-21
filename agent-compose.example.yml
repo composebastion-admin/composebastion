@@ -1,0 +1,13 @@
+services:
+  composebastion-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    environment:
+      AGENT_TOKEN: change-this-to-a-long-random-token
+      AGENT_PORT: 8090
+    ports:
+      - "8090:8090"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped

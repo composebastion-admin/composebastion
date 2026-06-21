@@ -1,0 +1,50 @@
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "07:00"
+      timezone: "Africa/Johannesburg"
+    open-pull-requests-limit: 5
+    labels:
+      - "type: dependencies"
+      - "area: security"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "07:30"
+      timezone: "Africa/Johannesburg"
+    open-pull-requests-limit: 5
+    labels:
+      - "type: dependencies"
+      - "area: ci"
+
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:00"
+      timezone: "Africa/Johannesburg"
+    open-pull-requests-limit: 5
+    labels:
+      - "type: dependencies"
+      - "area: docker"
+
+  - package-ecosystem: "docker"
+    directory: "/infra/dev"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:30"
+      timezone: "Africa/Johannesburg"
+    open-pull-requests-limit: 3
+    labels:
+      - "type: dependencies"
+      - "area: docker"
+      - "area: ci"

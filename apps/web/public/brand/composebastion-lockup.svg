@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 460 120" role="img" aria-label="ComposeBastion — multi-host Docker ops">
+  <rect width="460" height="120" rx="16" fill="#15100a"/>
+  <rect x="0.75" y="0.75" width="458.5" height="118.5" rx="15.25" fill="none" stroke="#e0a23f" stroke-opacity="0.18" stroke-width="1.5"/>
+  <g transform="translate(28 36)">
+    <rect width="48" height="48" rx="11" fill="#1c160d"/>
+    <rect x="0.75" y="0.75" width="46.5" height="46.5" rx="10.25" fill="none" stroke="#e0a23f" stroke-opacity="0.28" stroke-width="1.5"/>
+    <g transform="translate(24 24) scale(1.18) translate(-16 -16.3)">
+      <path d="M6 5 H10 V8 H14 V5 H18 V8 H22 V5 H26 V16 C26 22 22 26 16 29 C10 26 6 22 6 16 Z" fill="none" stroke="#e0a23f" stroke-width="2.4" stroke-linejoin="round"/>
+      <rect x="10.5" y="12.6" width="11" height="2.7" rx="1.35" fill="#e0a23f"/>
+      <rect x="10.5" y="17.2" width="11" height="2.7" rx="1.35" fill="#e0a23f"/>
+    </g>
+  </g>
+  <text x="98" y="60" font-family="'IBM Plex Sans', system-ui, sans-serif" font-size="31" font-weight="600" letter-spacing="-0.4"><tspan fill="#f3ede0">Compose</tspan><tspan fill="#e0a23f">Bastion</tspan></text>
+  <text x="100" y="84" font-family="'IBM Plex Mono', ui-monospace, monospace" font-size="11" font-weight="500" letter-spacing="2.6" fill="#b1a386">MULTI-HOST DOCKER OPS</text>
+</svg>

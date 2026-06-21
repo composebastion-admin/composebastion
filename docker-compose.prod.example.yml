@@ -1,0 +1,39 @@
+# Example production overrides. Use with:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.example.yml up -d --build
+#
+# Required environment:
+#   APP_SECRET=<unique random value of at least 32 characters>
+#   POSTGRES_PASSWORD=<unique database password>
+#   COMPOSEBASTION_BACKUP_DIR=/srv/composebastion/backups
+#
+# Terminate TLS at a reverse proxy and set CORS_ORIGINS to the public origin
+# if browsers access the API from a different origin.
+services:
+  app:
+    environment:
+      NODE_ENV: production
+      BACKUP_DIR: /data/backups
+      SECURE_COOKIES: "true"
+      APP_SECRET: ${APP_SECRET:?Set APP_SECRET to a unique random value of at least 32 characters}
+      DATABASE_URL: postgres://composebastion:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/composebastion
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      ALLOW_PRIVATE_WEBHOOK_URLS: ${ALLOW_PRIVATE_WEBHOOK_URLS:-false}
+    volumes:
+      - ${COMPOSEBASTION_BACKUP_DIR:-/srv/composebastion/backups}:/data/backups
+    ports: !reset []  # terminate TLS at reverse proxy only
+
+  worker:
+    environment:
+      NODE_ENV: production
+      BACKUP_DIR: /data/backups
+      APP_SECRET: ${APP_SECRET:?Set APP_SECRET to a unique random value of at least 32 characters}
+      DATABASE_URL: postgres://composebastion:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/composebastion
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      ALLOW_PRIVATE_WEBHOOK_URLS: ${ALLOW_PRIVATE_WEBHOOK_URLS:-false}
+    volumes:
+      - ${COMPOSEBASTION_BACKUP_DIR:-/srv/composebastion/backups}:/data/backups
+
+  postgres:
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}

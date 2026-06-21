@@ -1,0 +1,73 @@
+name: Container Scan
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Dockerfile"
+      - "Dockerfile.agent"
+      - "docker-compose*.yml"
+      - "package.json"
+      - "package-lock.json"
+      - "apps/**"
+      - "packages/**"
+      - "infra/**"
+  pull_request:
+    branches: [main]
+    paths:
+      - "Dockerfile"
+      - "Dockerfile.agent"
+      - "docker-compose*.yml"
+      - "package.json"
+      - "package-lock.json"
+      - "apps/**"
+      - "packages/**"
+      - "infra/**"
+  schedule:
+    - cron: "42 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: container-scan-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image-scan:
+    name: Scan runtime images
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Build app runtime image
+        run: docker build --target runtime -t composebastion-app:ci .
+
+      - name: Build agent runtime image
+        run: docker build -f Dockerfile.agent --target runtime -t composebastion-agent:ci .
+
+      - name: Scan app runtime image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: "composebastion-app:ci"
+          version: "v0.71.2"
+          ignore-policy: ".github/trivy-ignore.rego"
+          format: "table"
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: "os,library"
+          severity: "HIGH,CRITICAL"
+
+      - name: Scan agent runtime image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: "composebastion-agent:ci"
+          version: "v0.71.2"
+          ignore-policy: ".github/trivy-ignore.rego"
+          format: "table"
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: "os,library"
+          severity: "HIGH,CRITICAL"

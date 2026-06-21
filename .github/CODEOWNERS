@@ -1,0 +1,16 @@
+# CODEOWNERS keeps review ownership clear if GitHub branch protection enables
+# required code-owner reviews. Keep this single-owner until the project has
+# separate maintainers for API, web, agent, release, or security areas.
+
+* @Admin-ComposeBastion
+
+/apps/api/ @Admin-ComposeBastion
+/apps/web/ @Admin-ComposeBastion
+/apps/agent/ @Admin-ComposeBastion
+/packages/shared/ @Admin-ComposeBastion
+/infra/postgres/ @Admin-ComposeBastion
+/Dockerfile @Admin-ComposeBastion
+/Dockerfile.agent @Admin-ComposeBastion
+/docker-compose*.yml @Admin-ComposeBastion
+/.github/ @Admin-ComposeBastion
+/SECURITY.md @Admin-ComposeBastion

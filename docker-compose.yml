@@ -1,0 +1,88 @@
+services:
+  app:
+    build:
+      context: .
+      target: runtime
+    command: ["node", "apps/api/dist/server.js"]
+    environment:
+      NODE_ENV: production
+      API_HOST: 0.0.0.0
+      API_PORT: 8080
+      APP_SECRET: ${APP_SECRET:?Set APP_SECRET to a unique random value of at least 32 characters}
+      DATABASE_URL: postgres://composebastion:composebastion@postgres:5432/composebastion
+      REDIS_URL: redis://redis:6379
+      BACKUP_DIR: /data/backups
+      WEB_DIST_DIR: /app/apps/web/dist
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      SECURE_COOKIES: ${SECURE_COOKIES:-false}
+      ALLOW_PRIVATE_AGENT_URLS: ${ALLOW_PRIVATE_AGENT_URLS:-false}
+      ALLOW_PRIVATE_WEBHOOK_URLS: ${ALLOW_PRIVATE_WEBHOOK_URLS:-false}
+    ports:
+      - "8080:8080"
+    volumes:
+      - backups:/data/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/api/health/ready').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      target: runtime
+    command: ["node", "apps/api/dist/worker.js"]
+    environment:
+      NODE_ENV: production
+      APP_SECRET: ${APP_SECRET:?Set APP_SECRET to a unique random value of at least 32 characters}
+      DATABASE_URL: postgres://composebastion:composebastion@postgres:5432/composebastion
+      REDIS_URL: redis://redis:6379
+      BACKUP_DIR: /data/backups
+      ALLOW_PRIVATE_WEBHOOK_URLS: ${ALLOW_PRIVATE_WEBHOOK_URLS:-false}
+    volumes:
+      - backups:/data/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: composebastion
+      POSTGRES_USER: composebastion
+      POSTGRES_PASSWORD: composebastion
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U composebastion -d composebastion"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  backups:
+  postgres-data:
+  redis-data:

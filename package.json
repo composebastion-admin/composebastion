@@ -1,0 +1,39 @@
+{
+  "name": "composebastion",
+  "version": "0.9.4",
+  "private": true,
+  "license": "SEE LICENSE IN LICENSE.md",
+  "description": "Multi-host Docker management console deployed with Docker Compose.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/composebastion-admin/composebastion.git"
+  },
+  "bugs": {
+    "url": "https://github.com/composebastion-admin/composebastion/issues"
+  },
+  "homepage": "https://github.com/composebastion-admin/composebastion#readme",
+  "workspaces": [
+    "apps/api",
+    "apps/agent",
+    "apps/web",
+    "packages/shared"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace @composebastion/shared && npm run build --workspace @composebastion/api && npm run build --workspace @composebastion/agent && npm run build --workspace @composebastion/web",
+    "dev": "concurrently -n shared,api,web -c cyan,green,magenta \"npm run dev --workspace @composebastion/shared\" \"npm run dev --workspace @composebastion/api\" \"npm run dev --workspace @composebastion/web\"",
+    "lint:migrations": "npm run lint:migrations --workspace @composebastion/api",
+    "openapi:check": "npm run openapi:check --workspace @composebastion/api",
+    "smoke:web": "npm run build --workspace @composebastion/shared && npm run smoke --workspace @composebastion/web",
+    "test": "npm run build --workspace @composebastion/shared && npm run test --workspaces --if-present",
+    "typecheck": "npm run build --workspace @composebastion/shared && npm run typecheck --workspace @composebastion/api && npm run typecheck --workspace @composebastion/agent && npm run typecheck --workspace @composebastion/web",
+    "docker:up": "docker compose up --build",
+    "docker:down": "docker compose down"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  },
+  "engines": {
+    "node": ">=20.11.0",
+    "npm": ">=10.0.0"
+  }
+}

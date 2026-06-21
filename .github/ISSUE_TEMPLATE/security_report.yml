@@ -1,0 +1,41 @@
+name: Security Report
+description: Minimal public security report when private reporting is unavailable.
+title: "[Security]: "
+labels: ["type: security", "area: security", "status: needs info"]
+body:
+  - type: markdown
+    attributes:
+      value: "Do not post secrets, credentials, exploit details for active systems, customer data, private hostnames, tokens, private keys, or confidential commercial information. Prefer the process in SECURITY.md or GitHub private vulnerability reporting when available."
+  - type: checkboxes
+    id: public_safety
+    attributes:
+      label: Public safety check
+      options:
+        - label: I have not included secrets, credentials, exploit details for active systems, or confidential data.
+          required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: High-level summary
+      description: Describe the affected area and impact without publishing exploit details.
+    validations:
+      required: true
+  - type: input
+    id: affected_version
+    attributes:
+      label: Affected version or branch
+      placeholder: "v0.9.4, main, beta, or commit SHA"
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Potential impact
+      description: Keep this high level. A maintainer can ask for a private channel for sensitive details.
+    validations:
+      required: true
+  - type: textarea
+    id: mitigation
+    attributes:
+      label: Suggested mitigation
+      description: Optional high-level workaround or mitigation.
