@@ -1,6 +1,6 @@
 # ComposeBastion How-To Guide
 
-Version covered: `v0.9.8`.
+Version covered: `v0.9.9`.
 
 This guide covers the day-to-day workflows that are easiest to forget when you
 only use them occasionally. For installation-first docs, start with
@@ -212,7 +212,7 @@ password, and port. Run the target test before using it for recovery points.
 
 For experimental rclone targets, create and test the rclone remote outside
 ComposeBastion, then paste the rclone config into the target form. Guided OAuth
-flows are not part of the pre-1.0 release line; bring a working rclone config
+flows are not part of the guided V1 release path; bring a working rclone config
 and test it before using the target for important recovery points.
 
 ### Use `remote_only`

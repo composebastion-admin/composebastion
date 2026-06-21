@@ -1,8 +1,8 @@
 # Release Process
 
-ComposeBastion is a pre-1.0 TypeScript/npm workspaces project with a Fastify API,
+ComposeBastion is a TypeScript/npm workspaces project with a Fastify API,
 React/Vite web UI, optional host agent, Postgres migrations, Docker Compose
-deployment, and runtime Docker images.
+deployment, and runtime Docker images. The `v0.9` line is the V1 hardening line.
 
 ## Branches
 
@@ -59,7 +59,7 @@ Run the same gates CI expects before release:
 - Publish container images for every public release and every merge to `main`
   through `.github/workflows/publish-images.yml`.
 - Main image publishes must include `latest`, branch tags, and `sha-*` tags.
-  Immutable version tags such as `0.9.8`, `v0.9.8`, and the `0.9` minor tag
+  Immutable version tags such as `0.9.9`, `v0.9.9`, and the `0.9` minor tag
   must only be published from `v*` git tags.
 - The workflow must build both app and agent images before publishing either
   image so version tags are not created from a partial runtime build.
@@ -78,7 +78,19 @@ Run the same gates CI expects before release:
 - Beta/staging releases should include test notes: what to verify, where to look
   for logs/screenshots, and any rollback or known-risk notes.
 
-## Pre-1.0 Release Verification
+## V1 Readiness
+
+- Treat V1 as feature-complete, documented, and release-gated rather than a
+  guarantee that every recovery provider has graduated from Beta.
+- Backups, restores, restore drills, and migration runs may remain labeled Beta
+  in V1; imported rclone providers beyond SMB remain experimental.
+- Freeze `/api/v1` after `v1.0.0-rc.1`. Any breaking change after the first RC
+  restarts the RC cycle.
+- Protect `main`, require release-gating checks before promotion, and enable or
+  verify Dependabot alerts and secret scanning before final V1.
+- Use `docs/v1-readiness.md` as the release-candidate checklist.
+
+## Release Verification
 
 Run these before tagging a public release:
 
@@ -90,9 +102,14 @@ npm test
 npm run smoke:web
 npm audit --omit=dev --audit-level=high
 docker compose config
-docker compose -f docker-compose.image.yml config
-docker compose -f docker-compose.yml -f docker-compose.prod.example.yml config
-docker compose -f agent-compose.image.example.yml config
+POSTGRES_PASSWORD=composebastion-ci-password \
+  APP_SECRET=ci-test-secret-which-is-at-least-32-chars-long \
+  docker compose -f docker-compose.image.yml config
+POSTGRES_PASSWORD=composebastion-ci-password \
+  APP_SECRET=ci-test-secret-which-is-at-least-32-chars-long \
+  docker compose -f docker-compose.yml -f docker-compose.prod.example.yml config
+AGENT_TOKEN=ci-test-agent-token-which-is-at-least-32-chars-long \
+  docker compose -f agent-compose.image.example.yml config
 docker build --target runtime -t composebastion-app:v0.9-local .
 docker build -f Dockerfile.agent --target runtime -t composebastion-agent:v0.9-local .
 ```
@@ -100,10 +117,10 @@ docker build -f Dockerfile.agent --target runtime -t composebastion-agent:v0.9-l
 After publishing, verify unauthenticated pulls:
 
 ```bash
-docker pull ghcr.io/composebastion-admin/composebastion-app:0.9.8
-docker pull ghcr.io/composebastion-admin/composebastion-agent:0.9.8
-docker pull ghcr.io/composebastion-admin/composebastion-app:v0.9.8
-docker pull ghcr.io/composebastion-admin/composebastion-agent:v0.9.8
+docker pull ghcr.io/composebastion-admin/composebastion-app:0.9.9
+docker pull ghcr.io/composebastion-admin/composebastion-agent:0.9.9
+docker pull ghcr.io/composebastion-admin/composebastion-app:v0.9.9
+docker pull ghcr.io/composebastion-admin/composebastion-agent:v0.9.9
 docker pull ghcr.io/composebastion-admin/composebastion-app:0.9
 docker pull ghcr.io/composebastion-admin/composebastion-agent:0.9
 ```
@@ -114,7 +131,7 @@ docker pull ghcr.io/composebastion-admin/composebastion-agent:0.9
   any image publishing jobs.
 - Confirm scanner alerts on the protected branch after scans refresh; alerts can
   lag until the target branch is rescanned.
-- For the `v0.9.8` release, CI, CodeQL, Container Scan, Publish Images, and 0
+- For the `v0.9.9` release, CI, CodeQL, Container Scan, Publish Images, and 0
   open code-scanning alerts were verified after the scan refresh.
 - Distinguish Dependabot or bot PRs opened after a release push from actual
   release failures.

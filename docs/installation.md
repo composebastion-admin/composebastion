@@ -29,16 +29,20 @@ the base images all support the device.
 
 ## Current Published Release
 
-The latest verified release is `v0.9.8`.
+The latest verified release is `v0.9.9`.
 
 - App image: `ghcr.io/composebastion-admin/composebastion-app`
 - Agent image: `ghcr.io/composebastion-admin/composebastion-agent`
-- Exact release tags: `0.9.8` and `v0.9.8`
+- Exact release tags: `0.9.9` and `v0.9.9`
 - Public `v0.9` line tag: `0.9`
 - Moving `main` tags: `latest`, branch tags, and `sha-*`
 
-Pin `COMPOSEBASTION_VERSION=0.9.8` for controlled production upgrades. Use
+Pin `COMPOSEBASTION_VERSION=0.9.9` for controlled production upgrades. Use
 `latest` only when you intentionally want the newest `main` build.
+
+The `v0.9` line is the V1 hardening line. Backups and restores are included but
+remain labeled Beta in the app; keep routine backup verification and restore
+drills in your operational checklist.
 
 ## Image Install
 
@@ -80,7 +84,7 @@ docker compose -f docker-compose.image.yml up -d
 
 Open `http://<manager-ip>:8080`, create the first owner account, then add a
 Docker host. For production change control, pin `COMPOSEBASTION_VERSION` to a
-release tag such as `0.9.8` instead of `latest`.
+release tag such as `0.9.9` instead of `latest`.
 
 ## Source Build Install
 
@@ -236,7 +240,7 @@ cd ~/composebastion && git pull --rebase origin main && docker compose -f docker
 Before updating a production deployment, export a config backup from
 Admin -> Settings and confirm recent recovery points are usable.
 
-## Pre-1.0 Release Verification
+## Release Verification
 
 Before tagging or upgrading a production deployment, run:
 
@@ -248,7 +252,12 @@ npm test
 npm run smoke:web
 npm audit --omit=dev --audit-level=high
 docker compose config
-docker compose -f docker-compose.image.yml config
-docker compose -f docker-compose.yml -f docker-compose.prod.example.yml config
-docker compose -f agent-compose.image.example.yml config
+POSTGRES_PASSWORD=composebastion-ci-password \
+  APP_SECRET=ci-test-secret-which-is-at-least-32-chars-long \
+  docker compose -f docker-compose.image.yml config
+POSTGRES_PASSWORD=composebastion-ci-password \
+  APP_SECRET=ci-test-secret-which-is-at-least-32-chars-long \
+  docker compose -f docker-compose.yml -f docker-compose.prod.example.yml config
+AGENT_TOKEN=ci-test-agent-token-which-is-at-least-32-chars-long \
+  docker compose -f agent-compose.image.example.yml config
 ```

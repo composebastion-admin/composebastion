@@ -27,9 +27,10 @@ We will review reports as soon as practical.
 
 ## Supported Versions
 
-ComposeBastion is still pre-1.0. Security fixes are expected to target the
-current `main` branch and the latest public release (`v0.9.8`) unless a
-separate written support agreement applies.
+Security fixes are expected to target the current `main` branch and the latest
+public release (`v0.9.9`) unless a separate written support agreement applies.
+The `v0.9` line remains the V1 hardening line until the release-candidate cycle
+is complete.
 
 ## Deployment
 
@@ -66,5 +67,7 @@ separate written support agreement applies.
   ignore scanner findings.
 - Dependency and container updates from Dependabot should be reviewed as normal
   release-impact changes, not assumed to be release failures.
-- For `v0.9.8`, CI, CodeQL, Container Scan, Publish Images, and 0 open
+- For `v0.9.9`, CI, CodeQL, Container Scan, Publish Images, and 0 open
   code-scanning alerts were verified after the release scan refreshed.
+- Before V1, enable or verify Dependabot alerts, secret scanning, branch
+  protection for `main`, and required release-gating checks.

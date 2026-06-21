@@ -3,6 +3,10 @@
 ComposeBastion recovery is app-focused. It captures the data an app needs, tracks
 where artifacts live, and helps you prove a restore before you need it.
 
+Backups, restores, restore drills, and migration runs are included in the V1
+scope but remain labeled Beta. Treat the Beta label as a reminder to run drills
+and keep rollback paths simple, not as a sign that the workflow is unavailable.
+
 ## Recovery Terms
 
 - Recovery point: a captured snapshot of app data and metadata.
@@ -36,7 +40,7 @@ providers only when you are comfortable operating the rclone remote yourself.
 | Local filesystem | Supported | Persistent manager storage | Best for first drills and simple homelabs. |
 | S3-compatible | Supported | Network access to object storage | Use path-style mode when your provider requires it. |
 | SMB / CIFS | Supported | Reachable NAS or Samba/Windows share | Runs through rclone inside the app/worker image; no privileged CIFS mount is required. |
-| Drive, OneDrive, iCloud Drive, WebDAV, SFTP, custom rclone | Experimental | Working rclone config created and tested outside ComposeBastion | Guided OAuth/provider setup is not part of the pre-1.0 line. |
+| Drive, OneDrive, iCloud Drive, WebDAV, SFTP, custom rclone | Experimental | Working rclone config created and tested outside ComposeBastion | Guided OAuth/provider setup is not part of the V1 release path. |
 
 Always run the target test before using a target for important recovery points.
 

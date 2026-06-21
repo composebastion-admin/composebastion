@@ -32,13 +32,13 @@ export type RecoverySection =
   | "runs"
   | "volume-backups";
 
-const recoverySections: Array<{ id: RecoverySection; label: string }> = [
+const recoverySections: Array<{ id: RecoverySection; label: string; beta?: boolean }> = [
   { id: "points", label: "Recovery Points" },
   { id: "move", label: "Migrate App" },
   { id: "schedules", label: "Schedules" },
   { id: "targets", label: "Backup Storage" },
-  { id: "runs", label: "Restore / Migration Runs" },
-  { id: "volume-backups", label: "Backups" }
+  { id: "runs", label: "Restore / Migration Runs", beta: true },
+  { id: "volume-backups", label: "Backups", beta: true }
 ];
 
 function recoverySectionLabel(section: RecoverySection) {
@@ -151,21 +151,20 @@ export function RecoveryCenterPanel({
           <RefreshCw size={16} className={loading ? "spin" : undefined} />
         </button>
       </div>
-      <div className={`adminLayout ${section ? "singlePane" : ""}`}>
-        {!section && (
-          <nav className="adminNav" aria-label="Recovery Center sections">
-            {recoverySections.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                className={activeSection === item.id ? "active" : ""}
-                onClick={() => setActiveSection(item.id)}
-              >
-                {item.label}
-              </button>
-            ))}
-          </nav>
-        )}
+      <div className="adminLayout">
+        <nav className="adminNav" aria-label="Recovery Center sections">
+          {recoverySections.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={activeSection === item.id ? "active" : ""}
+              onClick={() => setActiveSection(item.id)}
+            >
+              <span>{item.label}</span>
+              {item.beta && <span className="pill beta">Beta</span>}
+            </button>
+          ))}
+        </nav>
         <div className="adminPane">
           {activeSection === "points" && (
             <RecoveryPointsPanel

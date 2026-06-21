@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "ComposeBastion API",
-    "version": "0.9.8",
-    "description": "ComposeBastion pre-1.0 API contract. Stable JSON endpoints are available under /api/v1 while legacy /api routes remain compatible."
+    "version": "0.9.9",
+    "description": "ComposeBastion API contract. Stable JSON endpoints are available under /api/v1 while legacy /api routes remain compatible during the V1 transition."
   },
   "servers": [
     {

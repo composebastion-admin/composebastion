@@ -1,5 +1,21 @@
 # Changelog
 
+## [v0.9.9] - 2026-06-21
+
+### Added
+- Added Beta labels to backup inventory, restore/migration jobs, Recovery Center
+  backup and restore-run navigation, and related smoke coverage.
+- Added the V1 readiness checklist covering release gates, supported install
+  paths, Beta/experimental recovery areas, upgrade expectations, and GHCR
+  verification.
+
+### Changed
+- Bumped the package and generated OpenAPI versions to `0.9.9`.
+- Updated GitHub and product documentation to describe the V1 hardening path:
+  `0.9.x` patches, `v1.0.0-rc.1`, then `v1.0.0`.
+- Cleaned local duplicate `* 2.*` workspace files so root release gates can run
+  from a clean tree.
+
 ## [v0.9.8] - 2026-06-21
 
 ### Added

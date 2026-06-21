@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/composebastion-admin/composebastion/releases"><img alt="Release" src="https://img.shields.io/badge/release-v0.9.8-e0a23f"></a>
+  <a href="https://github.com/composebastion-admin/composebastion/releases"><img alt="Release" src="https://img.shields.io/badge/release-v0.9.9-e0a23f"></a>
   <a href="https://github.com/composebastion-admin/composebastion/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/composebastion-admin/composebastion/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/composebastion-admin/composebastion/pkgs/container/composebastion-app"><img alt="Container image" src="https://img.shields.io/badge/ghcr.io-composebastion--app-2496ed"></a>
   <a href="LICENSE.md"><img alt="License" src="https://img.shields.io/badge/license-source--available-df7d27"></a>
@@ -30,13 +30,15 @@ devices, Proxmox Docker VMs/LXCs, Portainer stacks, and any native Docker host o
 
 ## Current Release
 
-Latest verified release: `v0.9.8`.
+Latest verified release: `v0.9.9`.
 
-- Package and OpenAPI version: `0.9.8`.
-- GitHub release images: `0.9.8`, `v0.9.8`, and `0.9`.
+- Package and OpenAPI version: `0.9.9`.
+- GitHub release images: `0.9.9`, `v0.9.9`, and `0.9`.
 - Published platforms: `linux/amd64` and `linux/arm64` for both app and agent.
 - Verified release gates: CI, CodeQL, Container Scan, Publish Images, and 0 open
   code-scanning alerts after the release scan refreshed.
+- V1 readiness track: core app hardening continues in the `v0.9` line; backups
+  and restores are included but remain visibly Beta for V1.
 - `main` publishes moving image tags only: `latest`, branch tags, and `sha-*`.
   Immutable version tags publish from `v*` release tags.
 
@@ -111,12 +113,12 @@ Image tags:
 | Tag | Use |
 |-----|-----|
 | `latest` | Simple homelab/NAS updates that intentionally follow `main`. |
-| `0.9.8` or `v0.9.8` | Exact release pin for controlled production upgrades. |
+| `0.9.9` or `v0.9.9` | Exact release pin for controlled production upgrades. |
 | `0.9` | Latest patch in the public `v0.9` line. |
 | `sha-*` | Commit-level verification or rollback testing. |
 
 Main builds publish `latest`, branch tags, and `sha-*` tags. Release tags
-publish immutable version tags such as `0.9.8`, `v0.9.8`, and `0.9`.
+publish immutable version tags such as `0.9.9`, `v0.9.9`, and `0.9`.
 
 ### Option B: Build From Source
 
@@ -230,6 +232,8 @@ The full screenshot tour is in the [how-to guide](docs/how-to.md).
   `linux/arm64`.
 - v0.9 config backup/restore for hosts, tracked repos, registries, alerts, users,
   Compose stacks, recovery schedules, storage targets, and operator settings.
+- V1 readiness checklist and release-candidate policy in
+  [docs/v1-readiness.md](docs/v1-readiness.md).
 
 ## Repository Rules
 
@@ -237,7 +241,9 @@ The full screenshot tour is in the [how-to guide](docs/how-to.md).
 - Pushes, tags, releases, and version updates must use the
   `composebastion-admin` GitHub account.
 - `v0.9` is the first public release line for this repository; do not promote to
-  `v1.0` until the stable-release checklist is complete.
+  `v1.0` until the V1 readiness checklist is complete.
+- Backups, restores, restore drills, and migration runs may ship in V1 with a
+  Beta label; local, S3, and SMB are the supported guided recovery targets.
 - Do not reintroduce personal owner, repository, image, or user fixtures.
 
 ## License

@@ -642,6 +642,11 @@ a.sideNavItem[aria-disabled="true"] {
   text-transform: uppercase;
 }
 
+.sideNavItem small.sideNavBeta {
+  background: color-mix(in srgb, var(--accent) 18%, var(--sidebar-panel));
+  color: var(--sidebar-text);
+}
+
 .hostItem {
   width: 100%;
   min-height: 56px;
@@ -2391,6 +2396,12 @@ a.sideNavItem[aria-disabled="true"] {
   background: transparent;
 }
 
+.adminNav button .pill.beta {
+  margin-left: auto;
+  padding: 2px 7px;
+  font-size: 10px;
+}
+
 .adminNav button.active {
   background: var(--accent-soft);
   color: var(--accent-text);
@@ -2567,6 +2578,29 @@ a.sideNavItem[aria-disabled="true"] {
   font-size: 12px;
   font-weight: 800;
   white-space: nowrap;
+}
+
+.panelTitleWithBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.panelHeader .panelTitleWithBadge {
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  white-space: normal;
+}
+
+.pill.beta {
+  background: var(--info-bg);
+  color: var(--info-text);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
 }
 
 .skeletonPanel {

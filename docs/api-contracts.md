@@ -1,16 +1,18 @@
 # API Contracts
 
-ComposeBastion is still pre-1.0. Stable route families are exposed through
-`/api/v1/*`. Existing UI and trusted clients can keep using `/api/*`; those
-routes remain compatible aliases for the same backend behavior during the v0.9
-line.
+ComposeBastion exposes stable route families through `/api/v1/*` during the
+`v0.9` hardening line and into the V1 release-candidate cycle. Existing UI and
+trusted clients can keep using `/api/*`; those routes remain compatible aliases
+for the same backend behavior during the V1 transition.
 
 ## Compatibility Boundary
 
 - Prefer additive response changes and keep existing request fields working
   unless a security fix requires otherwise.
-- `/api/v1` is the pre-1.0 public compatibility boundary. New public route
-  families should be documented there before release.
+- `/api/v1` is the public compatibility boundary. New public route families
+  should be documented there before release.
+- After `v1.0.0-rc.1`, no breaking `/api/v1` change should ship without
+  restarting the release-candidate cycle.
 - Error responses should use the existing envelope shape:
   `{ error: string, code?: string, requestId?: string | null, issues?: unknown[] }`.
 - The request ID is copied from `x-request-id` when provided and is included in
