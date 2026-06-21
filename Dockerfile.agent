@@ -4,7 +4,7 @@ FROM node:20-bookworm-slim AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY apps/agent/package.json apps/agent/package.json
-RUN npm ci --workspace @composebastion/agent --include-workspace-root=false
+RUN npm ci --workspace @composebastion/agent --include-workspace-root=false --ignore-scripts
 
 FROM deps AS build
 WORKDIR /app
