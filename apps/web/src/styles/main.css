@@ -642,11 +642,6 @@ a.sideNavItem[aria-disabled="true"] {
   text-transform: uppercase;
 }
 
-.sideNavItem small.sideNavBeta {
-  background: color-mix(in srgb, var(--accent) 18%, var(--sidebar-panel));
-  color: var(--sidebar-text);
-}
-
 .hostItem {
   width: 100%;
   min-height: 56px;
@@ -2396,12 +2391,6 @@ a.sideNavItem[aria-disabled="true"] {
   background: transparent;
 }
 
-.adminNav button .pill.beta {
-  margin-left: auto;
-  padding: 2px 7px;
-  font-size: 10px;
-}
-
 .adminNav button.active {
   background: var(--accent-soft);
   color: var(--accent-text);
@@ -2596,13 +2585,6 @@ a.sideNavItem[aria-disabled="true"] {
   white-space: normal;
 }
 
-.pill.beta {
-  background: var(--info-bg);
-  color: var(--info-text);
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-}
-
 .skeletonPanel {
   overflow: hidden;
 }
@@ -2667,6 +2649,48 @@ a.sideNavItem[aria-disabled="true"] {
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface-soft);
+}
+
+.aboutPanel {
+  display: grid;
+  gap: 14px;
+}
+
+.aboutFacts {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+.aboutFacts div {
+  display: grid;
+  grid-template-columns: minmax(120px, 180px) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.aboutFacts dt {
+  color: var(--subtle);
+  font-weight: 800;
+}
+
+.aboutFacts dd {
+  margin: 0;
+}
+
+.aboutLinks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.aboutLinks a {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 10px;
+  background: var(--surface-soft);
+  color: var(--accent-text);
+  font-weight: 800;
+  text-decoration: none;
 }
 
 .cardSectionHeader {
@@ -4842,6 +4866,11 @@ code {
   .sshSummary,
   .adminLayout {
     grid-template-columns: 1fr;
+  }
+
+  .aboutFacts div {
+    grid-template-columns: 1fr;
+    gap: 4px;
   }
 
   .recoveryRouteGrid,

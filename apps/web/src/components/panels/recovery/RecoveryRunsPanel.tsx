@@ -1,7 +1,7 @@
 import type { DockerHost, MigrationRun, OperationJob } from "@composebastion/shared";
 import { formatDate } from "../../../lib/format.js";
 import { hostName } from "../../../lib/hostScope.js";
-import { BetaBadge, DataTable, Panel, StatusPill } from "../../ui/primitives.js";
+import { DataTable, Panel, StatusPill } from "../../ui/primitives.js";
 
 function migrationAppLabel(run: MigrationRun) {
   const identity = run.sourceAppIdentity;
@@ -42,7 +42,7 @@ export function RecoveryRunsPanel({
           ]}
         />
       </Panel>
-      <Panel title={<span className="panelTitleWithBadge">Recent Restore / Migration Jobs <BetaBadge /></span>} count={recoveryJobs.length}>
+      <Panel title="Recent Restore / Migration Jobs" count={recoveryJobs.length}>
         <DataTable
           rows={recoveryJobs}
           columns={["Type", "Host", "Status", "Created", "Error"]}

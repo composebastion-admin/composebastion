@@ -3,9 +3,10 @@
 ComposeBastion recovery is app-focused. It captures the data an app needs, tracks
 where artifacts live, and helps you prove a restore before you need it.
 
-Backups, restores, restore drills, and migration runs are included in the V1
-scope but remain labeled Beta. Treat the Beta label as a reminder to run drills
-and keep rollback paths simple, not as a sign that the workflow is unavailable.
+Backups, restores, restore drills, and migration runs are included in V1 release
+scope. Local filesystem, S3-compatible storage, and SMB targets are supported;
+imported rclone providers remain experimental and should be used only after
+successful target tests and restore drills.
 
 ## Recovery Terms
 

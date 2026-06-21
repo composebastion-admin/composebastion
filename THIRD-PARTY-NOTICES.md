@@ -3,7 +3,7 @@
 ComposeBastion may include or depend on third-party software components.
 Third-party components are governed by their own license terms and are not relicensed by LICENSE.md.
 
-This inventory was generated from package-lock.json and installed package metadata on 2026-06-20. It is a best-effort dependency notice for the npm workspace and should be reviewed before commercial distribution.
+This inventory was generated from package-lock.json and installed package metadata on 2026-06-21. It is a best-effort dependency notice for the npm workspace.
 
 ## License Summary
 

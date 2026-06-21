@@ -58,7 +58,7 @@ export type Tab =
 
 export type HostScope = "selected" | "all" | "custom";
 
-export const tabs: Array<{ id: Tab; label: string; icon: typeof Box; beta?: boolean }> = [
+export const tabs: Array<{ id: Tab; label: string; icon: typeof Box }> = [
   { id: "overview", label: "Dashboard", icon: Activity },
   { id: "services", label: "Services", icon: Boxes },
   { id: "containers", label: "Containers", icon: Box },
@@ -79,8 +79,8 @@ export const tabs: Array<{ id: Tab; label: string; icon: typeof Box; beta?: bool
   { id: "recovery-move", label: "Migrate App", icon: Copy },
   { id: "recovery-schedules", label: "Schedules", icon: RefreshCw },
   { id: "recovery-targets", label: "Backup Storage", icon: HardDrive },
-  { id: "recovery-runs", label: "Restore Runs", icon: Activity, beta: true },
-  { id: "recovery-backups", label: "Backups", icon: ShieldCheck, beta: true },
+  { id: "recovery-runs", label: "Restore Runs", icon: Activity },
+  { id: "recovery-backups", label: "Backups", icon: ShieldCheck },
   { id: "migrate", label: "Migrate App", icon: Copy },
   { id: "alerts", label: "Alerts", icon: Bell },
   { id: "registries", label: "Registries", icon: KeyRound },

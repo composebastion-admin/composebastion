@@ -14,6 +14,8 @@ import { HostSettingsPanel } from "../settings/HostSettingsPanel.js";
 import { SessionsPanel } from "../settings/SessionsPanel.js";
 import { ButtonRow, Panel } from "../ui/primitives.js";
 
+const APP_VERSION = import.meta.env.VITE_APP_VERSION ?? "dev";
+
 type AdminSection =
   | "settings"
   | "operations"
@@ -22,7 +24,8 @@ type AdminSection =
   | "registries"
   | "users"
   | "jobs"
-  | "audit";
+  | "audit"
+  | "about";
 
 const adminSections: Array<{ id: AdminSection; label: string }> = [
   { id: "settings", label: "Settings" },
@@ -32,7 +35,8 @@ const adminSections: Array<{ id: AdminSection; label: string }> = [
   { id: "registries", label: "Registries" },
   { id: "users", label: "Users" },
   { id: "jobs", label: "Jobs" },
-  { id: "audit", label: "Audit" }
+  { id: "audit", label: "Audit" },
+  { id: "about", label: "About" }
 ];
 
 export function AdminPanel({
@@ -111,8 +115,46 @@ export function AdminPanel({
           {section === "users" && <UsersPanel />}
           {section === "jobs" && <JobsPanel jobs={jobs} userRole={user.role} refresh={refresh} />}
           {section === "audit" && <AuditPanel />}
+          {section === "about" && <AboutPanel />}
         </div>
       </div>
     </div>
+  );
+}
+
+function AboutPanel() {
+  return (
+    <Panel title="About ComposeBastion">
+      <div className="aboutPanel">
+        <dl className="aboutFacts">
+          <div>
+            <dt>Version</dt>
+            <dd>v{APP_VERSION}</dd>
+          </div>
+          <div>
+            <dt>Copyright</dt>
+            <dd>Copyright (c) 2026 ComposeBastion Admin. All rights reserved.</dd>
+          </div>
+          <div>
+            <dt>License</dt>
+            <dd>Source-available private use license. Home, personal, and private non-commercial use is allowed.</dd>
+          </div>
+          <div>
+            <dt>Commercial Use</dt>
+            <dd>Business, organizational, hosted, MSP, SaaS, redistribution, and container image republishing require written approval or a purchased license.</dd>
+          </div>
+          <div>
+            <dt>Contact</dt>
+            <dd><a href="mailto:support@composebastion.com">support@composebastion.com</a></dd>
+          </div>
+        </dl>
+        <div className="aboutLinks" aria-label="Legal documents">
+          <a href="https://github.com/composebastion-admin/composebastion/blob/main/LICENSE.md" target="_blank" rel="noreferrer">License</a>
+          <a href="https://github.com/composebastion-admin/composebastion/blob/main/LICENSING_SUMMARY.md" target="_blank" rel="noreferrer">Summary</a>
+          <a href="https://github.com/composebastion-admin/composebastion/blob/main/COMMERCIAL-LICENSE.md" target="_blank" rel="noreferrer">Commercial</a>
+          <a href="https://github.com/composebastion-admin/composebastion/blob/main/THIRD-PARTY-NOTICES.md" target="_blank" rel="noreferrer">Third-Party Notices</a>
+        </div>
+      </div>
+    </Panel>
   );
 }

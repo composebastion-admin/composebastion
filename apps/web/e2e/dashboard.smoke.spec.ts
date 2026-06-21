@@ -715,6 +715,16 @@ test("active sessions are reachable from admin settings", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Log out everywhere" })).toBeVisible();
 });
 
+test("admin about shows V1 licensing details", async ({ page }) => {
+  await mockApi(page);
+  await page.goto("/admin");
+  await page.getByRole("button", { name: "About" }).click();
+  await expect(page.getByRole("heading", { name: "About ComposeBastion" })).toBeVisible();
+  await expect(page.locator(".adminPane").getByText("v1.0.0")).toBeVisible();
+  await expect(page.getByText("Copyright (c) 2026 ComposeBastion Admin. All rights reserved.")).toBeVisible();
+  await expect(page.getByRole("link", { name: "support@composebastion.com" })).toBeVisible();
+});
+
 test("mobile navigation opens and supports keyboard-visible links", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 820 });
   await mockApi(page);
@@ -905,20 +915,20 @@ test("backups route renders recovery-owned backups with sparse backup pages", as
   await mockApi(page);
   await page.goto("/backups");
   await expect(page.getByRole("heading", { name: "Recovery Center" })).toBeVisible();
-  await expect(page.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name: /Backups.*Beta/ })).toBeVisible();
-  await expect(page.getByRole("button", { name: /Backups.*Beta/ })).toBeVisible();
-  await expect(page.getByRole("heading", { name: /Backup inventory.*Beta/ })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name: "Backups" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Backups" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Backup inventory" })).toBeVisible();
   await expect(page.getByText("Create backup")).toBeVisible();
   await expect(page.getByText(/view failed to load|view failed to render/i)).toHaveCount(0);
 });
 
-test("restore run surfaces keep beta labels visible", async ({ page }) => {
+test("restore run surfaces render V1 labels", async ({ page }) => {
   await mockApi(page);
   await page.goto("/recovery-runs");
   await expect(page.getByRole("heading", { name: "Recovery Center" })).toBeVisible();
-  await expect(page.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name: /Restore Runs.*Beta/ })).toBeVisible();
-  await expect(page.getByRole("button", { name: /Restore \/ Migration Runs.*Beta/ })).toBeVisible();
-  await expect(page.getByRole("heading", { name: /Recent Restore \/ Migration Jobs.*Beta/ })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name: "Restore Runs" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Restore / Migration Runs" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Recent Restore / Migration Jobs" })).toBeVisible();
 });
 
 test("recovery drill flow uses confirmation before enqueue", async ({ page }) => {

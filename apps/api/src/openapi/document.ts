@@ -698,7 +698,7 @@ export function buildOpenApiDocument() {
     info: {
       title: "ComposeBastion API",
       version: OPENAPI_VERSION,
-      description: "ComposeBastion API contract. Stable JSON endpoints are available under /api/v1 while legacy /api routes remain compatible during the V1 transition."
+      description: "ComposeBastion API contract. Stable JSON endpoints are available under /api/v1 while legacy /api routes remain compatible in V1."
     },
     servers: [{ url: "/" }],
     components: {
@@ -721,7 +721,7 @@ export function buildOpenApiMarkdown() {
     "",
     "Generated from `apps/api/src/openapi/document.ts`.",
     "",
-    "Stable JSON endpoints are documented under `/api/v1/*`. Existing `/api/*` endpoints remain compatibility aliases during the V1 transition.",
+    "Stable JSON endpoints are documented under `/api/v1/*`. Existing `/api/*` endpoints remain compatibility aliases in V1.",
     "",
     "| Method | Path | Auth | Summary |",
     "|--------|------|------|---------|"

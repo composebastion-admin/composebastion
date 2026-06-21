@@ -12,6 +12,13 @@ on:
       - "agent-compose*.yml"
       - "package.json"
       - "package-lock.json"
+      - "LICENSE.md"
+      - "LICENSING_SUMMARY.md"
+      - "COMMERCIAL-LICENSE.md"
+      - "NOTICE.md"
+      - "THIRD-PARTY-NOTICES.md"
+      - "TRADEMARKS.md"
+      - "LICENSES/**"
       - "apps/**"
       - "packages/**"
       - "infra/**"
@@ -25,6 +32,13 @@ on:
       - "agent-compose*.yml"
       - "package.json"
       - "package-lock.json"
+      - "LICENSE.md"
+      - "LICENSING_SUMMARY.md"
+      - "COMMERCIAL-LICENSE.md"
+      - "NOTICE.md"
+      - "THIRD-PARTY-NOTICES.md"
+      - "TRADEMARKS.md"
+      - "LICENSES/**"
       - "apps/**"
       - "packages/**"
       - "infra/**"
@@ -89,6 +103,8 @@ jobs:
             type=sha,prefix=sha-
           labels: |
             org.opencontainers.image.title=ComposeBastion
+            org.opencontainers.image.vendor=ComposeBastion Admin
+            org.opencontainers.image.licenses=LicenseRef-ComposeBastion-SourceAvailable-PrivateUse-1.0
             org.opencontainers.image.version=${{ steps.package.outputs.version }}
 
       - name: Agent image metadata
@@ -105,6 +121,8 @@ jobs:
             type=sha,prefix=sha-
           labels: |
             org.opencontainers.image.title=ComposeBastion Agent
+            org.opencontainers.image.vendor=ComposeBastion Admin
+            org.opencontainers.image.licenses=LicenseRef-ComposeBastion-SourceAvailable-PrivateUse-1.0
             org.opencontainers.image.version=${{ steps.package.outputs.version }}
 
       - name: Build app image

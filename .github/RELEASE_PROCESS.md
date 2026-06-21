@@ -2,7 +2,7 @@
 
 ComposeBastion is a TypeScript/npm workspaces project with a Fastify API,
 React/Vite web UI, optional host agent, Postgres migrations, Docker Compose
-deployment, and runtime Docker images. The `v0.9` line is the V1 hardening line.
+deployment, and runtime Docker images.
 
 ## Branches
 
@@ -59,8 +59,8 @@ Run the same gates CI expects before release:
 - Publish container images for every public release and every merge to `main`
   through `.github/workflows/publish-images.yml`.
 - Main image publishes must include `latest`, branch tags, and `sha-*` tags.
-  Immutable version tags such as `0.9.9`, `v0.9.9`, and the `0.9` minor tag
-  must only be published from `v*` git tags.
+  Immutable version tags such as `1.0.0` and `v1.0.0` must only be published
+  from `v*` git tags.
 - The workflow must build both app and agent images before publishing either
   image so version tags are not created from a partial runtime build.
 - Multi-arch image publishing targets `linux/amd64` and `linux/arm64` so NAS
@@ -78,17 +78,28 @@ Run the same gates CI expects before release:
 - Beta/staging releases should include test notes: what to verify, where to look
   for logs/screenshots, and any rollback or known-risk notes.
 
-## V1 Readiness
+## Legal And License Review
 
-- Treat V1 as feature-complete, documented, and release-gated rather than a
-  guarantee that every recovery provider has graduated from Beta.
-- Backups, restores, restore drills, and migration runs may remain labeled Beta
-  in V1; imported rclone providers beyond SMB remain experimental.
-- Freeze `/api/v1` after `v1.0.0-rc.1`. Any breaking change after the first RC
-  restarts the RC cycle.
+- Confirm project code, documentation, images, icons, screenshots, and other
+  assets are owned by ComposeBastion Admin or included with compatible
+  permission.
+- Review earlier public tags before making historical license claims.
+- Keep `LICENSE.md`, `LICENSING_SUMMARY.md`, `COMMERCIAL-LICENSE.md`,
+  `NOTICE.md`, `THIRD-PARTY-NOTICES.md`, `TRADEMARKS.md`, and `LICENSES/`
+  aligned before publishing images.
+- Confirm app and agent runtime images contain those legal artifacts under
+  `/licenses`.
+- Keep `support@composebastion.com` as the private contact path for commercial
+  licensing and written permission.
+
+## V1 Release Gates
+
+- Treat V1 as feature-complete, documented, and release-gated.
+- `/api/v1` is the V1 compatibility boundary. Breaking changes require a new
+  major version or documented compatibility plan.
 - Protect `main`, require release-gating checks before promotion, and enable or
   verify Dependabot alerts and secret scanning before final V1.
-- Use `docs/v1-readiness.md` as the release-candidate checklist.
+- Use `docs/v1-readiness.md` as the release verification checklist.
 
 ## Release Verification
 
@@ -110,19 +121,17 @@ POSTGRES_PASSWORD=composebastion-ci-password \
   docker compose -f docker-compose.yml -f docker-compose.prod.example.yml config
 AGENT_TOKEN=ci-test-agent-token-which-is-at-least-32-chars-long \
   docker compose -f agent-compose.image.example.yml config
-docker build --target runtime -t composebastion-app:v0.9-local .
-docker build -f Dockerfile.agent --target runtime -t composebastion-agent:v0.9-local .
+docker build --target runtime -t composebastion-app:v1-local .
+docker build -f Dockerfile.agent --target runtime -t composebastion-agent:v1-local .
 ```
 
 After publishing, verify unauthenticated pulls:
 
 ```bash
-docker pull ghcr.io/composebastion-admin/composebastion-app:0.9.9
-docker pull ghcr.io/composebastion-admin/composebastion-agent:0.9.9
-docker pull ghcr.io/composebastion-admin/composebastion-app:v0.9.9
-docker pull ghcr.io/composebastion-admin/composebastion-agent:v0.9.9
-docker pull ghcr.io/composebastion-admin/composebastion-app:0.9
-docker pull ghcr.io/composebastion-admin/composebastion-agent:0.9
+docker pull ghcr.io/composebastion-admin/composebastion-app:1.0.0
+docker pull ghcr.io/composebastion-admin/composebastion-agent:1.0.0
+docker pull ghcr.io/composebastion-admin/composebastion-app:v1.0.0
+docker pull ghcr.io/composebastion-admin/composebastion-agent:v1.0.0
 ```
 
 ## Post-Push Verification
@@ -131,8 +140,8 @@ docker pull ghcr.io/composebastion-admin/composebastion-agent:0.9
   any image publishing jobs.
 - Confirm scanner alerts on the protected branch after scans refresh; alerts can
   lag until the target branch is rescanned.
-- For the `v0.9.9` release, CI, CodeQL, Container Scan, Publish Images, and 0
-  open code-scanning alerts were verified after the scan refresh.
+- For the `v1.0.0` release, verify CI, CodeQL, Container Scan, Publish Images,
+  and code-scanning alerts after the scan refresh.
 - Distinguish Dependabot or bot PRs opened after a release push from actual
   release failures.
 - Close linked issues only after the fix is released or merged to the intended

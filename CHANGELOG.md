@@ -1,5 +1,26 @@
 # Changelog
 
+## [v1.0.0] - 2026-06-21
+
+### Added
+- Promoted image-only installs as a first-class V1 path for NAS devices,
+  Proxmox Docker guests, Portainer stacks, and native Docker hosts.
+- Added an authenticated Admin About surface with version, copyright,
+  source-available license summary, commercial contact, and legal document links.
+- Added runtime image license bundles under `/licenses` for app and agent images.
+
+### Changed
+- Bumped package, generated OpenAPI, runtime image, and documentation versions to
+  `1.0.0`.
+- Updated V1 docs around the stable `/api/v1` contract, config backup/restore,
+  agent image lifecycle, and supported recovery storage targets.
+- Standardized licensing contact on `support@composebastion.com` and copyright
+  ownership on ComposeBastion Admin.
+
+### Fixed
+- Removed outdated public `v0.9`/V1-readiness wording from active release docs.
+- Removed release-beta labels from backup and restore-run UI surfaces for V1.
+
 ## [v0.9.9] - 2026-06-21
 
 ### Added

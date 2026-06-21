@@ -14,7 +14,7 @@ import { useAsyncAction } from "../../hooks/useAsyncAction.js";
 import type { Jobish, JobResult } from "../../lib/dashboardTypes.js";
 import { formatBytes, formatDate } from "../../lib/format.js";
 import { hostName, jobLabel } from "../../lib/hostScope.js";
-import { BetaBadge, ButtonRow, CardSection, DataTable, Field, Panel, StatusPill } from "../ui/primitives.js";
+import { ButtonRow, CardSection, DataTable, Field, Panel, StatusPill } from "../ui/primitives.js";
 import { HostSelect } from "../dashboard/HostSelect.js";
 import { useConfirm } from "../ConfirmProvider.js";
 
@@ -358,7 +358,7 @@ export function BackupsPanel({
   }
 
   return (
-    <Panel title={<span className="panelTitleWithBadge">Backup inventory <BetaBadge /></span>} count={panelCount}>
+    <Panel title="Backup inventory" count={panelCount}>
       {health && (
         <div className="backupHealthSummary">
           <div className="backupHealthOverall">

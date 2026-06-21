@@ -1,32 +1,27 @@
-# V1 Readiness
+# V1 Release Verification
 
-ComposeBastion is using the `v0.9` line to finish V1 hardening. V1 readiness
-means the core product is feature-complete, documented, and release-gated; it
-does not mean every recovery provider has graduated from Beta or experimental
-status.
+ComposeBastion V1 is feature-complete, documented, release-gated, and published
+as matching app and agent images.
 
 ## V1 Stability Model
 
 - Core host management, Compose operations, GitHub deploys, alerts, RBAC, audit,
-  config backup/restore, and the `/api/v1` compatibility boundary are intended
-  to be V1-stable after the release-candidate cycle.
+  config backup/restore, and the `/api/v1` compatibility boundary are V1-stable.
 - Backups, restores, restore drills, recovery points, and migration runs are
-  included in V1 but remain labeled Beta until broader real-world restore proof
-  is complete.
+  included in V1 release verification.
 - Local, S3-compatible, and SMB backup targets are the supported guided storage
-  targets for the V1 candidate.
+  targets for V1.
 - Drive, OneDrive, iCloud Drive, WebDAV, SFTP, and custom rclone targets remain
   experimental imported-rclone workflows.
 
-## Release Path
+## Release Rules
 
-1. Publish one or more `0.9.x` hardening releases for cleanup, docs, and release
-   automation fixes.
-2. Publish `v1.0.0-rc.1` only after all automated gates pass locally and on
-   GitHub.
-3. Promote to `v1.0.0` only when the RC has no release-blocking issues, image
-   tags publish correctly, and docs match the final support story.
-4. Restart the RC cycle for any breaking `/api/v1` change after the first RC.
+1. Tag `v1.0.0` only after automated and manual gates pass.
+2. Publish app and agent images together.
+3. Confirm GHCR packages are public and pullable.
+4. Confirm Docker images include legal artifacts under `/licenses`.
+5. Use `support@composebastion.com` for commercial licensing and written
+   permission requests.
 
 ## Required Gates
 
@@ -45,11 +40,14 @@ status.
 ## Manual Acceptance
 
 - Fresh image install from GHCR.
-- Upgrade from the latest `v0.9` release.
+- Source install update from `main`.
 - Unauthenticated GHCR pulls for app and agent image tags.
 - Local backup, verify, and restore drill.
 - S3 and SMB backup target connection tests.
-- Confirmation that Beta and experimental labels appear where expected.
+- Confirmation that experimental labels appear only for imported rclone
+  providers.
+- Confirmation that Admin -> About shows version, copyright, license summary,
+  and `support@composebastion.com`.
 
 ## GitHub Release Plumbing
 
@@ -57,4 +55,3 @@ status.
 - Require the release-gating checks before merges or release promotion.
 - Enable or verify Dependabot alerts and secret scanning.
 - Keep dependency review enabled for pull requests that change dependencies.
-
