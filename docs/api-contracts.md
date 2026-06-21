@@ -1,9 +1,8 @@
 # API Contracts
 
-ComposeBastion exposes stable route families through `/api/v1/*` during the
-`v0.9` hardening line and into the V1 release-candidate cycle. Existing UI and
-trusted clients can keep using `/api/*`; those routes remain compatible aliases
-for the same backend behavior during the V1 transition.
+ComposeBastion exposes stable route families through `/api/v1/*`. Existing UI
+and trusted clients can keep using `/api/*`; those routes remain compatible
+aliases for the same backend behavior in V1.
 
 ## Compatibility Boundary
 
@@ -11,8 +10,8 @@ for the same backend behavior during the V1 transition.
   unless a security fix requires otherwise.
 - `/api/v1` is the public compatibility boundary. New public route families
   should be documented there before release.
-- After `v1.0.0-rc.1`, no breaking `/api/v1` change should ship without
-  restarting the release-candidate cycle.
+- Breaking `/api/v1` changes require a new major version or an explicitly
+  documented compatibility plan.
 - Error responses should use the existing envelope shape:
   `{ error: string, code?: string, requestId?: string | null, issues?: unknown[] }`.
 - The request ID is copied from `x-request-id` when provided and is included in
@@ -30,9 +29,9 @@ for the same backend behavior during the V1 transition.
 | Auth/session | Stable enough for UI use; token material is never returned. |
 | Hosts/resources | Stable enough for UI use; host secrets are redacted. |
 | Containers/compose/apps | Stable enough for UI use; mutations are typed jobs. |
-| Backups/recovery | Stable for documented local, S3, SMB, backup health attention, recovery-point, drill, and restore workflows in v0.9. |
+| Backups/recovery | Stable for documented local, S3, SMB, backup health attention, recovery-point, drill, and restore workflows in V1. |
 | Metrics/alerts | Stable enough for UI use; stats may degrade gracefully when host data is unavailable. |
-| Admin/config/users/audit | Stable for documented admin workflows and config backup/restore in v0.9. |
+| Admin/config/users/audit | Stable for documented admin workflows and config backup/restore in V1. |
 
 ## OpenAPI Plan
 

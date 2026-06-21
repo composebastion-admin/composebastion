@@ -29,20 +29,18 @@ the base images all support the device.
 
 ## Current Published Release
 
-The latest verified release is `v0.9.9`.
+The latest verified release is `v1.0.0`.
 
 - App image: `ghcr.io/composebastion-admin/composebastion-app`
 - Agent image: `ghcr.io/composebastion-admin/composebastion-agent`
-- Exact release tags: `0.9.9` and `v0.9.9`
-- Public `v0.9` line tag: `0.9`
+- Exact release tags: `1.0.0` and `v1.0.0`
 - Moving `main` tags: `latest`, branch tags, and `sha-*`
 
-Pin `COMPOSEBASTION_VERSION=0.9.9` for controlled production upgrades. Use
+Pin `COMPOSEBASTION_VERSION=1.0.0` for controlled production upgrades. Use
 `latest` only when you intentionally want the newest `main` build.
 
-The `v0.9` line is the V1 hardening line. Backups and restores are included but
-remain labeled Beta in the app; keep routine backup verification and restore
-drills in your operational checklist.
+Runtime app and agent images include ComposeBastion license, notice, trademark,
+and third-party notice files under `/licenses`.
 
 ## Image Install
 
@@ -84,7 +82,7 @@ docker compose -f docker-compose.image.yml up -d
 
 Open `http://<manager-ip>:8080`, create the first owner account, then add a
 Docker host. For production change control, pin `COMPOSEBASTION_VERSION` to a
-release tag such as `0.9.9` instead of `latest`.
+release tag such as `1.0.0` instead of `latest`.
 
 ## Source Build Install
 
@@ -221,20 +219,26 @@ HTTPS.
 For homelab/NAS installs following `latest`:
 
 ```bash
-cd ~/composebastion && docker compose -f docker-compose.image.yml pull && docker compose -f docker-compose.image.yml up -d
+cd ~/composebastion
+docker compose -f docker-compose.image.yml pull
+docker compose -f docker-compose.image.yml up -d
 ```
 
 For pinned production installs, edit `COMPOSEBASTION_VERSION` in `.env`, then
 run:
 
 ```bash
-cd ~/composebastion && docker compose -f docker-compose.image.yml pull && docker compose -f docker-compose.image.yml up -d
+cd ~/composebastion
+docker compose -f docker-compose.image.yml pull
+docker compose -f docker-compose.image.yml up -d
 ```
 
 ## Updating Source Installs
 
 ```bash
-cd ~/composebastion && git pull --rebase origin main && docker compose -f docker-compose.yml -f docker-compose.prod.example.yml up -d --build
+cd ~/composebastion
+git pull --ff-only
+docker compose up -d --build app worker
 ```
 
 Before updating a production deployment, export a config backup from

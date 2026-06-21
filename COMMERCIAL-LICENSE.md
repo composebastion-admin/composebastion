@@ -30,11 +30,10 @@ Approval or a paid license is required for:
 
 To request approval, written permission, or a commercial license, contact:
 
-https://github.com/composebastion-admin/composebastion/issues
+support@composebastion.com
 
 Do not include secrets, credentials, customer data, pricing expectations, or
-confidential commercial terms in public issues. Ask for a private contact path
-when needed.
+confidential commercial terms in public issues.
 
 Commercial terms are valid only when provided in a separate written agreement or
 written approval from the project publisher.

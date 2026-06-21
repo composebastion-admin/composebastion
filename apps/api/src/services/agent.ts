@@ -164,7 +164,7 @@ export function agentCompatibilityStatus(version: string | null | undefined) {
         ? current.patch > minimum.patch
         : current.pre === null || (minimum.pre !== null && current.pre >= minimum.pre);
   return compatible
-    ? { status: "compatible" as const, message: `Agent ${version} supports the current pre-1.0 API surface.` }
+    ? { status: "compatible" as const, message: `Agent ${version} supports the current V1 agent API surface.` }
     : { status: "outdated" as const, message: `Agent ${version} is older than ${MIN_COMPATIBLE_AGENT_VERSION}; upgrade it for live logs and host metrics parity.` };
 }
 

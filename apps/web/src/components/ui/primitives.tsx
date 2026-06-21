@@ -2,10 +2,6 @@ import type { ReactNode } from "react";
 import { Plus } from "lucide-react";
 import { statusClassName } from "../../lib/dockerMetrics.js";
 
-export function BetaBadge() {
-  return <span className="pill beta" title="Beta workflow">Beta</span>;
-}
-
 export function Panel({ title, count, children }: { title: ReactNode; count?: number; children: ReactNode }) {
   return (
     <div className="panel">

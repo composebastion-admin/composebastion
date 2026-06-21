@@ -32,4 +32,4 @@ compensation.
 
 For support or licensing questions, contact:
 
-https://github.com/composebastion-admin/composebastion/issues
+support@composebastion.com

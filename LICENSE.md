@@ -1,6 +1,6 @@
 # ComposeBastion Source Available Private Use License v1.0
 
-Copyright (c) 2026. All rights reserved.
+Copyright (c) 2026 ComposeBastion Admin. All rights reserved.
 
 This license governs access to and use of ComposeBastion, a multi-host Docker
 management console deployed with Docker Compose, including its source code,
@@ -63,10 +63,10 @@ commercial activity requires prior written approval or a purchased license.
 
 To request approval or purchase a license, contact:
 
-https://github.com/composebastion-admin/composebastion/issues
+support@composebastion.com
 
 Do not include secrets, credentials, customer data, or confidential commercial
-terms in public issues. Ask for a private contact path when needed.
+terms in public issues.
 
 ## 4. Examples of Use That Requires Approval or a License
 
@@ -219,4 +219,4 @@ prior versions unless explicitly stated in writing.
 For support, approval, business use, commercial licensing, or written
 permission, contact:
 
-https://github.com/composebastion-admin/composebastion/issues
+support@composebastion.com

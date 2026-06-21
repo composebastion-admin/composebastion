@@ -25,7 +25,6 @@ export function SideNavigation({ currentTab, hasHost, onTabChange }: { currentTa
               >
                 <Icon size={18} />
                 <span>{item.label}</span>
-                {item.beta && <small className="sideNavBeta">Beta</small>}
                 {needsHost && <small>Host</small>}
               </Link>
             );

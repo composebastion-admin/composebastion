@@ -1,4 +1,4 @@
-ARG APP_VERSION=0.9.6
+ARG APP_VERSION=1.0.0
 
 FROM node:20-bookworm-slim AS deps
 WORKDIR /app
@@ -25,6 +25,7 @@ LABEL org.opencontainers.image.title="ComposeBastion Agent" \
       org.opencontainers.image.description="Optional Docker-only host agent for ComposeBastion" \
       org.opencontainers.image.url="https://github.com/composebastion-admin/composebastion" \
       org.opencontainers.image.source="https://github.com/composebastion-admin/composebastion" \
+      org.opencontainers.image.vendor="ComposeBastion Admin" \
       org.opencontainers.image.version="${APP_VERSION}" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.created="${BUILD_DATE}" \
@@ -46,5 +47,7 @@ RUN set -eux; \
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/apps/agent/package.json ./apps/agent/package.json
 COPY --from=build /app/apps/agent/dist ./apps/agent/dist
+COPY LICENSE.md LICENSING_SUMMARY.md COMMERCIAL-LICENSE.md NOTICE.md THIRD-PARTY-NOTICES.md TRADEMARKS.md /licenses/
+COPY LICENSES /licenses/LICENSES
 EXPOSE 8090
 CMD ["node", "apps/agent/dist/server.js"]

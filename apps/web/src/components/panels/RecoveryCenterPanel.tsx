@@ -32,13 +32,13 @@ export type RecoverySection =
   | "runs"
   | "volume-backups";
 
-const recoverySections: Array<{ id: RecoverySection; label: string; beta?: boolean }> = [
+const recoverySections: Array<{ id: RecoverySection; label: string }> = [
   { id: "points", label: "Recovery Points" },
   { id: "move", label: "Migrate App" },
   { id: "schedules", label: "Schedules" },
   { id: "targets", label: "Backup Storage" },
-  { id: "runs", label: "Restore / Migration Runs", beta: true },
-  { id: "volume-backups", label: "Backups", beta: true }
+  { id: "runs", label: "Restore / Migration Runs" },
+  { id: "volume-backups", label: "Backups" }
 ];
 
 function recoverySectionLabel(section: RecoverySection) {
@@ -161,7 +161,6 @@ export function RecoveryCenterPanel({
               onClick={() => setActiveSection(item.id)}
             >
               <span>{item.label}</span>
-              {item.beta && <span className="pill beta">Beta</span>}
             </button>
           ))}
         </nav>

@@ -1,5 +1,5 @@
 ARG TRIVY_VERSION=0.71.2
-ARG APP_VERSION=0.9.6
+ARG APP_VERSION=1.0.0
 
 FROM node:20-bookworm-slim AS deps
 WORKDIR /app
@@ -30,6 +30,7 @@ LABEL org.opencontainers.image.title="ComposeBastion" \
       org.opencontainers.image.description="Self-hosted Docker host manager, web UI, API, worker, recovery, and operations console" \
       org.opencontainers.image.url="https://github.com/composebastion-admin/composebastion" \
       org.opencontainers.image.source="https://github.com/composebastion-admin/composebastion" \
+      org.opencontainers.image.vendor="ComposeBastion Admin" \
       org.opencontainers.image.version="${APP_VERSION}" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.created="${BUILD_DATE}" \
@@ -63,6 +64,8 @@ COPY --from=build /app/apps/web/dist ./apps/web/dist
 COPY --from=build /app/packages/shared/package.json ./packages/shared/package.json
 COPY --from=build /app/packages/shared/dist ./packages/shared/dist
 COPY --from=build /app/infra ./infra
+COPY LICENSE.md LICENSING_SUMMARY.md COMMERCIAL-LICENSE.md NOTICE.md THIRD-PARTY-NOTICES.md TRADEMARKS.md /licenses/
+COPY LICENSES /licenses/LICENSES
 RUN mkdir -p /data/backups
 EXPOSE 8080
 CMD ["node", "apps/api/dist/server.js"]

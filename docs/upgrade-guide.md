@@ -1,16 +1,15 @@
 # Upgrade Guide
 
 Upgrade carefully, keep rollback paths simple, and export a config backup before
-every production update. The `v0.9` line is the V1 hardening line until the
-release-candidate cycle is complete.
+every production update.
 
 ## Version Policy
 
-- `/api/v1` is the public compatibility boundary for the V1 transition.
+- `/api/v1` is the public compatibility boundary for V1.
 - Use additive API changes whenever possible.
 - Keep app and agent images on the same release when possible. The latest
-  verified release is `v0.9.9`, with app and agent image tags `0.9.9`,
-  `v0.9.9`, and `0.9`.
+  verified release is `v1.0.0`, with app and agent image tags `1.0.0`
+  and `v1.0.0`.
 - New database migrations must use the next clean `NNN_snake_case.sql` filename.
   The existing duplicate `018_` migration prefix is a published legacy exception;
   do not create new duplicates.
@@ -30,7 +29,7 @@ For image installs:
 
 ```bash
 cd ~/composebastion
-export COMPOSEBASTION_VERSION=0.9.9
+export COMPOSEBASTION_VERSION=1.0.0
 docker compose -f docker-compose.image.yml pull
 docker compose -f docker-compose.image.yml up -d
 ```
@@ -38,7 +37,9 @@ docker compose -f docker-compose.image.yml up -d
 For source installs:
 
 ```bash
-cd ~/composebastion && git pull --rebase origin main && docker compose -f docker-compose.yml -f docker-compose.prod.example.yml up -d --build
+cd ~/composebastion
+git pull --ff-only
+docker compose up -d --build app worker
 ```
 
 ## Rollback

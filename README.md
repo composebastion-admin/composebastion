@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/composebastion-admin/composebastion/releases"><img alt="Release" src="https://img.shields.io/badge/release-v0.9.9-e0a23f"></a>
+  <a href="https://github.com/composebastion-admin/composebastion/releases"><img alt="Release" src="https://img.shields.io/badge/release-v1.0.0-e0a23f"></a>
   <a href="https://github.com/composebastion-admin/composebastion/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/composebastion-admin/composebastion/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/composebastion-admin/composebastion/pkgs/container/composebastion-app"><img alt="Container image" src="https://img.shields.io/badge/ghcr.io-composebastion--app-2496ed"></a>
   <a href="LICENSE.md"><img alt="License" src="https://img.shields.io/badge/license-source--available-df7d27"></a>
@@ -30,15 +30,13 @@ devices, Proxmox Docker VMs/LXCs, Portainer stacks, and any native Docker host o
 
 ## Current Release
 
-Latest verified release: `v0.9.9`.
+Latest verified release: `v1.0.0`.
 
-- Package and OpenAPI version: `0.9.9`.
-- GitHub release images: `0.9.9`, `v0.9.9`, and `0.9`.
+- Package and OpenAPI version: `1.0.0`.
+- GitHub release images: `1.0.0` and `v1.0.0`.
 - Published platforms: `linux/amd64` and `linux/arm64` for both app and agent.
-- Verified release gates: CI, CodeQL, Container Scan, Publish Images, and 0 open
-  code-scanning alerts after the release scan refreshed.
-- V1 readiness track: core app hardening continues in the `v0.9` line; backups
-  and restores are included but remain visibly Beta for V1.
+- Verified release gates: CI, OpenAPI generation, web smoke, dependency audit,
+  Compose config validation, local image builds, and image license inspection.
 - `main` publishes moving image tags only: `latest`, branch tags, and `sha-*`.
   Immutable version tags publish from `v*` release tags.
 
@@ -113,12 +111,11 @@ Image tags:
 | Tag | Use |
 |-----|-----|
 | `latest` | Simple homelab/NAS updates that intentionally follow `main`. |
-| `0.9.9` or `v0.9.9` | Exact release pin for controlled production upgrades. |
-| `0.9` | Latest patch in the public `v0.9` line. |
+| `1.0.0` or `v1.0.0` | Exact V1 release pin for controlled production upgrades. |
 | `sha-*` | Commit-level verification or rollback testing. |
 
 Main builds publish `latest`, branch tags, and `sha-*` tags. Release tags
-publish immutable version tags such as `0.9.9`, `v0.9.9`, and `0.9`.
+publish immutable version tags such as `1.0.0` and `v1.0.0`.
 
 ### Option B: Build From Source
 
@@ -216,7 +213,7 @@ The full screenshot tour is in the [how-to guide](docs/how-to.md).
 - Test at least one recovery point, verify, and clone restore drill before
   relying on a backup target.
 
-## What Ships In v0.9
+## What Ships In V1
 
 - Multi-host Docker inventory and management.
 - SSH and optional host-agent connection modes.
@@ -230,20 +227,19 @@ The full screenshot tour is in the [how-to guide](docs/how-to.md).
 - Image-only install files and published GHCR images for NAS devices, Proxmox
   Docker guests, Portainer stacks, and native Docker hosts on `linux/amd64` or
   `linux/arm64`.
-- v0.9 config backup/restore for hosts, tracked repos, registries, alerts, users,
+- Config backup/restore for hosts, tracked repos, registries, alerts, users,
   Compose stacks, recovery schedules, storage targets, and operator settings.
-- V1 readiness checklist and release-candidate policy in
-  [docs/v1-readiness.md](docs/v1-readiness.md).
+- Runtime image license and notice files are available under `/licenses`.
+- V1 release verification guidance is in [docs/v1-readiness.md](docs/v1-readiness.md).
 
 ## Repository Rules
 
 - Canonical repository: `https://github.com/composebastion-admin/composebastion`.
 - Pushes, tags, releases, and version updates must use the
   `composebastion-admin` GitHub account.
-- `v0.9` is the first public release line for this repository; do not promote to
-  `v1.0` until the V1 readiness checklist is complete.
-- Backups, restores, restore drills, and migration runs may ship in V1 with a
-  Beta label; local, S3, and SMB are the supported guided recovery targets.
+- `v1.0.0` is the V1 public release line for this repository.
+- Local filesystem, S3-compatible storage, and SMB are the supported guided
+  recovery storage targets; imported rclone providers remain experimental.
 - Do not reintroduce personal owner, repository, image, or user fixtures.
 
 ## License
@@ -263,7 +259,8 @@ a purchased license.
 
 See [LICENSE.md](LICENSE.md), [LICENSING_SUMMARY.md](LICENSING_SUMMARY.md), and
 [COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md). Third-party dependency notices
-are listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+are listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). Commercial
+licensing and written permission requests go to `support@composebastion.com`.
 
 ## Development
 

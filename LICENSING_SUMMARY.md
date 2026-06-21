@@ -61,20 +61,10 @@ projects require prior written approval or a purchased license.
 
 For approval, commercial licensing, written permission, or support, contact:
 
-https://github.com/composebastion-admin/composebastion/issues
+support@composebastion.com
 
 Do not include secrets, credentials, customer data, or confidential commercial
-terms in public issues. Ask for a private contact path when needed.
-
-## Publisher Review Notes
-
-Before relying on this licensing model commercially, the project publisher
-should confirm that project code, documentation, images, icons, screenshots,
-and other assets are owned by the project publisher or included with compatible
-permission.
-
-Earlier public tags in this repository should also be reviewed before making
-claims about historical license terms.
+terms in public issues.
 
 Third-party dependencies remain governed by their own license terms. See
 THIRD-PARTY-NOTICES.md.
