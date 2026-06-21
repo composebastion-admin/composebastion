@@ -124,7 +124,7 @@ async function processAvailableJobs() {
           buildJobProgress(actionForFailure?.type ?? job.type, "failed", activeStepForFailure, failureMessage)
         ).catch(() => undefined);
         await failJob(job.id, error);
-        console.error("worker.job", workerJobLogFields(job, "failed", jobStartedAtMs, error), failureMessage);
+        console.error("worker.job", workerJobLogFields(job, "failed", jobStartedAtMs, error));
       }
     }
   } finally {

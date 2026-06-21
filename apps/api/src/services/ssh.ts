@@ -32,7 +32,8 @@ function execValidatedSshCommand(
   callback: (error: Error | undefined, stream: ClientChannel) => void
 ) {
   const safeCommand = validatedSshCommand(command);
-  // codeql[js/command-line-injection] Commands passed here are built by internal command builders that shell-quote untrusted arguments; this shared wrapper rejects control characters before invoking ssh2.
+  // Commands passed here are built by internal command builders that shell-quote untrusted arguments; this wrapper rejects control characters before invoking ssh2.
+  // codeql[js/command-line-injection]
   client.exec(safeCommand, callback);
 }
 
