@@ -2796,6 +2796,34 @@ a.sideNavItem[aria-disabled="true"] {
   color: var(--text);
 }
 
+.backupAttentionList {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  font-size: 13px;
+}
+
+.backupAttentionItem {
+  display: grid;
+  grid-template-columns: auto minmax(180px, 1fr) minmax(220px, 1.5fr) auto;
+  align-items: center;
+  gap: 8px 12px;
+  color: var(--text-muted);
+}
+
+.backupAttentionTarget {
+  color: var(--text);
+}
+
+.backupAttentionItem small {
+  color: var(--subtle);
+  white-space: nowrap;
+}
+
 .backupTypeCell {
   display: inline-flex;
   align-items: center;
@@ -4849,7 +4877,8 @@ code {
   .containerOverviewGrid,
   .detailKeyValueGrid,
   .opsSummary,
-  .inspectGrid {
+  .inspectGrid,
+  .backupAttentionItem {
     grid-template-columns: 1fr;
   }
 

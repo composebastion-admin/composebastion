@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/composebastion-admin/composebastion/releases"><img alt="Release" src="https://img.shields.io/badge/release-v0.9.7-e0a23f"></a>
+  <a href="https://github.com/composebastion-admin/composebastion/releases"><img alt="Release" src="https://img.shields.io/badge/release-v0.9.8-e0a23f"></a>
   <a href="https://github.com/composebastion-admin/composebastion/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/composebastion-admin/composebastion/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/composebastion-admin/composebastion/pkgs/container/composebastion-app"><img alt="Container image" src="https://img.shields.io/badge/ghcr.io-composebastion--app-2496ed"></a>
   <a href="LICENSE.md"><img alt="License" src="https://img.shields.io/badge/license-source--available-df7d27"></a>
@@ -30,10 +30,10 @@ devices, Proxmox Docker VMs/LXCs, Portainer stacks, and any native Docker host o
 
 ## Current Release
 
-Latest verified release: `v0.9.7`.
+Latest verified release: `v0.9.8`.
 
-- Package and OpenAPI version: `0.9.7`.
-- GitHub release images: `0.9.7`, `v0.9.7`, and `0.9`.
+- Package and OpenAPI version: `0.9.8`.
+- GitHub release images: `0.9.8`, `v0.9.8`, and `0.9`.
 - Published platforms: `linux/amd64` and `linux/arm64` for both app and agent.
 - Verified release gates: CI, CodeQL, Container Scan, Publish Images, and 0 open
   code-scanning alerts after the release scan refreshed.
@@ -111,12 +111,12 @@ Image tags:
 | Tag | Use |
 |-----|-----|
 | `latest` | Simple homelab/NAS updates that intentionally follow `main`. |
-| `0.9.7` or `v0.9.7` | Exact release pin for controlled production upgrades. |
+| `0.9.8` or `v0.9.8` | Exact release pin for controlled production upgrades. |
 | `0.9` | Latest patch in the public `v0.9` line. |
 | `sha-*` | Commit-level verification or rollback testing. |
 
 Main builds publish `latest`, branch tags, and `sha-*` tags. Release tags
-publish immutable version tags such as `0.9.7`, `v0.9.7`, and `0.9`.
+publish immutable version tags such as `0.9.8`, `v0.9.8`, and `0.9`.
 
 ### Option B: Build From Source
 
@@ -157,7 +157,7 @@ docker compose up -d --build app worker
 | Multi-host visibility | Containers, images, networks, volumes, Compose stacks, host metrics, and job history across all connected hosts. |
 | Safer Docker actions | Typed jobs for start, stop, restart, remove, pull, prune, deploy, backup, restore, and migration workflows. |
 | GitHub deploys | Track private or public GitHub Compose repositories with encrypted read-only tokens, branch discovery, preview, deploy, and redeploy. |
-| Recovery confidence | Recovery points, storage targets, readiness scoring, restore drills, profiles, clone restores, and migration runs. |
+| Recovery confidence | Recovery points, storage targets, backup health attention, readiness scoring, restore drills, profiles, clone restores, and migration runs. |
 | Team operations | Owner/admin/operator/viewer roles, active sessions, audit logs, request IDs, rate limits, and alert history. |
 | Practical security | Encrypted secrets, origin checks, credentialed CORS controls, Docker-only agent endpoints, and viewer-safe inspect output. |
 
@@ -167,7 +167,7 @@ docker compose up -d --build app worker
 2. Review inventory in Services, Containers, Images, Networks, and Volumes.
 3. Deploy or track Compose apps from GitHub.
 4. Create recovery points and run clone-only restore drills.
-5. Watch Admin -> Operations for worker health, backup health, and failed jobs.
+5. Watch Admin -> Operations and Backup inventory for worker health, backup health attention, and failed jobs.
 6. Add alert channels and metric thresholds for the services that matter.
 
 ## Product Demo Workspace
@@ -219,8 +219,8 @@ The full screenshot tour is in the [how-to guide](docs/how-to.md).
 - Multi-host Docker inventory and management.
 - SSH and optional host-agent connection modes.
 - Compose deploys, GitHub repository tracking, branch checks, and redeploy jobs.
-- Recovery points, recovery profiles, storage targets, restore drills, readiness
-  scoring, and migration workflows.
+- Recovery points, recovery profiles, storage targets, backup health attention,
+  restore drills, readiness scoring, and migration workflows.
 - Host metrics, host metric alerts, email/webhook notifications, alert silences,
   and alert history.
 - RBAC, active session management, audit events, route rate limits, request IDs,

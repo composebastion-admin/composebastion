@@ -76,7 +76,8 @@ Use clone restore for:
 
 Daily:
 
-- Check Admin -> Operations for backup health and failed jobs.
+- Check Admin -> Operations and Backup inventory for backup health attention and
+  failed jobs.
 - Review readiness warnings for critical apps.
 
 Weekly:
@@ -90,3 +91,15 @@ Before major updates:
 - Create a fresh recovery point.
 - Verify it.
 - Run a clone restore drill when risk is high.
+
+## Backup Health Attention
+
+Backup inventory highlights the most actionable backup-health problems from
+`/api/backups/health`.
+
+- Critical attention items include failed backups and partial backups whose
+  remote upload did not fully complete.
+- Warning attention items include backups that have never been verified, have
+  stale verification proof, have never been drilled, or have stale drill proof.
+- Each item includes the host, backup label, reason, age, severity, and a
+  recommended action so operators can decide whether to rerun, verify, or drill.

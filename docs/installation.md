@@ -29,15 +29,15 @@ the base images all support the device.
 
 ## Current Published Release
 
-The latest verified release is `v0.9.7`.
+The latest verified release is `v0.9.8`.
 
 - App image: `ghcr.io/composebastion-admin/composebastion-app`
 - Agent image: `ghcr.io/composebastion-admin/composebastion-agent`
-- Exact release tags: `0.9.7` and `v0.9.7`
+- Exact release tags: `0.9.8` and `v0.9.8`
 - Public `v0.9` line tag: `0.9`
 - Moving `main` tags: `latest`, branch tags, and `sha-*`
 
-Pin `COMPOSEBASTION_VERSION=0.9.7` for controlled production upgrades. Use
+Pin `COMPOSEBASTION_VERSION=0.9.8` for controlled production upgrades. Use
 `latest` only when you intentionally want the newest `main` build.
 
 ## Image Install
@@ -80,7 +80,7 @@ docker compose -f docker-compose.image.yml up -d
 
 Open `http://<manager-ip>:8080`, create the first owner account, then add a
 Docker host. For production change control, pin `COMPOSEBASTION_VERSION` to a
-release tag such as `0.9.7` instead of `latest`.
+release tag such as `0.9.8` instead of `latest`.
 
 ## Source Build Install
 

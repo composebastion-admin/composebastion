@@ -1,5 +1,30 @@
 # Changelog
 
+## [v0.9.8] - 2026-06-21
+
+### Added
+
+- Added backup health attention items to `/api/backups/health` and the Backup
+  inventory panel. Failed and partial backups are prioritized ahead of
+  verification and restore-drill reminders, with recommended next actions for
+  each affected backup.
+- Documented the backup health response shape in the generated OpenAPI contract,
+  including attention reasons and severity values.
+
+### Changed
+
+- Bumped the workspace, agent, API, web, shared package, package lock, and
+  generated OpenAPI versions to `0.9.8`.
+- Updated GitHub-facing install, upgrade, release, and operator documentation
+  for the `v0.9.8` release line.
+
+### Verified
+
+- Local API and web typechecks passed.
+- Targeted backup and backup-drill tests passed.
+- The shared package was typechecked against tracked source files because
+  unrelated local duplicate `* 2.*` files are present in this checkout.
+
 ## [v0.9.7] - 2026-06-21
 
 ### Changed

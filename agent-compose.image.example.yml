@@ -3,7 +3,7 @@
 #   docker compose -f agent-compose.yml up -d
 #
 # For production, pin COMPOSEBASTION_AGENT_VERSION to the same release as the
-# manager, for example 0.9.7.
+# manager, for example 0.9.8.
 services:
   composebastion-agent:
     image: ${COMPOSEBASTION_AGENT_IMAGE:-ghcr.io/composebastion-admin/composebastion-agent}:${COMPOSEBASTION_AGENT_VERSION:-latest}

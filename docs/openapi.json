@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "ComposeBastion API",
-    "version": "0.9.7",
+    "version": "0.9.8",
     "description": "ComposeBastion pre-1.0 API contract. Stable JSON endpoints are available under /api/v1 while legacy /api routes remain compatible."
   },
   "servers": [
@@ -1279,6 +1279,211 @@
           }
         }
       },
+      "BackupHealthHost": {
+        "type": "object",
+        "required": [
+          "hostId",
+          "hostName",
+          "newestSuccessfulBackupAt",
+          "newestSuccessfulBackupAgeMs",
+          "scheduleIntervalMs",
+          "staleSuccessfulBackup",
+          "recentFailureCount",
+          "totalSizeBytes",
+          "neverVerifiedCount",
+          "neverDrilledCount",
+          "staleVerifiedCount",
+          "staleDrilledCount",
+          "status"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "hostId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "hostName": {
+            "type": "string"
+          },
+          "newestSuccessfulBackupAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "newestSuccessfulBackupAgeMs": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "scheduleIntervalMs": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "staleSuccessfulBackup": {
+            "type": "boolean"
+          },
+          "recentFailureCount": {
+            "type": "number"
+          },
+          "totalSizeBytes": {
+            "type": "number"
+          },
+          "neverVerifiedCount": {
+            "type": "number"
+          },
+          "neverDrilledCount": {
+            "type": "number"
+          },
+          "staleVerifiedCount": {
+            "type": "number"
+          },
+          "staleDrilledCount": {
+            "type": "number"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "healthy",
+              "warning",
+              "critical"
+            ]
+          }
+        }
+      },
+      "BackupHealthAttention": {
+        "type": "object",
+        "required": [
+          "backupId",
+          "hostId",
+          "hostName",
+          "kind",
+          "label",
+          "status",
+          "severity",
+          "reason",
+          "recommendedAction",
+          "createdAt",
+          "completedAt",
+          "ageMs"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "backupId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "hostId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "hostName": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "volume",
+              "host_path"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "completed",
+              "partial",
+              "failed"
+            ]
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "healthy",
+              "warning",
+              "critical"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "failed",
+              "partial",
+              "never_verified",
+              "never_drilled",
+              "stale_verified",
+              "stale_drilled"
+            ]
+          },
+          "recommendedAction": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "completedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ageMs": {
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        }
+      },
+      "BackupHealthSummary": {
+        "type": "object",
+        "required": [
+          "windowMs",
+          "proofStaleMs",
+          "overall",
+          "hosts",
+          "attention"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "windowMs": {
+            "type": "number"
+          },
+          "proofStaleMs": {
+            "type": "number"
+          },
+          "overall": {
+            "$ref": "#/components/schemas/BackupHealthHost"
+          },
+          "hosts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BackupHealthHost"
+            }
+          },
+          "attention": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BackupHealthAttention"
+            }
+          }
+        }
+      },
       "BackupHealthResponse": {
         "type": "object",
         "required": [
@@ -1287,8 +1492,7 @@
         "additionalProperties": false,
         "properties": {
           "health": {
-            "type": "object",
-            "additionalProperties": true
+            "$ref": "#/components/schemas/BackupHealthSummary"
           }
         }
       },

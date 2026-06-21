@@ -36,6 +36,7 @@ import { sanitizeDockerName } from "./recoveryRestoreUtils.js";
 export const BACKUP_DRILL_ROOT = "/var/lib/composebastion/drills";
 const BACKUP_HEALTH_WINDOW_MS = 24 * 60 * 60 * 1000;
 const BACKUP_PROOF_STALE_MS = 30 * 24 * 60 * 60 * 1000;
+const BACKUP_HEALTH_ATTENTION_LIMIT = 20;
 
 function sanitizeFilePart(value: string) {
   return value.replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 120);
@@ -290,8 +291,124 @@ function worstBackupHealthStatus(statuses: Array<"healthy" | "warning" | "critic
   return "healthy" as const;
 }
 
+type BackupHealthAttentionReason =
+  | "failed"
+  | "partial"
+  | "never_verified"
+  | "never_drilled"
+  | "stale_verified"
+  | "stale_drilled";
+
+export type BackupHealthAttentionRow = {
+  id: string;
+  host_id: string;
+  host_name: string | null;
+  host_hostname: string | null;
+  kind: "volume" | "host_path";
+  volume_name: string | null;
+  source_path: string | null;
+  status: "queued" | "running" | "completed" | "partial" | "failed";
+  created_at: Date | string;
+  completed_at: Date | string | null;
+  verified_at: Date | string | null;
+  last_drill_at: Date | string | null;
+};
+
+function isoDate(value: Date | string | null | undefined) {
+  if (!value) return null;
+  return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+}
+
+function attentionLabel(row: BackupHealthAttentionRow) {
+  return row.kind === "host_path" ? row.source_path ?? "Host path" : row.volume_name ?? "Volume";
+}
+
+function attentionAction(reason: BackupHealthAttentionReason) {
+  switch (reason) {
+    case "failed":
+      return "Review the failure and rerun the backup.";
+    case "partial":
+      return "Fix the remote target, then rerun the backup or verify the local artifact.";
+    case "never_verified":
+      return "Run backup verification.";
+    case "stale_verified":
+      return "Run backup verification again.";
+    case "never_drilled":
+      return "Run a restore drill.";
+    case "stale_drilled":
+      return "Run another restore drill.";
+  }
+}
+
+function attentionSeverity(reason: BackupHealthAttentionReason) {
+  return reason === "failed" || reason === "partial" ? "critical" as const : "warning" as const;
+}
+
+function attentionRank(status: "healthy" | "warning" | "critical") {
+  if (status === "critical") return 0;
+  if (status === "warning") return 1;
+  return 2;
+}
+
+export function buildBackupHealthAttentionItems(rows: BackupHealthAttentionRow[], now = new Date()) {
+  const proofCutoff = now.getTime() - BACKUP_PROOF_STALE_MS;
+  const items: BackupHealthSummary["attention"] = [];
+
+  function add(row: BackupHealthAttentionRow, reason: BackupHealthAttentionReason) {
+    const severity = attentionSeverity(reason);
+    const createdAt = isoDate(row.created_at)!;
+    const completedAt = isoDate(row.completed_at);
+    const basis = completedAt ?? createdAt;
+    items.push({
+      backupId: row.id,
+      hostId: row.host_id,
+      hostName: row.host_name ?? row.host_hostname ?? row.host_id,
+      kind: row.kind,
+      label: attentionLabel(row),
+      status: row.status,
+      severity,
+      reason,
+      recommendedAction: attentionAction(reason),
+      createdAt,
+      completedAt,
+      ageMs: basis ? Math.max(0, now.getTime() - new Date(basis).getTime()) : null
+    });
+  }
+
+  for (const row of rows) {
+    if (row.status === "failed") {
+      add(row, "failed");
+      continue;
+    }
+    if (row.status !== "completed" && row.status !== "partial") continue;
+    if (row.status === "partial") add(row, "partial");
+
+    const verifiedAt = row.verified_at ? new Date(row.verified_at).getTime() : null;
+    if (verifiedAt === null) {
+      add(row, "never_verified");
+    } else if (verifiedAt < proofCutoff) {
+      add(row, "stale_verified");
+    }
+
+    const lastDrillAt = row.last_drill_at ? new Date(row.last_drill_at).getTime() : null;
+    if (lastDrillAt === null) {
+      add(row, "never_drilled");
+    } else if (lastDrillAt < proofCutoff) {
+      add(row, "stale_drilled");
+    }
+  }
+
+  return items
+    .sort((left, right) => {
+      const severity = attentionRank(left.severity) - attentionRank(right.severity);
+      if (severity !== 0) return severity;
+      return (right.ageMs ?? 0) - (left.ageMs ?? 0);
+    })
+    .slice(0, BACKUP_HEALTH_ATTENTION_LIMIT);
+}
+
 export async function getBackupHealthSummary(now = new Date()): Promise<BackupHealthSummary> {
-  const [hostsResult, scheduleResult, aggregateResult] = await Promise.all([
+  const [hostsResult, scheduleResult, aggregateResult, attentionResult] = await Promise.all([
     query<{ id: string; name: string | null; hostname: string | null }>(
       "SELECT id, name, hostname FROM docker_hosts ORDER BY name ASC"
     ),
@@ -324,6 +441,25 @@ export async function getBackupHealthSummary(now = new Date()): Promise<BackupHe
        FROM backups
        GROUP BY host_id`,
       [BACKUP_HEALTH_WINDOW_MS, BACKUP_PROOF_STALE_MS]
+    ),
+    query<BackupHealthAttentionRow>(
+      `SELECT b.id,
+              b.host_id,
+              docker_hosts.name AS host_name,
+              docker_hosts.hostname AS host_hostname,
+              b.kind,
+              b.volume_name,
+              b.source_path,
+              b.status,
+              b.created_at,
+              b.completed_at,
+              b.verified_at,
+              b.last_drill_at
+       FROM backups b
+       LEFT JOIN docker_hosts ON docker_hosts.id = b.host_id
+       WHERE b.status IN ('completed', 'partial', 'failed')
+       ORDER BY COALESCE(b.completed_at, b.created_at) DESC
+       LIMIT 200`
     )
   ]);
 
@@ -396,7 +532,8 @@ export async function getBackupHealthSummary(now = new Date()): Promise<BackupHe
     windowMs: BACKUP_HEALTH_WINDOW_MS,
     proofStaleMs: BACKUP_PROOF_STALE_MS,
     overall,
-    hosts
+    hosts,
+    attention: buildBackupHealthAttentionItems(attentionResult.rows, now)
   };
 }
 

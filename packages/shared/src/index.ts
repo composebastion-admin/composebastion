@@ -334,6 +334,29 @@ export const backupVerifySchema = z.object({
 export const backupDrillSchema = z.object({});
 
 export const backupHealthStatusSchema = z.enum(["healthy", "warning", "critical"]);
+export const backupHealthAttentionReasonSchema = z.enum([
+  "failed",
+  "partial",
+  "never_verified",
+  "never_drilled",
+  "stale_verified",
+  "stale_drilled"
+]);
+
+export const backupHealthAttentionSchema = z.object({
+  backupId: idSchema,
+  hostId: idSchema,
+  hostName: z.string(),
+  kind: backupKindSchema,
+  label: z.string(),
+  status: backupStatusSchema,
+  severity: backupHealthStatusSchema,
+  reason: backupHealthAttentionReasonSchema,
+  recommendedAction: z.string(),
+  createdAt: z.string(),
+  completedAt: z.string().nullable(),
+  ageMs: z.number().nullable()
+});
 
 export const backupHealthHostSchema = z.object({
   hostId: idSchema.nullable(),
@@ -355,7 +378,8 @@ export const backupHealthSummarySchema = z.object({
   windowMs: z.number(),
   proofStaleMs: z.number(),
   overall: backupHealthHostSchema,
-  hosts: z.array(backupHealthHostSchema)
+  hosts: z.array(backupHealthHostSchema),
+  attention: z.array(backupHealthAttentionSchema).default([])
 });
 
 export const backupScheduleCreateSchema = z.discriminatedUnion("kind", [

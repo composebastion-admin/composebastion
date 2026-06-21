@@ -97,5 +97,5 @@ claims for a release.
   but live logs and host `/proc` stats require the newer agent endpoints.
 - The v0.9 line expects app and agent images from the same release for live
   logs, queued Docker work, and host `/proc` stats.
-- For the latest verified release, use app and agent image tags `0.9.7` or
-  `v0.9.7`; `0.9` tracks the newest patch in the public v0.9 line.
+- For the latest verified release, use app and agent image tags `0.9.8` or
+  `v0.9.8`; `0.9` tracks the newest patch in the public v0.9 line.

@@ -361,7 +361,43 @@ const componentSchemas = {
     metadata: recordSchema
   }),
   BackupsResponse: namedArrayResponse("backups", schemaRef("Backup")),
-  BackupHealthResponse: namedItemResponse("health", objectSchema),
+  BackupHealthHost: object(["hostId", "hostName", "newestSuccessfulBackupAt", "newestSuccessfulBackupAgeMs", "scheduleIntervalMs", "staleSuccessfulBackup", "recentFailureCount", "totalSizeBytes", "neverVerifiedCount", "neverDrilledCount", "staleVerifiedCount", "staleDrilledCount", "status"], {
+    hostId: idOrNullSchema,
+    hostName: { type: "string" },
+    newestSuccessfulBackupAt: stringOrNullSchema,
+    newestSuccessfulBackupAgeMs: { type: ["number", "null"] },
+    scheduleIntervalMs: { type: ["number", "null"] },
+    staleSuccessfulBackup: { type: "boolean" },
+    recentFailureCount: { type: "number" },
+    totalSizeBytes: { type: "number" },
+    neverVerifiedCount: { type: "number" },
+    neverDrilledCount: { type: "number" },
+    staleVerifiedCount: { type: "number" },
+    staleDrilledCount: { type: "number" },
+    status: enumSchema(["healthy", "warning", "critical"])
+  }),
+  BackupHealthAttention: object(["backupId", "hostId", "hostName", "kind", "label", "status", "severity", "reason", "recommendedAction", "createdAt", "completedAt", "ageMs"], {
+    backupId: idSchema,
+    hostId: idSchema,
+    hostName: { type: "string" },
+    kind: enumSchema(["volume", "host_path"]),
+    label: { type: "string" },
+    status: enumSchema(["queued", "running", "completed", "partial", "failed"]),
+    severity: enumSchema(["healthy", "warning", "critical"]),
+    reason: enumSchema(["failed", "partial", "never_verified", "never_drilled", "stale_verified", "stale_drilled"]),
+    recommendedAction: { type: "string" },
+    createdAt: dateTimeSchema,
+    completedAt: stringOrNullSchema,
+    ageMs: { type: ["number", "null"] }
+  }),
+  BackupHealthSummary: object(["windowMs", "proofStaleMs", "overall", "hosts", "attention"], {
+    windowMs: { type: "number" },
+    proofStaleMs: { type: "number" },
+    overall: schemaRef("BackupHealthHost"),
+    hosts: arrayOf(schemaRef("BackupHealthHost")),
+    attention: arrayOf(schemaRef("BackupHealthAttention"))
+  }),
+  BackupHealthResponse: namedItemResponse("health", schemaRef("BackupHealthSummary")),
   BackupJobResponse: object(["backup", "job"], { backup: schemaRef("Backup"), job: schemaRef("OperationJob") }),
   BackupTarget: object(["id", "name", "type", "kind", "enabled", "config", "localCachePolicy", "healthStatus", "createdAt", "updatedAt"], {
     id: idSchema,

@@ -28,7 +28,7 @@ line.
 | Auth/session | Stable enough for UI use; token material is never returned. |
 | Hosts/resources | Stable enough for UI use; host secrets are redacted. |
 | Containers/compose/apps | Stable enough for UI use; mutations are typed jobs. |
-| Backups/recovery | Stable for documented local, S3, SMB, recovery-point, drill, and restore workflows in v0.9. |
+| Backups/recovery | Stable for documented local, S3, SMB, backup health attention, recovery-point, drill, and restore workflows in v0.9. |
 | Metrics/alerts | Stable enough for UI use; stats may degrade gracefully when host data is unavailable. |
 | Admin/config/users/audit | Stable for documented admin workflows and config backup/restore in v0.9. |
 

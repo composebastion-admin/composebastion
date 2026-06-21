@@ -80,6 +80,25 @@ function healthLabel(status: "healthy" | "warning" | "critical") {
   return "Attention";
 }
 
+type BackupAttentionItem = BackupHealthSummary["attention"][number];
+
+function attentionReasonLabel(reason: BackupAttentionItem["reason"]) {
+  switch (reason) {
+    case "failed":
+      return "Backup failed";
+    case "partial":
+      return "Remote incomplete";
+    case "never_verified":
+      return "Never verified";
+    case "stale_verified":
+      return "Verify stale";
+    case "never_drilled":
+      return "No drill";
+    case "stale_drilled":
+      return "Drill stale";
+  }
+}
+
 function formatAge(ms: number | null) {
   if (ms === null) return "No successful backups";
   const minutes = Math.max(1, Math.round(ms / 60_000));
@@ -252,6 +271,7 @@ export function BackupsPanel({
       .slice(0, 4) ?? [],
     [health]
   );
+  const attentionItems = useMemo(() => health?.attention?.slice(0, 6) ?? [], [health]);
 
   async function createBackup() {
     await action.run(async () => {
@@ -353,6 +373,21 @@ export function BackupsPanel({
             <span key={host.hostId ?? host.hostName} className="backupHealthHost">
               {host.hostName}: <span className={`pill ${healthPillClass(host.status)}`}>{healthLabel(host.status)}</span>
             </span>
+          ))}
+        </div>
+      )}
+      {attentionItems.length > 0 && (
+        <div className="backupAttentionList">
+          <strong>Needs attention</strong>
+          {attentionItems.map((item) => (
+            <div key={`${item.backupId}-${item.reason}`} className="backupAttentionItem">
+              <span className={`pill ${healthPillClass(item.severity)}`}>{attentionReasonLabel(item.reason)}</span>
+              <span className="backupAttentionTarget">
+                {item.hostName} / <span className={item.kind === "host_path" ? "monoText" : undefined}>{item.label}</span>
+              </span>
+              <span>{item.recommendedAction}</span>
+              <small>{formatAge(item.ageMs)}</small>
+            </div>
           ))}
         </div>
       )}

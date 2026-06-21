@@ -8,8 +8,8 @@ and export a config backup before every production update.
 - `/api/v1` is the pre-1.0 public compatibility boundary.
 - Use additive API changes whenever possible.
 - Keep app and agent images on the same release when possible. The latest
-  verified release is `v0.9.7`, with app and agent image tags `0.9.7`,
-  `v0.9.7`, and `0.9`.
+  verified release is `v0.9.8`, with app and agent image tags `0.9.8`,
+  `v0.9.8`, and `0.9`.
 - New database migrations must use the next clean `NNN_snake_case.sql` filename.
   The existing duplicate `018_` migration prefix is a published legacy exception;
   do not create new duplicates.
@@ -29,7 +29,7 @@ For image installs:
 
 ```bash
 cd ~/composebastion
-export COMPOSEBASTION_VERSION=0.9.7
+export COMPOSEBASTION_VERSION=0.9.8
 docker compose -f docker-compose.image.yml pull
 docker compose -f docker-compose.image.yml up -d
 ```

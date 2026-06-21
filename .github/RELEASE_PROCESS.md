@@ -59,7 +59,7 @@ Run the same gates CI expects before release:
 - Publish container images for every public release and every merge to `main`
   through `.github/workflows/publish-images.yml`.
 - Main image publishes must include `latest`, branch tags, and `sha-*` tags.
-  Immutable version tags such as `0.9.7`, `v0.9.7`, and the `0.9` minor tag
+  Immutable version tags such as `0.9.8`, `v0.9.8`, and the `0.9` minor tag
   must only be published from `v*` git tags.
 - The workflow must build both app and agent images before publishing either
   image so version tags are not created from a partial runtime build.
@@ -100,10 +100,10 @@ docker build -f Dockerfile.agent --target runtime -t composebastion-agent:v0.9-l
 After publishing, verify unauthenticated pulls:
 
 ```bash
-docker pull ghcr.io/composebastion-admin/composebastion-app:0.9.7
-docker pull ghcr.io/composebastion-admin/composebastion-agent:0.9.7
-docker pull ghcr.io/composebastion-admin/composebastion-app:v0.9.7
-docker pull ghcr.io/composebastion-admin/composebastion-agent:v0.9.7
+docker pull ghcr.io/composebastion-admin/composebastion-app:0.9.8
+docker pull ghcr.io/composebastion-admin/composebastion-agent:0.9.8
+docker pull ghcr.io/composebastion-admin/composebastion-app:v0.9.8
+docker pull ghcr.io/composebastion-admin/composebastion-agent:v0.9.8
 docker pull ghcr.io/composebastion-admin/composebastion-app:0.9
 docker pull ghcr.io/composebastion-admin/composebastion-agent:0.9
 ```
@@ -114,7 +114,7 @@ docker pull ghcr.io/composebastion-admin/composebastion-agent:0.9
   any image publishing jobs.
 - Confirm scanner alerts on the protected branch after scans refresh; alerts can
   lag until the target branch is rescanned.
-- For the `v0.9.7` release, CI, CodeQL, Container Scan, Publish Images, and 0
+- For the `v0.9.8` release, CI, CodeQL, Container Scan, Publish Images, and 0
   open code-scanning alerts were verified after the scan refresh.
 - Distinguish Dependabot or bot PRs opened after a release push from actual
   release failures.
