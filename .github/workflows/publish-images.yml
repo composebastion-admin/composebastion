@@ -91,7 +91,7 @@ jobs:
 
       - name: App image metadata
         id: app_meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.APP_IMAGE_NAME }}
           tags: |
@@ -109,7 +109,7 @@ jobs:
 
       - name: Agent image metadata
         id: agent_meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.AGENT_IMAGE_NAME }}
           tags: |
