@@ -59,7 +59,7 @@ Run the same gates CI expects before release:
 - Publish container images for every public release and every merge to `main`
   through `.github/workflows/publish-images.yml`.
 - Main image publishes must include `latest`, branch tags, and `sha-*` tags.
-  Immutable version tags such as `1.0.0` and `v1.0.0` must only be published
+  Immutable version tags such as `1.0.1` and `v1.0.1` must only be published
   from `v*` git tags.
 - The workflow must build both app and agent images before publishing either
   image so version tags are not created from a partial runtime build.
@@ -128,10 +128,10 @@ docker build -f Dockerfile.agent --target runtime -t composebastion-agent:v1-loc
 After publishing, verify unauthenticated pulls:
 
 ```bash
-docker pull ghcr.io/composebastion-admin/composebastion-app:1.0.0
-docker pull ghcr.io/composebastion-admin/composebastion-agent:1.0.0
-docker pull ghcr.io/composebastion-admin/composebastion-app:v1.0.0
-docker pull ghcr.io/composebastion-admin/composebastion-agent:v1.0.0
+docker pull ghcr.io/composebastion-admin/composebastion-app:1.0.1
+docker pull ghcr.io/composebastion-admin/composebastion-agent:1.0.1
+docker pull ghcr.io/composebastion-admin/composebastion-app:v1.0.1
+docker pull ghcr.io/composebastion-admin/composebastion-agent:v1.0.1
 ```
 
 ## Post-Push Verification
@@ -140,7 +140,7 @@ docker pull ghcr.io/composebastion-admin/composebastion-agent:v1.0.0
   any image publishing jobs.
 - Confirm scanner alerts on the protected branch after scans refresh; alerts can
   lag until the target branch is rescanned.
-- For the `v1.0.0` release, verify CI, CodeQL, Container Scan, Publish Images,
+- For the `v1.0.1` release, verify CI, CodeQL, Container Scan, Publish Images,
   and code-scanning alerts after the scan refresh.
 - Distinguish Dependabot or bot PRs opened after a release push from actual
   release failures.

@@ -44,6 +44,10 @@
 - Before committing, run `git status`, inspect the diff, and stage only relevant
   files. Never stage unrelated untracked files, generated `dist` output, local
   test results, `.env`, or duplicate editor/download artifacts.
+- Always bump the project version for pushed user-visible behavior, UI, API,
+  migration, runtime, Docker, or install-flow changes unless the user explicitly
+  says the work is docs-only or unreleased. Patch bumps are the default for
+  fixes and small features.
 - Releases must update the root and workspace package versions, `package-lock`,
   relevant tests, `CHANGELOG.md` or release notes, generated OpenAPI docs when
   API contracts change, tags, and target branches according to the release plan.
@@ -60,7 +64,7 @@
   - `ghcr.io/composebastion-admin/composebastion-app`
   - `ghcr.io/composebastion-admin/composebastion-agent`
 - Image publishing must preserve `latest`, branch tags, and `sha-*` tags on
-  main. Immutable version tags such as `1.0.0` and `v1.0.0` must only be
+  main. Immutable version tags such as `1.0.1` and `v1.0.1` must only be
   published from `v*` git tags.
 - The publish workflow must build both app and agent images before publishing
   either image so release tags are not created from a partial runtime build.
@@ -72,7 +76,7 @@
 - After release pushes, verify GitHub Actions, CodeQL, dependency review,
   container scans, and any configured container/image publishing. Distinguish
   Dependabot or bot PRs opened after the push from actual release failures.
-- For `v1.0.0`, verify CI, CodeQL, Container Scan, Publish Images, and open
+- For `v1.0.1`, verify CI, CodeQL, Container Scan, Publish Images, and open
   code-scanning alerts after refresh.
 
 ## Quality And Security Gates

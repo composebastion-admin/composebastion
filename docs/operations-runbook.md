@@ -106,5 +106,5 @@ claims for a release.
   but live logs and host `/proc` stats require the newer agent endpoints.
 - V1 expects app and agent images from the same release for live logs, queued
   Docker work, and host `/proc` stats.
-- For the latest verified release, use app and agent image tags `1.0.0` or
-  `v1.0.0`.
+- For the latest verified release, use app and agent image tags `1.0.1` or
+  `v1.0.1`.

@@ -292,7 +292,7 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
       }
     });
     if (path === "/api/health/ready") return json({ ok: true, checks: { database: { ok: true }, redis: { ok: true }, backups: { ok: true }, worker: { ok: true, queued: 0, running: 0 } } });
-    if (path === "/api/health") return json({ ok: true, version: "1.0.0", revision: null, buildDate: null });
+    if (path === "/api/health") return json({ ok: true, version: "1.0.1", revision: null, buildDate: null });
     if (path === "/api/self-update") return json({
       configured: true,
       config: {
@@ -302,8 +302,8 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
         versionMode: "latest",
         targetVersion: "latest"
       },
-      runtime: { version: "1.0.0", revision: null, buildDate: null },
-      latest: { version: "1.0.0", checkedAt: new Date(0).toISOString(), error: null },
+      runtime: { version: "1.0.1", revision: null, buildDate: null },
+      latest: { version: "1.0.1", checkedAt: new Date(0).toISOString(), error: null },
       updateAvailable: false,
       lastJob: null
     });
@@ -735,7 +735,7 @@ test("admin about shows V1 licensing details", async ({ page }) => {
   await page.goto("/admin");
   await page.getByRole("button", { name: "About" }).click();
   await expect(page.getByRole("heading", { name: "About ComposeBastion" })).toBeVisible();
-  await expect(page.locator(".adminPane").getByText("v1.0.0")).toBeVisible();
+  await expect(page.locator(".adminPane").getByText("v1.0.1")).toBeVisible();
   await expect(page.getByText("Copyright (c) 2026 ComposeBastion Admin. All rights reserved.")).toBeVisible();
   await expect(page.getByRole("link", { name: "support@composebastion.com" })).toBeVisible();
 });

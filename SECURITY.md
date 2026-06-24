@@ -28,7 +28,7 @@ We will review reports as soon as practical.
 ## Supported Versions
 
 Security fixes are expected to target the current `main` branch and the latest
-public release (`v1.0.0`) unless a separate written support agreement applies.
+public release (`v1.0.1`) unless a separate written support agreement applies.
 
 ## Deployment
 
@@ -65,7 +65,7 @@ public release (`v1.0.0`) unless a separate written support agreement applies.
   ignore scanner findings.
 - Dependency and container updates from Dependabot should be reviewed as normal
   release-impact changes, not assumed to be release failures.
-- For `v1.0.0`, verify CI, CodeQL, Container Scan, Publish Images, and open
+- For `v1.0.1`, verify CI, CodeQL, Container Scan, Publish Images, and open
   code-scanning alerts after the release scan refreshes.
 - Enable or verify Dependabot alerts, secret scanning, branch protection for
   `main`, and required release-gating checks before each release.

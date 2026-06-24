@@ -1,5 +1,20 @@
 # Changelog
 
+## [v1.0.1] - 2026-06-25
+
+### Added
+- Added an admin-only ComposeBastion self-update flow for image installs running
+  on an SSH-managed manager host.
+- Added persistent success feedback after container image updates complete.
+- Added an inline Hosts add form so Add host opens inside the Hosts workspace
+  instead of only changing the top-left action area.
+
+### Changed
+- Bumped package, generated OpenAPI, runtime image, Docker default, test, and
+  documentation versions to `1.0.1`.
+- Updated installation, upgrade, operations, RBAC, and OpenAPI documentation for
+  the self-update workflow and its SSH/image-install constraints.
+
 ## [v1.0.0] - 2026-06-21
 
 ### Added

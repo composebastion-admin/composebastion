@@ -17,7 +17,7 @@ body:
     id: version
     attributes:
       label: Version or branch
-      placeholder: "v1.0.0, main, beta, or commit SHA"
+      placeholder: "v1.0.1, main, beta, or commit SHA"
   - type: textarea
     id: environment
     attributes:
