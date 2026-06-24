@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Download, Search } from "lucide-react";
+import { Download, RefreshCw, Search } from "lucide-react";
 import type { ResourceSnapshot } from "@composebastion/shared";
 import { imageRepository, imageTag, imageWithTag } from "@composebastion/shared";
 import { api } from "../../api.js";
@@ -14,6 +14,8 @@ export function ContainerUpdatePanel({ container, images, onUpdate, onClose }: {
   const [tagFilter, setTagFilter] = useState("");
   const [tagLookupState, setTagLookupState] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [tagLookupError, setTagLookupError] = useState<string | null>(null);
+  const [isUpdating, setIsUpdating] = useState(false);
+  const [updateError, setUpdateError] = useState<string | null>(null);
   const repository = imageRepository(currentImage);
   const localTags = images
     .map((image) => String((image.data as any).Repository ? `${(image.data as any).Repository}:${(image.data as any).Tag ?? "latest"}` : image.name))
@@ -28,6 +30,7 @@ export function ContainerUpdatePanel({ container, images, onUpdate, onClose }: {
 
   useEffect(() => {
     setTargetImage(currentImage);
+    setUpdateError(null);
   }, [currentImage]);
 
   useEffect(() => {
@@ -52,6 +55,19 @@ export function ContainerUpdatePanel({ container, images, onUpdate, onClose }: {
       cancelled = true;
     };
   }, [currentImage]);
+
+  async function submitUpdate() {
+    const image = targetImage.trim();
+    if (!image || isUpdating) return;
+    setIsUpdating(true);
+    setUpdateError(null);
+    try {
+      await onUpdate(image);
+    } catch (caught) {
+      setUpdateError(caught instanceof Error ? caught.message : String(caught));
+      setIsUpdating(false);
+    }
+  }
 
   return (
     <div className="drawer">
@@ -86,8 +102,12 @@ export function ContainerUpdatePanel({ container, images, onUpdate, onClose }: {
         ))}
         {visibleTags.length === 0 && <div className="notice">No tags match this filter.</div>}
       </div>
+      {updateError && <div className="notice error">{updateError}</div>}
       <ButtonRow>
-        <button className="primary" onClick={() => void onUpdate(targetImage)}><Download size={18} />Update To Tag</button>
+        <button className="primary" disabled={isUpdating || !targetImage.trim()} onClick={() => void submitUpdate()}>
+          {isUpdating ? <RefreshCw className="spin" size={18} /> : <Download size={18} />}
+          {isUpdating ? "Updating..." : "Update To Tag"}
+        </button>
       </ButtonRow>
     </div>
   );

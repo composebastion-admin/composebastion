@@ -31,6 +31,11 @@ export function UpdatesPanel({
   const [hostId, setHostId] = useState(hosts[0]?.id ?? "");
   const [updates, setUpdates] = useState<ImageUpdateCheck[]>([]);
   const [scannerStatus, setScannerStatus] = useState<ImageScannerStatus | null>(null);
+  const [lastContainerUpdate, setLastContainerUpdate] = useState<{
+    containerName: string;
+    imageReference: string;
+    completedAt: string;
+  } | null>(null);
   const [preview, setPreview] = useState<{
     data: ImageUpdatePreview;
     title: string;
@@ -53,6 +58,10 @@ export function UpdatesPanel({
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    setLastContainerUpdate(null);
+  }, [hostId]);
 
   useEffect(() => {
     if (preview) previewCloseButtonRef.current?.focus();
@@ -85,13 +94,18 @@ export function UpdatesPanel({
     });
   }
 
-  async function updateContainerNow(containerId: string, imageReference: string) {
+  async function updateContainerNow(containerId: string, imageReference: string, containerName?: string) {
     if (!hostId) return;
     await action.run(() => runJob(() => postJson<JobResult>(`/api/hosts/${hostId}/actions`, {
       type: "container.update",
       hostId,
       payload: { containerId, targetImage: imageReference }
     })));
+    setLastContainerUpdate({
+      containerName: containerName?.trim() || containerId,
+      imageReference,
+      completedAt: new Date().toISOString()
+    });
     await refresh();
     await load();
   }
@@ -136,6 +150,11 @@ export function UpdatesPanel({
         <HostSelect hosts={hosts} value={hostId} onChange={setHostId} />
         <button type="button" className="primary" disabled={!hostId || action.busy} onClick={() => void checkNow()}><RefreshCw size={16} />Check now</button>
       </div>
+      {lastContainerUpdate && (
+        <div className="notice success" role="status">
+          Container update successful for <strong>{lastContainerUpdate.containerName}</strong>. Now using <code>{lastContainerUpdate.imageReference}</code> as of {formatDate(lastContainerUpdate.completedAt)}.
+        </div>
+      )}
       {updates.length === 0 ? (
         <EmptyState headline="No update checks yet" hint="Run a check to compare local image digests and flag mutable tags." />
       ) : (
@@ -157,7 +176,7 @@ export function UpdatesPanel({
                   update.imageReference,
                   "Update container",
                   "Update container",
-                  () => updateContainerNow(update.affectedContainers?.[0]!.id, update.imageReference)
+                  () => updateContainerNow(update.affectedContainers?.[0]!.id, update.imageReference, update.affectedContainers?.[0]!.name)
                 )}><Play size={16} /></button>
               )}
               {update.affectedStacks?.[0] && update.status === "update_available" && (

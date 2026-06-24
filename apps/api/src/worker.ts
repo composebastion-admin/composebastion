@@ -12,6 +12,7 @@ import { enqueueJob } from "./services/jobs.js";
 import { createRedis } from "./services/redis.js";
 import { runDueBackupSchedules } from "./services/backupSchedules.js";
 import { markRecoveryDrillResult, runDueRecoverySchedules, runMigrationExecute, runRecoveryCreate, runRecoveryRestore, runRecoveryVerify } from "./services/recoveryCenter.js";
+import { runSelfUpdate } from "./services/selfUpdate.js";
 import { runStackUpdatePolicies } from "./services/stackUpdatePolicies.js";
 import { safeErrorMessage, workerJobLogFields } from "./services/operationLogs.js";
 
@@ -26,6 +27,7 @@ function primaryProgressStep(type: string) {
   if (type === "volume.restore" || type === "hostPath.restore" || type === "recovery.restore") return "restore";
   if (type.startsWith("migration.")) return "plan";
   if (type.startsWith("compose.") || type === "git.cloneDeploy") return "deploy";
+  if (type === "system.self_update") return "handoff";
   if (type.startsWith("image.") || type === "container.update") return "apply";
   return "run";
 }
@@ -99,6 +101,13 @@ async function processAvailableJobs() {
             projectNameOverride: action.payload.projectNameOverride,
             remapPorts: action.payload.remapPorts,
             networkMode: action.payload.networkMode,
+            onProgress: async (stepId, detail) => {
+              activeStepForFailure = stepId;
+              await markJobProgressStep(job.id, action.type, stepId, detail).catch(() => undefined);
+            }
+          });
+        } else if (action.type === "system.self_update") {
+          result = await runSelfUpdate(action.hostId, action.payload, {
             onProgress: async (stepId, detail) => {
               activeStepForFailure = stepId;
               await markJobProgressStep(job.id, action.type, stepId, detail).catch(() => undefined);

@@ -33,6 +33,7 @@ import { registerHostTerminalRoutes } from "./routes/hostTerminal.js";
 import { registerJobRoutes } from "./routes/jobs.js";
 import { registerRegistryRoutes } from "./routes/registries.js";
 import { registerRecoveryCenterRoutes } from "./routes/recoveryCenter.js";
+import { registerSelfUpdateRoutes } from "./routes/selfUpdate.js";
 import { registerUserRoutes } from "./routes/users.js";
 import { registerRequestId } from "./plugins/requestId.js";
 import { registerApiVersionAliasRoutes } from "./routes/apiVersion.js";
@@ -204,6 +205,7 @@ export async function buildServer() {
   await registerGithubRoutes(app);
   await registerHostMetricRoutes(app);
   await registerRegistryRoutes(app);
+  await registerSelfUpdateRoutes(app);
   await registerUserRoutes(app);
   await registerJobRoutes(app);
   await registerApiVersionAliasRoutes(app);

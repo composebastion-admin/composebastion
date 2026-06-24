@@ -70,6 +70,10 @@ Stable JSON endpoints are documented under `/api/v1/*`. Existing `/api/*` endpoi
 | DELETE | `/api/v1/alerts/silences/{id}` | operator | Delete alert silence |
 | GET | `/api/v1/alerts/history` | viewer | List alert history events |
 | GET | `/api/v1/audit` | admin | List audit events |
+| GET | `/api/v1/self-update` | admin | Read ComposeBastion self-update status |
+| PUT | `/api/v1/self-update/config` | admin | Save ComposeBastion self-update settings |
+| POST | `/api/v1/self-update/check` | admin | Check latest ComposeBastion release |
+| POST | `/api/v1/self-update/start` | admin | Start ComposeBastion self-update handoff |
 | GET | `/api/v1/users` | admin | List users |
 
 ## Non-JSON Contracts

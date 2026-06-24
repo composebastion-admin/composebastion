@@ -577,7 +577,8 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
                     containerCounts={hostContainerCounts}
                     user={user}
                     onSelectHost={(hostId) => { setSelectedHostId(hostId); setHostScope("selected"); }}
-                    onAddHost={() => setShowHostForm(true)}
+                    refresh={refresh}
+                    runJob={runJob}
                     onHostAction={(type, hostId) => hostAction(type, {}, hostId)}
                     onOpenMetrics={(targetHost) => {
                       setSelectedHostId(targetHost.id);

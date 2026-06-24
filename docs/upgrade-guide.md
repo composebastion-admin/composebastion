@@ -19,13 +19,22 @@ every production update.
 1. Read `CHANGELOG.md`.
 2. Export config from Admin -> Settings.
 3. Confirm recent backups and at least one recent successful drill for critical data.
-4. Pull the new image or source.
-5. Validate the Compose configuration.
-6. Start the stack.
-7. Watch `app` and `worker` logs until migrations and worker startup complete.
-8. Open Admin -> Operations and confirm readiness checks are healthy.
+4. For image installs, either start the in-app self-update from Admin ->
+   Operations or pull the new image manually.
+5. For source installs, pull the source update.
+6. Validate the Compose configuration when updating manually.
+7. Start the stack or wait for the self-update handoff to restart `app` and
+   `worker`.
+8. Watch `app` and `worker` logs until migrations and worker startup complete.
+9. Open Admin -> Operations and confirm readiness checks are healthy.
 
-For image installs:
+For image installs managed over SSH, use Admin -> Operations ->
+ComposeBastion self-update. Set the manager host, Compose directory, Compose
+file, and release mode, then start the update. V1 self-update supports image
+installs only; source checkouts and agent-only manager hosts use the manual
+commands below.
+
+Manual image install:
 
 ```bash
 cd ~/composebastion

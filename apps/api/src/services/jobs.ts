@@ -71,6 +71,7 @@ function progressLabels(type: string) {
   if (type === "volume.restore" || type === "hostPath.restore" || type === "recovery.restore") return ["Prepare", "Restore", "Verify", "Finish"];
   if (type.startsWith("migration.")) return ["Plan", "Capture", "Transfer", "Deploy", "Verify"];
   if (type.startsWith("compose.") || type === "git.cloneDeploy") return ["Prepare", "Deploy", "Verify"];
+  if (type === "system.self_update") return ["Prepare", "Handoff", "Reconnect"];
   if (type === "host.sync") return ["Connect", "Inventory", "Store"];
   if (type === "host.check") return ["Connect", "Check", "Store"];
   if (type.startsWith("image.") || type === "container.update") return ["Inspect", "Apply", "Verify"];

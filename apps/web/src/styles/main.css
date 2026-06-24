@@ -1702,6 +1702,17 @@ a.sideNavItem[aria-disabled="true"] {
   background: var(--surface-muted);
 }
 
+.hostsAddPanel {
+  width: min(760px, 100%);
+  margin-inline: auto;
+}
+
+.hostsAddPanel .hostForm {
+  border-color: var(--border);
+  background: var(--surface-muted);
+  box-shadow: var(--shadow-soft);
+}
+
 .sshHostName {
   font-weight: 700;
 }
@@ -2968,6 +2979,40 @@ a.sideNavItem[aria-disabled="true"] {
 .opsSummary span:not(.pill):not(.statusDot) {
   color: var(--text);
   overflow-wrap: anywhere;
+}
+
+.selfUpdateSummary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+}
+
+.selfUpdateSummary > div {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.selfUpdateSummary strong {
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.selfUpdateSummary span {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.selfUpdateForm {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
 }
 
 .sessionDetails,

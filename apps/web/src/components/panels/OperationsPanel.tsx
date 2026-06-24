@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
-import { RefreshCw } from "lucide-react";
-import type { BackupHealthSummary, OperationJob, RecoveryPointListItem } from "@composebastion/shared";
-import { api, parseApiJson } from "../../api.js";
+import { RefreshCw, Save } from "lucide-react";
+import type { BackupHealthSummary, DockerHost, OperationJob, RecoveryPointListItem, SelfUpdateConfig } from "@composebastion/shared";
+import { api, parseApiJson, postJson, putJson } from "../../api.js";
 import { formatDate } from "../../lib/format.js";
 import { activeJobPhase, jobProgressSteps, jobRecoveryHint } from "../../lib/jobProgress.js";
-import { ButtonRow, CardSection, DataTable, InlineStatus, Panel, ProgressSteps, StatusPill, VirtualDataTable } from "../ui/primitives.js";
+import { sleep } from "../../lib/hostScope.js";
+import { ButtonRow, CardSection, DataTable, Field, InlineStatus, Panel, ProgressSteps, StatusPill, VirtualDataTable } from "../ui/primitives.js";
 
 type ReadyCheck = {
   ok: boolean;
@@ -32,6 +33,28 @@ type CheckRow = {
   detail: string;
 };
 
+type RuntimeVersion = {
+  version: string;
+  revision: string | null;
+  buildDate: string | null;
+};
+
+type LatestRelease = {
+  version: string | null;
+  checkedAt: string | null;
+  error: string | null;
+  htmlUrl?: string | null;
+};
+
+type SelfUpdateStatus = {
+  configured: boolean;
+  config: SelfUpdateConfig;
+  runtime: RuntimeVersion;
+  latest: LatestRelease;
+  updateAvailable: boolean;
+  lastJob: OperationJob | null;
+};
+
 function checkDetail(check: ReadyCheck) {
   if (check.error) return check.error;
   const parts = [
@@ -51,12 +74,18 @@ async function getReadiness() {
   return data as ReadyResponse;
 }
 
+function normalizeVersion(value: string | null | undefined) {
+  return String(value ?? "").trim().replace(/^v/i, "");
+}
+
 export function OperationsPanel() {
   const [ready, setReady] = useState<ReadyResponse | null>(null);
   const [worker, setWorker] = useState<WorkerStatus | null>(null);
   const [failedJobs, setFailedJobs] = useState<OperationJob[]>([]);
   const [backupHealth, setBackupHealth] = useState<BackupHealthSummary | null>(null);
   const [recoveryPoints, setRecoveryPoints] = useState<RecoveryPointListItem[]>([]);
+  const [hosts, setHosts] = useState<DockerHost[]>([]);
+  const [selfUpdate, setSelfUpdate] = useState<SelfUpdateStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -64,18 +93,22 @@ export function OperationsPanel() {
     setLoading(true);
     setError(null);
     try {
-      const [readyResult, workerResult, jobsResult, backupHealthResult, recoveryResult] = await Promise.all([
+      const [readyResult, workerResult, jobsResult, backupHealthResult, recoveryResult, hostsResult, selfUpdateResult] = await Promise.all([
         getReadiness(),
         api<{ worker: WorkerStatus }>("/api/jobs/status"),
         api<{ jobs: OperationJob[] }>("/api/jobs?limit=40"),
         api<{ health: BackupHealthSummary }>("/api/backups/health").catch(() => null),
-        api<{ points: RecoveryPointListItem[] }>("/api/recovery/points").catch(() => null)
+        api<{ points: RecoveryPointListItem[] }>("/api/recovery/points").catch(() => null),
+        api<{ hosts: DockerHost[] }>("/api/hosts").catch(() => null),
+        api<SelfUpdateStatus>("/api/self-update").catch(() => null)
       ]);
       setReady(readyResult);
       setWorker(workerResult.worker);
       setFailedJobs(jobsResult.jobs.filter((job) => job.status === "failed"));
       setBackupHealth(backupHealthResult?.health ?? null);
       setRecoveryPoints(recoveryResult?.points ?? []);
+      setHosts(hostsResult?.hosts ?? []);
+      setSelfUpdate(selfUpdateResult);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -153,6 +186,7 @@ export function OperationsPanel() {
           />
         )}
       </CardSection>
+      {selfUpdate && <SelfUpdateCard hosts={hosts} status={selfUpdate} onChanged={load} />}
       <CardSection title="Failed jobs" aside={<InlineStatus tone={failedJobs.length ? "danger" : "success"}>{failedJobs.length} failed</InlineStatus>}>
         <VirtualDataTable
           rows={failedJobs}
@@ -173,5 +207,156 @@ export function OperationsPanel() {
         />
       </CardSection>
     </Panel>
+  );
+}
+
+function SelfUpdateCard({ hosts, status, onChanged }: { hosts: DockerHost[]; status: SelfUpdateStatus; onChanged: () => Promise<void> }) {
+  const [form, setForm] = useState<SelfUpdateConfig>(status.config);
+  const [busy, setBusy] = useState<"saving" | "checking" | "starting" | "waiting" | null>(null);
+  const [message, setMessage] = useState<{ tone: "success" | "warning" | "error" | "info"; text: string } | null>(null);
+
+  useEffect(() => {
+    setForm(status.config);
+  }, [status.config]);
+
+  async function saveConfig() {
+    setBusy("saving");
+    setMessage(null);
+    try {
+      await putJson<{ config: SelfUpdateConfig }>("/api/self-update/config", form);
+      setMessage({ tone: "success", text: "Self-update settings saved." });
+      await onChanged();
+    } catch (caught) {
+      setMessage({ tone: "error", text: caught instanceof Error ? caught.message : String(caught) });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function checkLatest() {
+    setBusy("checking");
+    setMessage(null);
+    try {
+      await postJson<SelfUpdateStatus & { latest: LatestRelease }>("/api/self-update/check", {});
+      await onChanged();
+    } catch (caught) {
+      setMessage({ tone: "error", text: caught instanceof Error ? caught.message : String(caught) });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function waitForRestart(expectedVersion: string | null, previousVersion: string) {
+    setBusy("waiting");
+    for (let attempt = 0; attempt < 90; attempt += 1) {
+      await sleep(2_000);
+      try {
+        const health = await api<RuntimeVersion & { ok: boolean }>("/api/health");
+        const current = normalizeVersion(health.version);
+        const expected = normalizeVersion(expectedVersion);
+        if ((expected && current === expected) || (!expected && current && current !== normalizeVersion(previousVersion))) {
+          setMessage({ tone: "success", text: `ComposeBastion is running v${health.version}.` });
+          await onChanged();
+          setBusy(null);
+          return;
+        }
+      } catch {
+        // The app may be restarting; keep polling.
+      }
+    }
+    setMessage({ tone: "warning", text: "Update handoff started. The app did not confirm the new version yet; refresh after the containers finish restarting." });
+    setBusy(null);
+  }
+
+  async function startUpdate() {
+    setBusy("starting");
+    setMessage(null);
+    try {
+      const targetVersion = form.versionMode === "latest"
+        ? "latest"
+        : form.targetVersion ?? undefined;
+      await postJson<{ job: OperationJob }>("/api/self-update/start", { targetVersion });
+      setMessage({ tone: "info", text: "Self-update handoff started. ComposeBastion may disconnect briefly while app and worker restart." });
+      await onChanged();
+      void waitForRestart(form.versionMode === "latest" ? status.latest.version : form.targetVersion, status.runtime.version);
+    } catch (caught) {
+      setMessage({ tone: "error", text: caught instanceof Error ? caught.message : String(caught) });
+      setBusy(null);
+    }
+  }
+
+  const latestText = status.latest.error
+    ? status.latest.error
+    : status.latest.version
+      ? `v${status.latest.version}${status.latest.checkedAt ? ` checked ${formatDate(status.latest.checkedAt)}` : ""}`
+      : "Not checked";
+  const canStart = Boolean(form.hostId && form.workingDir && form.composeFile && (form.versionMode === "latest" || form.targetVersion));
+  const targetLabel = form.versionMode === "latest"
+    ? status.latest.version ? `latest release v${status.latest.version}` : "latest image tag"
+    : `v${form.targetVersion}`;
+
+  return (
+    <CardSection
+      title="ComposeBastion self-update"
+      aside={<InlineStatus tone={status.updateAvailable ? "warning" : "success"}>{status.updateAvailable ? "update available" : "current"}</InlineStatus>}
+    >
+      <div className="selfUpdateSummary">
+        <div>
+          <strong>Running</strong>
+          <span>v{status.runtime.version}</span>
+        </div>
+        <div>
+          <strong>Latest</strong>
+          <span>{latestText}</span>
+        </div>
+        <div>
+          <strong>Last update job</strong>
+          <span>{status.lastJob ? `${status.lastJob.status} ${formatDate(status.lastJob.updatedAt)}` : "None yet"}</span>
+        </div>
+      </div>
+      <div className="selfUpdateForm">
+        <Field label="Manager host">
+          <select value={form.hostId ?? ""} onChange={(event) => setForm({ ...form, hostId: event.target.value || null })}>
+            <option value="">Choose host</option>
+            {hosts.map((host) => <option key={host.id} value={host.id}>{host.name}</option>)}
+          </select>
+        </Field>
+        <Field label="Compose directory">
+          <input value={form.workingDir} onChange={(event) => setForm({ ...form, workingDir: event.target.value })} />
+        </Field>
+        <Field label="Compose file">
+          <input value={form.composeFile} onChange={(event) => setForm({ ...form, composeFile: event.target.value })} />
+        </Field>
+        <Field label="Version mode">
+          <select value={form.versionMode} onChange={(event) => setForm({ ...form, versionMode: event.target.value as SelfUpdateConfig["versionMode"], targetVersion: event.target.value === "latest" ? "latest" : status.latest.version ?? "" })}>
+            <option value="latest">Follow latest</option>
+            <option value="pinned">Pin release</option>
+          </select>
+        </Field>
+        {form.versionMode === "pinned" && (
+          <Field label="Target version">
+            <input value={form.targetVersion ?? ""} onChange={(event) => setForm({ ...form, targetVersion: event.target.value })} />
+          </Field>
+        )}
+      </div>
+      {message && <div className={`notice ${message.tone === "error" ? "error" : message.tone === "success" ? "success" : message.tone === "warning" ? "warning" : ""}`}>{message.text}</div>}
+      <ButtonRow>
+        <button type="button" onClick={() => void saveConfig()} disabled={Boolean(busy)}>
+          <Save size={16} />
+          Save self-update
+        </button>
+        <button type="button" onClick={() => void checkLatest()} disabled={Boolean(busy)}>
+          <RefreshCw size={16} className={busy === "checking" ? "spin" : undefined} />
+          Check latest
+        </button>
+        <button type="button" className="primary" onClick={() => void startUpdate()} disabled={!canStart || Boolean(busy)}>
+          <RefreshCw size={16} className={busy === "starting" || busy === "waiting" ? "spin" : undefined} />
+          Update to {targetLabel}
+        </button>
+      </ButtonRow>
+      {status.lastJob?.type === "system.self_update" && (
+        <ProgressSteps steps={jobProgressSteps(status.lastJob)} />
+      )}
+    </CardSection>
   );
 }

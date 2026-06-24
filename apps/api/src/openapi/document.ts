@@ -124,6 +124,10 @@ export const openApiRoutes: OpenApiPath[] = [
   { method: "delete", path: "/api/v1/alerts/silences/{id}", summary: "Delete alert silence", tags: ["Alerts"], auth: "operator", responseSchema: schemaRef("OkResponse") },
   { method: "get", path: "/api/v1/alerts/history", summary: "List alert history events", tags: ["Alerts"], auth: "viewer", responseSchema: schemaRef("AlertHistoryResponse") },
   { method: "get", path: "/api/v1/audit", summary: "List audit events", tags: ["Audit"], auth: "admin", responseSchema: schemaRef("AuditEventsResponse") },
+  { method: "get", path: "/api/v1/self-update", summary: "Read ComposeBastion self-update status", tags: ["System"], auth: "admin", responseSchema: schemaRef("SelfUpdateStatusResponse") },
+  { method: "put", path: "/api/v1/self-update/config", summary: "Save ComposeBastion self-update settings", tags: ["System"], auth: "admin", responseSchema: schemaRef("SelfUpdateConfigResponse") },
+  { method: "post", path: "/api/v1/self-update/check", summary: "Check latest ComposeBastion release", tags: ["System"], auth: "admin", responseSchema: schemaRef("SelfUpdateStatusResponse") },
+  { method: "post", path: "/api/v1/self-update/start", summary: "Start ComposeBastion self-update handoff", tags: ["System"], auth: "admin", responseSchema: schemaRef("JobResponse") },
   { method: "get", path: "/api/v1/users", summary: "List users", tags: ["Users"], auth: "admin", responseSchema: schemaRef("UsersResponse") }
 ];
 
@@ -336,6 +340,33 @@ const componentSchemas = {
     lastJobCompletedAt: stringOrNullSchema
   }, true)),
   JobRetryResponse: object(["job", "original"], { job: schemaRef("OperationJob"), original: schemaRef("OperationJob") }),
+  RuntimeVersion: object(["version", "revision", "buildDate"], {
+    version: { type: "string" },
+    revision: stringOrNullSchema,
+    buildDate: stringOrNullSchema
+  }),
+  SelfUpdateConfig: object(["hostId", "workingDir", "composeFile", "versionMode", "targetVersion"], {
+    hostId: idOrNullSchema,
+    workingDir: { type: "string" },
+    composeFile: { type: "string" },
+    versionMode: enumSchema(["latest", "pinned"]),
+    targetVersion: stringOrNullSchema
+  }),
+  SelfUpdateLatest: object(["version", "checkedAt", "error"], {
+    version: stringOrNullSchema,
+    checkedAt: stringOrNullSchema,
+    error: stringOrNullSchema,
+    htmlUrl: stringOrNullSchema
+  }),
+  SelfUpdateStatusResponse: object(["configured", "config", "runtime", "latest", "updateAvailable", "lastJob"], {
+    configured: { type: "boolean" },
+    config: schemaRef("SelfUpdateConfig"),
+    runtime: schemaRef("RuntimeVersion"),
+    latest: schemaRef("SelfUpdateLatest"),
+    updateAvailable: { type: "boolean" },
+    lastJob: { anyOf: [schemaRef("OperationJob"), { type: "null" }] }
+  }),
+  SelfUpdateConfigResponse: namedItemResponse("config", schemaRef("SelfUpdateConfig")),
   Backup: object(["id", "hostId", "kind", "fileName", "status", "createdAt", "metadata"], {
     id: idSchema,
     hostId: idSchema,

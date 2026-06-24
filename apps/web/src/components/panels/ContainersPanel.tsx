@@ -21,6 +21,7 @@ import { api, postJson } from "../../api.js";
 import { useConfirm } from "../ConfirmProvider.js";
 import { useToast } from "../ToastProvider.js";
 import { useAsyncAction } from "../../hooks/useAsyncAction.js";
+import { formatDate } from "../../lib/format.js";
 import {
   containerMetricKey,
   containerStateLabel,
@@ -76,10 +77,20 @@ export function ContainersPanel({
   const [query, setQuery] = useState("");
   const [showRunForm, setShowRunForm] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [lastContainerUpdate, setLastContainerUpdate] = useState<{
+    containerName: string;
+    targetImage: string;
+    completedAt: string;
+  } | null>(null);
 
   useEffect(() => {
     if (listQuery !== undefined) setQuery(listQuery);
   }, [listQuery, listQueryKey]);
+
+  useEffect(() => {
+    setLastContainerUpdate(null);
+  }, [host.id]);
+
   const [stateFilter, setStateFilter] = useState<ContainerStateFilter>("all");
   const [sortKey, setSortKey] = useState<ContainerSortKey>("name");
   const [sortDesc, setSortDesc] = useState(false);
@@ -368,6 +379,11 @@ export function ContainersPanel({
         />
       )}
       {action.error && <div className="notice error">{action.error}</div>}
+      {lastContainerUpdate && (
+        <div className="notice success" role="status">
+          Container update successful for <strong>{lastContainerUpdate.containerName}</strong>. Now using <code>{lastContainerUpdate.targetImage}</code> as of {formatDate(lastContainerUpdate.completedAt)}.
+        </div>
+      )}
       <VirtualDataTable
         rows={visibleContainers}
         maxRows={300}
@@ -466,7 +482,23 @@ export function ContainersPanel({
           </ButtonRow>
         </div>
       )}
-      {updateTarget && <ContainerUpdatePanel container={updateTarget} images={images.filter((image) => image.hostId === updateTarget.hostId)} onClose={() => setUpdateTarget(null)} onUpdate={async (targetImage) => { await onAction("container.update", { containerId: updateTarget.externalId, targetImage }, updateTarget.hostId); setUpdateTarget(null); }} />}
+      {updateTarget && (
+        <ContainerUpdatePanel
+          container={updateTarget}
+          images={images.filter((image) => image.hostId === updateTarget.hostId)}
+          onClose={() => setUpdateTarget(null)}
+          onUpdate={async (targetImage) => {
+            const target = updateTarget;
+            await onAction("container.update", { containerId: target.externalId, targetImage }, target.hostId);
+            setLastContainerUpdate({
+              containerName: String((target.data as any).Names ?? target.name),
+              targetImage,
+              completedAt: new Date().toISOString()
+            });
+            setUpdateTarget(null);
+          }}
+        />
+      )}
       {auditTarget && <ContainerAuditPanel host={hosts.find((item) => item.id === auditTarget.hostId) ?? host} container={auditTarget} onClose={() => setAuditTarget(null)} />}
       {selected && (
         <ContainerDetailDrawer

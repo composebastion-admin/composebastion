@@ -133,7 +133,14 @@ docker compose up -d --build
 
 ## Update Commands
 
-Image install:
+Image installs can update from Admin -> Operations -> ComposeBastion
+self-update. Choose the SSH host that runs the ComposeBastion stack, save the
+Compose directory and Compose file, then start the handoff. ComposeBastion
+writes a short host-side update script, pulls the selected app and worker
+images, restarts them, and shows the latest handoff job so you can confirm the
+update completed.
+
+Manual image update fallback:
 
 ```bash
 cd ~/composebastion

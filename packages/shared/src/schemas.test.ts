@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appGithubVersionSelectSchema, appGithubVersionsSchema, appSourceLinkInputSchema, backupCreateSchema, backupListQuerySchema, backupRestoreSchema, backupScheduleCreateSchema, catalogTemplates, configExportSchema, customCatalogTemplateInputSchema, dockerActionSchema, dockerAppSchema, externalCatalogQuerySchema, githubRepositoryBranchesRequestSchema, githubRepositoryCreateSchema, githubRepositoryDeploySchema, hostPathBackupRestoreSchema, loginRequestSchema, networkDriverExplanations, setupRequestSchema, validatePasswordStrength, volumeCloneSchema } from "./index.js";
+import { appGithubVersionSelectSchema, appGithubVersionsSchema, appSourceLinkInputSchema, backupCreateSchema, backupListQuerySchema, backupRestoreSchema, backupScheduleCreateSchema, catalogTemplates, configExportSchema, customCatalogTemplateInputSchema, dockerActionSchema, dockerAppSchema, externalCatalogQuerySchema, githubRepositoryBranchesRequestSchema, githubRepositoryCreateSchema, githubRepositoryDeploySchema, hostPathBackupRestoreSchema, loginRequestSchema, networkDriverExplanations, selfUpdateConfigSchema, setupRequestSchema, validatePasswordStrength, volumeCloneSchema } from "./index.js";
 
 const sampleHostId = "00000000-0000-4000-8000-000000000001";
 
@@ -34,6 +34,23 @@ describe("shared schemas", () => {
       payload: { directory: "/home/user/app" }
     });
     expect(pull.payload.directory).toBe("/home/user/app");
+  });
+
+  it("validates self-update configuration", () => {
+    const latest = selfUpdateConfigSchema.parse({
+      hostId: sampleHostId,
+      workingDir: "/srv/composebastion",
+      composeFile: "docker-compose.image.yml",
+      versionMode: "latest"
+    });
+    expect(latest.targetVersion).toBe("latest");
+    const pinned = selfUpdateConfigSchema.parse({
+      ...latest,
+      versionMode: "pinned",
+      targetVersion: "1.0.1"
+    });
+    expect(pinned.targetVersion).toBe("1.0.1");
+    expect(() => selfUpdateConfigSchema.parse({ ...latest, versionMode: "pinned", targetVersion: "latest" })).toThrow();
   });
 
   it("validates container update and config backup requests", () => {

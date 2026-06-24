@@ -216,6 +216,18 @@ HTTPS.
 
 ## Updating Image Installs
 
+Image installs can be updated in-app from Admin -> Operations ->
+ComposeBastion self-update. Configure the manager host as the SSH-mode host
+that runs ComposeBastion, set the Compose directory and file, choose `latest`
+or a pinned release tag, then start the update handoff. The app writes
+`.composebastion-self-update.sh` and `.composebastion-self-update.log` in the
+Compose directory, starts the script detached from the worker, pulls the app and
+worker images, and restarts those services. The browser may disconnect briefly
+while the new app container starts.
+
+Use the manual commands below when the manager host is not managed over SSH,
+when running a source checkout, or when you want to inspect each step yourself.
+
 For homelab/NAS installs following `latest`:
 
 ```bash

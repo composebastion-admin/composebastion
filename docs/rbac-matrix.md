@@ -26,6 +26,7 @@ capabilities, and operator includes viewer capabilities.
 | Registries | None | Full management | Full management | Registry credentials may expose operational secrets. |
 | Jobs | Read | Read | Read | Job creation is done through the feature-specific operator routes. |
 | Audit | None | None | Read | Audit details are administrative records. |
+| Platform self-update | None | None | Configure and run | Self-update can restart the manager app and worker, so it is admin/owner only. |
 | Users and config import/export | None | None | Full management | Config export may include encrypted secret material. |
 | Auth sessions | Own sessions | Own sessions | Own sessions | Users can revoke only their own sessions. |
 

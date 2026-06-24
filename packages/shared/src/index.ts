@@ -464,6 +464,45 @@ export const containerExecRequestSchema = z.object({
   command: z.string().min(1).max(4000)
 });
 
+export const selfUpdateComposeFileSchema = z.string()
+  .trim()
+  .min(1)
+  .max(1024)
+  .refine((value) => !/[\x00-\x1F\x7F]/.test(value), "Compose file contains invalid control characters");
+
+export const selfUpdateVersionSchema = z.string()
+  .trim()
+  .min(1)
+  .max(80)
+  .regex(/^[a-zA-Z0-9._-]+$/, "Use a release tag such as 1.0.1, v1.0.1, or latest");
+
+const selfUpdateConfigBaseSchema = z.object({
+  hostId: idSchema.nullable().default(null),
+  workingDir: hostPathSchema.default("/srv/composebastion"),
+  composeFile: selfUpdateComposeFileSchema.default("docker-compose.image.yml"),
+  versionMode: z.enum(["latest", "pinned"]).default("latest"),
+  targetVersion: selfUpdateVersionSchema.nullable().default("latest")
+});
+
+export const selfUpdateConfigSchema = selfUpdateConfigBaseSchema.superRefine((value, ctx) => {
+  if (value.versionMode === "pinned" && (!value.targetVersion || value.targetVersion === "latest")) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Pinned updates require a release version", path: ["targetVersion"] });
+  }
+});
+
+export const selfUpdateConfigInputSchema = selfUpdateConfigBaseSchema.partial().superRefine((value, ctx) => {
+  if (value.versionMode === "pinned" && (!value.targetVersion || value.targetVersion === "latest")) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Pinned updates require a release version", path: ["targetVersion"] });
+  }
+});
+
+export const selfUpdateStartSchema = z.object({
+  targetVersion: selfUpdateVersionSchema.optional()
+}).default({});
+
+export type SelfUpdateConfig = z.infer<typeof selfUpdateConfigSchema>;
+export type SelfUpdateConfigInput = z.infer<typeof selfUpdateConfigInputSchema>;
+
 const withHost = <TType extends string, T extends z.ZodRawShape>(type: TType, payload: T) =>
   z.object({
     type: z.literal(type),
@@ -578,7 +617,13 @@ export const dockerActionSchema = z.discriminatedUnion("type", [
   withHost("compose.deploy", { stackId: idSchema }),
   withHost("compose.stop", { stackId: idSchema }),
   withHost("compose.remove", { stackId: idSchema, removeVolumes: z.boolean().default(false) }),
-  withHost("registry.login", { registryId: idSchema })
+  withHost("registry.login", { registryId: idSchema }),
+  withHost("system.self_update", {
+    workingDir: hostPathSchema,
+    composeFile: selfUpdateComposeFileSchema,
+    versionMode: z.enum(["latest", "pinned"]),
+    targetVersion: selfUpdateVersionSchema
+  })
 ]);
 
 export type DockerActionRequest = z.infer<typeof dockerActionSchema>;

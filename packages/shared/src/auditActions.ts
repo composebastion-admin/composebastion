@@ -23,6 +23,8 @@ export const auditActions = [
   "image.scan",
   "job.cancel",
   "job.retry",
+  "system.self_update.config",
+  "system.self_update.start",
   "alert.channel.create",
   "alert.rule.create",
   "alert.silence.create",

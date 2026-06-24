@@ -292,6 +292,21 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
       }
     });
     if (path === "/api/health/ready") return json({ ok: true, checks: { database: { ok: true }, redis: { ok: true }, backups: { ok: true }, worker: { ok: true, queued: 0, running: 0 } } });
+    if (path === "/api/health") return json({ ok: true, version: "1.0.0", revision: null, buildDate: null });
+    if (path === "/api/self-update") return json({
+      configured: true,
+      config: {
+        hostId: host.id,
+        workingDir: "/srv/composebastion",
+        composeFile: "docker-compose.image.yml",
+        versionMode: "latest",
+        targetVersion: "latest"
+      },
+      runtime: { version: "1.0.0", revision: null, buildDate: null },
+      latest: { version: "1.0.0", checkedAt: new Date(0).toISOString(), error: null },
+      updateAvailable: false,
+      lastJob: null
+    });
     if (path === "/api/favorite-images") return json({ images: [] });
     if (path === "/api/catalog/templates") return json({ templates: [] });
     if (path === "/api/catalog/external") return json({
@@ -779,6 +794,16 @@ test("host SSH terminal action opens a visible warning drawer", async ({ page })
   });
   expect(sizes.frameHeight).toBeGreaterThan(500);
   expect(sizes.terminalHeight).toBeGreaterThan(sizes.frameHeight * 0.85);
+});
+
+test("hosts add button opens the host form inline", async ({ page }) => {
+  await mockApi(page);
+  await page.goto("/hosts");
+  await expect(page.getByRole("heading", { name: "Hosts" })).toBeVisible();
+  await page.getByRole("button", { name: "Add host" }).click();
+  await expect(page.getByRole("button", { name: "Close form" })).toBeVisible();
+  await expect(page.getByPlaceholder("Hostname or IP")).toBeVisible();
+  await expect(page.locator(".hostsAddPanel .hostForm")).toBeVisible();
 });
 
 test("dedicated SSH route manages SSH connections", async ({ page }) => {

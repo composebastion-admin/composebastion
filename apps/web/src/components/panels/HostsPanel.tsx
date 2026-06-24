@@ -1,8 +1,11 @@
+import { useState } from "react";
 import { Activity, Plus, RefreshCw, Server, Settings, Terminal } from "lucide-react";
 import type { AdminUser, DockerHost } from "@composebastion/shared";
 import { formatDate } from "../../lib/format.js";
 import { describeAgentCompatibility } from "../../lib/agentCompatibility.js";
 import { canOpenHostTerminal } from "../../lib/hostTerminal.js";
+import type { Jobish } from "../../lib/dashboardTypes.js";
+import { HostForm } from "../dashboard/HostForm.js";
 import { ButtonRow, DataTable, EmptyState, StatusPill } from "../ui/primitives.js";
 
 export function HostsPanel({
@@ -11,7 +14,8 @@ export function HostsPanel({
   containerCounts,
   user,
   onSelectHost,
-  onAddHost,
+  refresh,
+  runJob,
   onHostAction,
   onOpenMetrics,
   onOpenAdmin,
@@ -22,12 +26,17 @@ export function HostsPanel({
   containerCounts: Record<string, number>;
   user: AdminUser;
   onSelectHost: (hostId: string) => void;
-  onAddHost: () => void;
+  refresh: () => Promise<void>;
+  runJob: <T extends Jobish>(request: () => Promise<T>) => Promise<T>;
   onHostAction: (type: string, hostId: string) => Promise<void>;
   onOpenMetrics: (host: DockerHost) => void;
   onOpenAdmin: () => void;
   onOpenTerminal: (host: DockerHost) => void;
 }) {
+  const [showHostForm, setShowHostForm] = useState(false);
+
+  const openHostForm = () => setShowHostForm(true);
+
   return (
     <div className="hostsSurface">
       <div className="resourceHeader">
@@ -36,11 +45,26 @@ export function HostsPanel({
           <p>Add a server once, then let ComposeBastion keep inventory fresh in the background.</p>
         </div>
         <ButtonRow>
-          <button type="button" className="primary" onClick={onAddHost}><Plus size={16} />Add host</button>
+          <button type="button" className="primary" onClick={() => setShowHostForm((value) => !value)}>
+            <Plus size={16} />
+            {showHostForm ? "Close form" : "Add host"}
+          </button>
         </ButtonRow>
       </div>
+      {showHostForm && (
+        <div className="hostsAddPanel">
+          <HostForm
+            runJob={runJob}
+            onCreated={() => {
+              setShowHostForm(false);
+              void refresh();
+            }}
+            submitLabel="Save host"
+          />
+        </div>
+      )}
       {hosts.length === 0 ? (
-        <EmptyState headline="No hosts added" hint="Add your first Docker server to begin discovering containers, images, and compose apps." actionLabel="Add host" onAction={onAddHost} />
+        <EmptyState headline="No hosts added" hint="Add your first Docker server to begin discovering containers, images, and compose apps." actionLabel="Add host" onAction={openHostForm} />
       ) : (
         <DataTable
           rows={hosts}

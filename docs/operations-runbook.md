@@ -16,6 +16,8 @@ This runbook is the minimum production checklist for a ComposeBastion deployment
 - Confirm alert channels are enabled and recent threshold alerts are expected.
 - Check active alert silences before maintenance, and remove stale silences after
   work is complete so future notifications are not suppressed unexpectedly.
+- If this deployment uses image-based self-update, check Admin -> Operations for
+  the configured manager host, latest release check, and last self-update job.
 
 ## Weekly Checks
 
@@ -25,6 +27,10 @@ This runbook is the minimum production checklist for a ComposeBastion deployment
 - Review admin/operator users and remove inactive accounts.
 - Check image update intelligence, vulnerability scan setup, and preview guidance
   before updating containers or redeploying stacks.
+- Review the ComposeBastion self-update configuration before planned upgrades:
+  the manager host should be an SSH-mode host, the Compose directory should
+  match the deployed stack, and the Compose file should be the image install
+  file used by production.
 
 ## Recovery Acceptance Drill
 
@@ -60,6 +66,9 @@ claims for a release.
 3. Confirm migrations are clean with `npm run lint:migrations` in the source tree.
 4. Read the changelog for new migrations, role changes, and agent compatibility notes.
 5. Upgrade a non-critical deployment first when possible.
+6. For in-app self-updates, keep a shell open to the manager host and tail
+   `.composebastion-self-update.log` from the Compose directory until app and
+   worker restart successfully.
 
 ## Incident Notes
 
