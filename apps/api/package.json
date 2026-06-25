@@ -38,7 +38,7 @@
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
-    "@types/node": "^22.19.20",
+    "@types/node": "^26.0.1",
     "@types/nodemailer": "^6.4.23",
     "@types/pg": "^8.11.10",
     "@types/ssh2": "^1.15.4",
