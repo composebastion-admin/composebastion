@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Boxes,
   ChevronDown,
@@ -9,6 +9,7 @@ import {
   Layers,
   Link2,
   ListTree,
+  Pencil,
   Play,
   RefreshCw,
   RotateCcw,
@@ -21,7 +22,7 @@ import {
   UploadCloud
 } from "lucide-react";
 import type { AppGithubVersionKind, AppGithubVersionOption, AppGithubVersions, ComposeStack, DockerApp, DockerHost, RecoveryReadiness, ResourceSnapshot } from "@composebastion/shared";
-import { publishedWebLinks } from "@composebastion/shared";
+import { imageRepository, imageTag, publishedWebLinks } from "@composebastion/shared";
 import { api, deleteJson, postJson, putJson } from "../../api.js";
 import { useConfirm } from "../ConfirmProvider.js";
 import { useToast } from "../ToastProvider.js";
@@ -42,6 +43,7 @@ import { formatDate } from "../../lib/format.js";
 import { dockerAppRecoveryKey, recoveryIdentityKey, recoveryReadinessClass, recoveryReadinessLabel } from "../../lib/recovery.js";
 import { activeSourceChannel, imageReferenceWithTag, sourceChannels } from "../../lib/sourceChannels.js";
 import { countGithubVersionUpdates, groupGithubVersionOptions, shortVersionSha } from "../../lib/sourceVersions.js";
+import { isImageChannelTag, summarizeImageVersionTags } from "../../lib/imageTagOptions.js";
 import { ServiceImageUpdateDrawer, type ServiceImageUpdateTarget } from "../services/ServiceImageUpdateDrawer.js";
 
 type GroupActionVerb = "start" | "stop" | "restart" | "deploy" | "remove";
@@ -60,6 +62,12 @@ type VersionLookupState = {
   data?: AppGithubVersions;
   error?: string;
   selectingRef?: string | null;
+};
+
+type TagLookupState = {
+  status: "loading" | "ready" | "error";
+  tags: string[];
+  error?: string;
 };
 
 const emptyVersionLookup: VersionLookupState = { status: "idle", selectingRef: null };
@@ -103,6 +111,65 @@ function versionValue(app: DockerApp, type: "current" | "latest") {
     return compactText(value, 12) || compactText(app.update.imageReference, 24) || "Unknown";
   }
   return type === "current" ? compactText(app.imageReferences[0], 24) || "Unknown" : "Unknown";
+}
+
+function versionLabel(app: DockerApp, type: "current" | "latest") {
+  if (app.update.kind === "image") return type === "current" ? "Current digest" : "Remote digest";
+  return type === "current" ? "Current" : "Latest";
+}
+
+function primaryImageReference(app: DockerApp, group?: ServiceGroup | null) {
+  return app.update.kind === "image" && app.update.imageReference
+    ? app.update.imageReference
+    : app.imageReferences[0] ?? group?.images[0] ?? null;
+}
+
+function sourceReferenceLabel(app: DockerApp, group?: ServiceGroup | null) {
+  if (app.source === "git" && app.branch) {
+    return { label: "Git ref", value: app.branch };
+  }
+  const imageReference = primaryImageReference(app, group);
+  if (imageReference) return { label: "Image tag", value: imageTag(imageReference) };
+  if (app.branch) return { label: "Source ref", value: app.branch };
+  return null;
+}
+
+function tagLookupLabel(lookup: TagLookupState | undefined, currentTag: string) {
+  if (!lookup) return "Waiting for tag scan";
+  if (lookup.status === "loading") return "Scanning tags...";
+  if (lookup.status === "error") return "Tag scan failed";
+  const summary = summarizeImageVersionTags(lookup.tags, currentTag);
+  if (summary.latestStable && summary.latestPrerelease && summary.latestPrerelease !== summary.latestStable) {
+    return `${summary.latestStable} stable / ${summary.latestPrerelease} prerelease`;
+  }
+  return summary.latestStable ?? summary.latestPrerelease ?? "No numbered versions";
+}
+
+function tagLookupUpdateAvailable(lookup: TagLookupState | undefined, currentTag: string) {
+  if (!lookup || lookup.status !== "ready") return false;
+  const summary = summarizeImageVersionTags(lookup.tags, currentTag);
+  return summary.stableUpdateAvailable || summary.prereleaseUpdateAvailable;
+}
+
+function displayImageTag(tag: string) {
+  return isImageChannelTag(tag) ? `${tag} channel` : tag;
+}
+
+function updateReason(app: DockerApp, lookup: TagLookupState | undefined, currentTag: string | null) {
+  if (app.update.status === "error") return "Check failed";
+  if (app.update.kind === "git" && app.update.status === "update_available") return "Git ref has newer commits";
+  if (app.update.kind === "image" && app.update.status === "update_available") return "Tracked image digest changed";
+  if (currentTag && tagLookupUpdateAvailable(lookup, currentTag)) return "Newer version tag found";
+  return "No update";
+}
+
+function imageDigestUpdatesForApp(app: DockerApp | null | undefined) {
+  if (!app || app.update.kind !== "image" || app.update.status !== "update_available" || !app.update.imageReference) return [];
+  return [{
+    imageReference: app.update.imageReference,
+    currentDigest: app.update.currentDigest ?? null,
+    remoteDigest: app.update.remoteDigest ?? null
+  }];
 }
 
 function dataMountLabel(mount: ServiceGroup["dataMounts"][number]) {
@@ -186,11 +253,17 @@ export function ServicesPanel({
   const [busyKeys, setBusyKeys] = useState<Set<string>>(new Set());
   const [checkingUpdates, setCheckingUpdates] = useState(false);
   const [sourceTarget, setSourceTarget] = useState<DockerApp | null>(null);
+  const [renameTarget, setRenameTarget] = useState<DockerApp | null>(null);
+  const [renameValue, setRenameValue] = useState("");
   const [imageUpdateTarget, setImageUpdateTarget] = useState<ServiceGroup | null>(null);
   const [sourceForm, setSourceForm] = useState<SourceLinkForm | null>(null);
   const [savingSource, setSavingSource] = useState(false);
   const [versionLookup, setVersionLookup] = useState<VersionLookupState>(emptyVersionLookup);
   const [versionQuery, setVersionQuery] = useState("");
+  const [showUpdateSummary, setShowUpdateSummary] = useState(false);
+  const [updateSummaryDismissed, setUpdateSummaryDismissed] = useState(false);
+  const [lastUpdateScanAt, setLastUpdateScanAt] = useState<string | null>(null);
+  const [tagLookups, setTagLookups] = useState<Record<string, TagLookupState>>({});
 
   const groups = useMemo(() => groupServices(containers, stacks, hosts), [containers, stacks, hosts]);
   const appByGroupKey = useMemo(() => {
@@ -213,6 +286,38 @@ export function ServicesPanel({
     () => Array.from(appByGroupKey.values()).filter((app) => app.update.status === "update_available").length,
     [appByGroupKey]
   );
+  const servicesWithApps = useMemo(
+    () => groups.flatMap((group) => {
+      const app = appByGroupKey.get(group.key);
+      return app ? [{ group, app }] : [];
+    }),
+    [appByGroupKey, groups]
+  );
+  const shouldShowUpdateSummary = showUpdateSummary || (serviceUpdates > 0 && !updateSummaryDismissed);
+  const tagScanTargets = useMemo(() => {
+    if (!shouldShowUpdateSummary) return [];
+    const targets = new Map<string, string>();
+    for (const { app, group } of servicesWithApps) {
+      const imageReference = primaryImageReference(app, group);
+      if (!imageReference) continue;
+      const repository = imageRepository(imageReference);
+      if (!targets.has(repository)) targets.set(repository, imageReference);
+    }
+    return Array.from(targets, ([repository, imageReference]) => ({ repository, imageReference }));
+  }, [servicesWithApps, shouldShowUpdateSummary]);
+  const updateSummaryItems = useMemo(() => servicesWithApps.flatMap(({ app, group }) => {
+    const imageReference = primaryImageReference(app, group);
+    const currentTag = imageReference ? imageTag(imageReference) : null;
+    const lookup = imageReference ? tagLookups[imageRepository(imageReference)] : undefined;
+    const hasVersionUpdate = currentTag ? tagLookupUpdateAvailable(lookup, currentTag) : false;
+    const hasTrackedUpdate = app.update.status === "update_available" || app.update.status === "error";
+    if (!hasTrackedUpdate && !hasVersionUpdate) return [];
+    return [{ app, group, imageReference, currentTag, lookup }];
+  }), [servicesWithApps, tagLookups]);
+  const tagScanLoading = shouldShowUpdateSummary && tagScanTargets.some((target) => {
+    const lookup = tagLookups[target.repository];
+    return !lookup || lookup.status === "loading";
+  });
   const hasGitServices = useMemo(() => apps.some((app) => app.source === "git"), [apps]);
   const canEditSourceLink = Boolean(sourceTarget?.id.startsWith("container:") && sourceTarget.primaryContainerId);
   const canLoadGithubVersions = Boolean(sourceTarget?.source === "git" && sourceForm?.sourceType === "git" && sourceForm.repositoryUrl.trim());
@@ -223,6 +328,35 @@ export function ServicesPanel({
   const githubVersionUpdateCount = versionLookup.status === "ready" && versionLookup.data
     ? countGithubVersionUpdates(versionLookup.data.options)
     : 0;
+
+  useEffect(() => {
+    if (!shouldShowUpdateSummary) return;
+    for (const target of tagScanTargets) {
+      const existing = tagLookups[target.repository];
+      if (existing?.status === "loading" || existing?.status === "ready") continue;
+      setTagLookups((current) => ({
+        ...current,
+        [target.repository]: { status: "loading", tags: [] }
+      }));
+      void api<{ tags: string[] }>(`/api/image-tags?image=${encodeURIComponent(target.imageReference)}`)
+        .then((response) => {
+          setTagLookups((current) => ({
+            ...current,
+            [target.repository]: { status: "ready", tags: response.tags }
+          }));
+        })
+        .catch((caught) => {
+          setTagLookups((current) => ({
+            ...current,
+            [target.repository]: {
+              status: "error",
+              tags: [],
+              error: caught instanceof Error ? caught.message : String(caught)
+            }
+          }));
+        });
+    }
+  }, [shouldShowUpdateSummary, tagLookups, tagScanTargets]);
 
   function toggleExpanded(key: string) {
     setExpanded((current) => {
@@ -323,9 +457,19 @@ export function ServicesPanel({
   async function checkUpdates() {
     setCheckingUpdates(true);
     try {
-      await postJson<{ apps: DockerApp[] }>("/api/apps/check-updates", {});
+      const result = await postJson<{ apps: DockerApp[] }>("/api/apps/check-updates", {});
+      const updateCount = result.apps.filter((app) => app.update.status === "update_available").length;
+      setShowUpdateSummary(true);
+      setUpdateSummaryDismissed(false);
+      setLastUpdateScanAt(new Date().toISOString());
+      setTagLookups({});
       await refresh();
-      pushToast("Service update check completed", "success");
+      pushToast(
+        updateCount > 0
+          ? `${updateCount} service update${updateCount === 1 ? "" : "s"} found`
+          : "Tracked update scan completed; checking version tags",
+        "success"
+      );
     } catch (caught) {
       pushToast(caught instanceof Error ? caught.message : String(caught), "error");
     } finally {
@@ -350,6 +494,16 @@ export function ServicesPanel({
     setSourceForm(sourceFormFromApp(app));
     setVersionLookup(emptyVersionLookup);
     setVersionQuery("");
+  }
+
+  function openRename(app: DockerApp) {
+    setRenameTarget(app);
+    setRenameValue(app.name);
+  }
+
+  function closeRename() {
+    setRenameTarget(null);
+    setRenameValue("");
   }
 
   function patchSourceForm(patch: Partial<SourceLinkForm>) {
@@ -392,6 +546,26 @@ export function ServicesPanel({
       closeSourceDrawer();
       await refresh();
       pushToast("Service source cleared", "success");
+    } catch (caught) {
+      pushToast(caught instanceof Error ? caught.message : String(caught), "error");
+    } finally {
+      setSavingSource(false);
+    }
+  }
+
+  async function saveRename() {
+    if (!renameTarget) return;
+    const name = renameValue.trim();
+    if (!name || name === renameTarget.name) {
+      closeRename();
+      return;
+    }
+    setSavingSource(true);
+    try {
+      await putJson(`/api/apps/${encodeURIComponent(renameTarget.id)}/name`, { name });
+      closeRename();
+      await refresh();
+      pushToast("Service renamed", "success");
     } catch (caught) {
       pushToast(caught instanceof Error ? caught.message : String(caught), "error");
     } finally {
@@ -512,12 +686,99 @@ export function ServicesPanel({
             <ListTree size={16} />
             {allExpanded ? "Collapse all" : "Expand all"}
           </button>
-          <button type="button" onClick={() => void checkUpdates()} disabled={checkingUpdates} title="Check service updates">
+          <button type="button" onClick={() => void checkUpdates()} disabled={checkingUpdates} title="Scan service updates">
             <RefreshCw size={16} className={checkingUpdates ? "spin" : undefined} />
-            Check updates
+            Scan updates
           </button>
         </ButtonRow>
       </div>
+
+      {shouldShowUpdateSummary && (
+        <section className="servicesUpdateSummary" aria-label="Service update summary">
+          <div className="servicesUpdateSummaryHeader">
+            <div>
+              <span>Update summary</span>
+              <strong>
+                {tagScanLoading
+                  ? "Scanning services"
+                  : updateSummaryItems.length > 0
+                    ? `${updateSummaryItems.length} service${updateSummaryItems.length === 1 ? "" : "s"} need attention`
+                    : "Everything looks current"}
+              </strong>
+              <small>
+                {lastUpdateScanAt ? `Last scanned ${formatDate(lastUpdateScanAt)}` : "Based on the latest saved check"}
+              </small>
+            </div>
+            <ButtonRow>
+              <button type="button" onClick={() => void checkUpdates()} disabled={checkingUpdates}>
+                <RefreshCw size={15} className={checkingUpdates ? "spin" : undefined} />
+                Rescan
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowUpdateSummary(false);
+                  setUpdateSummaryDismissed(true);
+                }}
+              >
+                Hide
+              </button>
+            </ButtonRow>
+          </div>
+          {tagScanLoading && <div className="notice">Checking registry tags so numbered versions can be compared.</div>}
+          {!tagScanLoading && updateSummaryItems.length === 0 && (
+            <div className="notice success">No outdated digests, newer numbered tags, or failed checks were found for the current service inventory.</div>
+          )}
+          {updateSummaryItems.length > 0 && (
+            <div className="servicesUpdateRows">
+              {updateSummaryItems.map(({ app, group, imageReference, currentTag, lookup }) => {
+                const reason = updateReason(app, lookup, currentTag);
+                const trackedDigestUpdate = app.update.kind === "image" && app.update.status === "update_available";
+                const latestLabel = app.update.kind === "git"
+                  ? compactText(app.update.availableVersion, 12) || "Unknown"
+                  : trackedDigestUpdate
+                    ? versionValue(app, "latest")
+                  : currentTag
+                    ? tagLookupLabel(lookup, currentTag)
+                    : versionValue(app, "latest");
+                return (
+                  <div key={`${group.key}:${app.id}`} className="servicesUpdateRow">
+                    <div className="servicesUpdateService">
+                      <strong>{app.name}</strong>
+                      <small>{group.hostName}</small>
+                    </div>
+                    <div>
+                      <span>Reason</span>
+                      <strong>{reason}</strong>
+                    </div>
+                    <div>
+                      <span>Current</span>
+                      <code>{app.update.kind === "git" ? versionValue(app, "current") : currentTag ? displayImageTag(currentTag) : versionValue(app, "current")}</code>
+                    </div>
+                    <div>
+                      <span>Latest</span>
+                      <code title={lookup?.status === "error" ? lookup.error : undefined}>{latestLabel}</code>
+                    </div>
+                    <div className="servicesUpdateImage">
+                      <span>{app.update.kind === "git" ? "Source" : "Image"}</span>
+                      <code title={imageReference ?? app.repositoryUrl ?? undefined}>{imageReference ?? app.repositoryUrl ?? "Unknown"}</code>
+                    </div>
+                    <ButtonRow>
+                      <button
+                        type="button"
+                        onClick={() => app.update.kind === "git" ? openSourceLink(app) : setImageUpdateTarget(group)}
+                        disabled={app.update.kind !== "git" && group.members.length === 0}
+                      >
+                        More details
+                      </button>
+                    </ButtonRow>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      )}
 
       {hasGitServices && (
         <div className="formHint servicesSourceHint">
@@ -546,6 +807,8 @@ export function ServicesPanel({
             const appReadiness = appReadinessKey ? readinessByAppKey.get(appReadinessKey) ?? null : null;
             const canLinkSource = Boolean(app?.id.startsWith("container:") && app.primaryContainerId);
             const canOpenSource = Boolean(app && (canLinkSource || (app.source === "git" && app.repositoryUrl)));
+            const sourceRef = app ? sourceReferenceLabel(app, group) : null;
+            const displayName = app?.name ?? group.name;
             return (
               <div key={group.key} className={`serviceCard status-${group.status}${busy ? " busy" : ""}`}>
                 <div className="serviceCardHeader">
@@ -562,7 +825,7 @@ export function ServicesPanel({
                   <span className={`serviceStatusDot ${group.status}`} aria-hidden="true" />
                   <div className="serviceIdentity">
                     <div className="serviceTitleRow">
-                      <strong>{group.name}</strong>
+                      <strong>{displayName}</strong>
                       <span className={`serviceKindBadge ${group.kind}`}>
                         {group.kind === "compose" ? <Boxes size={12} /> : <Server size={12} />}
                         {group.kind === "compose" ? "Compose" : "Standalone"}
@@ -580,9 +843,9 @@ export function ServicesPanel({
                     {app && (
                       <div className="serviceVersionRow">
                         <span className={`appSourcePill ${app.source}`}>{sourceLabel(app.source)}</span>
-                        {app.branch && <span>Ref <code>{compactText(app.branch, 18)}</code></span>}
-                        <span>Current <code>{versionValue(app, "current")}</code></span>
-                        <span>Latest <code>{versionValue(app, "latest")}</code></span>
+                        {sourceRef && <span>{sourceRef.label} <code>{compactText(sourceRef.value, 18)}</code></span>}
+                        <span>{versionLabel(app, "current")} <code>{versionValue(app, "current")}</code></span>
+                        <span>{versionLabel(app, "latest")} <code>{versionValue(app, "latest")}</code></span>
                         {app.update.checkedAt && <span>Checked {formatDate(app.update.checkedAt)}</span>}
                         {app.update.riskNote && <small title={app.update.riskNote}>{compactText(app.update.riskNote, 90)}</small>}
                       </div>
@@ -683,6 +946,16 @@ export function ServicesPanel({
                         onClick={() => openSourceLink(app)}
                       >
                         {app.source === "git" && app.repositoryUrl ? <GitBranch size={15} /> : <Link2 size={15} />}
+                      </button>
+                    )}
+                    {app && (
+                      <button
+                        type="button"
+                        title={`Rename ${app.name}`}
+                        disabled={busy}
+                        onClick={() => openRename(app)}
+                      >
+                        <Pencil size={15} />
                       </button>
                     )}
                     {hasContainers && (
@@ -938,10 +1211,40 @@ export function ServicesPanel({
           </ButtonRow>
         </form>
       )}
+      {renameTarget && (
+        <form
+          className="drawer appRenameDrawer"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void saveRename();
+          }}
+        >
+          <div className="panelHeader">
+            <h3>Rename {renameTarget.name}</h3>
+            <button type="button" onClick={closeRename}>Close</button>
+          </div>
+          <label>
+            Display name
+            <input
+              value={renameValue}
+              onChange={(event) => setRenameValue(event.target.value)}
+              maxLength={120}
+              autoFocus
+            />
+          </label>
+          <ButtonRow>
+            <button type="button" onClick={closeRename}>Cancel</button>
+            <button type="submit" className="primary" disabled={savingSource || !renameValue.trim() || renameValue.trim() === renameTarget.name}>
+              Save name
+            </button>
+          </ButtonRow>
+        </form>
+      )}
       {imageUpdateTarget && (
         <ServiceImageUpdateDrawer
           group={imageUpdateTarget}
           images={images}
+          availableImageUpdates={imageDigestUpdatesForApp(appByGroupKey.get(imageUpdateTarget.key))}
           busy={busyKeys.has(imageUpdateTarget.key)}
           onClose={() => setImageUpdateTarget(null)}
           onUpdate={(targets) => updateServiceImages(imageUpdateTarget, targets)}

@@ -37,6 +37,53 @@ function compareParsedVersions(left: ParsedVersion, right: ParsedVersion) {
   return right.prereleaseNumber - left.prereleaseNumber;
 }
 
+export function isImageChannelTag(tag: string) {
+  return channelPriority.has(tag.trim().toLowerCase());
+}
+
+function parsedVersionEntry(tag: string) {
+  const parsed = parseVersionTag(tag);
+  if (!parsed || isImageChannelTag(tag)) return null;
+  return { tag, parsed };
+}
+
+export function latestStableImageTag(tags: string[]) {
+  return tags
+    .map(parsedVersionEntry)
+    .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry && !entry.parsed.prerelease))
+    .sort((left, right) => compareParsedVersions(left.parsed, right.parsed))[0]?.tag ?? null;
+}
+
+export function latestPrereleaseImageTag(tags: string[]) {
+  return tags
+    .map(parsedVersionEntry)
+    .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry && entry.parsed.prerelease))
+    .sort((left, right) => compareParsedVersions(left.parsed, right.parsed))[0]?.tag ?? null;
+}
+
+export function isVersionImageTag(tag: string) {
+  return Boolean(parsedVersionEntry(tag));
+}
+
+export function isNewerVersionTag(candidate: string | null | undefined, current: string | null | undefined) {
+  const candidateEntry = candidate ? parsedVersionEntry(candidate) : null;
+  const currentEntry = current ? parsedVersionEntry(current) : null;
+  if (!candidateEntry || !currentEntry) return false;
+  return compareParsedVersions(candidateEntry.parsed, currentEntry.parsed) < 0;
+}
+
+export function summarizeImageVersionTags(tags: string[], currentTag: string) {
+  const latestStable = latestStableImageTag(tags);
+  const latestPrerelease = latestPrereleaseImageTag(tags);
+  return {
+    currentTag,
+    latestStable,
+    latestPrerelease,
+    stableUpdateAvailable: isNewerVersionTag(latestStable, currentTag),
+    prereleaseUpdateAvailable: isNewerVersionTag(latestPrerelease, currentTag)
+  };
+}
+
 export function compareImageTags(left: string, right: string) {
   const normalizedLeft = left.toLowerCase();
   const normalizedRight = right.toLowerCase();

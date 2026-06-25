@@ -193,6 +193,10 @@ export const appGithubVersionSelectSchema = z.object({
   kind: appGithubVersionKindSchema.optional()
 });
 
+export const appRenameInputSchema = z.object({
+  name: z.string().trim().min(1).max(120)
+});
+
 export const imageScanRequestSchema = z.object({
   hostId: idSchema,
   imageReference: z.string().min(1)
@@ -274,6 +278,7 @@ export type AppGithubVersionKind = z.infer<typeof appGithubVersionKindSchema>;
 export type AppGithubVersionOption = z.infer<typeof appGithubVersionOptionSchema>;
 export type AppGithubVersions = z.infer<typeof appGithubVersionsSchema>;
 export type AppGithubVersionSelect = z.infer<typeof appGithubVersionSelectSchema>;
+export type AppRenameInput = z.infer<typeof appRenameInputSchema>;
 export type ImageScanResult = z.infer<typeof imageScanResultSchema>;
 export type ImageScannerStatus = z.infer<typeof imageScannerStatusSchema>;
 export type ImageUpdatePreview = z.infer<typeof imageUpdatePreviewSchema>;

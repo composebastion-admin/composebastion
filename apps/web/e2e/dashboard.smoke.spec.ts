@@ -158,14 +158,16 @@ type MockApiOptions = {
   hosts?: unknown[];
   role?: "owner" | "admin" | "operator" | "viewer";
   failChannelTest?: boolean;
+  appOverride?: Record<string, unknown>;
 };
 
 async function mockApi(page: Page, options: MockApiOptions = {}) {
   const requests: string[] = [];
   const currentUser = { ...user, role: options.role ?? user.role };
   const hostList = options.hosts ?? [host];
+  let appData = { ...app, ...(options.appOverride ?? {}) } as typeof app & Record<string, any>;
   let channelTestFailed = false;
-  let selectedGitRef = app.branch;
+  let selectedGitRef = appData.branch;
 
   await page.route("**/api/**", async (route) => {
     const request = route.request();
@@ -351,10 +353,14 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
       }]
     });
     if (path === "/api/github/repos") return json({ repositories: [] });
-    if (path === "/api/apps") return json({ apps: [{ ...app, branch: selectedGitRef }] });
-    if (path === `/api/apps/${app.id}/versions`) return json({
+    if (path === "/api/apps") return json({ apps: [{ ...appData, branch: selectedGitRef }] });
+    if (path === `/api/apps/${appData.id}/name` && request.method() === "PUT") {
+      appData = { ...appData, name: (request.postDataJSON() as { name?: string }).name ?? appData.name };
+      return json({ app: appData });
+    }
+    if (path === `/api/apps/${appData.id}/versions`) return json({
       versions: {
-        repositoryUrl: app.repositoryUrl,
+        repositoryUrl: appData.repositoryUrl,
         selectedRef: selectedGitRef,
         currentCommitSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         options: [
@@ -397,9 +403,9 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
         ]
       }
     });
-    if (path === `/api/apps/${app.id}/version` && request.method() === "PUT") {
+    if (path === `/api/apps/${appData.id}/version` && request.method() === "PUT") {
       selectedGitRef = (request.postDataJSON() as { ref?: string }).ref ?? selectedGitRef;
-      return json({ app: { ...app, branch: selectedGitRef } });
+      return json({ app: { ...appData, branch: selectedGitRef } });
     }
     if (path === "/api/auth/sessions") return json({ sessions: [{
       id: "abababab-abab-4bab-8bab-abababababab",
@@ -509,7 +515,7 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
       status: "update_available",
       riskNote: "Mutable tag",
       affectedContainers: [{ id: "web", name: "web" }],
-      affectedStacks: [{ id: app.stackId, name: "Web" }],
+      affectedStacks: [{ id: appData.stackId, name: "Web" }],
       lastCheckedAt: new Date(0).toISOString(),
       severityCounts: { critical: 0, high: 1, medium: 0, low: 0 }
     }] });
@@ -552,7 +558,7 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
       credentialHint: null,
       safeAction: "update_container",
       affectedContainers: [{ id: "web", name: "web" }],
-      affectedStacks: [{ id: app.stackId, name: "Web" }],
+      affectedStacks: [{ id: appData.stackId, name: "Web" }],
       severityCounts: { critical: 0, high: 1, medium: 0, low: 0 }
     } });
     if (path === "/api/recovery/readiness") return json({ readiness: [recoveryReadiness] });
@@ -807,7 +813,7 @@ test("host SSH terminal action opens a visible warning drawer", async ({ page })
 test("hosts add button opens the host form inline", async ({ page }) => {
   await mockApi(page);
   await gotoApp(page, "/hosts");
-  await expect(page.getByRole("heading", { name: "Hosts" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Hosts", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Add host" }).click();
   await expect(page.getByRole("button", { name: "Close form" })).toBeVisible();
   await expect(page.getByPlaceholder("Hostname or IP")).toBeVisible();
@@ -840,7 +846,7 @@ test("apps compatibility route renders the services experience", async ({ page }
   await expect(versionRow).toBeVisible();
   await expect(versionRow).toContainText("Latest");
   await expect(page.getByText("Ready 97")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Check updates" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Scan updates" })).toBeVisible();
   await expect(page.getByText("No apps discovered yet")).toHaveCount(0);
 });
 
@@ -861,18 +867,50 @@ test("services load GitHub versions and select a tracked ref", async ({ page }) 
   await expect.poll(() => mock.requests).toContain(`PUT /api/apps/${app.id}/version`);
 });
 
+test("services rename the display name without changing the container", async ({ page }) => {
+  const mock = await mockApi(page);
+  await gotoApp(page, "/services");
+  await expect(page.getByText("Web").first()).toBeVisible();
+  await page.getByTitle("Rename Web").click();
+  await expect(page.getByRole("heading", { name: "Rename Web" })).toBeVisible();
+  await page.getByLabel("Display name").fill("Rackpad");
+  await page.getByRole("button", { name: "Save name" }).click();
+  await expect.poll(() => mock.requests).toContain(`PUT /api/apps/${app.id}/name`);
+  await expect(page.getByText("Rackpad").first()).toBeVisible();
+});
+
 test("services expose service-level image tag updates", async ({ page }) => {
-  await mockApi(page);
+  await mockApi(page, {
+    appOverride: {
+      source: "image",
+      repositoryId: null,
+      repositoryUrl: null,
+      branch: null,
+      update: {
+        status: "update_available",
+        kind: "image",
+        imageReference: "nginx:latest",
+        currentDigest: "sha256:local",
+        remoteDigest: "sha256:remote",
+        checkedAt: new Date(0).toISOString(),
+        riskNote: "Mutable tag"
+      }
+    }
+  });
   await gotoApp(page, "/services");
   await page.getByTitle("Update service image tags").click();
   const dialog = page.getByRole("dialog", { name: "Update images for Web" });
   await expect(dialog).toBeVisible();
   await expect(dialog.getByText("Update Web images")).toBeVisible();
-  await expect(dialog.getByText("latest")).toBeVisible();
-  await expect(dialog.getByText("beta")).toBeVisible();
+  await expect(dialog.locator(".serviceImageVersionSummary")).toContainText("Current latest channel");
+  await expect(dialog.locator(".serviceImageVersionSummary")).toContainText("Latest stable v0.9.7");
+  await expect(dialog.locator(".serviceImageVersionSummary")).toContainText("Remote digest remote");
+  await expect(dialog.getByRole("button", { name: "Update 1 container" })).toBeEnabled();
+  await expect(dialog.getByRole("button", { name: "latest current" })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "beta" })).toBeVisible();
   await dialog.getByLabel("Filter tags for nginx").fill("v0.9");
-  await expect(dialog.getByText("v0.9.7")).toBeVisible();
-  await expect(dialog.getByText("main")).toHaveCount(0);
+  await expect(dialog.getByRole("button", { name: "v0.9.7" })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "main" })).toHaveCount(0);
 });
 
 test("files route uses an in-panel host selector and resets paths", async ({ page }) => {
@@ -917,7 +955,7 @@ test("migrate compatibility route renders the unified migrate app panel", async 
 test("catalog imports external discovery as a review draft", async ({ page }) => {
   await mockApi(page);
   await gotoApp(page, "/catalog");
-  await expect(page.getByRole("heading", { name: "Catalog" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Catalog", level: 2 })).toBeVisible();
   await page.getByRole("button", { name: "Load" }).click();
   await expect(page.getByText("ArchiveBox")).toBeVisible();
   await page.getByRole("button", { name: "Import draft" }).click();

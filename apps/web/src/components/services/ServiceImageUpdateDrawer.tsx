@@ -3,7 +3,7 @@ import { Download, RefreshCw, Search, X } from "lucide-react";
 import type { ResourceSnapshot } from "@composebastion/shared";
 import { imageRepository, imageTag, imageWithTag } from "@composebastion/shared";
 import { api } from "../../api.js";
-import { filterImageTags, uniqueSortedImageTags } from "../../lib/imageTagOptions.js";
+import { filterImageTags, isImageChannelTag, summarizeImageVersionTags, uniqueSortedImageTags } from "../../lib/imageTagOptions.js";
 import type { ServiceGroup, ServiceMember } from "../../lib/serviceGroups.js";
 import { ButtonRow } from "../ui/primitives.js";
 
@@ -15,10 +15,17 @@ type ImageFamily = {
   localTags: string[];
 };
 
+type ImageDigestUpdate = {
+  imageReference: string;
+  currentDigest?: string | null;
+  remoteDigest?: string | null;
+};
+
 export type ServiceImageUpdateTarget = {
   containerId: string;
   containerName: string;
   targetImage: string;
+  digestUpdateAvailable?: boolean;
 };
 
 function imageReferenceFromResource(resource: ResourceSnapshot) {
@@ -58,15 +65,30 @@ function buildFamilies(group: ServiceGroup, images: ResourceSnapshot[]): ImageFa
   return Array.from(byRepository.values()).sort((left, right) => left.repository.localeCompare(right.repository));
 }
 
+function displayImageTag(tag: string) {
+  return isImageChannelTag(tag) ? `${tag} channel` : tag;
+}
+
+function shortDigest(value?: string | null) {
+  const digest = value?.replace(/^sha256:/, "").trim();
+  return digest ? digest.slice(0, 12) : "unknown";
+}
+
+function digestUpdateFor(family: ImageFamily, tag: string, updates: ImageDigestUpdate[]) {
+  return updates.find((update) => imageRepository(update.imageReference) === family.repository && imageTag(update.imageReference) === tag) ?? null;
+}
+
 export function ServiceImageUpdateDrawer({
   group,
   images,
+  availableImageUpdates = [],
   busy,
   onClose,
   onUpdate
 }: {
   group: ServiceGroup;
   images: ResourceSnapshot[];
+  availableImageUpdates?: ImageDigestUpdate[];
   busy: boolean;
   onClose: () => void;
   onUpdate: (targets: ServiceImageUpdateTarget[]) => Promise<void>;
@@ -118,15 +140,17 @@ export function ServiceImageUpdateDrawer({
 
   const targets = families.flatMap((family) => {
     const tag = targetTags[family.repository] ?? family.currentTags[0] ?? "latest";
+    const digestUpdate = digestUpdateFor(family, tag, availableImageUpdates);
     return family.members.map((member) => ({
       containerId: member.externalId,
       containerName: member.containerName,
-      targetImage: imageWithTag(member.image, tag)
+      targetImage: imageWithTag(member.image, tag),
+      digestUpdateAvailable: Boolean(digestUpdate && imageTag(member.image) === tag)
     }));
   });
   const changedTargets = targets.filter((target) => {
     const member = group.members.find((item) => item.externalId === target.containerId);
-    return member ? target.targetImage !== member.image : true;
+    return member ? target.digestUpdateAvailable || target.targetImage !== member.image : true;
   });
 
   return (
@@ -149,6 +173,9 @@ export function ServiceImageUpdateDrawer({
           const allTags = uniqueSortedImageTags([selectedTag], family.currentTags, remoteTags[family.repository] ?? [], family.localTags);
           const visibleTags = filterImageTags(allTags, tagFilters[family.repository] ?? "");
           const loading = loadingRepositories.has(family.repository);
+          const currentTag = family.currentTags[0] ?? selectedTag;
+          const versionSummary = summarizeImageVersionTags(allTags, currentTag);
+          const selectedDigestUpdate = digestUpdateFor(family, selectedTag, availableImageUpdates);
           return (
             <section key={family.repository} className="serviceImageFamily">
               <div className="serviceImageFamilyHeader">
@@ -159,6 +186,14 @@ export function ServiceImageUpdateDrawer({
                 <span>{loading ? <RefreshCw className="spin" size={14} /> : `${allTags.length} tags`}</span>
               </div>
               {errors[family.repository] && <div className="notice error">{errors[family.repository]}</div>}
+              <div className="serviceImageVersionSummary">
+                <span>Current <code>{displayImageTag(currentTag)}</code></span>
+                <span>Latest stable <code>{versionSummary.latestStable ?? "none"}</code></span>
+                <span>Latest prerelease <code>{versionSummary.latestPrerelease ?? "none"}</code></span>
+                {selectedDigestUpdate && (
+                  <span className="update">Remote digest <code>{shortDigest(selectedDigestUpdate.remoteDigest)}</code></span>
+                )}
+              </div>
               <input
                 className="serviceImageTarget"
                 value={imageWithTag(family.representativeImage, selectedTag)}

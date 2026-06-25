@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appGithubVersionSelectSchema, appGithubVersionsSchema, appSourceLinkInputSchema, backupCreateSchema, backupListQuerySchema, backupRestoreSchema, backupScheduleCreateSchema, catalogTemplates, configExportSchema, customCatalogTemplateInputSchema, dockerActionSchema, dockerAppSchema, externalCatalogQuerySchema, githubRepositoryBranchesRequestSchema, githubRepositoryCreateSchema, githubRepositoryDeploySchema, hostPathBackupRestoreSchema, loginRequestSchema, networkDriverExplanations, selfUpdateConfigSchema, setupRequestSchema, validatePasswordStrength, volumeCloneSchema } from "./index.js";
+import { appGithubVersionSelectSchema, appGithubVersionsSchema, appRenameInputSchema, appSourceLinkInputSchema, backupCreateSchema, backupListQuerySchema, backupRestoreSchema, backupScheduleCreateSchema, catalogTemplates, configExportSchema, customCatalogTemplateInputSchema, dockerActionSchema, dockerAppSchema, externalCatalogQuerySchema, githubRepositoryBranchesRequestSchema, githubRepositoryCreateSchema, githubRepositoryDeploySchema, hostPathBackupRestoreSchema, loginRequestSchema, networkDriverExplanations, selfUpdateConfigSchema, setupRequestSchema, validatePasswordStrength, volumeCloneSchema } from "./index.js";
 
 const sampleHostId = "00000000-0000-4000-8000-000000000001";
 
@@ -282,6 +282,8 @@ describe("shared schemas", () => {
       composePath: "docker-compose.yml"
     });
     expect(link.sourceType).toBe("git");
+    expect(appRenameInputSchema.parse({ name: " Rackpad " }).name).toBe("Rackpad");
+    expect(() => appRenameInputSchema.parse({ name: "" })).toThrow();
     expect(() => appSourceLinkInputSchema.parse({ sourceType: "git", workingDir: "/srv/app" })).toThrow();
   });
 

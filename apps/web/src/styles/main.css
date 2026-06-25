@@ -5590,6 +5590,100 @@ tbody tr:hover td {
   margin-bottom: 12px;
 }
 
+.servicesUpdateSummary {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 14px;
+  border: 1px solid color-mix(in srgb, var(--warning) 28%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface) 88%, var(--warning-bg));
+  padding: 12px;
+}
+
+.servicesUpdateSummaryHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.servicesUpdateSummaryHeader > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.servicesUpdateSummaryHeader span,
+.servicesUpdateRow span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.servicesUpdateSummaryHeader strong {
+  font-size: 18px;
+  line-height: 1.15;
+}
+
+.servicesUpdateSummaryHeader small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.servicesUpdateRows {
+  display: grid;
+  gap: 8px;
+}
+
+.servicesUpdateRow {
+  display: grid;
+  grid-template-columns: minmax(160px, 1.1fr) minmax(150px, 1fr) minmax(120px, 0.7fr) minmax(160px, 1fr) minmax(220px, 1.4fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 10px;
+}
+
+.servicesUpdateRow > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.servicesUpdateRow strong,
+.servicesUpdateRow code,
+.servicesUpdateRow small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.servicesUpdateRow code {
+  width: fit-content;
+  max-width: 100%;
+  border-radius: 6px;
+  background: var(--surface-muted);
+  color: var(--text);
+  padding: 2px 7px;
+  font-size: 11px;
+}
+
+.servicesUpdateService small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.servicesUpdateImage code {
+  font-family: "IBM Plex Mono", "JetBrains Mono", Consolas, monospace;
+}
+
 .serviceList {
   display: flex;
   flex-direction: column;
@@ -5870,6 +5964,34 @@ tbody tr:hover td {
 .serviceImageFamilyHeader span {
   color: var(--muted);
   font-size: 12px;
+}
+
+.serviceImageVersionSummary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.serviceImageVersionSummary span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 24px;
+  border-radius: 6px;
+  background: var(--surface-muted);
+  color: var(--muted);
+  padding: 2px 7px;
+  font-size: 12px;
+}
+
+.serviceImageVersionSummary span.update {
+  background: var(--warning-bg);
+  color: var(--warning-text);
+}
+
+.serviceImageVersionSummary code {
+  color: var(--text);
+  font-size: 11px;
 }
 
 .serviceImageTarget {
@@ -6277,6 +6399,14 @@ tbody tr:hover td {
 }
 
 @media (max-width: 900px) {
+  .servicesUpdateRow {
+    grid-template-columns: 1fr;
+  }
+
+  .servicesUpdateRow .buttonRow {
+    justify-content: flex-start;
+  }
+
   .serviceCardHeader {
     flex-wrap: wrap;
   }

@@ -1,8 +1,8 @@
 import type { FastifyInstance } from "fastify";
-import { appGithubVersionSelectSchema, appSourceLinkInputSchema } from "@composebastion/shared";
+import { appGithubVersionSelectSchema, appRenameInputSchema, appSourceLinkInputSchema } from "@composebastion/shared";
 import { auditContextFromRequest, writeAuditEvent } from "../services/audit.js";
 import { requireRole } from "../services/auth.js";
-import { checkAppUpdates, deleteAppSourceLink, listAppGithubVersions, listApps, selectAppGithubVersion, updateApp, upsertAppSourceLink } from "../services/apps.js";
+import { checkAppUpdates, deleteAppSourceLink, listAppGithubVersions, listApps, renameApp, selectAppGithubVersion, updateApp, upsertAppSourceLink } from "../services/apps.js";
 import { sensitiveMutationRateLimit } from "../services/rateLimits.js";
 
 export async function registerAppRoutes(app: FastifyInstance) {
@@ -56,6 +56,21 @@ export async function registerAppRoutes(app: FastifyInstance) {
       action: "app.update",
       targetKind: "app",
       targetId: appId,
+      ...auditContextFromRequest(request)
+    });
+    return result;
+  });
+
+  app.put("/api/apps/:appId/name", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
+    const { appId } = request.params as { appId: string };
+    const body = appRenameInputSchema.parse(request.body);
+    const result = await renameApp(decodeURIComponent(appId), body);
+    await writeAuditEvent({
+      userId: request.user?.id,
+      action: "app.rename",
+      targetKind: "app",
+      targetId: appId,
+      details: { name: body.name },
       ...auditContextFromRequest(request)
     });
     return result;

@@ -17,6 +17,7 @@ export const auditActions = [
   "catalog.deploy",
   "app.update_check",
   "app.update",
+  "app.rename",
   "app.source_link",
   "app.source_unlink",
   "image.update_check",

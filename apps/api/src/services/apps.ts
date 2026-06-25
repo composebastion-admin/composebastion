@@ -1,5 +1,5 @@
 import { v4 as uuid } from "uuid";
-import type { AppGithubVersionSelect, AppGithubVersions, AppSourceLink, AppSourceLinkInput, ComposeStack, DockerApp, DockerAppUpdate, GithubRepository, ImageUpdateCheck, ResourceSnapshot } from "@composebastion/shared";
+import type { AppGithubVersionSelect, AppGithubVersions, AppRenameInput, AppSourceLink, AppSourceLinkInput, ComposeStack, DockerApp, DockerAppUpdate, GithubRepository, ImageUpdateCheck, ResourceSnapshot } from "@composebastion/shared";
 import { query } from "../db/pool.js";
 import { shQuote } from "./commands.js";
 import { isDemoHost } from "./demo.js";
@@ -799,6 +799,61 @@ export async function deleteAppSourceLink(appId: string) {
     [app.hostId, app.primaryContainerId]
   );
   return { ok: true };
+}
+
+export async function renameApp(appId: string, input: AppRenameInput) {
+  const app = await findApp(appId);
+  const name = input.name.trim();
+  let updated = false;
+
+  if (app.stackId) {
+    await query(
+      `UPDATE compose_stacks
+       SET name = $3,
+           updated_at = now()
+       WHERE id = $1 AND host_id = $2`,
+      [app.stackId, app.hostId, name]
+    );
+    updated = true;
+  }
+
+  if (app.repositoryId) {
+    await query(
+      `UPDATE github_repositories
+       SET name = $2,
+           updated_at = now()
+       WHERE id = $1`,
+      [app.repositoryId, name]
+    );
+    updated = true;
+  }
+
+  if (app.sourceLink?.id) {
+    await query(
+      `UPDATE app_source_links
+       SET name = $2,
+           updated_at = now()
+       WHERE id = $1`,
+      [app.sourceLink.id, name]
+    );
+    updated = true;
+  } else if (!app.stackId && !app.repositoryId && app.primaryContainerId) {
+    await query(
+      `INSERT INTO app_source_links (
+         id, host_id, container_external_id, source_type, name, image_reference, updated_at
+       )
+       VALUES ($1, $2, $3, 'image', $4, $5, now())
+       ON CONFLICT (host_id, container_external_id)
+       DO UPDATE SET
+         name = EXCLUDED.name,
+         updated_at = now()`,
+      [uuid(), app.hostId, app.primaryContainerId, name, app.imageReferences[0] ?? null]
+    );
+    updated = true;
+  }
+
+  if (!updated) throw new Error("This service cannot be renamed yet");
+  return { app: (await listApps(app.hostId)).find((item) => item.id === appId) ?? null };
 }
 
 export async function updateApp(appId: string, createdBy?: string | null) {
