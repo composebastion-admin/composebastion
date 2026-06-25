@@ -1,4 +1,8 @@
+import { createRequire } from "node:module";
 import { expect, test, type Page } from "@playwright/test";
+
+const require = createRequire(import.meta.url);
+const packageJson = require("../../../package.json") as { version: string };
 
 const user = {
   id: "11111111-1111-4111-8111-111111111111",
@@ -739,7 +743,7 @@ test("admin about shows V1 licensing details", async ({ page }) => {
   await gotoApp(page, "/admin");
   await page.getByRole("button", { name: "About" }).click();
   await expect(page.getByRole("heading", { name: "About ComposeBastion" })).toBeVisible();
-  await expect(page.locator(".adminPane").getByText("v1.0.2")).toBeVisible();
+  await expect(page.locator(".adminPane").getByText(`v${packageJson.version}`)).toBeVisible();
   await expect(page.getByText("Copyright (c) 2026 ComposeBastion Admin. All rights reserved.")).toBeVisible();
   await expect(page.getByRole("link", { name: "support@composebastion.com" })).toBeVisible();
 });
