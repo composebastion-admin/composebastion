@@ -37,8 +37,8 @@ body:
     id: app_version
     attributes:
       label: App version
-      description: "Example: v1.0.1, main, beta, or a commit SHA."
-      placeholder: "v1.0.1"
+      description: "Example: v1.0.2, main, beta, or a commit SHA."
+      placeholder: "v1.0.2"
     validations:
       required: true
   - type: textarea

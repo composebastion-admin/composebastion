@@ -51,19 +51,19 @@ describe("self update service", () => {
       workingDir: "/srv/composebastion",
       composeFile: "docker-compose.image.yml",
       versionMode: "pinned",
-      targetVersion: "1.0.1"
+      targetVersion: "1.0.2"
     });
 
     expect(result).toMatchObject({
       handoffStarted: true,
       pid: "4242",
-      targetVersion: "1.0.1",
+      targetVersion: "1.0.2",
       logPath: "/srv/composebastion/.composebastion-self-update.log"
     });
     expect(writeRemoteFile).toHaveBeenCalledWith(
       expect.anything(),
       "/srv/composebastion/.composebastion-self-update.sh",
-      expect.stringContaining("COMPOSEBASTION_VERSION=1.0.1")
+      expect.stringContaining("COMPOSEBASTION_VERSION=1.0.2")
     );
     const script = String(writeRemoteFile.mock.calls[0]?.[2] ?? "");
     expect(script).toContain("docker compose -f 'docker-compose.image.yml' pull app worker");

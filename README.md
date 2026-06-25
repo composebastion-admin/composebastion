@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/composebastion-admin/composebastion/releases"><img alt="Release" src="https://img.shields.io/badge/release-v1.0.1-e0a23f"></a>
+  <a href="https://github.com/composebastion-admin/composebastion/releases"><img alt="Release" src="https://img.shields.io/badge/release-v1.0.2-e0a23f"></a>
   <a href="https://github.com/composebastion-admin/composebastion/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/composebastion-admin/composebastion/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/composebastion-admin/composebastion/pkgs/container/composebastion-app"><img alt="Container image" src="https://img.shields.io/badge/ghcr.io-composebastion--app-2496ed"></a>
   <a href="LICENSE.md"><img alt="License" src="https://img.shields.io/badge/license-source--available-df7d27"></a>
@@ -30,10 +30,10 @@ devices, Proxmox Docker VMs/LXCs, Portainer stacks, and any native Docker host o
 
 ## Current Release
 
-Latest verified release: `v1.0.1`.
+Latest verified release: `v1.0.2`.
 
-- Package and OpenAPI version: `1.0.1`.
-- GitHub release images: `1.0.1` and `v1.0.1`.
+- Package and OpenAPI version: `1.0.2`.
+- GitHub release images: `1.0.2` and `v1.0.2`.
 - Published platforms: `linux/amd64` and `linux/arm64` for both app and agent.
 - Verified release gates: CI, OpenAPI generation, web smoke, dependency audit,
   Compose config validation, local image builds, and image license inspection.
@@ -111,11 +111,11 @@ Image tags:
 | Tag | Use |
 |-----|-----|
 | `latest` | Simple homelab/NAS updates that intentionally follow `main`. |
-| `1.0.1` or `v1.0.1` | Exact V1 release pin for controlled production upgrades. |
+| `1.0.2` or `v1.0.2` | Exact V1 release pin for controlled production upgrades. |
 | `sha-*` | Commit-level verification or rollback testing. |
 
 Main builds publish `latest`, branch tags, and `sha-*` tags. Release tags
-publish immutable version tags such as `1.0.1` and `v1.0.1`.
+publish immutable version tags such as `1.0.2` and `v1.0.2`.
 
 ### Option B: Build From Source
 
@@ -244,7 +244,7 @@ The full screenshot tour is in the [how-to guide](docs/how-to.md).
 - Canonical repository: `https://github.com/composebastion-admin/composebastion`.
 - Pushes, tags, releases, and version updates must use the
   `composebastion-admin` GitHub account.
-- `v1.0.1` is the V1 public release line for this repository.
+- `v1.0.2` is the V1 public release line for this repository.
 - Local filesystem, S3-compatible storage, and SMB are the supported guided
   recovery storage targets; imported rclone providers remain experimental.
 - Do not reintroduce personal owner, repository, image, or user fixtures.

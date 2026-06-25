@@ -47,9 +47,9 @@ describe("shared schemas", () => {
     const pinned = selfUpdateConfigSchema.parse({
       ...latest,
       versionMode: "pinned",
-      targetVersion: "1.0.1"
+      targetVersion: "1.0.2"
     });
-    expect(pinned.targetVersion).toBe("1.0.1");
+    expect(pinned.targetVersion).toBe("1.0.2");
     expect(() => selfUpdateConfigSchema.parse({ ...latest, versionMode: "pinned", targetVersion: "latest" })).toThrow();
   });
 

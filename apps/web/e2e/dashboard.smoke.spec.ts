@@ -292,7 +292,7 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
       }
     });
     if (path === "/api/health/ready") return json({ ok: true, checks: { database: { ok: true }, redis: { ok: true }, backups: { ok: true }, worker: { ok: true, queued: 0, running: 0 } } });
-    if (path === "/api/health") return json({ ok: true, version: "1.0.1", revision: null, buildDate: null });
+    if (path === "/api/health") return json({ ok: true, version: "1.0.2", revision: null, buildDate: null });
     if (path === "/api/self-update") return json({
       configured: true,
       config: {
@@ -302,8 +302,8 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
         versionMode: "latest",
         targetVersion: "latest"
       },
-      runtime: { version: "1.0.1", revision: null, buildDate: null },
-      latest: { version: "1.0.1", checkedAt: new Date(0).toISOString(), error: null },
+      runtime: { version: "1.0.2", revision: null, buildDate: null },
+      latest: { version: "1.0.2", checkedAt: new Date(0).toISOString(), error: null },
       updateAvailable: false,
       lastJob: null
     });
@@ -583,9 +583,13 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
   return { requests };
 }
 
+async function gotoApp(page: Page, path: string) {
+  await page.goto(path, { waitUntil: "domcontentloaded" });
+}
+
 test("first-run setup reaches the dashboard", async ({ page }) => {
   await mockApi(page, { needsSetup: true, hosts: [] });
-  await page.goto("/");
+  await gotoApp(page, "/");
   await expect(page.getByRole("heading", { name: "ComposeBastion" })).toBeVisible();
   await page.getByLabel("Username").fill("admin");
   await page.getByLabel("Password").fill("long-enough-password");
@@ -597,7 +601,7 @@ test("first-run setup reaches the dashboard", async ({ page }) => {
 
 test("keyboard focus and theme toggle are visible", async ({ page }) => {
   await mockApi(page);
-  await page.goto("/overview");
+  await gotoApp(page, "/overview");
   await expect(page.getByRole("heading", { name: "prod-01" })).toBeVisible();
   await page.keyboard.press("/");
   await expect(page.getByRole("searchbox", { name: /Search hosts and resources/ })).toBeFocused();
@@ -610,7 +614,7 @@ test("keyboard focus and theme toggle are visible", async ({ page }) => {
 test("reduced-motion mode keeps focus and contrast usable", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await mockApi(page);
-  await page.goto("/overview");
+  await gotoApp(page, "/overview");
   const search = page.getByRole("searchbox", { name: /Search hosts and resources/ });
   await search.focus();
   await expect(search).toBeFocused();
@@ -655,7 +659,7 @@ test("reduced-motion mode keeps focus and contrast usable", async ({ page }) => 
 
 test("operations panel exposes readiness, backup health, and failed jobs", async ({ page }) => {
   await mockApi(page);
-  await page.goto("/admin");
+  await gotoApp(page, "/admin");
   await page.getByRole("button", { name: "Operations" }).click();
   await expect(page.locator(".opsSummary strong", { hasText: "Readiness" })).toBeVisible();
   await expect(page.locator(".opsSummary strong", { hasText: "Backups" })).toBeVisible();
@@ -665,7 +669,7 @@ test("operations panel exposes readiness, backup health, and failed jobs", async
 
 test("job actions expose recovery context and confirm focus return", async ({ page }) => {
   const mock = await mockApi(page);
-  await page.goto("/admin");
+  await gotoApp(page, "/admin");
   await page.getByRole("button", { name: "Jobs" }).click();
   await expect(page.getByText(/Confirm SSH or agent connectivity/)).toBeVisible();
   await page.getByRole("button", { name: "Retry" }).click();
@@ -685,7 +689,7 @@ test("job actions expose recovery context and confirm focus return", async ({ pa
 
 test("alerts show silences and history", async ({ page }) => {
   await mockApi(page);
-  await page.goto("/alerts");
+  await gotoApp(page, "/alerts");
   await expect(page.getByRole("heading", { name: "Alerts" })).toBeVisible();
   await expect(page.getByText("CPU sustained")).toBeVisible();
   await expect(page.getByRole("cell", { name: "Maintenance" })).toBeVisible();
@@ -696,7 +700,7 @@ test("alerts show silences and history", async ({ page }) => {
 
 test("failed alert channel tests refresh into history", async ({ page }) => {
   await mockApi(page, { failChannelTest: true });
-  await page.goto("/alerts");
+  await gotoApp(page, "/alerts");
   await page.getByRole("button", { name: "Test" }).click();
   await expect(page.locator(".notice.error", { hasText: "Webhook failed with 500" })).toBeVisible();
   await expect(page.getByRole("cell", { name: "failed", exact: true })).toBeVisible();
@@ -705,7 +709,7 @@ test("failed alert channel tests refresh into history", async ({ page }) => {
 
 test("viewer alerts avoid operator endpoints and show read-only history", async ({ page }) => {
   const mock = await mockApi(page, { role: "viewer" });
-  await page.goto("/alerts");
+  await gotoApp(page, "/alerts");
   await expect(page.getByRole("heading", { name: "Alerts" })).toBeVisible();
   await expect(page.getByText("Channel Test History")).toBeVisible();
   await expect(page.getByRole("cell", { name: "Maintenance" })).toBeVisible();
@@ -723,7 +727,7 @@ test("viewer alerts avoid operator endpoints and show read-only history", async 
 
 test("active sessions are reachable from admin settings", async ({ page }) => {
   await mockApi(page);
-  await page.goto("/admin");
+  await gotoApp(page, "/admin");
   await page.getByRole("button", { name: "Settings" }).click();
   await expect(page.getByRole("heading", { name: "Active Sessions" })).toBeVisible();
   await expect(page.getByText("This device")).toBeVisible();
@@ -732,10 +736,10 @@ test("active sessions are reachable from admin settings", async ({ page }) => {
 
 test("admin about shows V1 licensing details", async ({ page }) => {
   await mockApi(page);
-  await page.goto("/admin");
+  await gotoApp(page, "/admin");
   await page.getByRole("button", { name: "About" }).click();
   await expect(page.getByRole("heading", { name: "About ComposeBastion" })).toBeVisible();
-  await expect(page.locator(".adminPane").getByText("v1.0.1")).toBeVisible();
+  await expect(page.locator(".adminPane").getByText("v1.0.2")).toBeVisible();
   await expect(page.getByText("Copyright (c) 2026 ComposeBastion Admin. All rights reserved.")).toBeVisible();
   await expect(page.getByRole("link", { name: "support@composebastion.com" })).toBeVisible();
 });
@@ -743,7 +747,7 @@ test("admin about shows V1 licensing details", async ({ page }) => {
 test("mobile navigation opens and supports keyboard-visible links", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 820 });
   await mockApi(page);
-  await page.goto("/overview");
+  await gotoApp(page, "/overview");
   await page.getByLabel("Open sidebar").click();
   await expect(page.getByLabel("Close sidebar")).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Main navigation" })).toBeVisible();
@@ -754,7 +758,7 @@ test("mobile navigation opens and supports keyboard-visible links", async ({ pag
 test("mobile admin settings remain reachable", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 820 });
   await mockApi(page);
-  await page.goto("/admin");
+  await gotoApp(page, "/admin");
   await expect(page.getByRole("heading", { name: "Admin" })).toBeVisible();
   await page.getByRole("button", { name: "Operations" }).click();
   await expect(page.getByRole("heading", { name: "Readiness checks" })).toBeVisible();
@@ -764,7 +768,7 @@ test("mobile admin settings remain reachable", async ({ page }) => {
 
 test("host SSH terminal action opens a visible warning drawer", async ({ page }) => {
   await mockApi(page);
-  await page.goto("/hosts");
+  await gotoApp(page, "/hosts");
   const terminalButton = page.locator('button[title="Open SSH terminal"]');
   await expect(terminalButton).toHaveCount(1);
   await terminalButton.click();
@@ -798,7 +802,7 @@ test("host SSH terminal action opens a visible warning drawer", async ({ page })
 
 test("hosts add button opens the host form inline", async ({ page }) => {
   await mockApi(page);
-  await page.goto("/hosts");
+  await gotoApp(page, "/hosts");
   await expect(page.getByRole("heading", { name: "Hosts" })).toBeVisible();
   await page.getByRole("button", { name: "Add host" }).click();
   await expect(page.getByRole("button", { name: "Close form" })).toBeVisible();
@@ -808,7 +812,7 @@ test("hosts add button opens the host form inline", async ({ page }) => {
 
 test("dedicated SSH route manages SSH connections", async ({ page }) => {
   await mockApi(page);
-  await page.goto("/ssh");
+  await gotoApp(page, "/ssh");
   await expect(page.getByRole("heading", { name: "SSH connections" })).toBeVisible();
   await expect(page.getByRole("link", { name: /SSH/ })).toBeVisible();
   await expect(page.getByText("docker@prod-01.local:22")).toBeVisible();
@@ -826,7 +830,7 @@ test("dedicated SSH route manages SSH connections", async ({ page }) => {
 
 test("apps compatibility route renders the services experience", async ({ page }) => {
   await mockApi(page);
-  await page.goto("/apps");
+  await gotoApp(page, "/apps");
   await expect(page.getByRole("heading", { name: "Services" })).toBeVisible();
   const versionRow = page.locator(".serviceVersionRow", { hasText: "Current" });
   await expect(versionRow).toBeVisible();
@@ -838,7 +842,7 @@ test("apps compatibility route renders the services experience", async ({ page }
 
 test("services load GitHub versions and select a tracked ref", async ({ page }) => {
   const mock = await mockApi(page);
-  await page.goto("/apps");
+  await gotoApp(page, "/apps");
   const versionButton = page.locator('button[title="GitHub versions for Web"]');
   await expect(versionButton).toHaveCount(1);
   await versionButton.click();
@@ -855,7 +859,7 @@ test("services load GitHub versions and select a tracked ref", async ({ page }) 
 
 test("services expose service-level image tag updates", async ({ page }) => {
   await mockApi(page);
-  await page.goto("/services");
+  await gotoApp(page, "/services");
   await page.getByTitle("Update service image tags").click();
   const dialog = page.getByRole("dialog", { name: "Update images for Web" });
   await expect(dialog).toBeVisible();
@@ -869,7 +873,7 @@ test("services expose service-level image tag updates", async ({ page }) => {
 
 test("files route uses an in-panel host selector and resets paths", async ({ page }) => {
   await mockApi(page, { hosts: [host, fileHost] });
-  await page.goto("/files");
+  await gotoApp(page, "/files");
   await expect(page.getByRole("heading", { name: "Host Files" }).first()).toBeVisible();
   await expect(page.getByLabel("Management scope")).toHaveCount(0);
   await expect(page.getByLabel("Host")).toHaveValue(host.id);
@@ -884,7 +888,7 @@ test("files route uses an in-panel host selector and resets paths", async ({ pag
 
 test("images cleanup preview explains blocked stopped-container images", async ({ page }) => {
   await mockApi(page);
-  await page.goto("/images");
+  await gotoApp(page, "/images");
   await page.getByRole("button", { name: "Clean unused" }).click();
   await expect(page.getByText("held by stopped container demoapp-old")).toBeVisible();
   await expect(page.getByText("ghcr.io/composebastion-admin/demo-app:old")).toBeVisible();
@@ -895,7 +899,7 @@ test("images cleanup preview explains blocked stopped-container images", async (
 
 test("migrate compatibility route renders the unified migrate app panel", async ({ page }) => {
   await mockApi(page, { hosts: [host, fileHost] });
-  await page.goto("/migrate");
+  await gotoApp(page, "/migrate");
   await expect(page.getByRole("heading", { name: "Recovery Center" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Migrate app", exact: true })).toBeVisible();
   await expect(page.getByText("Safe move")).toBeVisible();
@@ -908,7 +912,7 @@ test("migrate compatibility route renders the unified migrate app panel", async 
 
 test("catalog imports external discovery as a review draft", async ({ page }) => {
   await mockApi(page);
-  await page.goto("/catalog");
+  await gotoApp(page, "/catalog");
   await expect(page.getByRole("heading", { name: "Catalog" })).toBeVisible();
   await page.getByRole("button", { name: "Load" }).click();
   await expect(page.getByText("ArchiveBox")).toBeVisible();
@@ -921,7 +925,7 @@ test("catalog imports external discovery as a review draft", async ({ page }) =>
 
 test("metrics route follows host scope", async ({ page }) => {
   await mockApi(page);
-  await page.goto("/host-metrics");
+  await gotoApp(page, "/host-metrics");
   await expect(page.getByRole("heading", { name: "Fleet metrics" })).toBeVisible();
   await page.getByLabel("Management scope").selectOption("selected");
   await expect(page.getByRole("heading", { name: "prod-01 metrics" })).toBeVisible();
@@ -929,7 +933,7 @@ test("metrics route follows host scope", async ({ page }) => {
 
 test("recovery points surface restore drill status", async ({ page }) => {
   await mockApi(page);
-  await page.goto("/recovery");
+  await gotoApp(page, "/recovery");
   await expect(page.getByRole("heading", { name: "Recovery Center" })).toBeVisible();
   await expect(page.locator(".readinessSummaryPanel")).toContainText("Ready");
   await expect(page.locator(".readinessDetailPanel")).toContainText("Volume web_data -> /data");
@@ -938,7 +942,7 @@ test("recovery points surface restore drill status", async ({ page }) => {
 
 test("backups route renders recovery-owned backups with sparse backup pages", async ({ page }) => {
   await mockApi(page);
-  await page.goto("/backups");
+  await gotoApp(page, "/backups");
   await expect(page.getByRole("heading", { name: "Recovery Center" })).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name: "Backups" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Backups" })).toBeVisible();
@@ -949,7 +953,7 @@ test("backups route renders recovery-owned backups with sparse backup pages", as
 
 test("restore run surfaces render V1 labels", async ({ page }) => {
   await mockApi(page);
-  await page.goto("/recovery-runs");
+  await gotoApp(page, "/recovery-runs");
   await expect(page.getByRole("heading", { name: "Recovery Center" })).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name: "Restore Runs" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Restore / Migration Runs" })).toBeVisible();
@@ -958,7 +962,7 @@ test("restore run surfaces render V1 labels", async ({ page }) => {
 
 test("recovery drill flow uses confirmation before enqueue", async ({ page }) => {
   const mock = await mockApi(page);
-  await page.goto("/recovery");
+  await gotoApp(page, "/recovery");
   await page.getByTitle("Run restore drill").click();
   const dialog = page.getByRole("alertdialog", { name: "Run restore drill" });
   await expect(dialog).toBeVisible();
@@ -969,7 +973,7 @@ test("recovery drill flow uses confirmation before enqueue", async ({ page }) =>
 
 test("container detail drawer exposes logs, stats, inspect, and exec tabs", async ({ page }) => {
   await mockApi(page);
-  await page.goto("/containers");
+  await gotoApp(page, "/containers");
   await expect(page.getByRole("heading", { name: "Containers" })).toBeVisible();
   await page.getByTitle("Open logs, stats, and exec").click();
   await expect(page.getByRole("heading", { name: "web" })).toBeVisible();
@@ -985,7 +989,7 @@ test("container detail drawer exposes logs, stats, inspect, and exec tabs", asyn
 
 test("image update preview dialog opens before container updates", async ({ page }) => {
   await mockApi(page);
-  await page.goto("/updates");
+  await gotoApp(page, "/updates");
   await expect(page.getByRole("heading", { name: "Image Updates" })).toBeVisible();
   await expect(page.getByText(/Scanner: trivy/)).toBeVisible();
   const updateButton = page.getByTitle("Update container");

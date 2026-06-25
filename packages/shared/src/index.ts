@@ -474,7 +474,7 @@ export const selfUpdateVersionSchema = z.string()
   .trim()
   .min(1)
   .max(80)
-  .regex(/^[a-zA-Z0-9._-]+$/, "Use a release tag such as 1.0.1, v1.0.1, or latest");
+  .regex(/^[a-zA-Z0-9._-]+$/, "Use a release tag such as 1.0.2, v1.0.2, or latest");
 
 const selfUpdateConfigBaseSchema = z.object({
   hostId: idSchema.nullable().default(null),

@@ -9,10 +9,10 @@ export default defineConfig({
     trace: "on-first-retry"
   },
   webServer: {
-    command: "npm run dev -- --host 127.0.0.1 --port 4174",
+    command: "npm run build && npm run preview -- --host 127.0.0.1 --port 4174",
     url: "http://127.0.0.1:4174",
     reuseExistingServer: !process.env.CI,
-    timeout: 60_000
+    timeout: 90_000
   },
   projects: [
     { name: "chromium", use: { ...devices["Desktop Chrome"] } }

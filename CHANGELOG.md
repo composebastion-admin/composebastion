@@ -1,5 +1,16 @@
 # Changelog
 
+## [v1.0.2] - 2026-06-25
+
+### Changed
+- Bumped package, generated OpenAPI, runtime image, Docker default, test, and
+  documentation versions to `1.0.2`.
+
+### Fixed
+- Hardened Playwright smoke navigation for CI by waiting for DOM readiness and
+  serving the web app from a production preview build instead of the Vite dev
+  server.
+
 ## [v1.0.1] - 2026-06-25
 
 ### Added

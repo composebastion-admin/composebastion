@@ -1,5 +1,5 @@
 ARG TRIVY_VERSION=0.71.2
-ARG APP_VERSION=1.0.1
+ARG APP_VERSION=1.0.2
 
 FROM node:20-bookworm-slim AS deps
 WORKDIR /app
