@@ -20,7 +20,7 @@ export async function registerHostRoutes(app: FastifyInstance) {
   app.post("/api/hosts", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request, reply) => {
     try {
       const host = await createHost(request.body);
-      const job = await enqueueJob({ type: "host.check", hostId: host.id, payload: {} }, request.user?.id);
+      const job = await enqueueJob({ type: "host.sync", hostId: host.id, payload: {} }, request.user?.id);
       await writeAuditEvent({
         userId: request.user?.id,
         hostId: host.id,
