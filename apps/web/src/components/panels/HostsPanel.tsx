@@ -1,12 +1,12 @@
 import { useState } from "react";
-import { Activity, Plus, RefreshCw, Server, Settings, Terminal } from "lucide-react";
+import { Activity, Boxes, GitBranch, Plus, RefreshCw, Server, Settings, Terminal } from "lucide-react";
 import type { AdminUser, DockerHost } from "@composebastion/shared";
 import { formatDate } from "../../lib/format.js";
 import { describeAgentCompatibility } from "../../lib/agentCompatibility.js";
 import { canOpenHostTerminal } from "../../lib/hostTerminal.js";
 import type { Jobish } from "../../lib/dashboardTypes.js";
 import { HostForm } from "../dashboard/HostForm.js";
-import { ButtonRow, DataTable, EmptyState, StatusPill } from "../ui/primitives.js";
+import { ButtonRow, DataTable, StatusPill } from "../ui/primitives.js";
 
 export function HostsPanel({
   hosts,
@@ -34,17 +34,34 @@ export function HostsPanel({
   onOpenTerminal: (host: DockerHost) => void;
 }) {
   const [showHostForm, setShowHostForm] = useState(false);
+  const onlineHosts = hosts.filter((host) => host.lastStatus === "online").length;
+  const totalContainers = Object.values(containerCounts).reduce((total, count) => total + count, 0);
 
   const openHostForm = () => setShowHostForm(true);
 
   return (
     <div className="hostsSurface">
-      <div className="resourceHeader">
-        <div>
+      <div className="hostsHero">
+        <div className="hostsHeroTitle">
+          <span>Fleet inventory</span>
           <h3>Hosts</h3>
-          <p>Add a server once, then let ComposeBastion keep inventory fresh in the background.</p>
+          <p>Register Docker endpoints, track health, and keep inventory ready for action.</p>
         </div>
-        <ButtonRow>
+        <div className="hostsHeroStats" aria-label="Host summary">
+          <div>
+            <span>Hosts</span>
+            <strong>{hosts.length}</strong>
+          </div>
+          <div>
+            <span>Online</span>
+            <strong>{onlineHosts}</strong>
+          </div>
+          <div>
+            <span>Containers</span>
+            <strong>{totalContainers}</strong>
+          </div>
+        </div>
+        <ButtonRow className="hostsHeroActions">
           <button type="button" className="primary" onClick={() => setShowHostForm((value) => !value)}>
             <Plus size={16} />
             {showHostForm ? "Close form" : "Add host"}
@@ -64,7 +81,35 @@ export function HostsPanel({
         </div>
       )}
       {hosts.length === 0 ? (
-        <EmptyState headline="No hosts added" hint="Add your first Docker server to begin discovering containers, images, and compose apps." actionLabel="Add host" onAction={openHostForm} />
+        <section className="hostsEmptyState" aria-label="No hosts added">
+          <div className="hostsEmptyInner">
+            <div className="hostsEmptyVisual" aria-hidden="true">
+              <span className="hostsEmptyNode">
+                <Server size={26} />
+              </span>
+              <span className="hostsEmptyNode isPrimary">
+                <Activity size={30} />
+              </span>
+              <span className="hostsEmptyNode">
+                <Boxes size={26} />
+              </span>
+            </div>
+            <div className="hostsEmptyCopy">
+              <span>Ready for first contact</span>
+              <h3>No hosts added</h3>
+              <p>Add your first Docker server to begin discovering containers, images, and compose apps.</p>
+            </div>
+            <div className="hostsEmptyChecks" aria-hidden="true">
+              <span><Server size={14} />SSH or agent</span>
+              <span><GitBranch size={14} />Compose aware</span>
+              <span><Activity size={14} />Health tracked</span>
+            </div>
+            <button type="button" className="primary hostsEmptyAction" onClick={openHostForm}>
+              <Plus size={16} />
+              Add host
+            </button>
+          </div>
+        </section>
       ) : (
         <DataTable
           rows={hosts}
