@@ -1,6 +1,6 @@
 {
   "name": "composebastion",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "private": true,
   "license": "SEE LICENSE IN LICENSE.md",
   "description": "Multi-host Docker management console deployed with Docker Compose.",

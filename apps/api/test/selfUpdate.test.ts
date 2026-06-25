@@ -82,4 +82,34 @@ describe("self update service", () => {
       targetVersion: "latest"
     })).rejects.toThrow("requires the manager host to use SSH mode");
   });
+
+  it("compares semantic versions without treating older releases as updates", async () => {
+    const { compareVersions, updateAvailable } = await import("../src/services/selfUpdate.js");
+
+    expect(compareVersions("1.0.4", "1.0.0")).toBe(1);
+    expect(compareVersions("v1.0.0", "v1.0.2")).toBe(-1);
+    expect(compareVersions("1.0.4-beta.1", "1.0.4")).toBe(-1);
+    expect(updateAvailable("1.0.2", "1.0.0")).toBe(false);
+    expect(updateAvailable("1.0.2", "1.0.4")).toBe(true);
+  });
+
+  it("uses the newest semver tag when GitHub latest release is stale", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes("/tags")) {
+        return new Response(JSON.stringify([{ name: "v1.0.4" }, { name: "v1.0.3" }, { name: "v1.0.0" }]), { status: 200 });
+      }
+      if (url.includes("/releases")) {
+        return new Response(JSON.stringify([{ tag_name: "v1.0.0", html_url: "https://example.test/v1.0.0", draft: false }]), { status: 200 });
+      }
+      return new Response("{}", { status: 404 });
+    });
+    query.mockResolvedValue({ rows: [] });
+    const { checkSelfUpdateLatest } = await import("../src/services/selfUpdate.js");
+
+    const latest = await checkSelfUpdateLatest();
+
+    expect(latest.version).toBe("1.0.4");
+    fetchSpy.mockRestore();
+  });
 });

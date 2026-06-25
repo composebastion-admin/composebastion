@@ -15,7 +15,8 @@ import { runtimeVersionMetadata } from "./version.js";
 
 const SELF_UPDATE_CONFIG_KEY = "self_update.config";
 const SELF_UPDATE_LATEST_KEY = "self_update.latest";
-const RELEASES_LATEST_URL = "https://api.github.com/repos/composebastion-admin/composebastion/releases/latest";
+const GITHUB_API_REPO = "https://api.github.com/repos/composebastion-admin/composebastion";
+const GITHUB_REPO_URL = "https://github.com/composebastion-admin/composebastion";
 const DOCKER_SSH_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin";
 
 type LatestRelease = {
@@ -29,28 +30,52 @@ type SelfUpdatePayload = Extract<DockerActionRequest, { type: "system.self_updat
 
 const defaultSelfUpdateConfig = selfUpdateConfigSchema.parse({});
 
+type ParsedVersion = {
+  numbers: number[];
+  prerelease: string | null;
+};
+
 function normalizeVersion(value: string | null | undefined) {
   const trimmed = String(value ?? "").trim();
   if (!trimmed || trimmed === "unknown") return null;
   return trimmed.replace(/^v/i, "");
 }
 
-function compareVersions(left: string | null | undefined, right: string | null | undefined) {
+function parseVersion(value: string | null | undefined): ParsedVersion | null {
+  const normalized = normalizeVersion(value);
+  if (!normalized || normalized === "latest") return null;
+  const match = normalized.match(/^(\d+(?:\.\d+){0,4})(?:[-._]?([a-z][a-z0-9.-]*))?$/i);
+  if (!match) return null;
+  return {
+    numbers: match[1]!.split(".").map((part) => Number(part)),
+    prerelease: match[2]?.toLowerCase() ?? null
+  };
+}
+
+export function compareVersions(left: string | null | undefined, right: string | null | undefined) {
   const a = normalizeVersion(left);
   const b = normalizeVersion(right);
   if (!a || !b || a === "latest" || b === "latest") return 0;
-  const aParts = a.split(/[.-]/).map((part) => Number.parseInt(part, 10));
-  const bParts = b.split(/[.-]/).map((part) => Number.parseInt(part, 10));
-  for (let index = 0; index < Math.max(aParts.length, bParts.length, 3); index += 1) {
-    const nextA = Number.isFinite(aParts[index]) ? aParts[index]! : 0;
-    const nextB = Number.isFinite(bParts[index]) ? bParts[index]! : 0;
+  const parsedA = parseVersion(a);
+  const parsedB = parseVersion(b);
+  if (!parsedA || !parsedB) return 0;
+  for (let index = 0; index < Math.max(parsedA.numbers.length, parsedB.numbers.length, 3); index += 1) {
+    const nextA = parsedA.numbers[index] ?? 0;
+    const nextB = parsedB.numbers[index] ?? 0;
     if (nextA !== nextB) return nextA > nextB ? 1 : -1;
   }
+  if (!parsedA.prerelease && parsedB.prerelease) return 1;
+  if (parsedA.prerelease && !parsedB.prerelease) return -1;
+  if (parsedA.prerelease && parsedB.prerelease) return parsedA.prerelease.localeCompare(parsedB.prerelease);
   return 0;
 }
 
-function updateAvailable(current: string, latest: string | null) {
+export function updateAvailable(current: string, latest: string | null) {
   return compareVersions(latest, current) > 0;
+}
+
+function isStableVersion(value: string | null | undefined) {
+  return Boolean(parseVersion(value) && !parseVersion(value)?.prerelease);
 }
 
 async function readSetting<T>(key: string) {
@@ -104,8 +129,8 @@ export async function saveSelfUpdateConfig(input: unknown) {
   return next;
 }
 
-async function fetchLatestRelease(): Promise<LatestRelease> {
-  const response = await fetch(RELEASES_LATEST_URL, {
+async function fetchGithubJson<T>(url: string): Promise<T> {
+  const response = await fetch(url, {
     headers: {
       Accept: "application/vnd.github+json",
       "User-Agent": "ComposeBastion"
@@ -113,12 +138,35 @@ async function fetchLatestRelease(): Promise<LatestRelease> {
     signal: AbortSignal.timeout(15_000)
   });
   if (!response.ok) throw new Error(`GitHub returned ${response.status} while checking releases`);
-  const body = await response.json() as { tag_name?: string; html_url?: string | null };
+  return await response.json() as T;
+}
+
+async function fetchLatestRelease(): Promise<LatestRelease> {
+  const [tags, releases] = await Promise.all([
+    fetchGithubJson<Array<{ name?: string }>>(`${GITHUB_API_REPO}/tags?per_page=100`),
+    fetchGithubJson<Array<{ tag_name?: string; html_url?: string | null; draft?: boolean }>>(`${GITHUB_API_REPO}/releases?per_page=100`).catch(() => [])
+  ]);
+  const releaseUrlByVersion = new Map(
+    releases
+      .filter((release) => !release.draft)
+      .flatMap((release): Array<[string, string | null]> => {
+        const version = normalizeVersion(release.tag_name);
+        return version ? [[version, release.html_url ?? null]] : [];
+      })
+  );
+  const versions = Array.from(new Set([
+    ...tags.map((tag) => normalizeVersion(tag.name)).filter((version): version is string => Boolean(version)),
+    ...Array.from(releaseUrlByVersion.keys())
+  ]));
+  const stableVersions = versions.filter(isStableVersion);
+  const candidates = stableVersions.length > 0 ? stableVersions : versions.filter((version) => Boolean(parseVersion(version)));
+  const version = candidates.sort((left, right) => compareVersions(right, left))[0] ?? null;
+
   return {
-    version: body.tag_name ? normalizeVersion(body.tag_name) : null,
+    version,
     checkedAt: new Date().toISOString(),
     error: null,
-    htmlUrl: body.html_url ?? null
+    htmlUrl: version ? releaseUrlByVersion.get(version) ?? `${GITHUB_REPO_URL}/releases/tag/v${version}` : null
   };
 }
 

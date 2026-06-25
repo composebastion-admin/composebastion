@@ -78,6 +78,20 @@ function normalizeVersion(value: string | null | undefined) {
   return String(value ?? "").trim().replace(/^v/i, "");
 }
 
+function compareVersions(left: string | null | undefined, right: string | null | undefined) {
+  const a = normalizeVersion(left);
+  const b = normalizeVersion(right);
+  if (!a || !b || a === "latest" || b === "latest") return 0;
+  const aParts = a.split(/[.-]/).map((part) => Number.parseInt(part, 10));
+  const bParts = b.split(/[.-]/).map((part) => Number.parseInt(part, 10));
+  for (let index = 0; index < Math.max(aParts.length, bParts.length, 3); index += 1) {
+    const nextA = Number.isFinite(aParts[index]) ? aParts[index]! : 0;
+    const nextB = Number.isFinite(bParts[index]) ? bParts[index]! : 0;
+    if (nextA !== nextB) return nextA > nextB ? 1 : -1;
+  }
+  return 0;
+}
+
 export function OperationsPanel() {
   const [ready, setReady] = useState<ReadyResponse | null>(null);
   const [worker, setWorker] = useState<WorkerStatus | null>(null);
@@ -291,9 +305,17 @@ function SelfUpdateCard({ hosts, status, onChanged }: { hosts: DockerHost[]; sta
       ? `v${status.latest.version}${status.latest.checkedAt ? ` checked ${formatDate(status.latest.checkedAt)}` : ""}`
       : "Not checked";
   const canStart = Boolean(form.hostId && form.workingDir && form.composeFile && (form.versionMode === "latest" || form.targetVersion));
+  const latestKnown = Boolean(status.latest.version && !status.latest.error);
+  const latestNotNewer = form.versionMode === "latest" && latestKnown && !status.updateAvailable;
+  const pinnedNotNewer = form.versionMode === "pinned" && Boolean(form.targetVersion) && compareVersions(form.targetVersion, status.runtime.version) <= 0;
   const targetLabel = form.versionMode === "latest"
-    ? status.latest.version ? `latest release v${status.latest.version}` : "latest image tag"
+    ? status.latest.version ? `latest version v${status.latest.version}` : "latest image tag"
     : `v${form.targetVersion}`;
+  const startLabel = latestNotNewer
+    ? `Already at or above v${status.latest.version}`
+    : pinnedNotNewer
+      ? `Pinned version is not newer`
+      : `Update to ${targetLabel}`;
 
   return (
     <CardSection
@@ -349,9 +371,9 @@ function SelfUpdateCard({ hosts, status, onChanged }: { hosts: DockerHost[]; sta
           <RefreshCw size={16} className={busy === "checking" ? "spin" : undefined} />
           Check latest
         </button>
-        <button type="button" className="primary" onClick={() => void startUpdate()} disabled={!canStart || Boolean(busy)}>
+        <button type="button" className="primary" onClick={() => void startUpdate()} disabled={!canStart || latestNotNewer || pinnedNotNewer || Boolean(busy)}>
           <RefreshCw size={16} className={busy === "starting" || busy === "waiting" ? "spin" : undefined} />
-          Update to {targetLabel}
+          {startLabel}
         </button>
       </ButtonRow>
       {status.lastJob?.type === "system.self_update" && (
