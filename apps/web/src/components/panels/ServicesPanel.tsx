@@ -782,7 +782,7 @@ export function ServicesPanel({
 
       {hasGitServices && (
         <div className="formHint servicesSourceHint">
-          Private GitHub repositories use Deploy -&gt; Tracked GitHub repositories with a fine-grained token that has read-only Contents access.
+          Private GitHub repositories use Deploy -&gt; Tracked GitHub repositories with one fine-grained token per repo and read-only Contents access.
         </div>
       )}
 

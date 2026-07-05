@@ -524,6 +524,10 @@ export const dockerActionSchema = z.discriminatedUnion("type", [
     directory: z.string().min(1).max(1024),
     branch: z.string().min(1).max(255).optional()
   }),
+  withHost("git.testRemote", {
+    repositoryUrl: z.string().min(1).max(2048),
+    branch: z.string().min(1).max(255).optional()
+  }),
   withHost("git.cloneDeploy", {
     repositoryUrl: z.string().min(1).max(2048),
     directory: z.string().min(1).max(1024),
@@ -704,10 +708,21 @@ export const githubRepositoryCreateSchema = z.object({
   projectName: composeProjectNameSchema.optional(),
   env: z.string().default(""),
   defaultHostId: idSchema.optional(),
-  githubToken: z.string().optional()
+  githubToken: z.string().max(4096).optional()
 });
 
-export const githubRepositoryUpdateSchema = githubRepositoryCreateSchema.partial();
+export const githubRepositoryUpdateSchema = githubRepositoryCreateSchema.partial().extend({
+  clearGithubToken: z.boolean().default(false).optional()
+});
+
+export const githubRepositoryAccessCheckSchema = z.object({
+  repositoryUrl: z.string().url(),
+  branch: z.string().min(1).max(120).default("main"),
+  composePath: z.string().min(1).max(255).default("docker-compose.yml"),
+  githubToken: z.string().max(4096).optional()
+});
+
+export const githubTokenStatusSchema = z.enum(["none", "unchecked", "valid", "error"]);
 
 export const githubRepositorySchema = z.object({
   id: idSchema,
@@ -725,6 +740,10 @@ export const githubRepositorySchema = z.object({
   latestCommitSha: z.string().nullable().optional(),
   updateCheckedAt: z.string().nullable().optional(),
   updateCheckError: z.string().nullable().optional(),
+  hasGithubToken: z.boolean(),
+  githubTokenStatus: githubTokenStatusSchema,
+  githubTokenCheckedAt: z.string().nullable(),
+  githubTokenCheckError: z.string().nullable(),
   lastError: z.string().nullable(),
   createdAt: z.string(),
   updatedAt: z.string()
@@ -740,7 +759,7 @@ export const githubRepositoryDeploySchema = z.object({
 
 export const githubRepositoryBranchesRequestSchema = z.object({
   repositoryUrl: z.string().url(),
-  githubToken: z.string().optional()
+  githubToken: z.string().max(4096).optional()
 });
 
 export const configExportSchema = z.object({

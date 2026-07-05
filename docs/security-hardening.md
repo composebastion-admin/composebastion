@@ -42,5 +42,5 @@ Use this checklist before exposing ComposeBastion outside a trusted private netw
 - `npm run smoke:web`
 - `npm audit --omit=dev --audit-level=high`
 
-For `v1.0.2`, run CI, CodeQL, Container Scan, Publish Images, and the refreshed
+For `v1.0.6`, run CI, CodeQL, Container Scan, Publish Images, and the refreshed
 GitHub code-scanning view before tagging the release.

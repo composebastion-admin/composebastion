@@ -196,7 +196,7 @@ export function HostFilesPanel({
           <HostSelect hosts={hosts} value={host.id} onChange={onHostChange} />
         </Field>
       </div>
-      <div className="formHint">Browse your Docker host, create project folders, clone repos, edit small text files, and deploy Compose files from their real folder. Folder deploys are tracked as compose stacks with version history. Private Git clones work best when the host already has a deploy key configured.</div>
+      <div className="formHint">Browse your Docker host, create project folders, clone repos, edit small text files, and deploy Compose files from their real folder. Folder deploys are tracked as compose stacks with version history. Private GitHub clones use read-only deploy keys configured on the host.</div>
       {!supported && (
         <div className="notice error">File browsing requires an SSH host. Agent hosts cannot browse host files yet.</div>
       )}

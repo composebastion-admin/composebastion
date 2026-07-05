@@ -2088,6 +2088,15 @@ export async function executeDemoDockerAction(action: DockerActionRequest) {
     };
   }
 
+  if (action.type === "git.testRemote") {
+    return {
+      repositoryUrl: action.payload.repositoryUrl,
+      branch: action.payload.branch ?? null,
+      refs: [`demo\t${action.payload.branch ? `refs/heads/${action.payload.branch}` : "HEAD"}`],
+      demo: true
+    };
+  }
+
   if (action.type === "git.cloneDeploy") {
     await demoCloneRepository(action.hostId, action.payload.repositoryUrl, action.payload.directory, action.payload.branch);
     await query(

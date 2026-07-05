@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { FileText, FolderOpen, GitBranch, Github, Pencil, Play, RefreshCw, Save, Trash2, Wand2, X } from "lucide-react";
+import { FileText, FolderOpen, GitBranch, Github, KeyRound, Pencil, Play, RefreshCw, Save, ShieldCheck, Trash2, Wand2, X } from "lucide-react";
 import type { ComposeStack, DockerHost, GithubRepository, OperationJob } from "@composebastion/shared";
 import { api, deleteJson, postJson, putJson } from "../../api.js";
 import { useConfirm } from "../ConfirmProvider.js";
@@ -37,6 +37,27 @@ type GeneratedComposeDraft = {
   composeYaml: string;
   pullBeforeDeploy: boolean;
 };
+
+type GithubAccessCheck = {
+  ok: boolean;
+  checkedAt: string;
+  repositoryPrivate: boolean | null;
+  error: string | null;
+};
+
+function githubCredentialLabel(repo: GithubRepository) {
+  if (repo.githubTokenStatus === "valid") return "token verified";
+  if (repo.githubTokenStatus === "error") return "token check failed";
+  if (repo.githubTokenStatus === "unchecked") return "token saved";
+  return "public or host auth";
+}
+
+function githubCredentialClass(repo: GithubRepository) {
+  if (repo.githubTokenStatus === "valid") return "completed";
+  if (repo.githubTokenStatus === "error") return "failed";
+  if (repo.githubTokenStatus === "unchecked") return "running";
+  return "created";
+}
 
 function ImageComposeGenerator({ onGenerate }: { onGenerate: (draft: GeneratedComposeDraft) => void }) {
   const [form, setForm] = useState({
@@ -261,6 +282,7 @@ function GitCloneDeployForm({
   const [projectName, setProjectName] = useState("");
   const [directoryTouched, setDirectoryTouched] = useState(false);
   const [projectTouched, setProjectTouched] = useState(false);
+  const [accessMessage, setAccessMessage] = useState<string | null>(null);
 
   const host = hosts.find((entry) => entry.id === hostId) ?? hosts[0] ?? null;
 
@@ -295,6 +317,21 @@ function GitCloneDeployForm({
     });
   }
 
+  async function testRemoteAccess() {
+    if (!hostId || !repositoryUrl.trim()) return;
+    setAccessMessage(null);
+    await action.run(async () => {
+      await runJob(() => postJson<JobResult>(`/api/hosts/${hostId}/actions`, {
+        type: "git.testRemote",
+        payload: {
+          repositoryUrl: repositoryUrl.trim(),
+          branch: branch.trim() || undefined
+        }
+      }));
+      setAccessMessage("Host git access verified.");
+    });
+  }
+
   return (
     <form className="subPanel composeForm" onSubmit={submit}>
       <h3><GitBranch size={16} /> Clone &amp; Deploy any Git repository</h3>
@@ -302,7 +339,11 @@ function GitCloneDeployForm({
         Clones the repository onto the Docker host (or pulls if the folder already exists), then runs
         <code> docker compose up -d</code> from that folder. The folder stays on the host, so future updates are a
         pull + redeploy with the Update button on the Services page. Works with any Git URL the host can reach,
-        including private repos when the host has a deploy key.
+        including private GitHub repos when the host has a read-only deploy key for each repository.
+      </div>
+      <div className="formHint">
+        For private GitHub clones, create one deploy key on the host, add only its public key to the repository
+        with write access disabled, then use the SSH URL or a host SSH alias for that repo.
       </div>
       <div className="two">
         <HostSelect hosts={hosts} value={hostId} onChange={setHostId} />
@@ -332,8 +373,10 @@ function GitCloneDeployForm({
           required
         />
       </div>
+      {accessMessage && <div className="notice success">{accessMessage}</div>}
       {action.error && <div className="notice error">{action.error}</div>}
       <ButtonRow>
+        <button type="button" disabled={action.busy || !hostId || !repositoryUrl.trim()} onClick={() => void testRemoteAccess()}><ShieldCheck size={18} />Test Host Access</button>
         <button className="primary" disabled={action.busy || !hostId || !projectName}><Play size={18} />Clone &amp; Deploy</button>
       </ButtonRow>
     </form>
@@ -362,6 +405,7 @@ export function GithubDeployPanel({
     projectName: string;
     defaultHostId: string;
     githubToken: string;
+    clearGithubToken: boolean;
     env: string;
   };
   type ComposePreview = {
@@ -390,6 +434,7 @@ export function GithubDeployPanel({
     projectName: "",
     defaultHostId,
     githubToken: "",
+    clearGithubToken: false,
     env: ""
   });
 
@@ -402,6 +447,7 @@ export function GithubDeployPanel({
   const [formBranches, setFormBranches] = useState<string[]>([]);
   const [repoBranches, setRepoBranches] = useState<Record<string, string[]>>({});
   const [branchError, setBranchError] = useState<string | null>(null);
+  const [accessMessage, setAccessMessage] = useState<{ tone: "success" | "error"; text: string } | null>(null);
 
   useEffect(() => {
     const firstHostId = hosts[0]?.id;
@@ -415,7 +461,8 @@ export function GithubDeployPanel({
         ...form,
         projectName: form.projectName ? normalizeComposeProjectName(form.projectName) : undefined,
         defaultHostId: form.defaultHostId || undefined,
-        githubToken: form.githubToken || undefined
+        githubToken: form.clearGithubToken ? undefined : form.githubToken || undefined,
+        clearGithubToken: form.clearGithubToken || undefined
       };
       if (editingRepoId) {
         await putJson(`/api/github/repos/${editingRepoId}`, payload);
@@ -432,6 +479,7 @@ export function GithubDeployPanel({
     setForm(emptyForm(hosts[0]?.id ?? ""));
     setFormBranches([]);
     setBranchError(null);
+    setAccessMessage(null);
   }
 
   function startEdit(repo: GithubRepository) {
@@ -444,25 +492,50 @@ export function GithubDeployPanel({
       projectName: normalizeComposeProjectName(repo.projectName),
       defaultHostId: repo.defaultHostId ?? hosts[0]?.id ?? "",
       githubToken: "",
+      clearGithubToken: false,
       env: repo.env ?? ""
     });
     setFormBranches(repoBranches[repo.id] ?? []);
     setBranchError(null);
+    setAccessMessage(null);
   }
 
   async function loadFormBranches() {
     setBranchError(null);
+    setAccessMessage(null);
     try {
-      const result = await postJson<{ branches: string[] }>("/api/github/branches", {
-        repositoryUrl: form.repositoryUrl,
-        githubToken: form.githubToken || undefined
-      });
+      const result = editingRepoId && !form.githubToken && !form.clearGithubToken
+        ? await api<{ branches: string[] }>(`/api/github/repos/${editingRepoId}/branches`)
+        : await postJson<{ branches: string[] }>("/api/github/branches", {
+            repositoryUrl: form.repositoryUrl,
+            githubToken: form.clearGithubToken ? undefined : form.githubToken || undefined
+          });
       setFormBranches(result.branches);
       if (result.branches.length > 0 && !result.branches.includes(form.branch)) {
         setForm({ ...form, branch: result.branches[0] ?? form.branch });
       }
     } catch (caught) {
       setBranchError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }
+
+  async function testFormAccess() {
+    setBranchError(null);
+    setAccessMessage(null);
+    try {
+      const result = editingRepoId && !form.githubToken && !form.clearGithubToken
+        ? await postJson<{ repository: GithubRepository; access: GithubAccessCheck }>(`/api/github/repos/${editingRepoId}/access-check`, {})
+        : await postJson<{ access: GithubAccessCheck }>("/api/github/access-check", {
+            repositoryUrl: form.repositoryUrl,
+            branch: form.branch,
+            composePath: form.composePath,
+            githubToken: form.clearGithubToken ? undefined : form.githubToken || undefined
+          });
+      setAccessMessage(result.access.ok
+        ? { tone: "success", text: result.access.repositoryPrivate ? "Private repository access verified." : "Repository access verified." }
+        : { tone: "error", text: result.access.error ?? "GitHub access check failed." });
+    } catch (caught) {
+      setAccessMessage({ tone: "error", text: caught instanceof Error ? caught.message : String(caught) });
     }
   }
 
@@ -475,6 +548,18 @@ export function GithubDeployPanel({
     } catch (caught) {
       setBranchError(caught instanceof Error ? caught.message : String(caught));
     }
+  }
+
+  async function testSavedAccess(repo: GithubRepository) {
+    setBranchError(null);
+    setAccessMessage(null);
+    await action.run(async () => {
+      const result = await postJson<{ repository: GithubRepository; access: GithubAccessCheck }>(`/api/github/repos/${repo.id}/access-check`, {});
+      setAccessMessage(result.access.ok
+        ? { tone: "success", text: `${repo.name} access verified.` }
+        : { tone: "error", text: result.access.error ?? `${repo.name} access check failed.` });
+      await refresh();
+    });
   }
 
   async function deleteRepo(repo: GithubRepository) {
@@ -539,8 +624,8 @@ export function GithubDeployPanel({
       <div className="formHint">
         Track a GitHub repository to deploy its compose file straight from the GitHub API (no clone on the host),
         preview and customize the YAML before deploying, and get commit-based update checks. Private repositories work
-        with a fine-grained GitHub token that has read-only Contents access; ComposeBastion encrypts the token and never
-        shows it again. When editing a repo, leave the token blank to keep the saved token.
+        with one fine-grained GitHub token per repository with read-only Contents access; ComposeBastion encrypts the token
+        and never shows it again. When editing a repo, leave the token blank to keep the saved token.
       </div>
       <form className="composeForm" onSubmit={save}>
         <div className="two">
@@ -565,16 +650,29 @@ export function GithubDeployPanel({
           <HostSelect hosts={hosts} value={form.defaultHostId} onChange={(defaultHostId) => setForm({ ...form, defaultHostId })} />
         </div>
         <input
-          placeholder="Fine-grained GitHub token for private repos, Contents: Read-only"
+          placeholder={editingRepoId ? "New fine-grained token, blank keeps saved token" : "Fine-grained token for private repos, Contents: Read-only"}
           type="password"
           autoComplete="off"
           value={form.githubToken}
-          onChange={(event) => { setForm({ ...form, githubToken: event.target.value }); setFormBranches([]); }}
+          disabled={form.clearGithubToken}
+          onChange={(event) => { setForm({ ...form, githubToken: event.target.value, clearGithubToken: false }); setFormBranches([]); }}
         />
+        {editingRepoId && (
+          <label className="checkLine">
+            <input
+              type="checkbox"
+              checked={form.clearGithubToken}
+              onChange={(event) => setForm({ ...form, clearGithubToken: event.target.checked, githubToken: event.target.checked ? "" : form.githubToken })}
+            />
+            <span>Clear saved GitHub token</span>
+          </label>
+        )}
         <textarea placeholder="Optional .env content" value={form.env} onChange={(event) => setForm({ ...form, env: event.target.value })} />
+        {accessMessage && <div className={`notice ${accessMessage.tone}`}>{accessMessage.text}</div>}
         {(branchError || action.error) && <div className="notice error">{branchError ?? action.error}</div>}
         <ButtonRow>
           <button className="primary" disabled={action.busy}><SubmitIcon size={18} />{editingRepoId ? "Save Repo" : "Track Repo"}</button>
+          <button type="button" disabled={action.busy || !form.repositoryUrl || !form.branch || !form.composePath} onClick={() => void testFormAccess()}><ShieldCheck size={16} />Test Access</button>
           {editingRepoId && <button type="button" onClick={resetForm}><X size={16} />Cancel</button>}
         </ButtonRow>
       </form>
@@ -636,19 +734,23 @@ export function GithubDeployPanel({
       )}
       <DataTable
         rows={repositories}
-        columns={["Name", "Repository", "Branch", "Compose", "Project", "Last Deploy", "Actions"]}
+        columns={["Name", "Repository", "Branch", "Compose", "Project", "Access", "Last Deploy", "Actions"]}
         render={(repo) => [
           repo.name,
           `${repo.owner}/${repo.repo}`,
           repo.branch,
           repo.composePath,
           repo.projectName,
+          <span key="access" className={`pill ${githubCredentialClass(repo)}`} title={repo.githubTokenCheckError ?? undefined}>
+            {githubCredentialLabel(repo)}
+          </span>,
           repo.lastDeployedAt ? formatDate(repo.lastDeployedAt) : repo.lastError ?? "",
           <div className="deployActions" key="actions">
             <select value={deployBranch[repo.id] ?? repo.branch} onChange={(event) => setDeployBranch({ ...deployBranch, [repo.id]: event.target.value })}>
               {(repoBranches[repo.id] ?? [repo.branch]).map((branch) => <option key={branch} value={branch}>{branch}</option>)}
             </select>
             <HostSelect hosts={hosts} value={deployHost[repo.id] ?? repo.defaultHostId ?? hosts[0]?.id ?? ""} onChange={(hostId) => setDeployHost({ ...deployHost, [repo.id]: hostId })} />
+            <button type="button" title="Test GitHub access" onClick={() => void testSavedAccess(repo)}><KeyRound size={16} /></button>
             <button type="button" title="Load branches" onClick={() => void loadRepoBranches(repo)}><RefreshCw size={16} /></button>
             <button type="button" title="Preview and customize compose" onClick={() => void openDeployPreview(repo)}><FileText size={16} /></button>
             <button type="button" title="Edit repo" onClick={() => startEdit(repo)}><Pencil size={16} /></button>

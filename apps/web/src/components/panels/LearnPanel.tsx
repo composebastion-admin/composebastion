@@ -29,7 +29,7 @@ export function LearnPanel() {
         "Services groups Compose projects and standalone containers into the operational view you use day to day.",
         "Current and latest versions come from existing git commit checks or image digest checks.",
         "Standalone containers can be linked to an image tag, Compose folder, or Git folder so ComposeBastion knows how to check and update them.",
-        "Private GitHub repositories are supported from Deploy -> Tracked GitHub repositories by adding a fine-grained token with read-only Contents access.",
+        "Private GitHub repositories are supported from Deploy -> Tracked GitHub repositories with one fine-grained token per repo and read-only Contents access.",
         "The old Apps information now lives in Services so source, status, versions, ports, and lifecycle actions stay together."
       ]
     },

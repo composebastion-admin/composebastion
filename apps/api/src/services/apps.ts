@@ -9,7 +9,7 @@ import {
   deployGithubRepository,
   fetchGithubCommitShaWithStoredCredentials,
   listGithubVersionsForRepository,
-  listGithubVersionsForUrl,
+  listGithubVersionsForUrlWithStoredCredentials,
   mapGithubRepository,
   parseGithubUrl
 } from "./github.js";
@@ -689,7 +689,7 @@ export async function listAppGithubVersions(appId: string): Promise<AppGithubVer
     return listGithubVersionsForRepository(app.repositoryId, { selectedRef, currentCommitSha });
   }
   if (!app.repositoryUrl) throw new Error("Add a GitHub repository URL before loading versions");
-  return listGithubVersionsForUrl(app.repositoryUrl, undefined, { selectedRef, currentCommitSha });
+  return listGithubVersionsForUrlWithStoredCredentials(app.repositoryUrl, { selectedRef, currentCommitSha });
 }
 
 export async function selectAppGithubVersion(appId: string, input: AppGithubVersionSelect) {

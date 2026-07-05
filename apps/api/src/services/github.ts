@@ -1,6 +1,12 @@
 import { Buffer } from "node:buffer";
 import { v4 as uuid } from "uuid";
-import { githubRepositoryCreateSchema, githubRepositoryUpdateSchema, type AppGithubVersionOption, type AppGithubVersions } from "@composebastion/shared";
+import {
+  githubRepositoryAccessCheckSchema,
+  githubRepositoryCreateSchema,
+  githubRepositoryUpdateSchema,
+  type AppGithubVersionOption,
+  type AppGithubVersions
+} from "@composebastion/shared";
 import { query } from "../db/pool.js";
 import { decryptSecret, encryptSecret } from "./crypto.js";
 import { isDemoHostId } from "./demo.js";
@@ -28,6 +34,20 @@ type GithubReleaseResponse = {
   prerelease?: boolean;
   published_at?: string | null;
   html_url?: string | null;
+};
+
+type GithubRepositoryAccessInput = {
+  repositoryUrl: string;
+  branch: string;
+  composePath: string;
+  githubToken?: string;
+};
+
+type GithubRepositoryAccessResult = {
+  ok: boolean;
+  checkedAt: string;
+  repositoryPrivate: boolean | null;
+  error: string | null;
 };
 
 function iso(value: Date | string | null | undefined) {
@@ -72,6 +92,45 @@ function githubHeaders(token?: string | null) {
   return headers;
 }
 
+function githubPrivateRepoHint(message: string) {
+  if (!/GitHub returned (401|403|404)/.test(message)) return message;
+  return `${message}. For private GitHub repositories, use a fine-grained personal access token scoped to this repository with read-only Contents access. Organization-owned repositories may also require token approval.`;
+}
+
+function githubTokenForRow(row: any) {
+  return row.github_token_encrypted ? decryptSecret(row.github_token_encrypted) : null;
+}
+
+async function fetchGithubJson<T>(url: string | URL, token: string | null | undefined, label: string) {
+  const response = await fetch(url, { headers: githubHeaders(token) });
+  if (!response.ok) throw new Error(`GitHub returned ${response.status} while ${label}`);
+  return response.json() as Promise<T>;
+}
+
+function githubTokenStatus(row: any): "none" | "unchecked" | "valid" | "error" {
+  if (!row.github_token_encrypted) return "none";
+  if (row.github_token_check_error) return "error";
+  if (row.github_token_checked_at) return "valid";
+  return "unchecked";
+}
+
+async function storedGithubRepositoryCredential(owner: string, repo: string, ref?: string | null) {
+  const result = await query<any>(
+    `SELECT * FROM github_repositories
+     WHERE owner = $1 AND repo = $2
+     ORDER BY CASE WHEN branch = $3 THEN 0 ELSE 1 END,
+              github_token_encrypted IS NULL,
+              updated_at DESC
+     LIMIT 1`,
+    [owner, repo, ref ?? null]
+  );
+  const row = result.rows[0] ?? null;
+  return {
+    row,
+    token: row ? githubTokenForRow(row) : null
+  };
+}
+
 function shaMatches(left?: string | null, right?: string | null) {
   if (!left || !right) return false;
   return left === right || left.startsWith(right) || right.startsWith(left);
@@ -104,7 +163,7 @@ function githubVersionOption(input: {
   };
 }
 
-async function fetchGithubPages<T>(owner: string, repo: string, endpoint: string, token: string | undefined, label: string) {
+async function fetchGithubPages<T>(owner: string, repo: string, endpoint: string, token: string | null | undefined, label: string) {
   const items: T[] = [];
   for (let page = 1; page <= MAX_GITHUB_VERSION_PAGES; page += 1) {
     const url = new URL(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/${endpoint}`);
@@ -124,7 +183,7 @@ async function listGithubVersionOptions(
   owner: string,
   repo: string,
   repositoryUrl: string,
-  token: string | undefined,
+  token: string | null | undefined,
   context: { selectedRef?: string | null; currentCommitSha?: string | null } = {}
 ): Promise<AppGithubVersions> {
   const [branches, tags, releases] = await Promise.all([
@@ -187,6 +246,7 @@ async function listGithubVersionOptions(
 }
 
 export function mapGithubRepository(row: any) {
+  const hasGithubToken = Boolean(row.github_token_encrypted);
   return {
     id: row.id,
     name: row.name,
@@ -203,6 +263,10 @@ export function mapGithubRepository(row: any) {
     latestCommitSha: row.latest_commit_sha ?? null,
     updateCheckedAt: iso(row.update_checked_at),
     updateCheckError: row.update_check_error ?? null,
+    hasGithubToken,
+    githubTokenStatus: githubTokenStatus(row),
+    githubTokenCheckedAt: iso(row.github_token_checked_at),
+    githubTokenCheckError: row.github_token_check_error ?? null,
     lastError: row.last_error,
     createdAt: iso(row.created_at)!,
     updatedAt: iso(row.updated_at)!
@@ -219,14 +283,128 @@ export async function getGithubRepositoryForConfig() {
   return result.rows;
 }
 
+function githubContentsPath(composePath: string) {
+  return composePath
+    .split("/")
+    .map((part: string) => encodeURIComponent(part))
+    .join("/");
+}
+
+async function fetchComposeFileByParts(owner: string, repo: string, composePath: string, ref: string, token?: string | null) {
+  const path = githubContentsPath(composePath);
+  const url = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${path}?ref=${encodeURIComponent(ref)}`;
+  const body = await fetchGithubJson<{ content?: string; encoding?: string }>(url, token, `fetching ${composePath}`);
+  if (body.encoding !== "base64" || !body.content) {
+    throw new Error("GitHub response did not include a base64 file body");
+  }
+  return Buffer.from(body.content.replace(/\s/g, ""), "base64").toString("utf8");
+}
+
+async function checkGithubRepositoryAccess(input: GithubRepositoryAccessInput): Promise<GithubRepositoryAccessResult> {
+  const { owner, repo } = parseGithubUrl(input.repositoryUrl);
+  const token = input.githubToken?.trim() || null;
+  const checkedAt = new Date().toISOString();
+  try {
+    const repository = await fetchGithubJson<{ private?: boolean }>(
+      `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
+      token,
+      `checking ${owner}/${repo}`
+    );
+    const branchesUrl = new URL(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/branches`);
+    branchesUrl.searchParams.set("per_page", "1");
+    const tagsUrl = new URL(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/tags`);
+    tagsUrl.searchParams.set("per_page", "1");
+    const releasesUrl = new URL(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/releases`);
+    releasesUrl.searchParams.set("per_page", "1");
+    await Promise.all([
+      fetchGithubCommitSha(owner, repo, input.branch, token),
+      fetchComposeFileByParts(owner, repo, input.composePath, input.branch, token),
+      fetchGithubJson<unknown[]>(branchesUrl, token, "listing branches"),
+      fetchGithubJson<unknown[]>(tagsUrl, token, "listing tags"),
+      fetchGithubJson<unknown[]>(releasesUrl, token, "listing releases")
+    ]);
+    return {
+      ok: true,
+      checkedAt,
+      repositoryPrivate: typeof repository.private === "boolean" ? repository.private : null,
+      error: null
+    };
+  } catch (error) {
+    const message = githubPrivateRepoHint(error instanceof Error ? error.message : String(error));
+    throw new Error(message);
+  }
+}
+
+async function accessResultFromError(error: unknown): Promise<GithubRepositoryAccessResult> {
+  return {
+    ok: false,
+    checkedAt: new Date().toISOString(),
+    repositoryPrivate: null,
+    error: githubPrivateRepoHint(error instanceof Error ? error.message : String(error))
+  };
+}
+
+export async function testGithubRepositoryAccess(input: unknown) {
+  const body = githubRepositoryAccessCheckSchema.parse(input);
+  try {
+    return await checkGithubRepositoryAccess(body);
+  } catch (error) {
+    return accessResultFromError(error);
+  }
+}
+
+async function requireValidGithubRepositoryAccess(input: GithubRepositoryAccessInput) {
+  return checkGithubRepositoryAccess(input);
+}
+
+export async function testGithubRepositoryStoredAccess(id: string) {
+  const result = await query<any>("SELECT * FROM github_repositories WHERE id = $1", [id]);
+  const row = result.rows[0];
+  if (!row) return null;
+  let access: GithubRepositoryAccessResult;
+  try {
+    access = await checkGithubRepositoryAccess({
+      repositoryUrl: row.repository_url,
+      branch: row.branch,
+      composePath: row.compose_path,
+      githubToken: githubTokenForRow(row) ?? undefined
+    });
+  } catch (error) {
+    access = await accessResultFromError(error);
+  }
+  const updated = await query<any>(
+    `UPDATE github_repositories
+     SET github_token_checked_at = now(),
+         github_token_check_error = $2,
+         updated_at = now()
+     WHERE id = $1
+     RETURNING *`,
+    [id, access.ok ? null : access.error]
+  );
+  return { repository: mapGithubRepository(updated.rows[0]), access };
+}
+
 export async function createGithubRepository(input: unknown) {
   const body = githubRepositoryCreateSchema.parse(input);
   const { owner, repo } = parseGithubUrl(body.repositoryUrl);
   const projectName = body.projectName ?? normalizeProjectName(repo);
+  const githubToken = body.githubToken?.trim() || null;
+  if (githubToken) {
+    await requireValidGithubRepositoryAccess({
+      repositoryUrl: body.repositoryUrl,
+      branch: body.branch,
+      composePath: body.composePath,
+      githubToken
+    });
+  }
   const result = await query(
     `INSERT INTO github_repositories
-      (id, name, repository_url, owner, repo, branch, compose_path, project_name, env, default_host_id, github_token_encrypted)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      (id, name, repository_url, owner, repo, branch, compose_path, project_name, env, default_host_id,
+       github_token_encrypted, github_token_updated_at, github_token_checked_at, github_token_check_error)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+             CASE WHEN $11::text IS NULL THEN null ELSE now() END,
+             CASE WHEN $11::text IS NULL THEN null ELSE now() END,
+             null)
      ON CONFLICT (owner, repo, branch, compose_path)
      DO UPDATE SET name = EXCLUDED.name,
                    repository_url = EXCLUDED.repository_url,
@@ -234,6 +412,9 @@ export async function createGithubRepository(input: unknown) {
                    env = EXCLUDED.env,
                    default_host_id = EXCLUDED.default_host_id,
                    github_token_encrypted = COALESCE(EXCLUDED.github_token_encrypted, github_repositories.github_token_encrypted),
+                   github_token_updated_at = CASE WHEN EXCLUDED.github_token_encrypted IS NULL THEN github_repositories.github_token_updated_at ELSE now() END,
+                   github_token_checked_at = CASE WHEN EXCLUDED.github_token_encrypted IS NULL THEN github_repositories.github_token_checked_at ELSE now() END,
+                   github_token_check_error = CASE WHEN EXCLUDED.github_token_encrypted IS NULL THEN github_repositories.github_token_check_error ELSE null END,
                    updated_at = now()
      RETURNING *`,
     [
@@ -247,7 +428,7 @@ export async function createGithubRepository(input: unknown) {
       projectName,
       body.env,
       body.defaultHostId ?? null,
-      body.githubToken ? encryptSecret(body.githubToken) : null
+      githubToken ? encryptSecret(githubToken) : null
     ]
   );
   return mapGithubRepository(result.rows[0]);
@@ -260,6 +441,21 @@ export async function updateGithubRepository(id: string, input: unknown) {
   if (!row) return null;
   const repositoryUrl = body.repositoryUrl ?? row.repository_url;
   const parsed = body.repositoryUrl ? parseGithubUrl(body.repositoryUrl) : { owner: row.owner, repo: row.repo };
+  const nextBranch = body.branch ?? row.branch;
+  const nextComposePath = body.composePath ?? row.compose_path;
+  const githubToken = body.githubToken?.trim() || null;
+  const clearGithubToken = Boolean(body.clearGithubToken);
+  const existingToken = clearGithubToken ? null : githubTokenForRow(row);
+  const tokenForValidation = githubToken ?? existingToken;
+  const changedAccessTarget = Boolean(body.repositoryUrl || body.branch || body.composePath);
+  if (!clearGithubToken && tokenForValidation && (githubToken || changedAccessTarget)) {
+    await requireValidGithubRepositoryAccess({
+      repositoryUrl,
+      branch: nextBranch,
+      composePath: nextComposePath,
+      githubToken: tokenForValidation
+    });
+  }
   const result = await query(
     `UPDATE github_repositories
      SET name = $2,
@@ -271,7 +467,22 @@ export async function updateGithubRepository(id: string, input: unknown) {
          project_name = $8,
          env = $9,
          default_host_id = $10,
-         github_token_encrypted = COALESCE($11, github_token_encrypted),
+         github_token_encrypted = CASE WHEN $12::boolean THEN null ELSE COALESCE($11, github_token_encrypted) END,
+         github_token_updated_at = CASE
+           WHEN $12::boolean THEN null
+           WHEN $11::text IS NULL THEN github_token_updated_at
+           ELSE now()
+         END,
+         github_token_checked_at = CASE
+           WHEN $12::boolean THEN null
+           WHEN $11::text IS NOT NULL OR ($13::boolean AND github_token_encrypted IS NOT NULL) THEN now()
+           ELSE github_token_checked_at
+         END,
+         github_token_check_error = CASE
+           WHEN $12::boolean THEN null
+           WHEN $11::text IS NOT NULL OR ($13::boolean AND github_token_encrypted IS NOT NULL) THEN null
+           ELSE github_token_check_error
+         END,
          updated_at = now()
      WHERE id = $1
      RETURNING *`,
@@ -281,12 +492,14 @@ export async function updateGithubRepository(id: string, input: unknown) {
       repositoryUrl,
       parsed.owner,
       parsed.repo,
-      body.branch ?? row.branch,
-      body.composePath ?? row.compose_path,
+      nextBranch,
+      nextComposePath,
       body.projectName ?? row.project_name,
       body.env ?? row.env,
       body.defaultHostId ?? row.default_host_id,
-      body.githubToken ? encryptSecret(body.githubToken) : null
+      githubToken ? encryptSecret(githubToken) : null,
+      clearGithubToken,
+      changedAccessTarget
     ]
   );
   return mapGithubRepository(result.rows[0]);
@@ -298,22 +511,11 @@ export async function deleteGithubRepository(id: string) {
 }
 
 async function fetchComposeFileForRef(row: any, ref: string) {
-  const path = row.compose_path
-    .split("/")
-    .map((part: string) => encodeURIComponent(part))
-    .join("/");
-  const url = `https://api.github.com/repos/${encodeURIComponent(row.owner)}/${encodeURIComponent(row.repo)}/contents/${path}?ref=${encodeURIComponent(ref)}`;
-  const token = row.github_token_encrypted ? decryptSecret(row.github_token_encrypted) : null;
-
-  const response = await fetch(url, { headers: githubHeaders(token) });
-  if (!response.ok) {
-    throw new Error(`GitHub returned ${response.status} while fetching ${row.compose_path}`);
+  try {
+    return await fetchComposeFileByParts(row.owner, row.repo, row.compose_path, ref, githubTokenForRow(row));
+  } catch (error) {
+    throw new Error(githubPrivateRepoHint(error instanceof Error ? error.message : String(error)));
   }
-  const body = await response.json() as { content?: string; encoding?: string };
-  if (body.encoding !== "base64" || !body.content) {
-    throw new Error("GitHub response did not include a base64 file body");
-  }
-  return Buffer.from(body.content.replace(/\s/g, ""), "base64").toString("utf8");
 }
 
 async function fetchGithubCommitSha(owner: string, repo: string, ref: string, token?: string | null) {
@@ -343,19 +545,28 @@ export async function fetchGithubCommitShaForUrl(repositoryUrl: string, ref: str
 
 export async function fetchGithubCommitShaWithStoredCredentials(repositoryUrl: string, ref: string) {
   const { owner, repo } = parseGithubUrl(repositoryUrl);
-  const result = await query<any>(
-    `SELECT * FROM github_repositories
-     WHERE owner = $1 AND repo = $2
-     ORDER BY CASE WHEN branch = $3 THEN 0 ELSE 1 END,
-              github_token_encrypted IS NULL,
-              updated_at DESC
-     LIMIT 1`,
-    [owner, repo, ref]
-  );
-  const row = result.rows[0];
-  const token = row?.github_token_encrypted ? decryptSecret(row.github_token_encrypted) : null;
+  const { token } = await storedGithubRepositoryCredential(owner, repo, ref);
   try {
     return await fetchGithubCommitSha(owner, repo, ref, token);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!token && /GitHub returned (401|403|404)/.test(message)) {
+      throw new Error(
+        `${message}. If this is a private GitHub repository, track it under Deploy -> Tracked GitHub repositories with a read-only Contents token.`
+      );
+    }
+    throw error;
+  }
+}
+
+export async function listGithubVersionsForUrlWithStoredCredentials(
+  repositoryUrl: string,
+  context: { selectedRef?: string | null; currentCommitSha?: string | null } = {}
+) {
+  const { owner, repo } = parseGithubUrl(repositoryUrl);
+  const { token } = await storedGithubRepositoryCredential(owner, repo, context.selectedRef);
+  try {
+    return await listGithubVersionOptions(owner, repo, repositoryUrl, token, context);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (!token && /GitHub returned (401|403|404)/.test(message)) {

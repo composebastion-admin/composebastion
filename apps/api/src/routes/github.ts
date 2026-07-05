@@ -1,6 +1,17 @@
 import type { FastifyInstance } from "fastify";
 import { githubRepositoryBranchesRequestSchema, githubRepositoryDeploySchema } from "@composebastion/shared";
-import { createGithubRepository, deleteGithubRepository, deployGithubRepository, listGithubBranchesForRepository, listGithubBranchesForUrl, listGithubRepositories, previewGithubRepositoryCompose, updateGithubRepository } from "../services/github.js";
+import {
+  createGithubRepository,
+  deleteGithubRepository,
+  deployGithubRepository,
+  listGithubBranchesForRepository,
+  listGithubBranchesForUrl,
+  listGithubRepositories,
+  previewGithubRepositoryCompose,
+  testGithubRepositoryAccess,
+  testGithubRepositoryStoredAccess,
+  updateGithubRepository
+} from "../services/github.js";
 import { requireRole } from "../services/auth.js";
 import { writeAuditEvent } from "../services/audit.js";
 import { authenticatedReadRateLimit, sensitiveMutationRateLimit } from "../services/rateLimits.js";
@@ -22,6 +33,21 @@ export async function registerGithubRoutes(app: FastifyInstance) {
   app.post("/api/github/branches", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
     const body = githubRepositoryBranchesRequestSchema.parse(request.body);
     return { branches: await listGithubBranchesForUrl(body.repositoryUrl, body.githubToken) };
+  });
+
+  app.post("/api/github/access-check", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => ({
+    access: await testGithubRepositoryAccess(request.body)
+  }));
+
+  app.post("/api/github/repos/:id/access-check", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const result = await testGithubRepositoryStoredAccess(id);
+    if (!result) {
+      reply.code(404);
+      return { error: "GitHub repository not found" };
+    }
+    await writeAuditEvent({ userId: request.user?.id, action: "github_repo.access_check", targetKind: "github_repository", targetId: id });
+    return result;
   });
 
   app.get("/api/github/repos/:id/branches", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {

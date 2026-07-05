@@ -298,7 +298,7 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
       }
     });
     if (path === "/api/health/ready") return json({ ok: true, checks: { database: { ok: true }, redis: { ok: true }, backups: { ok: true }, worker: { ok: true, queued: 0, running: 0 } } });
-    if (path === "/api/health") return json({ ok: true, version: "1.0.2", revision: null, buildDate: null });
+    if (path === "/api/health") return json({ ok: true, version: "1.0.6", revision: null, buildDate: null });
     if (path === "/api/self-update") return json({
       configured: true,
       config: {
@@ -308,8 +308,8 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
         versionMode: "latest",
         targetVersion: "latest"
       },
-      runtime: { version: "1.0.2", revision: null, buildDate: null },
-      latest: { version: "1.0.2", checkedAt: new Date(0).toISOString(), error: null },
+      runtime: { version: "1.0.6", revision: null, buildDate: null },
+      latest: { version: "1.0.6", checkedAt: new Date(0).toISOString(), error: null },
       updateAvailable: false,
       lastJob: null
     });

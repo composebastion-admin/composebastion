@@ -432,6 +432,7 @@ export async function executeDockerAction(action: DockerActionRequest) {
   if (action.type === "host.mkdir") return createRemoteDirectory(action.hostId, action.payload.path);
   if (action.type === "git.clone") return cloneGitRepository(action.hostId, action.payload.repositoryUrl, action.payload.directory, action.payload.branch, action.payload.shallow);
   if (action.type === "git.pull") return pullGitRepository(action.hostId, action.payload.directory, action.payload.branch);
+  if (action.type === "git.testRemote") return testGitRemoteAccess(action.hostId, action.payload.repositoryUrl, action.payload.branch);
   if (action.type === "git.cloneDeploy") {
     return cloneAndDeployRepository(
       action.hostId,
@@ -1035,6 +1036,28 @@ async function pullGitRepository(hostId: string, directory: string, branchOverri
   }
   const metadata = await readHostGitMetadata(hostId, target, branchOverride, false).catch(() => null);
   return { path: target, stdout: result.stdout, stderr: result.stderr, ...metadata };
+}
+
+async function testGitRemoteAccess(hostId: string, repositoryUrl: string, branch?: string) {
+  const host = await getHostForWorker(hostId);
+  if (host.connectionMode !== "ssh") throw new Error("Git remote access checks currently require SSH host mode.");
+  const ref = branch?.trim();
+  const command = ref
+    ? `GIT_TERMINAL_PROMPT=0 git ls-remote --exit-code --heads --tags ${shQuote(repositoryUrl)} ${shQuote(ref)}`
+    : `GIT_TERMINAL_PROMPT=0 git ls-remote --exit-code ${shQuote(repositoryUrl)} HEAD`;
+  const result = await runSshCommand(host.ssh, command, { timeoutMs: 60_000 });
+  if (result.code !== 0) {
+    const detail = (result.stderr || result.stdout).trim();
+    throw new Error(
+      `${detail || "Host could not access this repository."} For private GitHub clones, add a read-only deploy key to the repository and use the host's SSH URL or SSH alias.`
+    );
+  }
+  const refs = result.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 20);
+  return { repositoryUrl, branch: ref || null, refs };
 }
 
 async function writeAndDeployComposeFromHostPath(

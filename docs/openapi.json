@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "ComposeBastion API",
-    "version": "1.0.5",
+    "version": "1.0.6",
     "description": "ComposeBastion API contract. Stable JSON endpoints are available under /api/v1 while legacy /api routes remain compatible in V1."
   },
   "servers": [
@@ -2651,6 +2651,293 @@
               "type": "object",
               "additionalProperties": true
             }
+          }
+        }
+      },
+      "GithubRepository": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "repositoryUrl",
+          "owner",
+          "repo",
+          "branch",
+          "composePath",
+          "projectName",
+          "env",
+          "defaultHostId",
+          "lastDeployedAt",
+          "lastDeployedCommitSha",
+          "latestCommitSha",
+          "updateCheckedAt",
+          "updateCheckError",
+          "hasGithubToken",
+          "githubTokenStatus",
+          "githubTokenCheckedAt",
+          "githubTokenCheckError",
+          "lastError",
+          "createdAt",
+          "updatedAt"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "repositoryUrl": {
+            "type": "string"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "repo": {
+            "type": "string"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "composePath": {
+            "type": "string"
+          },
+          "projectName": {
+            "type": "string"
+          },
+          "env": {
+            "type": "string"
+          },
+          "defaultHostId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lastDeployedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lastDeployedCommitSha": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "latestCommitSha": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updateCheckedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updateCheckError": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "hasGithubToken": {
+            "type": "boolean"
+          },
+          "githubTokenStatus": {
+            "type": "string",
+            "enum": [
+              "none",
+              "unchecked",
+              "valid",
+              "error"
+            ]
+          },
+          "githubTokenCheckedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "githubTokenCheckError": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lastError": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "GithubRepositoriesResponse": {
+        "type": "object",
+        "required": [
+          "repositories"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "repositories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GithubRepository"
+            }
+          }
+        }
+      },
+      "GithubRepositoryResponse": {
+        "type": "object",
+        "required": [
+          "repository"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "repository": {
+            "$ref": "#/components/schemas/GithubRepository"
+          }
+        }
+      },
+      "GithubBranchesResponse": {
+        "type": "object",
+        "required": [
+          "branches"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "branches": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "GithubAccessCheck": {
+        "type": "object",
+        "required": [
+          "ok",
+          "checkedAt",
+          "repositoryPrivate",
+          "error"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "checkedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "repositoryPrivate": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "GithubAccessCheckResponse": {
+        "type": "object",
+        "required": [
+          "access"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "access": {
+            "$ref": "#/components/schemas/GithubAccessCheck"
+          }
+        }
+      },
+      "GithubStoredAccessCheckResponse": {
+        "type": "object",
+        "required": [
+          "repository",
+          "access"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "repository": {
+            "$ref": "#/components/schemas/GithubRepository"
+          },
+          "access": {
+            "$ref": "#/components/schemas/GithubAccessCheck"
+          }
+        }
+      },
+      "GithubComposePreviewResponse": {
+        "type": "object",
+        "required": [
+          "repository",
+          "branch",
+          "composeYaml",
+          "projectName",
+          "env"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "repository": {
+            "$ref": "#/components/schemas/GithubRepository"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "composeYaml": {
+            "type": "string"
+          },
+          "projectName": {
+            "type": "string"
+          },
+          "env": {
+            "type": "string"
+          }
+        }
+      },
+      "GithubDeployResponse": {
+        "type": "object",
+        "required": [
+          "stack",
+          "job",
+          "branch"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "stack": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "job": {
+            "$ref": "#/components/schemas/OperationJob"
+          },
+          "branch": {
+            "type": "string"
           }
         }
       },
@@ -6477,6 +6764,652 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AppsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/github/repos": {
+      "get": {
+        "summary": "List tracked GitHub repositories",
+        "tags": [
+          "GitHub"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GithubRepositoriesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create a tracked GitHub repository",
+        "tags": [
+          "GitHub"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GithubRepositoryResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/github/branches": {
+      "post": {
+        "summary": "List branches for a GitHub repository URL",
+        "tags": [
+          "GitHub"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GithubBranchesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/github/access-check": {
+      "post": {
+        "summary": "Test unsaved GitHub repository access",
+        "tags": [
+          "GitHub"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GithubAccessCheckResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/github/repos/{id}/access-check": {
+      "post": {
+        "summary": "Test saved GitHub repository access",
+        "tags": [
+          "GitHub"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GithubStoredAccessCheckResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/github/repos/{id}/branches": {
+      "get": {
+        "summary": "List branches for a saved GitHub repository",
+        "tags": [
+          "GitHub"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GithubBranchesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/github/repos/{id}/compose": {
+      "get": {
+        "summary": "Preview a saved GitHub repository Compose file",
+        "tags": [
+          "GitHub"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GithubComposePreviewResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/github/repos/{id}": {
+      "put": {
+        "summary": "Update a tracked GitHub repository",
+        "tags": [
+          "GitHub"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GithubRepositoryResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete a tracked GitHub repository",
+        "tags": [
+          "GitHub"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/github/repos/{id}/deploy": {
+      "post": {
+        "summary": "Deploy a saved GitHub repository Compose file",
+        "tags": [
+          "GitHub"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GithubDeployResponse"
                 }
               }
             }

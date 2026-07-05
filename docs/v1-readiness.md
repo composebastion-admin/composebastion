@@ -16,7 +16,7 @@ as matching app and agent images.
 
 ## Release Rules
 
-1. Tag `v1.0.2` only after automated and manual gates pass.
+1. Tag `v1.0.6` only after automated and manual gates pass.
 2. Publish app and agent images together.
 3. Confirm GHCR packages are public and pullable.
 4. Confirm Docker images include legal artifacts under `/licenses`.

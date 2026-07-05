@@ -55,6 +55,16 @@ Stable JSON endpoints are documented under `/api/v1/*`. Existing `/api/*` endpoi
 | POST | `/api/v1/recovery/points` | operator | Create a recovery point |
 | POST | `/api/v1/recovery/points/{id}/drill` | operator | Enqueue a clone-only recovery restore drill |
 | GET | `/api/v1/apps` | viewer | List managed apps |
+| GET | `/api/v1/github/repos` | viewer | List tracked GitHub repositories |
+| POST | `/api/v1/github/repos` | operator | Create a tracked GitHub repository |
+| POST | `/api/v1/github/branches` | operator | List branches for a GitHub repository URL |
+| POST | `/api/v1/github/access-check` | operator | Test unsaved GitHub repository access |
+| POST | `/api/v1/github/repos/{id}/access-check` | operator | Test saved GitHub repository access |
+| GET | `/api/v1/github/repos/{id}/branches` | operator | List branches for a saved GitHub repository |
+| GET | `/api/v1/github/repos/{id}/compose` | operator | Preview a saved GitHub repository Compose file |
+| PUT | `/api/v1/github/repos/{id}` | operator | Update a tracked GitHub repository |
+| DELETE | `/api/v1/github/repos/{id}` | operator | Delete a tracked GitHub repository |
+| POST | `/api/v1/github/repos/{id}/deploy` | operator | Deploy a saved GitHub repository Compose file |
 | GET | `/api/v1/image-updates` | viewer | List image update intelligence |
 | GET | `/api/v1/image-updates/preview` | viewer | Preview an image update action |
 | GET | `/api/v1/image-scanner/status` | viewer | Read vulnerability scanner availability |

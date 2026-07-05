@@ -1,5 +1,22 @@
 # Changelog
 
+## [v1.0.6] - 2026-07-05
+
+### Added
+- Added first-class private GitHub repository access checks for tracked repos,
+  including encrypted per-repo token status, token rotation, token clearing, and
+  validation of repository metadata, refs, Compose contents, tags, and releases.
+- Added host-side read-only `git ls-remote` checks for Clone & Deploy workflows
+  that use GitHub deploy keys instead of app-managed clone tokens.
+
+### Changed
+- Reused stored private GitHub credentials for Services GitHub version discovery
+  and commit update checks by repository URL.
+- Updated private GitHub repo documentation for read-only fine-grained tokens,
+  read-only deploy keys, and multi-repo host setup.
+- Bumped workspace, generated OpenAPI, runtime image defaults, and release docs
+  to `1.0.6`.
+
 ## [v1.0.2] - 2026-06-25
 
 ### Changed
