@@ -10,8 +10,8 @@ then deploy or redeploy them to connected hosts.
    host.
 3. Click `Branches` to confirm the repository is reachable.
 4. Save the repository.
-5. Use preview/customize deploy to review the Compose YAML before launching the
-   job.
+5. Use preview/customize deploy for image-only Compose files, or Clone/Build
+   Deploy when the Compose file uses repo-local Dockerfiles or build contexts.
 
 ## Private Tracked GitHub Repository
 
@@ -34,7 +34,9 @@ In ComposeBastion:
 3. Click `Test Access` to validate repository metadata, the selected ref,
    Compose file contents, tags, and releases.
 4. Click `Branches` to load refs.
-5. Save the repository.
+5. Optionally enter the host SSH clone URL or alias and clone directory for
+   Clone/Build Deploy.
+6. Save the repository.
 
 ComposeBastion encrypts the token with `APP_SECRET`. When editing the repository,
 leave the token field blank to keep the saved token, paste a new token to rotate
@@ -45,7 +47,10 @@ backup passphrase and `APP_SECRET`.
 ## Private Clone And Deploy Repository
 
 Use this path when the Docker host should keep a real git working tree and
-future updates should run host-side `git pull` plus Compose redeploy.
+future updates should run host-side `git pull` plus Compose redeploy. This is
+the required path for Compose files that use `build:`, repo-local Dockerfiles,
+relative build contexts, or other files that must exist next to the Compose
+file on the host.
 
 On the Docker host:
 
@@ -58,10 +63,17 @@ On the Docker host:
 In ComposeBastion:
 
 1. Use the SSH clone URL or host SSH alias URL in `Clone & Deploy any Git
-   repository`.
+   repository`, or save those values on a tracked GitHub repository and use
+   `Clone/Build Deploy`.
 2. Click `Test Host Access`; ComposeBastion runs read-only `git ls-remote` on
    the host to confirm the deploy key works.
 3. Clone and deploy after the access check passes.
+
+For tracked GitHub repositories, `Preview and customize compose` still uses the
+GitHub API and a managed Compose copy. It is useful for image-only Compose files,
+but it cannot provide repo-local build contexts. `Clone/Build Deploy` stores the
+resulting stack as a Git folder source, so later Services updates use host-side
+`git pull` plus Compose redeploy.
 
 ## Compose Path And Project Name
 

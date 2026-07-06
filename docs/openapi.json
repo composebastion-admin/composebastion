@@ -2667,6 +2667,8 @@
           "projectName",
           "env",
           "defaultHostId",
+          "hostCloneUrl",
+          "hostCloneDirectory",
           "lastDeployedAt",
           "lastDeployedCommitSha",
           "latestCommitSha",
@@ -2719,6 +2721,18 @@
               {
                 "type": "null"
               }
+            ]
+          },
+          "hostCloneUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "hostCloneDirectory": {
+            "type": [
+              "string",
+              "null"
             ]
           },
           "lastDeployedAt": {
@@ -2923,21 +2937,34 @@
       "GithubDeployResponse": {
         "type": "object",
         "required": [
-          "stack",
           "job",
           "branch"
         ],
         "additionalProperties": false,
         "properties": {
           "stack": {
-            "type": "object",
-            "additionalProperties": true
+            "anyOf": [
+              {
+                "type": "object",
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "job": {
             "$ref": "#/components/schemas/OperationJob"
           },
           "branch": {
             "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "api",
+              "host_clone"
+            ]
           }
         }
       },

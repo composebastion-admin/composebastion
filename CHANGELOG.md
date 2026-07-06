@@ -1,6 +1,6 @@
 # Changelog
 
-## [v1.0.6] - 2026-07-05
+## [v1.0.6] - 2026-07-06
 
 ### Added
 - Added first-class private GitHub repository access checks for tracked repos,
@@ -8,10 +8,17 @@
   validation of repository metadata, refs, Compose contents, tags, and releases.
 - Added host-side read-only `git ls-remote` checks for Clone & Deploy workflows
   that use GitHub deploy keys instead of app-managed clone tokens.
+- Added tracked GitHub Clone/Build Deploy defaults so private repos with
+  `build:` contexts can deploy from a host-side checkout using read-only deploy
+  keys.
 
 ### Changed
 - Reused stored private GitHub credentials for Services GitHub version discovery
   and commit update checks by repository URL.
+- Updated Services redeploy precedence so clone-built tracked GitHub apps use
+  host-side `git pull` plus Compose redeploy.
+- Updated Services image-tag refreshes so prerelease channels like `beta` can
+  surface the latest matching prerelease.
 - Updated private GitHub repo documentation for read-only fine-grained tokens,
   read-only deploy keys, and multi-repo host setup.
 - Bumped workspace, generated OpenAPI, runtime image defaults, and release docs

@@ -34,6 +34,18 @@ describe("shared schemas", () => {
       payload: { directory: "/home/user/app" }
     });
     expect(pull.payload.directory).toBe("/home/user/app");
+    const cloneDeploy = dockerActionSchema.parse({
+      type: "git.cloneDeploy",
+      hostId: "00000000-0000-4000-8000-000000000001",
+      payload: {
+        repositoryId: "00000000-0000-4000-8000-000000000002",
+        repositoryUrl: "git@github.com:example/app.git",
+        directory: "/home/user/app",
+        projectName: "sampleapp"
+      }
+    });
+    expect(cloneDeploy.payload.composePath).toBe("docker-compose.yml");
+    expect(cloneDeploy.payload.repositoryId).toBe("00000000-0000-4000-8000-000000000002");
   });
 
   it("validates self-update configuration", () => {
@@ -110,13 +122,21 @@ describe("shared schemas", () => {
     const repo = githubRepositoryCreateSchema.parse({
       name: "ComposeBastion",
       repositoryUrl: "https://github.com/composebastion-admin/composebastion",
-      defaultHostId: "00000000-0000-4000-8000-000000000001"
+      defaultHostId: "00000000-0000-4000-8000-000000000001",
+      hostCloneUrl: "git@github.com:composebastion-admin/composebastion.git",
+      hostCloneDirectory: "/srv/apps/composebastion"
     });
     expect(repo.branch).toBe("main");
     expect(repo.composePath).toBe("docker-compose.yml");
+    expect(repo.hostCloneDirectory).toBe("/srv/apps/composebastion");
     expect(githubRepositoryBranchesRequestSchema.parse({ repositoryUrl: repo.repositoryUrl }).repositoryUrl).toBe(repo.repositoryUrl);
     expect(() => githubRepositoryCreateSchema.parse({ ...repo, projectName: "SampleApp" })).toThrow();
     expect(githubRepositoryDeploySchema.parse({ projectName: "sampleapp", composeYaml: "services: {}" }).projectName).toBe("sampleapp");
+    expect(githubRepositoryDeploySchema.parse({
+      mode: "host_clone",
+      hostCloneUrl: "git@github.com:composebastion-admin/composebastion.git",
+      hostCloneDirectory: "/srv/apps/composebastion"
+    }).mode).toBe("host_clone");
   });
 
   it("rejects path-like volume names that would become host bind mounts", () => {

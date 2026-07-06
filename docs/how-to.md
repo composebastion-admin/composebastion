@@ -108,7 +108,11 @@ Then fully log out of SSH and back in, or reboot the host, before testing again.
 4. Enter the repository URL, branch, Compose path, project name, default host, and optional `.env` content.
 5. Paste the token into `Fine-grained GitHub token for private repos, Contents: Read-only`.
 6. Click `Branches` to confirm ComposeBastion can read the private repo.
-7. Save the repo, then use preview/customize deploy.
+7. Save the repo, then use preview/customize deploy for image-only Compose
+   files.
+8. For Compose files with `build:` or repo-local Dockerfiles, add a read-only
+   deploy key on the Docker host, save the host SSH clone URL/alias and clone
+   directory on the tracked repo, then use `Clone/Build Deploy`.
 
 ComposeBastion encrypts the token with `APP_SECRET` before storing it. When editing a tracked repo, leave the token field blank to keep the saved token.
 

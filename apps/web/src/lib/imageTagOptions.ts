@@ -41,6 +41,11 @@ export function isImageChannelTag(tag: string) {
   return channelPriority.has(tag.trim().toLowerCase());
 }
 
+export function isPrereleaseImageChannelTag(tag: string) {
+  const normalized = tag.trim().toLowerCase();
+  return normalized === "beta" || normalized === "dev" || normalized === "nightly" || normalized === "edge";
+}
+
 function parsedVersionEntry(tag: string) {
   const parsed = parseVersionTag(tag);
   if (!parsed || isImageChannelTag(tag)) return null;
@@ -72,15 +77,41 @@ export function isNewerVersionTag(candidate: string | null | undefined, current:
   return compareParsedVersions(candidateEntry.parsed, currentEntry.parsed) < 0;
 }
 
+export function recommendedImageVersionTag(tags: string[], currentTag: string) {
+  const latestStable = latestStableImageTag(tags);
+  const latestPrerelease = latestPrereleaseImageTag(tags);
+  const normalizedCurrent = currentTag.trim().toLowerCase();
+
+  if (isImageChannelTag(currentTag)) {
+    if (isPrereleaseImageChannelTag(normalizedCurrent)) {
+      return latestPrerelease ?? latestStable;
+    }
+    return latestStable ?? latestPrerelease;
+  }
+
+  const currentEntry = parsedVersionEntry(currentTag);
+  if (!currentEntry) return null;
+  if (currentEntry.parsed.prerelease) {
+    if (isNewerVersionTag(latestPrerelease, currentTag)) return latestPrerelease;
+    if (isNewerVersionTag(latestStable, currentTag)) return latestStable;
+    return null;
+  }
+
+  return isNewerVersionTag(latestStable, currentTag) ? latestStable : null;
+}
+
 export function summarizeImageVersionTags(tags: string[], currentTag: string) {
   const latestStable = latestStableImageTag(tags);
   const latestPrerelease = latestPrereleaseImageTag(tags);
+  const recommendedUpdateTag = recommendedImageVersionTag(tags, currentTag);
   return {
     currentTag,
     latestStable,
     latestPrerelease,
     stableUpdateAvailable: isNewerVersionTag(latestStable, currentTag),
-    prereleaseUpdateAvailable: isNewerVersionTag(latestPrerelease, currentTag)
+    prereleaseUpdateAvailable: isNewerVersionTag(latestPrerelease, currentTag),
+    recommendedUpdateTag,
+    versionUpdateAvailable: Boolean(recommendedUpdateTag && (isPrereleaseImageChannelTag(currentTag) || isNewerVersionTag(recommendedUpdateTag, currentTag)))
   };
 }
 

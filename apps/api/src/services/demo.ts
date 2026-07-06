@@ -2125,6 +2125,20 @@ export async function executeDemoDockerAction(action: DockerActionRequest) {
         action.payload.composePath
       ]
     );
+    if (action.payload.repositoryId) {
+      await query(
+        `UPDATE github_repositories
+         SET last_deployed_at = now(),
+             last_deployed_commit_sha = 'demo-current',
+             latest_commit_sha = 'demo-current',
+             update_checked_at = now(),
+             update_check_error = null,
+             last_error = null,
+             updated_at = now()
+         WHERE id = $1`,
+        [action.payload.repositoryId]
+      );
+    }
     return { repositoryUrl: action.payload.repositoryUrl, projectName: action.payload.projectName, demo: true };
   }
 

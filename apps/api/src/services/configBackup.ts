@@ -167,6 +167,8 @@ export async function exportConfigBackup(passphrase: string) {
       projectName: row.project_name,
       env: row.env ?? "",
       defaultHostId: row.default_host_id,
+      hostCloneUrl: row.host_clone_url,
+      hostCloneDirectory: row.host_clone_directory,
       githubToken: decryptNullable(row.github_token_encrypted)
     })),
     appSourceLinks: appSourceLinks.rows.map((row: any) => ({
@@ -310,14 +312,17 @@ export async function importConfigBackup(backup: Record<string, unknown>, passph
     for (const repo of payload.githubRepositories ?? []) {
       await client.query(
         `INSERT INTO github_repositories
-          (id, name, repository_url, owner, repo, branch, compose_path, project_name, env, default_host_id, github_token_encrypted)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          (id, name, repository_url, owner, repo, branch, compose_path, project_name, env, default_host_id,
+           host_clone_url, host_clone_directory, github_token_encrypted)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
          ON CONFLICT (owner, repo, branch, compose_path)
          DO UPDATE SET name = EXCLUDED.name,
                        repository_url = EXCLUDED.repository_url,
                        project_name = EXCLUDED.project_name,
                        env = EXCLUDED.env,
                        default_host_id = EXCLUDED.default_host_id,
+                       host_clone_url = EXCLUDED.host_clone_url,
+                       host_clone_directory = EXCLUDED.host_clone_directory,
                        github_token_encrypted = EXCLUDED.github_token_encrypted,
                        updated_at = now()`,
         [
@@ -331,6 +336,8 @@ export async function importConfigBackup(backup: Record<string, unknown>, passph
           repo.projectName,
           repo.env ?? "",
           repo.defaultHostId ?? null,
+          repo.hostCloneUrl ?? null,
+          repo.hostCloneDirectory ?? null,
           encryptNullable(repo.githubToken)
         ]
       );

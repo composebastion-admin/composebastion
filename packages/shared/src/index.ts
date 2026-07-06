@@ -533,7 +533,8 @@ export const dockerActionSchema = z.discriminatedUnion("type", [
     directory: z.string().min(1).max(1024),
     branch: z.string().min(1).max(255).optional(),
     composePath: z.string().min(1).max(1024).default("docker-compose.yml"),
-    projectName: z.string().regex(/^[a-z0-9][a-z0-9_-]*$/, "Project name must be lowercase and contain only letters, numbers, hyphens, and underscores")
+    projectName: z.string().regex(/^[a-z0-9][a-z0-9_-]*$/, "Project name must be lowercase and contain only letters, numbers, hyphens, and underscores"),
+    repositoryId: idSchema.optional()
   }),
   withHost("container.run", {
     image: z.string().min(1),
@@ -708,6 +709,8 @@ export const githubRepositoryCreateSchema = z.object({
   projectName: composeProjectNameSchema.optional(),
   env: z.string().default(""),
   defaultHostId: idSchema.optional(),
+  hostCloneUrl: z.string().max(2048).optional(),
+  hostCloneDirectory: z.string().max(1024).optional(),
   githubToken: z.string().max(4096).optional()
 });
 
@@ -735,6 +738,8 @@ export const githubRepositorySchema = z.object({
   projectName: z.string(),
   env: z.string(),
   defaultHostId: idSchema.nullable(),
+  hostCloneUrl: z.string().nullable(),
+  hostCloneDirectory: z.string().nullable(),
   lastDeployedAt: z.string().nullable(),
   lastDeployedCommitSha: z.string().nullable().optional(),
   latestCommitSha: z.string().nullable().optional(),
@@ -754,7 +759,10 @@ export const githubRepositoryDeploySchema = z.object({
   branch: z.string().min(1).max(120).optional(),
   projectName: composeProjectNameSchema.optional(),
   composeYaml: z.string().min(1).optional(),
-  env: z.string().optional()
+  env: z.string().optional(),
+  mode: z.enum(["api", "host_clone"]).default("api").optional(),
+  hostCloneUrl: z.string().min(1).max(2048).optional(),
+  hostCloneDirectory: z.string().min(1).max(1024).optional()
 });
 
 export const githubRepositoryBranchesRequestSchema = z.object({

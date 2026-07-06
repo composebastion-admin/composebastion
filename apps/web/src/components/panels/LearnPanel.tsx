@@ -9,6 +9,7 @@ export function LearnPanel() {
       points: [
         "Preview pulls the Compose file from the selected branch before anything is deployed.",
         "Deploy Customized sends the edited YAML and .env text to the server, stores it as a Compose stack, then runs docker compose up.",
+        "Clone/Build Deploy keeps a repo checkout on the Docker host for Compose files with build contexts, Dockerfiles, or other repo-local files.",
         "Compose variable override fields are generated from placeholders such as ${APP_PORT:-3000}, ${IMAGE_TAG-latest}, or ${SECRET_KEY}; use those fields to write .env values before deploy.",
         "Project names must be lowercase. Use one project name per app so Compose can update the same stack safely.",
         "Deploy now force-recreates services so port, env, and image edits are applied to existing containers."
@@ -29,7 +30,7 @@ export function LearnPanel() {
         "Services groups Compose projects and standalone containers into the operational view you use day to day.",
         "Current and latest versions come from existing git commit checks or image digest checks.",
         "Standalone containers can be linked to an image tag, Compose folder, or Git folder so ComposeBastion knows how to check and update them.",
-        "Private GitHub repositories are supported from Deploy -> Tracked GitHub repositories with one fine-grained token per repo and read-only Contents access.",
+        "Private GitHub repositories use one fine-grained token per repo for API checks and read-only deploy keys for host-side Clone/Build Deploy.",
         "The old Apps information now lives in Services so source, status, versions, ports, and lifecycle actions stay together."
       ]
     },

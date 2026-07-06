@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Boxes,
   ChevronDown,
@@ -148,7 +148,7 @@ function tagLookupLabel(lookup: TagLookupState | undefined, currentTag: string) 
 function tagLookupUpdateAvailable(lookup: TagLookupState | undefined, currentTag: string) {
   if (!lookup || lookup.status !== "ready") return false;
   const summary = summarizeImageVersionTags(lookup.tags, currentTag);
-  return summary.stableUpdateAvailable || summary.prereleaseUpdateAvailable;
+  return summary.versionUpdateAvailable;
 }
 
 function displayImageTag(tag: string) {
@@ -264,6 +264,7 @@ export function ServicesPanel({
   const [updateSummaryDismissed, setUpdateSummaryDismissed] = useState(false);
   const [lastUpdateScanAt, setLastUpdateScanAt] = useState<string | null>(null);
   const [tagLookups, setTagLookups] = useState<Record<string, TagLookupState>>({});
+  const tagLookupsRef = useRef<Record<string, TagLookupState>>({});
 
   const groups = useMemo(() => groupServices(containers, stacks, hosts), [containers, stacks, hosts]);
   const appByGroupKey = useMemo(() => {
@@ -330,10 +331,18 @@ export function ServicesPanel({
     : 0;
 
   useEffect(() => {
+    tagLookupsRef.current = tagLookups;
+  }, [tagLookups]);
+
+  useEffect(() => {
     if (!shouldShowUpdateSummary) return;
     for (const target of tagScanTargets) {
-      const existing = tagLookups[target.repository];
+      const existing = tagLookupsRef.current[target.repository];
       if (existing?.status === "loading" || existing?.status === "ready") continue;
+      tagLookupsRef.current = {
+        ...tagLookupsRef.current,
+        [target.repository]: { status: "loading", tags: [] }
+      };
       setTagLookups((current) => ({
         ...current,
         [target.repository]: { status: "loading", tags: [] }
@@ -356,7 +365,7 @@ export function ServicesPanel({
           }));
         });
     }
-  }, [shouldShowUpdateSummary, tagLookups, tagScanTargets]);
+  }, [shouldShowUpdateSummary, tagScanTargets, lastUpdateScanAt]);
 
   function toggleExpanded(key: string) {
     setExpanded((current) => {

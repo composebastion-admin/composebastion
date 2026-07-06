@@ -59,6 +59,15 @@ function normalizeProjectName(value: string) {
   return normalized || "github-stack";
 }
 
+function nullIfBlank(value?: string | null) {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function defaultHostCloneUrl(owner: string, repo: string) {
+  return `git@github.com:${owner}/${repo}.git`;
+}
+
 function githubRepoParts(owner: string | undefined, repo: string | undefined) {
   const normalizedOwner = owner?.trim();
   const normalizedRepo = repo?.trim().replace(/\.git$/i, "");
@@ -258,6 +267,8 @@ export function mapGithubRepository(row: any) {
     projectName: row.project_name,
     env: row.env ?? "",
     defaultHostId: row.default_host_id,
+    hostCloneUrl: row.host_clone_url ?? defaultHostCloneUrl(row.owner, row.repo),
+    hostCloneDirectory: row.host_clone_directory ?? null,
     lastDeployedAt: iso(row.last_deployed_at),
     lastDeployedCommitSha: row.last_deployed_commit_sha ?? null,
     latestCommitSha: row.latest_commit_sha ?? null,
@@ -389,6 +400,8 @@ export async function createGithubRepository(input: unknown) {
   const { owner, repo } = parseGithubUrl(body.repositoryUrl);
   const projectName = body.projectName ?? normalizeProjectName(repo);
   const githubToken = body.githubToken?.trim() || null;
+  const hostCloneUrl = nullIfBlank(body.hostCloneUrl);
+  const hostCloneDirectory = nullIfBlank(body.hostCloneDirectory);
   if (githubToken) {
     await requireValidGithubRepositoryAccess({
       repositoryUrl: body.repositoryUrl,
@@ -400,10 +413,10 @@ export async function createGithubRepository(input: unknown) {
   const result = await query(
     `INSERT INTO github_repositories
       (id, name, repository_url, owner, repo, branch, compose_path, project_name, env, default_host_id,
-       github_token_encrypted, github_token_updated_at, github_token_checked_at, github_token_check_error)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-             CASE WHEN $11::text IS NULL THEN null ELSE now() END,
-             CASE WHEN $11::text IS NULL THEN null ELSE now() END,
+       host_clone_url, host_clone_directory, github_token_encrypted, github_token_updated_at, github_token_checked_at, github_token_check_error)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+             CASE WHEN $13::text IS NULL THEN null ELSE now() END,
+             CASE WHEN $13::text IS NULL THEN null ELSE now() END,
              null)
      ON CONFLICT (owner, repo, branch, compose_path)
      DO UPDATE SET name = EXCLUDED.name,
@@ -411,6 +424,8 @@ export async function createGithubRepository(input: unknown) {
                    project_name = EXCLUDED.project_name,
                    env = EXCLUDED.env,
                    default_host_id = EXCLUDED.default_host_id,
+                   host_clone_url = EXCLUDED.host_clone_url,
+                   host_clone_directory = EXCLUDED.host_clone_directory,
                    github_token_encrypted = COALESCE(EXCLUDED.github_token_encrypted, github_repositories.github_token_encrypted),
                    github_token_updated_at = CASE WHEN EXCLUDED.github_token_encrypted IS NULL THEN github_repositories.github_token_updated_at ELSE now() END,
                    github_token_checked_at = CASE WHEN EXCLUDED.github_token_encrypted IS NULL THEN github_repositories.github_token_checked_at ELSE now() END,
@@ -428,6 +443,8 @@ export async function createGithubRepository(input: unknown) {
       projectName,
       body.env,
       body.defaultHostId ?? null,
+      hostCloneUrl,
+      hostCloneDirectory,
       githubToken ? encryptSecret(githubToken) : null
     ]
   );
@@ -448,6 +465,8 @@ export async function updateGithubRepository(id: string, input: unknown) {
   const existingToken = clearGithubToken ? null : githubTokenForRow(row);
   const tokenForValidation = githubToken ?? existingToken;
   const changedAccessTarget = Boolean(body.repositoryUrl || body.branch || body.composePath);
+  const hostCloneUrl = body.hostCloneUrl === undefined ? row.host_clone_url : nullIfBlank(body.hostCloneUrl);
+  const hostCloneDirectory = body.hostCloneDirectory === undefined ? row.host_clone_directory : nullIfBlank(body.hostCloneDirectory);
   if (!clearGithubToken && tokenForValidation && (githubToken || changedAccessTarget)) {
     await requireValidGithubRepositoryAccess({
       repositoryUrl,
@@ -467,20 +486,22 @@ export async function updateGithubRepository(id: string, input: unknown) {
          project_name = $8,
          env = $9,
          default_host_id = $10,
-         github_token_encrypted = CASE WHEN $12::boolean THEN null ELSE COALESCE($11, github_token_encrypted) END,
+         host_clone_url = $11,
+         host_clone_directory = $12,
+         github_token_encrypted = CASE WHEN $14::boolean THEN null ELSE COALESCE($13, github_token_encrypted) END,
          github_token_updated_at = CASE
-           WHEN $12::boolean THEN null
-           WHEN $11::text IS NULL THEN github_token_updated_at
+           WHEN $14::boolean THEN null
+           WHEN $13::text IS NULL THEN github_token_updated_at
            ELSE now()
          END,
          github_token_checked_at = CASE
-           WHEN $12::boolean THEN null
-           WHEN $11::text IS NOT NULL OR ($13::boolean AND github_token_encrypted IS NOT NULL) THEN now()
+           WHEN $14::boolean THEN null
+           WHEN $13::text IS NOT NULL OR ($15::boolean AND github_token_encrypted IS NOT NULL) THEN now()
            ELSE github_token_checked_at
          END,
          github_token_check_error = CASE
-           WHEN $12::boolean THEN null
-           WHEN $11::text IS NOT NULL OR ($13::boolean AND github_token_encrypted IS NOT NULL) THEN null
+           WHEN $14::boolean THEN null
+           WHEN $13::text IS NOT NULL OR ($15::boolean AND github_token_encrypted IS NOT NULL) THEN null
            ELSE github_token_check_error
          END,
          updated_at = now()
@@ -497,6 +518,8 @@ export async function updateGithubRepository(id: string, input: unknown) {
       body.projectName ?? row.project_name,
       body.env ?? row.env,
       body.defaultHostId ?? row.default_host_id,
+      hostCloneUrl,
+      hostCloneDirectory,
       githubToken ? encryptSecret(githubToken) : null,
       clearGithubToken,
       changedAccessTarget
@@ -696,7 +719,16 @@ async function listGithubBranches(owner: string, repo: string, token?: string) {
 
 export async function deployGithubRepository(
   id: string,
-  options: { hostId?: string; branch?: string; projectName?: string; composeYaml?: string; env?: string },
+  options: {
+    hostId?: string;
+    branch?: string;
+    projectName?: string;
+    composeYaml?: string;
+    env?: string;
+    mode?: "api" | "host_clone";
+    hostCloneUrl?: string;
+    hostCloneDirectory?: string;
+  },
   createdBy?: string | null
 ) {
   const result = await query<any>("SELECT * FROM github_repositories WHERE id = $1", [id]);
@@ -710,6 +742,34 @@ export async function deployGithubRepository(
   let commitSha: string | null = null;
 
   try {
+    if (options.mode === "host_clone") {
+      const hostCloneUrl = nullIfBlank(options.hostCloneUrl) ?? row.host_clone_url ?? defaultHostCloneUrl(row.owner, row.repo);
+      const hostCloneDirectory = nullIfBlank(options.hostCloneDirectory) ?? row.host_clone_directory;
+      if (!hostCloneDirectory) throw new Error("Choose a host clone directory before using Clone/Build Deploy.");
+      await query(
+        `UPDATE github_repositories
+         SET host_clone_url = $2,
+             host_clone_directory = $3,
+             last_error = null,
+             updated_at = now()
+         WHERE id = $1`,
+        [id, hostCloneUrl, hostCloneDirectory]
+      );
+      const job = await enqueueJob({
+        type: "git.cloneDeploy",
+        hostId,
+        payload: {
+          repositoryUrl: hostCloneUrl,
+          directory: hostCloneDirectory,
+          branch,
+          composePath: row.compose_path,
+          projectName,
+          repositoryId: id
+        }
+      }, createdBy);
+      return { job, branch, mode: "host_clone" };
+    }
+
     try {
       commitSha = await fetchBranchCommitSha(row, branch);
     } catch {

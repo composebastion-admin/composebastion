@@ -859,10 +859,6 @@ export async function renameApp(appId: string, input: AppRenameInput) {
 export async function updateApp(appId: string, createdBy?: string | null) {
   const app = await findApp(appId);
 
-  if (app.source === "git" && app.repositoryId) {
-    return deployGithubRepository(app.repositoryId, { hostId: app.hostId, branch: app.branch ?? undefined }, createdBy);
-  }
-
   if ((app.source === "git" || app.source === "compose") && app.sourceLink?.workingDir && app.sourceLink.composePath) {
     const jobs = [];
     if (app.source === "git") {
@@ -914,6 +910,10 @@ export async function updateApp(appId: string, createdBy?: string | null) {
     }
     jobs.push(await enqueueJob({ type: "compose.deploy", hostId: app.hostId, payload: { stackId: app.stackId } }, createdBy));
     return { jobs };
+  }
+
+  if (app.source === "git" && app.repositoryId) {
+    return deployGithubRepository(app.repositoryId, { hostId: app.hostId, branch: app.branch ?? undefined }, createdBy);
   }
 
   if (app.primaryContainerId) {

@@ -5,6 +5,7 @@ import {
   isNewerVersionTag,
   latestPrereleaseImageTag,
   latestStableImageTag,
+  recommendedImageVersionTag,
   summarizeImageVersionTags,
   uniqueSortedImageTags
 } from "./imageTagOptions.js";
@@ -49,5 +50,28 @@ describe("image tag options", () => {
       stableUpdateAvailable: true,
       prereleaseUpdateAvailable: true
     });
+  });
+
+  it("recommends prerelease versions for beta channel updates", () => {
+    const tags = uniqueSortedImageTags(["latest", "main", "beta", "dev", "1.7.0-beta.4", "1.7.0-beta.3", "1.6.7", "1.2.2"]);
+
+    expect(recommendedImageVersionTag(tags, "beta")).toBe("1.7.0-beta.4");
+    expect(summarizeImageVersionTags(tags, "beta")).toMatchObject({
+      latestStable: "1.6.7",
+      latestPrerelease: "1.7.0-beta.4",
+      recommendedUpdateTag: "1.7.0-beta.4",
+      versionUpdateAvailable: true
+    });
+    expect(summarizeImageVersionTags(tags, "latest")).toMatchObject({
+      recommendedUpdateTag: "1.6.7",
+      versionUpdateAvailable: false
+    });
+  });
+
+  it("keeps stable version users on stable updates", () => {
+    const tags = uniqueSortedImageTags(["latest", "beta", "1.7.0-beta.4", "1.6.7", "1.6.6"]);
+
+    expect(recommendedImageVersionTag(tags, "1.6.6")).toBe("1.6.7");
+    expect(recommendedImageVersionTag(tags, "1.6.7")).toBeNull();
   });
 });

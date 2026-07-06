@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { FileText, FolderOpen, GitBranch, Github, KeyRound, Pencil, Play, RefreshCw, Save, ShieldCheck, Trash2, Wand2, X } from "lucide-react";
+import { FileText, FolderOpen, GitBranch, Github, Hammer, KeyRound, Pencil, Play, RefreshCw, Save, ShieldCheck, Trash2, Wand2, X } from "lucide-react";
 import type { ComposeStack, DockerHost, GithubRepository, OperationJob } from "@composebastion/shared";
 import { api, deleteJson, postJson, putJson } from "../../api.js";
 import { useConfirm } from "../ConfirmProvider.js";
@@ -404,6 +404,8 @@ export function GithubDeployPanel({
     composePath: string;
     projectName: string;
     defaultHostId: string;
+    hostCloneUrl: string;
+    hostCloneDirectory: string;
     githubToken: string;
     clearGithubToken: boolean;
     env: string;
@@ -417,6 +419,16 @@ export function GithubDeployPanel({
     projectName: string;
     composeYaml: string;
     env: string;
+  };
+  type CloneBuildDeploy = {
+    repoId: string;
+    repoName: string;
+    hostId: string;
+    branch: string;
+    projectName: string;
+    composePath: string;
+    hostCloneUrl: string;
+    hostCloneDirectory: string;
   };
   type ComposePreviewResponse = {
     repository: GithubRepository;
@@ -433,6 +445,8 @@ export function GithubDeployPanel({
     composePath: "docker-compose.yml",
     projectName: "",
     defaultHostId,
+    hostCloneUrl: "",
+    hostCloneDirectory: "",
     githubToken: "",
     clearGithubToken: false,
     env: ""
@@ -444,6 +458,7 @@ export function GithubDeployPanel({
   const [deployHost, setDeployHost] = useState<Record<string, string>>({});
   const [deployBranch, setDeployBranch] = useState<Record<string, string>>({});
   const [deployPreview, setDeployPreview] = useState<ComposePreview | null>(null);
+  const [cloneDeploy, setCloneDeploy] = useState<CloneBuildDeploy | null>(null);
   const [formBranches, setFormBranches] = useState<string[]>([]);
   const [repoBranches, setRepoBranches] = useState<Record<string, string[]>>({});
   const [branchError, setBranchError] = useState<string | null>(null);
@@ -461,6 +476,8 @@ export function GithubDeployPanel({
         ...form,
         projectName: form.projectName ? normalizeComposeProjectName(form.projectName) : undefined,
         defaultHostId: form.defaultHostId || undefined,
+        hostCloneUrl: form.hostCloneUrl || undefined,
+        hostCloneDirectory: form.hostCloneDirectory || undefined,
         githubToken: form.clearGithubToken ? undefined : form.githubToken || undefined,
         clearGithubToken: form.clearGithubToken || undefined
       };
@@ -491,6 +508,8 @@ export function GithubDeployPanel({
       composePath: repo.composePath,
       projectName: normalizeComposeProjectName(repo.projectName),
       defaultHostId: repo.defaultHostId ?? hosts[0]?.id ?? "",
+      hostCloneUrl: repo.hostCloneUrl ?? `git@github.com:${repo.owner}/${repo.repo}.git`,
+      hostCloneDirectory: repo.hostCloneDirectory ?? "",
       githubToken: "",
       clearGithubToken: false,
       env: repo.env ?? ""
@@ -573,6 +592,57 @@ export function GithubDeployPanel({
       await deleteJson<{ ok: boolean }>(`/api/github/repos/${repo.id}`);
       if (editingRepoId === repo.id) resetForm();
       if (deployPreview?.repoId === repo.id) setDeployPreview(null);
+      if (cloneDeploy?.repoId === repo.id) setCloneDeploy(null);
+      await refresh();
+    });
+  }
+
+  function openCloneBuildDeploy(repo: GithubRepository) {
+    const branch = deployBranch[repo.id] ?? repo.branch;
+    const hostId = deployHost[repo.id] ?? repo.defaultHostId ?? hosts[0]?.id ?? "";
+    const host = hosts.find((entry) => entry.id === hostId) ?? hosts[0] ?? null;
+    const projectName = normalizeComposeProjectName(repo.projectName || repo.repo) || "github-stack";
+    setCloneDeploy({
+      repoId: repo.id,
+      repoName: repo.name,
+      hostId,
+      branch,
+      projectName,
+      composePath: repo.composePath,
+      hostCloneUrl: repo.hostCloneUrl ?? `git@github.com:${repo.owner}/${repo.repo}.git`,
+      hostCloneDirectory: repo.hostCloneDirectory ?? (host ? defaultDeployDirectory(host, projectName) : "")
+    });
+    setAccessMessage(null);
+    setBranchError(null);
+  }
+
+  async function testCloneBuildAccess() {
+    if (!cloneDeploy?.hostId || !cloneDeploy.hostCloneUrl.trim()) return;
+    setAccessMessage(null);
+    await action.run(async () => {
+      await runJob(() => postJson<JobResult>(`/api/hosts/${cloneDeploy.hostId}/actions`, {
+        type: "git.testRemote",
+        payload: {
+          repositoryUrl: cloneDeploy.hostCloneUrl.trim(),
+          branch: cloneDeploy.branch.trim() || undefined
+        }
+      }));
+      setAccessMessage({ tone: "success", text: `${cloneDeploy.repoName} host git access verified.` });
+    });
+  }
+
+  async function deployCloneBuild() {
+    if (!cloneDeploy) return;
+    await action.run(async () => {
+      await runJob(() => postJson<JobResult>(`/api/github/repos/${cloneDeploy.repoId}/deploy`, {
+        mode: "host_clone",
+        hostId: cloneDeploy.hostId,
+        branch: cloneDeploy.branch,
+        projectName: cloneDeploy.projectName,
+        hostCloneUrl: cloneDeploy.hostCloneUrl.trim(),
+        hostCloneDirectory: cloneDeploy.hostCloneDirectory.trim()
+      }));
+      setCloneDeploy(null);
       await refresh();
     });
   }
@@ -625,7 +695,8 @@ export function GithubDeployPanel({
         Track a GitHub repository to deploy its compose file straight from the GitHub API (no clone on the host),
         preview and customize the YAML before deploying, and get commit-based update checks. Private repositories work
         with one fine-grained GitHub token per repository with read-only Contents access; ComposeBastion encrypts the token
-        and never shows it again. When editing a repo, leave the token blank to keep the saved token.
+        and never shows it again. Use Clone/Build Deploy when the Compose file depends on repo-local Dockerfiles or build contexts.
+        When editing a repo, leave the token blank to keep the saved token.
       </div>
       <form className="composeForm" onSubmit={save}>
         <div className="two">
@@ -649,6 +720,21 @@ export function GithubDeployPanel({
           <input placeholder="Project name, lowercase" value={form.projectName} onChange={(event) => setForm({ ...form, projectName: normalizeComposeProjectName(event.target.value) })} />
           <HostSelect hosts={hosts} value={form.defaultHostId} onChange={(defaultHostId) => setForm({ ...form, defaultHostId })} />
         </div>
+        <div className="two">
+          <input
+            className="monoText"
+            placeholder="git@github.com:owner/repo.git or host SSH alias"
+            value={form.hostCloneUrl}
+            onChange={(event) => setForm({ ...form, hostCloneUrl: event.target.value })}
+          />
+          <input
+            className="monoText"
+            placeholder="/home/user/apps/repo"
+            value={form.hostCloneDirectory}
+            onChange={(event) => setForm({ ...form, hostCloneDirectory: event.target.value })}
+          />
+        </div>
+        <div className="formHint">Clone/Build Deploy uses these host-side SSH settings for Compose files with build contexts, Dockerfiles, or other repo-local files.</div>
         <input
           placeholder={editingRepoId ? "New fine-grained token, blank keeps saved token" : "Fine-grained token for private repos, Contents: Read-only"}
           type="password"
@@ -700,7 +786,7 @@ export function GithubDeployPanel({
             </label>
           )}
           <textarea className="monoTextarea composeEditor" value={deployPreview.composeYaml} onChange={(event) => setDeployPreview({ ...deployPreview, composeYaml: event.target.value })} />
-          <div className="formHint">This edited Compose YAML is what ComposeBastion deploys. Variable override fields only write .env values; delete or change placeholders in the YAML when you want the YAML itself to control ports, images, volumes, or build settings.</div>
+          <div className="formHint">This edited Compose YAML is deployed from a managed copy, so repo-local Dockerfiles and relative build contexts are not available here. Use Clone/Build Deploy for those projects.</div>
           {deployVariableOverrides.length > 0 && (
             <div className="variableOverridePanel">
               <div>
@@ -732,6 +818,47 @@ export function GithubDeployPanel({
           </ButtonRow>
         </div>
       )}
+      {cloneDeploy && (
+        <div className="subPanel deployPreview">
+          <div className="previewHeader">
+            <div>
+              <strong>Clone/Build Deploy</strong>
+              <small>{cloneDeploy.repoName} - {cloneDeploy.branch}</small>
+            </div>
+            <button type="button" title="Close clone/build deploy" onClick={() => setCloneDeploy(null)}><X size={16} /></button>
+          </div>
+          <div className="formHint">
+            Use this path when the Compose file has <code>build:</code>, Dockerfiles, env files, or other repo-local assets.
+            The Docker host clones or pulls over SSH with a read-only deploy key, then runs Compose from that repository folder.
+          </div>
+          <div className="two">
+            <HostSelect hosts={hosts} value={cloneDeploy.hostId} onChange={(hostId) => setCloneDeploy({ ...cloneDeploy, hostId })} />
+            <input value={cloneDeploy.projectName} onChange={(event) => setCloneDeploy({ ...cloneDeploy, projectName: normalizeComposeProjectName(event.target.value) })} required />
+          </div>
+          <div className="two">
+            <input className="monoText" value={cloneDeploy.hostCloneUrl} onChange={(event) => setCloneDeploy({ ...cloneDeploy, hostCloneUrl: event.target.value })} required />
+            <input className="monoText" value={cloneDeploy.hostCloneDirectory} onChange={(event) => setCloneDeploy({ ...cloneDeploy, hostCloneDirectory: event.target.value })} required />
+          </div>
+          <div className="two">
+            <input value={cloneDeploy.branch} onChange={(event) => setCloneDeploy({ ...cloneDeploy, branch: event.target.value })} required />
+            <input value={cloneDeploy.composePath} disabled />
+          </div>
+          {accessMessage && <div className={`notice ${accessMessage.tone}`}>{accessMessage.text}</div>}
+          {action.error && <div className="notice error">{action.error}</div>}
+          <ButtonRow>
+            <button type="button" disabled={action.busy || !cloneDeploy.hostId || !cloneDeploy.hostCloneUrl.trim()} onClick={() => void testCloneBuildAccess()}><ShieldCheck size={16} />Test Host Access</button>
+            <button
+              type="button"
+              className="primary"
+              disabled={action.busy || !cloneDeploy.hostId || !cloneDeploy.projectName || !cloneDeploy.hostCloneUrl.trim() || !cloneDeploy.hostCloneDirectory.trim()}
+              onClick={() => void deployCloneBuild()}
+            >
+              <Hammer size={18} />Clone/Build Deploy
+            </button>
+            <button type="button" onClick={() => setCloneDeploy(null)}><X size={16} />Close</button>
+          </ButtonRow>
+        </div>
+      )}
       <DataTable
         rows={repositories}
         columns={["Name", "Repository", "Branch", "Compose", "Project", "Access", "Last Deploy", "Actions"]}
@@ -752,6 +879,7 @@ export function GithubDeployPanel({
             <HostSelect hosts={hosts} value={deployHost[repo.id] ?? repo.defaultHostId ?? hosts[0]?.id ?? ""} onChange={(hostId) => setDeployHost({ ...deployHost, [repo.id]: hostId })} />
             <button type="button" title="Test GitHub access" onClick={() => void testSavedAccess(repo)}><KeyRound size={16} /></button>
             <button type="button" title="Load branches" onClick={() => void loadRepoBranches(repo)}><RefreshCw size={16} /></button>
+            <button type="button" title="Clone/Build deploy with host deploy key" onClick={() => openCloneBuildDeploy(repo)}><Hammer size={16} /></button>
             <button type="button" title="Preview and customize compose" onClick={() => void openDeployPreview(repo)}><FileText size={16} /></button>
             <button type="button" title="Edit repo" onClick={() => startEdit(repo)}><Pencil size={16} /></button>
             <button type="button" title="Delete repo" className="danger" onClick={() => void deleteRepo(repo)}><Trash2 size={16} /></button>

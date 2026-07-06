@@ -159,6 +159,9 @@ type MockApiOptions = {
   role?: "owner" | "admin" | "operator" | "viewer";
   failChannelTest?: boolean;
   appOverride?: Record<string, unknown>;
+  containerImage?: string;
+  imageTags?: string[];
+  githubRepositories?: unknown[];
 };
 
 async function mockApi(page: Page, options: MockApiOptions = {}) {
@@ -166,6 +169,13 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
   const currentUser = { ...user, role: options.role ?? user.role };
   const hostList = options.hosts ?? [host];
   let appData = { ...app, ...(options.appOverride ?? {}) } as typeof app & Record<string, any>;
+  const currentContainerResource = {
+    ...containerResource,
+    data: {
+      ...containerResource.data,
+      Image: options.containerImage ?? containerResource.data.Image
+    }
+  };
   let channelTestFailed = false;
   let selectedGitRef = appData.branch;
 
@@ -184,7 +194,7 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
     if (path === "/api/auth/me") return options.needsSetup ? json({ error: "Authentication required" }, 401) : json({ user: currentUser });
     if (path === "/api/auth/setup" || path === "/api/auth/login") return json({ user: currentUser });
     if (path === "/api/hosts") return json({ hosts: hostList });
-    if (path === `/api/hosts/${host.id}/resources`) return json({ resources: [containerResource] });
+    if (path === `/api/hosts/${host.id}/resources`) return json({ resources: [currentContainerResource] });
     if (path === `/api/hosts/${fileHost.id}/resources`) return json({ resources: [] });
     if (path === `/api/hosts/${host.id}/containers/usage`) return json({ usage: [{ ID: "web", CPUPerc: "1.2%", MemPerc: "3.4%", MemUsage: "20MiB / 512MiB" }] });
     if (path === `/api/hosts/${fileHost.id}/containers/usage`) return json({ usage: [] });
@@ -275,6 +285,24 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
       offset: 0
     });
     if (path === "/api/jobs/status") return json({ worker: { queued: 0, running: 0, lastJobCompletedAt: new Date(0).toISOString() } });
+    if (path === "/api/jobs/dddddddd-dddd-4ddd-8ddd-dddddddddddd") return json({
+      job: {
+        id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        correlationId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        type: "git.cloneDeploy",
+        status: "completed",
+        hostId: host.id,
+        payload: {},
+        result: {},
+        progress: [],
+        error: null,
+        createdBy: currentUser.id,
+        createdAt: new Date(0).toISOString(),
+        updatedAt: new Date(0).toISOString(),
+        startedAt: new Date(0).toISOString(),
+        completedAt: new Date(0).toISOString()
+      }
+    });
     if (path === "/api/backups/health") return json({
       health: {
         windowMs: 7 * 24 * 60 * 60 * 1000,
@@ -352,7 +380,7 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
         }
       }]
     });
-    if (path === "/api/github/repos") return json({ repositories: [] });
+    if (path === "/api/github/repos") return json({ repositories: options.githubRepositories ?? [] });
     if (path === "/api/apps") return json({ apps: [{ ...appData, branch: selectedGitRef }] });
     if (path === `/api/apps/${appData.id}/name` && request.method() === "PUT") {
       appData = { ...appData, name: (request.postDataJSON() as { name?: string }).name ?? appData.name };
@@ -547,7 +575,7 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
       eligible: false,
       reason: "held by stopped container demoapp-old"
     }] });
-    if (path === "/api/image-tags") return json({ image: url.searchParams.get("image"), tags: ["latest", "main", "beta", "dev", "v0.9.7", "v0.9.6"] });
+    if (path === "/api/image-tags") return json({ image: url.searchParams.get("image"), tags: options.imageTags ?? ["latest", "main", "beta", "dev", "v0.9.7", "v0.9.6"] });
     if (path === "/api/image-updates/preview") return json({ preview: {
       hostId: host.id,
       imageReference: "nginx:latest",
@@ -838,6 +866,48 @@ test("dedicated SSH route manages SSH connections", async ({ page }) => {
   await expect(page.getByRole("dialog", { name: "Host SSH terminal for prod-01" })).toBeVisible();
 });
 
+test("tracked GitHub repos expose Clone/Build Deploy for build contexts", async ({ page }) => {
+  const repo = {
+    id: app.repositoryId,
+    name: "Private Web",
+    repositoryUrl: "https://github.com/example/web",
+    owner: "example",
+    repo: "web",
+    branch: "main",
+    composePath: "docker-compose.yml",
+    projectName: "web",
+    env: "",
+    defaultHostId: host.id,
+    hostCloneUrl: "git@github-web:example/web.git",
+    hostCloneDirectory: "/srv/apps/web",
+    lastDeployedAt: null,
+    lastDeployedCommitSha: null,
+    latestCommitSha: null,
+    updateCheckedAt: null,
+    updateCheckError: null,
+    hasGithubToken: true,
+    githubTokenStatus: "valid",
+    githubTokenCheckedAt: new Date(0).toISOString(),
+    githubTokenCheckError: null,
+    lastError: null,
+    createdAt: new Date(0).toISOString(),
+    updatedAt: new Date(0).toISOString()
+  };
+  const mock = await mockApi(page, { githubRepositories: [repo] });
+  await gotoApp(page, "/deploy");
+  await page.getByTitle("Clone/Build deploy with host deploy key").click();
+  const panel = page.locator(".deployPreview", { hasText: "Clone/Build Deploy" });
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText("build:");
+  await expect(panel.locator("input.monoText").first()).toHaveValue("git@github-web:example/web.git");
+  await expect(panel.locator("input.monoText").nth(1)).toHaveValue("/srv/apps/web");
+
+  await panel.getByRole("button", { name: "Test Host Access" }).click();
+  await expect(panel).toContainText("host git access verified");
+  await panel.getByRole("button", { name: "Clone/Build Deploy", exact: true }).click();
+  await expect.poll(() => mock.requests).toContain(`POST /api/github/repos/${app.repositoryId}/deploy`);
+});
+
 test("apps compatibility route renders the services experience", async ({ page }) => {
   await mockApi(page);
   await gotoApp(page, "/apps");
@@ -911,6 +981,38 @@ test("services expose service-level image tag updates", async ({ page }) => {
   await dialog.getByLabel("Filter tags for nginx").fill("v0.9");
   await expect(dialog.getByRole("button", { name: "v0.9.7" })).toBeVisible();
   await expect(dialog.getByRole("button", { name: "main" })).toHaveCount(0);
+});
+
+test("services allow beta channel refresh when a newer prerelease exists", async ({ page }) => {
+  const image = "ghcr.io/kobii-git/rackpad:beta";
+  await mockApi(page, {
+    containerImage: image,
+    imageTags: ["latest", "main", "beta", "dev", "1.7.0-beta.4", "1.7.0-beta.3", "1.6.7", "1.2.2"],
+    appOverride: {
+      source: "image",
+      repositoryId: null,
+      repositoryUrl: null,
+      branch: null,
+      imageReferences: [image],
+      update: {
+        status: "up_to_date",
+        kind: "image",
+        imageReference: image,
+        currentDigest: "sha256:local",
+        remoteDigest: "sha256:local",
+        checkedAt: new Date(0).toISOString()
+      }
+    }
+  });
+  await gotoApp(page, "/services");
+  await page.getByTitle("Update service image tags").click();
+  const dialog = page.getByRole("dialog", { name: "Update images for Web" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator(".serviceImageVersionSummary")).toContainText("Current beta channel");
+  await expect(dialog.locator(".serviceImageVersionSummary")).toContainText("Latest prerelease 1.7.0-beta.4");
+  await expect(dialog.locator(".serviceImageVersionSummary")).toContainText("Refresh channel 1.7.0-beta.4");
+  await expect(dialog.getByLabel("Target image for ghcr.io/kobii-git/rackpad")).toHaveValue(image);
+  await expect(dialog.getByRole("button", { name: "Update 1 container" })).toBeEnabled();
 });
 
 test("files route uses an in-panel host selector and resets paths", async ({ page }) => {

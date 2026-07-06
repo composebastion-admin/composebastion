@@ -138,6 +138,51 @@ describe("config backup product identity", () => {
     });
   });
 
+  it("exports and imports GitHub host clone defaults", async () => {
+    query
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: "00000000-0000-4000-8000-000000000123",
+          name: "Private App",
+          repository_url: "https://github.com/owner/private-app",
+          owner: "owner",
+          repo: "private-app",
+          branch: "main",
+          compose_path: "docker-compose.yml",
+          project_name: "private-app",
+          env: "",
+          default_host_id: null,
+          host_clone_url: "git@github-private-app:owner/private-app.git",
+          host_clone_directory: "/srv/apps/private-app",
+          github_token_encrypted: null
+        }]
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+
+    const encrypted = await exportConfigBackup("long-test-passphrase");
+    const payload = decryptConfigPayload<{ githubRepositories: Array<Record<string, unknown>> }>(encrypted, "long-test-passphrase");
+
+    expect(payload.githubRepositories[0]).toMatchObject({
+      hostCloneUrl: "git@github-private-app:owner/private-app.git",
+      hostCloneDirectory: "/srv/apps/private-app"
+    });
+
+    await importConfigBackup(encrypted as unknown as Record<string, unknown>, "long-test-passphrase");
+    const githubRepoQuery = transactionQuery.mock.calls.find(([sql]) =>
+      typeof sql === "string" && sql.includes("INSERT INTO github_repositories")
+    );
+    expect(githubRepoQuery).toBeTruthy();
+    const values = githubRepoQuery?.[1] as unknown[];
+    expect(values.slice(10, 12)).toEqual(["git@github-private-app:owner/private-app.git", "/srv/apps/private-app"]);
+  });
+
   it("imports backup target rclone fields", async () => {
     const encrypted = encryptConfigPayload({
       ...emptyConfigPayload("ComposeBastion"),

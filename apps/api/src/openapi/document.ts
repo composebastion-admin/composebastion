@@ -590,7 +590,7 @@ const componentSchemas = {
   RecoveryPointJobResponse: object(["point", "job"], { point: schemaRef("RecoveryPoint"), job: schemaRef("OperationJob") }),
   RecoveryDrillResponse: object(["point", "job"], { point: schemaRef("RecoveryPoint"), job: schemaRef("OperationJob") }),
   AppsResponse: namedArrayResponse("apps", objectSchema),
-  GithubRepository: object(["id", "name", "repositoryUrl", "owner", "repo", "branch", "composePath", "projectName", "env", "defaultHostId", "lastDeployedAt", "lastDeployedCommitSha", "latestCommitSha", "updateCheckedAt", "updateCheckError", "hasGithubToken", "githubTokenStatus", "githubTokenCheckedAt", "githubTokenCheckError", "lastError", "createdAt", "updatedAt"], {
+  GithubRepository: object(["id", "name", "repositoryUrl", "owner", "repo", "branch", "composePath", "projectName", "env", "defaultHostId", "hostCloneUrl", "hostCloneDirectory", "lastDeployedAt", "lastDeployedCommitSha", "latestCommitSha", "updateCheckedAt", "updateCheckError", "hasGithubToken", "githubTokenStatus", "githubTokenCheckedAt", "githubTokenCheckError", "lastError", "createdAt", "updatedAt"], {
     id: idSchema,
     name: { type: "string" },
     repositoryUrl: { type: "string" },
@@ -601,6 +601,8 @@ const componentSchemas = {
     projectName: { type: "string" },
     env: { type: "string" },
     defaultHostId: idOrNullSchema,
+    hostCloneUrl: stringOrNullSchema,
+    hostCloneDirectory: stringOrNullSchema,
     lastDeployedAt: stringOrNullSchema,
     lastDeployedCommitSha: stringOrNullSchema,
     latestCommitSha: stringOrNullSchema,
@@ -635,10 +637,11 @@ const componentSchemas = {
     projectName: { type: "string" },
     env: { type: "string" }
   }),
-  GithubDeployResponse: object(["stack", "job", "branch"], {
-    stack: objectSchema,
+  GithubDeployResponse: object(["job", "branch"], {
+    stack: { anyOf: [objectSchema, { type: "null" }] },
     job: schemaRef("OperationJob"),
-    branch: { type: "string" }
+    branch: { type: "string" },
+    mode: { type: "string", enum: ["api", "host_clone"] }
   }),
   ImageUpdateCheck: object(["id", "hostId", "imageReference", "status", "lastCheckedAt"], {
     id: idSchema,

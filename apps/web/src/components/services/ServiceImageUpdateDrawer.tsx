@@ -26,6 +26,7 @@ export type ServiceImageUpdateTarget = {
   containerName: string;
   targetImage: string;
   digestUpdateAvailable?: boolean;
+  versionUpdateAvailable?: boolean;
 };
 
 function imageReferenceFromResource(resource: ResourceSnapshot) {
@@ -140,17 +141,24 @@ export function ServiceImageUpdateDrawer({
 
   const targets = families.flatMap((family) => {
     const tag = targetTags[family.repository] ?? family.currentTags[0] ?? "latest";
+    const allTags = uniqueSortedImageTags([tag], family.currentTags, remoteTags[family.repository] ?? [], family.localTags);
+    const currentTag = family.currentTags[0] ?? tag;
+    const versionSummary = summarizeImageVersionTags(allTags, currentTag);
     const digestUpdate = digestUpdateFor(family, tag, availableImageUpdates);
+    const channelRefreshAvailable = isImageChannelTag(tag)
+      && family.currentTags.includes(tag)
+      && versionSummary.versionUpdateAvailable;
     return family.members.map((member) => ({
       containerId: member.externalId,
       containerName: member.containerName,
       targetImage: imageWithTag(member.image, tag),
-      digestUpdateAvailable: Boolean(digestUpdate && imageTag(member.image) === tag)
+      digestUpdateAvailable: Boolean(digestUpdate && imageTag(member.image) === tag),
+      versionUpdateAvailable: channelRefreshAvailable
     }));
   });
   const changedTargets = targets.filter((target) => {
     const member = group.members.find((item) => item.externalId === target.containerId);
-    return member ? target.digestUpdateAvailable || target.targetImage !== member.image : true;
+    return member ? target.digestUpdateAvailable || target.versionUpdateAvailable || target.targetImage !== member.image : true;
   });
 
   return (
@@ -190,6 +198,9 @@ export function ServiceImageUpdateDrawer({
                 <span>Current <code>{displayImageTag(currentTag)}</code></span>
                 <span>Latest stable <code>{versionSummary.latestStable ?? "none"}</code></span>
                 <span>Latest prerelease <code>{versionSummary.latestPrerelease ?? "none"}</code></span>
+                {isImageChannelTag(currentTag) && versionSummary.versionUpdateAvailable && versionSummary.recommendedUpdateTag && (
+                  <span className="update">Refresh channel <code>{versionSummary.recommendedUpdateTag}</code></span>
+                )}
                 {selectedDigestUpdate && (
                   <span className="update">Remote digest <code>{shortDigest(selectedDigestUpdate.remoteDigest)}</code></span>
                 )}

@@ -440,7 +440,8 @@ export async function executeDockerAction(action: DockerActionRequest) {
       action.payload.directory,
       action.payload.projectName,
       action.payload.composePath,
-      action.payload.branch
+      action.payload.branch,
+      action.payload.repositoryId
     );
   }
   if (action.type === "compose.deployPath") return deployComposeFromHostPath(action.hostId, action.payload.projectName, action.payload.workingDir, action.payload.composePath);
@@ -1001,21 +1002,62 @@ async function cloneAndDeployRepository(
   directory: string,
   projectName: string,
   composePath: string,
-  branch?: string
+  branch?: string,
+  repositoryId?: string
 ) {
   const host = await getHostForWorker(hostId);
   if (host.connectionMode !== "ssh") throw new Error("Clone and deploy currently requires SSH host mode.");
   const target = normalizeRemotePath(directory);
 
-  const existing = await runSshCommand(host.ssh, `test -d ${shQuote(`${target}/.git`)} && echo yes || echo no`, { timeoutMs: 30_000 });
-  if (existing.stdout.trim() === "yes") {
-    await pullGitRepository(hostId, target, branch);
-  } else {
-    await cloneGitRepository(hostId, repositoryUrl, target, branch, false);
-  }
+  try {
+    await testGitRemoteAccess(hostId, repositoryUrl, branch);
+    const existing = await runSshCommand(host.ssh, `test -d ${shQuote(`${target}/.git`)} && echo yes || echo no`, { timeoutMs: 30_000 });
+    if (existing.stdout.trim() === "yes") {
+      const remoteResult = await runSshCommand(
+        host.ssh,
+        `cd ${shQuote(target)} && (git remote get-url origin >/dev/null 2>&1 && git remote set-url origin ${shQuote(repositoryUrl)} || git remote add origin ${shQuote(repositoryUrl)})`,
+        { timeoutMs: 30_000 }
+      );
+      if (remoteResult.code !== 0) {
+        throw new Error(remoteResult.stderr || remoteResult.stdout || "Failed to update repository origin before pulling.");
+      }
+      await pullGitRepository(hostId, target, branch);
+    } else {
+      await cloneGitRepository(hostId, repositoryUrl, target, branch, false);
+    }
 
-  const deployed = await deployComposeFromHostPath(hostId, projectName, target, composePath);
-  return { ...deployed, repositoryUrl, branch: branch ?? null };
+    const deployed = await deployComposeFromHostPath(hostId, projectName, target, composePath);
+    const metadata = await readHostGitMetadata(hostId, target, branch, false).catch(() => null);
+    if (repositoryId) {
+      await query(
+        `UPDATE github_repositories
+         SET last_deployed_at = now(),
+             last_deployed_commit_sha = COALESCE($2, last_deployed_commit_sha),
+             latest_commit_sha = COALESCE($3, $2, latest_commit_sha),
+             update_checked_at = CASE WHEN COALESCE($3, $2)::text IS NULL THEN update_checked_at ELSE now() END,
+             update_check_error = null,
+             last_error = null,
+             updated_at = now()
+         WHERE id = $1`,
+        [repositoryId, metadata?.currentCommit ?? null, metadata?.latestCommit ?? null]
+      );
+    }
+    return {
+      ...deployed,
+      repositoryUrl,
+      branch: metadata?.branch ?? branch ?? null,
+      currentCommitSha: metadata?.currentCommit ?? null,
+      latestCommitSha: metadata?.latestCommit ?? null
+    };
+  } catch (error) {
+    if (repositoryId) {
+      await query("UPDATE github_repositories SET last_error = $2, updated_at = now() WHERE id = $1", [
+        repositoryId,
+        error instanceof Error ? error.message : String(error)
+      ]).catch(() => undefined);
+    }
+    throw error;
+  }
 }
 
 async function pullGitRepository(hostId: string, directory: string, branchOverride?: string) {

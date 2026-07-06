@@ -86,7 +86,7 @@ export async function registerGithubRoutes(app: FastifyInstance) {
     const { id } = request.params as { id: string };
     const body = githubRepositoryDeploySchema.parse(request.body ?? {});
     const result = await deployGithubRepository(id, body, request.user?.id);
-    await writeAuditEvent({ userId: request.user?.id, hostId: result.stack.hostId, action: "github_repo.deploy", targetKind: "github_repository", targetId: id });
+    await writeAuditEvent({ userId: request.user?.id, hostId: result.stack?.hostId ?? result.job?.hostId ?? body.hostId, action: "github_repo.deploy", targetKind: "github_repository", targetId: id });
     return result;
   });
 }
