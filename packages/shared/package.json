@@ -1,9 +1,12 @@
 {
   "name": "@composebastion/shared",
-  "version": "1.0.7-rc.1",
+  "version": "1.1.0-rc.1",
   "private": true,
   "license": "SEE LICENSE IN ../../LICENSE.md",
   "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
@@ -16,7 +19,8 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsc -p tsconfig.json --watch",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "semver": "^7.8.5",
@@ -25,6 +29,6 @@
   "devDependencies": {
     "@types/semver": "^7.7.1",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.10"
   }
 }

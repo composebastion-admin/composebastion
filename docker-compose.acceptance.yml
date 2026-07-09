@@ -98,6 +98,25 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${ACCEPTANCE_BIND_DIR:?Set ACCEPTANCE_BIND_DIR}:${ACCEPTANCE_BIND_DIR:?Set ACCEPTANCE_BIND_DIR}
 
+  composebastion-agent:
+    profiles: [hardening]
+    image: ${COMPOSEBASTION_ACCEPTANCE_AGENT_IMAGE:?Set COMPOSEBASTION_ACCEPTANCE_AGENT_IMAGE}
+    pull_policy: never
+    environment:
+      AGENT_HOST: 0.0.0.0
+      AGENT_PORT: 8090
+      AGENT_TOKEN: ${AGENT_TOKEN:?Set AGENT_TOKEN}
+    ports:
+      - "127.0.0.1:${ACCEPTANCE_HARDENED_AGENT_PORT:-18590}:8090"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8090/api/health',{headers:{authorization:'Bearer '+process.env.AGENT_TOKEN}}).then(async(r)=>process.exit(r.ok&&(await r.json()).ok===true?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s
+
 volumes:
   minio-data:
   samba-data:

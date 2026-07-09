@@ -16,6 +16,8 @@ const resultsDir = assertSafeTestResultsPath({
 const composeFile = path.join(root, "docker-compose.acceptance.yml");
 const productionImageComposeFile = path.join(root, "docker-compose.image.yml");
 const sourceAcceptanceComposeFile = path.join(root, "docker-compose.acceptance.source.yml");
+const managerHardeningFile = path.join(root, "docker-compose.hardened.yml");
+const agentHardeningFile = path.join(root, "agent-compose.hardened.yml");
 const candidateVersion = JSON.parse(await readFile(path.join(root, "package.json"), "utf8")).version;
 async function composeControlNames(files) {
   const names = new Set();
@@ -26,6 +28,12 @@ async function composeControlNames(files) {
   return Object.freeze([...names].sort());
 }
 const requiredImageComposeControls = await composeControlNames([productionImageComposeFile, composeFile]);
+const requiredHardenedComposeControls = await composeControlNames([
+  productionImageComposeFile,
+  composeFile,
+  managerHardeningFile,
+  agentHardeningFile
+]);
 const requiredSourceComposeControls = await composeControlNames([
   path.join(root, "docker-compose.yml"),
   path.join(root, "docker-compose.prod.example.yml"),
@@ -182,6 +190,7 @@ const report = {
     projects: {
       fresh: projectName("fresh"),
       source: projectName("source"),
+      hardened: projectName("hardened"),
       upgrade: projectName("upgrade")
     }
   },
@@ -296,10 +305,13 @@ function run(command, args, options = {}) {
 
 function compose(project, env, args, options = {}) {
   assertExplicitComposeControls(env, requiredImageComposeControls, "production image acceptance Compose");
+  return composeWithFiles(project, env, [productionImageComposeFile, composeFile], args, options);
+}
+
+function composeWithFiles(project, env, files, args, options = {}) {
   return run("docker", [
     "compose", "--env-file", "/dev/null", "--project-name", project,
-    "--file", productionImageComposeFile,
-    "--file", composeFile,
+    ...files.flatMap((file) => ["--file", file]),
     ...args
   ], {
     ...options,
@@ -522,6 +534,7 @@ function acceptanceEnv(image = candidateImage, overrides = {}) {
     ACCEPTANCE_MINIO_PORT: String(portBase + 1000),
     ACCEPTANCE_REGISTRY_PORT: String(portBase + 50),
     ACCEPTANCE_AGENT_PORT: String(portBase + 90),
+    ACCEPTANCE_HARDENED_AGENT_PORT: String(portBase + 590),
     ACCEPTANCE_BIND_DIR: acceptanceBindDir,
     AGENT_TOKEN: fixture.agentToken,
     ...overrides
@@ -594,6 +607,21 @@ async function loginOwner() {
   assert(login.setCookie.startsWith("cb_session="), "login did not establish a session");
   sessionCookie = login.setCookie;
   return login.data.user;
+}
+
+async function runLiveBrowserSuite() {
+  await run("npm", ["run", "smoke:web:live"], {
+    inherit: true,
+    env: {
+      ...hostEnvironment,
+      COMPOSEBASTION_LIVE_BASE_URL: activeBaseUrl(),
+      COMPOSEBASTION_LIVE_USERNAME: "acceptance-owner",
+      COMPOSEBASTION_LIVE_PASSWORD: fixture.ownerPassword,
+      COMPOSEBASTION_LIVE_VERSION: candidateVersion,
+      COMPOSEBASTION_LIVE_OUTPUT_DIR: path.join(runtimeDir, "playwright-live")
+    }
+  });
+  return { realBrowser: true, database: true, redis: true, worker: true };
 }
 
 async function verifyRoleBoundaries() {
@@ -1534,6 +1562,7 @@ async function freshCandidateScenario() {
     const ready = await api("/api/health/ready");
     assert(ready.data.ok === true, "Operations readiness was not healthy");
     const about = await verifyCandidateAboutArtifacts();
+    const liveBrowser = await runLiveBrowserSuite();
 
     const roles = await verifyRoleBoundaries();
     const mail = await verifySmtpAndWorker();
@@ -1556,6 +1585,7 @@ async function freshCandidateScenario() {
       firstRunSetup: true,
       loginSession: true,
       operationsReadiness: true,
+      liveBrowser,
       about,
       mail,
       roles,
@@ -1680,6 +1710,198 @@ async function sourceProductionScenario() {
     throw error;
   } finally {
     if (!keep) await run("docker", [...args, "down", "--volumes", "--remove-orphans"], { env }).catch(() => undefined);
+  }
+}
+
+async function hardenedContainersScenario() {
+  const project = projectName("hardened");
+  const managerPort = portBase + 580;
+  const registryPort = portBase + 550;
+  const agentPort = portBase + 590;
+  const files = [productionImageComposeFile, composeFile, managerHardeningFile, agentHardeningFile];
+  const env = acceptanceEnv(candidateImage, {
+    ACCEPTANCE_SCENARIO: "hardened",
+    ACCEPTANCE_HTTP_PORT: String(managerPort),
+    ACCEPTANCE_REGISTRY_PORT: String(registryPort),
+    ACCEPTANCE_HARDENED_AGENT_PORT: String(agentPort),
+    COMPOSEBASTION_UID: "1000",
+    COMPOSEBASTION_GID: "1000"
+  });
+  const backupDir = env.COMPOSEBASTION_BACKUP_DIR;
+  assertExplicitComposeControls(env, requiredHardenedComposeControls, "hardened production image acceptance Compose");
+  const hardenedCompose = (args, options = {}) => composeWithFiles(project, env, files, args, options);
+
+  async function prepareBackupOwnership(mode) {
+    await run("docker", [
+      "run", "--rm", "--user", "0:0",
+      "--volume", `${backupDir}:/data/backups`,
+      candidateImage,
+      "sh", "-ceu",
+      mode === "hardened"
+        ? "chown -R 1000:1000 /data/backups; chmod -R u+rwX,g+rwX,o-rwx /data/backups"
+        : "chmod -R a+rwX /data/backups"
+    ]);
+  }
+
+  async function inspectService(service, expectedUser = null) {
+    const container = await hardenedCompose(["--profile", "hardening", "ps", "--quiet", service]);
+    assert(container.stdout, `${service} container was not created`);
+    const inspected = await run("docker", ["inspect", container.stdout]);
+    const detail = JSON.parse(inspected.stdout)[0];
+    assert(detail.HostConfig.ReadonlyRootfs === true, `${service} root filesystem is writable`);
+    assert(detail.HostConfig.Init === true, `${service} does not use an init process`);
+    assert(detail.HostConfig.CapDrop?.includes("ALL"), `${service} did not drop all capabilities`);
+    assert(detail.HostConfig.SecurityOpt?.includes("no-new-privileges:true"), `${service} allows new privileges`);
+    if (expectedUser) assert(detail.Config.User === expectedUser, `${service} runs as ${detail.Config.User || "root"}`);
+    const tmpfs = detail.HostConfig.Tmpfs?.["/tmp"]
+      ?? detail.Mounts?.find((mount) => mount.Destination === "/tmp" && mount.Type === "tmpfs")?.Type;
+    assert(tmpfs, `${service} does not have a writable /tmp tmpfs`);
+    const environment = Object.fromEntries((detail.Config.Env ?? []).map((entry) => {
+      const separator = entry.indexOf("=");
+      return separator === -1 ? [entry, ""] : [entry.slice(0, separator), entry.slice(separator + 1)];
+    }));
+    return { detail, environment };
+  }
+
+  async function assertRootfsRejectsWrite(service) {
+    const script = "const fs=require('node:fs');try{fs.writeFileSync('/app/.hardening-write-test','blocked');process.exit(1)}catch{process.exit(0)}";
+    await hardenedCompose(["--profile", "hardening", "exec", "-T", service, "node", "-e", script]);
+  }
+
+  async function agentApi(pathname, { method = "GET", body } = {}) {
+    const response = await fetch(`http://127.0.0.1:${agentPort}${pathname}`, {
+      method,
+      headers: {
+        authorization: `Bearer ${fixture.agentToken}`,
+        ...(body === undefined ? {} : { "content-type": "application/json" })
+      },
+      body: body === undefined ? undefined : JSON.stringify(body)
+    });
+    const raw = await response.text();
+    let data;
+    try { data = raw ? JSON.parse(raw) : {}; } catch { data = { raw }; }
+    if (!response.ok) throw new Error(`${method} agent ${pathname} returned ${response.status}: ${redact(raw)}`);
+    return data;
+  }
+
+  await mkdir(backupDir, { recursive: true });
+  await prepareBackupOwnership("hardened");
+  activeProject = project;
+  activeEnv = env;
+  await hardenedCompose(["--profile", "hardening", "down", "--volumes", "--remove-orphans"]).catch(() => undefined);
+  try {
+    await hardenedCompose([
+      "--profile", "hardening", "up", "--detach",
+      "postgres", "redis", "registry", "app", "worker", "composebastion-agent"
+    ], { inherit: true });
+    await seedRegistry();
+    await waitForApiVersion(candidateVersion);
+    await waitForReadiness("hardened manager readiness");
+
+    for (const service of ["app", "worker"]) {
+      const inspected = await inspectService(service, "1000:1000");
+      assert(inspected.environment.HOME === "/tmp", `${service} HOME is not routed to writable /tmp`);
+      assert(inspected.environment.TRIVY_CACHE_DIR === "/var/cache/composebastion/trivy", `${service} Trivy cache path is incorrect`);
+      const backupMount = inspected.detail.Mounts?.find((mount) => mount.Destination === "/data/backups");
+      const cacheMount = inspected.detail.Mounts?.find((mount) => mount.Destination === "/var/cache/composebastion/trivy");
+      assert(backupMount?.Type === "bind", `${service} backup storage is not the production bind mount`);
+      assert(cacheMount?.Type === "volume", `${service} Trivy cache is not a dedicated volume`);
+      const identity = await hardenedCompose(["--profile", "hardening", "exec", "-T", service, "sh", "-c", "printf '%s:%s' \"$(id -u)\" \"$(id -g)\""]);
+      assert(identity.stdout === "1000:1000", `${service} process identity is ${identity.stdout}`);
+      await hardenedCompose([
+        "--profile", "hardening", "exec", "-T", service, "node", "-e",
+        `const fs=require('node:fs');fs.writeFileSync('/data/backups/${service}-proof','ok');fs.writeFileSync('/var/cache/composebastion/trivy/${service}-proof','ok');fs.writeFileSync('/tmp/${service}-proof','ok')`
+      ]);
+      await assertRootfsRejectsWrite(service);
+    }
+
+    await hardenedCompose(["--profile", "hardening", "up", "--detach", "--force-recreate", "app", "worker"]);
+    await waitForReadiness("recreated hardened manager readiness");
+    const managerProof = await hardenedCompose([
+      "--profile", "hardening", "exec", "-T", "app", "node", "-e",
+      "const fs=require('node:fs');for(const root of ['/data/backups','/var/cache/composebastion/trivy'])for(const service of ['app','worker'])if(fs.readFileSync(`${root}/${service}-proof`,'utf8')!=='ok')process.exit(1)"
+    ]);
+    assert(managerProof.stdout === "", "manager writable storage proof emitted unexpected output");
+
+    await retry("hardened agent", async () => {
+      const health = await agentApi("/api/health");
+      assert(health.ok === true, health.dockerError ?? "agent Docker check failed");
+    }, { attempts: 90, delayMs: 1_000 });
+    const inspectedAgent = await inspectService("composebastion-agent");
+    assert(inspectedAgent.environment.HOME === "/tmp/composebastion", "agent HOME is not on persistent storage");
+    assert(inspectedAgent.environment.DOCKER_CONFIG === "/tmp/composebastion/.docker", "agent Docker config is not on persistent storage");
+    const agentDataMount = inspectedAgent.detail.Mounts?.find((mount) => mount.Destination === "/tmp/composebastion");
+    assert(agentDataMount?.Type === "volume", "agent persistent data is not a named volume");
+    const agentIdentity = await hardenedCompose(["--profile", "hardening", "exec", "-T", "composebastion-agent", "id", "-u"]);
+    assert(agentIdentity.stdout === "0", `agent unexpectedly runs as UID ${agentIdentity.stdout}`);
+    await assertRootfsRejectsWrite("composebastion-agent");
+
+    const dockerResult = await agentApi("/api/run", {
+      method: "POST",
+      body: { command: "docker version --format '{{.Server.Version}}'" }
+    });
+    assert(dockerResult.code === 0 && dockerResult.stdout.trim(), "agent could not run an allowed Docker command");
+    await agentApi("/api/files/write", {
+      method: "POST",
+      body: { path: "/tmp/composebastion/acceptance/persistence.txt", content: "persistent-agent-data" }
+    });
+
+    assert(/^[a-z0-9]+$/i.test(fixture.registryUser) && /^[a-z0-9]+$/i.test(fixture.registryPassword), "registry fixture credentials are not shell-safe");
+    const registryOrigin = `127.0.0.1:${registryPort}`;
+    const login = await agentApi("/api/run", {
+      method: "POST",
+      body: {
+        command: `printf %s '${fixture.registryPassword}' | docker login '${registryOrigin}' --username '${fixture.registryUser}' --password-stdin`
+      }
+    });
+    assert(login.code === 0, "agent registry login failed");
+
+    await hardenedCompose([
+      "--profile", "hardening", "up", "--detach", "--force-recreate", "composebastion-agent"
+    ]);
+    await retry("recreated hardened agent", async () => {
+      const health = await agentApi("/api/health");
+      assert(health.ok === true, "recreated agent is not healthy");
+    }, { attempts: 90, delayMs: 1_000 });
+    const persisted = await agentApi("/api/files/read?path=%2Ftmp%2Fcomposebastion%2Facceptance%2Fpersistence.txt");
+    assert(persisted.content === "persistent-agent-data", "agent file did not survive container recreation");
+    const configResponse = await agentApi("/api/files/read?path=%2Ftmp%2Fcomposebastion%2F.docker%2Fconfig.json");
+    const dockerConfig = JSON.parse(configResponse.content);
+    const storedCredential = dockerConfig.auths?.[registryOrigin] ?? dockerConfig.auths?.[`http://${registryOrigin}`];
+    assert(storedCredential?.auth || storedCredential?.identitytoken, "agent registry credentials did not survive container recreation");
+
+    return {
+      productionImageCompose: true,
+      managerIdentity: "1000:1000",
+      managerRootfs: "read-only",
+      managerCapabilitiesDropped: true,
+      managerNoNewPrivileges: true,
+      managerInit: true,
+      managerTmpfs: true,
+      writableBackups: true,
+      writableTrivyCache: true,
+      persistentBackups: true,
+      persistentTrivyCache: true,
+      agentIdentity: "root (Docker socket trust boundary)",
+      agentRootfs: "read-only",
+      agentCapabilitiesDropped: true,
+      agentNoNewPrivileges: true,
+      agentInit: true,
+      agentTmpfs: true,
+      agentDockerCommand: true,
+      agentFilePersistence: true,
+      agentRegistryLoginPersistence: true
+    };
+  } catch (error) {
+    await captureFailureLogs();
+    throw error;
+  } finally {
+    if (!keep) {
+      await hardenedCompose(["--profile", "hardening", "down", "--volumes", "--remove-orphans"]).catch(() => undefined);
+      await prepareBackupOwnership("cleanup").catch(() => undefined);
+      activeProject = null;
+      activeEnv = null;
+    }
   }
 }
 
@@ -1881,7 +2103,7 @@ async function writeReport() {
 - Automated acceptance qualifying: **${report.releaseQualification.automatedAcceptanceQualifying ? "yes" : "no"}**
 - Required scenario manifest complete: **${report.releaseQualification.manifestComplete ? "yes" : "no"}**
 - Port base: \`${portBase}\`; workload subnet: \`${configuredSubnet}\`
-- Projects: \`${projectName("fresh")}\`, \`${projectName("source")}\`, \`${projectName("upgrade")}\`
+- Projects: \`${projectName("fresh")}\`, \`${projectName("source")}\`, \`${projectName("hardened")}\`, \`${projectName("upgrade")}\`
 - Fixture credentials: redacted and not retained in this report
 
 ## Automated qualification notes
@@ -1913,7 +2135,18 @@ async function captureFailureLogs() {
 }
 
 async function main() {
-  await Promise.all([portBase + 25, portBase + 50, portBase + 80, portBase + 90, portBase + 180, portBase + 380, portBase + 1000].map(assertPortAvailable));
+  await Promise.all([
+    portBase + 25,
+    portBase + 50,
+    portBase + 80,
+    portBase + 90,
+    portBase + 180,
+    portBase + 380,
+    portBase + 550,
+    portBase + 580,
+    portBase + 590,
+    portBase + 1000
+  ].map(assertPortAvailable));
   for (const location of [runtimeDir, acceptanceBindDir]) {
     if (await pathExists(location)) {
       throw new Error(`Acceptance fixture path ${location} already exists; use a different ACCEPTANCE_PORT_BASE or remove the retained fixture explicitly`);
@@ -1937,6 +2170,7 @@ async function main() {
   await record("candidate-images", buildCandidate);
   await record("fresh-image-install", freshCandidateScenario);
   await record("source-production-install", sourceProductionScenario);
+  await record("hardened-overlays", hardenedContainersScenario);
   if (!skipUpgrade) {
     await record("public-upgrade", upgradeScenario);
   } else {

@@ -37,6 +37,9 @@ Use this checklist before exposing ComposeBastion outside a trusted private netw
 - Review active sessions regularly and revoke unfamiliar devices.
 - Keep viewer accounts read-only; do not expose host files, archives, terminal, or
   full container env to viewers.
+- Evaluate the [opt-in container hardening overlays](container-hardening.md).
+  Prepare backup and Trivy-cache ownership before enabling manager non-root
+  mode, and retain the documented Docker-socket trust boundary for the agent.
 
 ## Regression Checks
 
@@ -44,13 +47,15 @@ Use this checklist before exposing ComposeBastion outside a trusted private netw
 - `npm run openapi:check`
 - `npm run typecheck`
 - `npm test`
+- `npm run coverage`
 - `npm run smoke:web`
 - `npm audit --audit-level=high`
 - `npm run check:actions-pinned`
 - `npm run check:release-version`
 - `npm run check:compose-env`
+- `npm run acceptance:config`
 
-For the local `1.0.7-rc.1` candidate, also run the full acceptance suite and
+For a local release candidate, also run the full live acceptance suite and
 scan the app and agent for both supported architectures. Do not tag it until
 the deferred governance and manual production-readiness gates are complete.
 

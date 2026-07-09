@@ -24,6 +24,10 @@ export const acceptanceScenarioManifest = Object.freeze([
       "firstRunSetup",
       "loginSession",
       "operationsReadiness",
+      "liveBrowser.realBrowser",
+      "liveBrowser.database",
+      "liveBrowser.redis",
+      "liveBrowser.worker",
       "about.aboutBundle",
       "mail.testNotification",
       "mail.workerNotification",
@@ -65,6 +69,32 @@ export const acceptanceScenarioManifest = Object.freeze([
       "loginSession",
       "configurationWrite",
       "backupWrite"
+    ]
+  },
+  {
+    id: "hardened-overlays",
+    name: "Hardened manager and agent overlays",
+    requiredEvidence: [
+      "productionImageCompose",
+      "managerIdentity",
+      "managerRootfs",
+      "managerCapabilitiesDropped",
+      "managerNoNewPrivileges",
+      "managerInit",
+      "managerTmpfs",
+      "writableBackups",
+      "writableTrivyCache",
+      "persistentBackups",
+      "persistentTrivyCache",
+      "agentIdentity",
+      "agentRootfs",
+      "agentCapabilitiesDropped",
+      "agentNoNewPrivileges",
+      "agentInit",
+      "agentTmpfs",
+      "agentDockerCommand",
+      "agentFilePersistence",
+      "agentRegistryLoginPersistence"
     ]
   },
   {

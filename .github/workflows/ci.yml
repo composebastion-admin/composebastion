@@ -17,10 +17,10 @@ jobs:
     name: Typecheck, tests & audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: "20"
+          node-version: "24"
           cache: npm
       - run: npm ci
       - name: Typecheck
@@ -39,6 +39,8 @@ jobs:
         run: npm run check:release-workflows
       - name: Unit tests
         run: npm test
+      - name: Enforce workspace coverage baselines
+        run: npm run coverage
       - name: Audit all dependencies
         run: npm audit --audit-level=high
 
@@ -75,10 +77,10 @@ jobs:
       APP_SECRET: ci-test-secret-which-is-at-least-32-chars-long
       NODE_ENV: test
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: "20"
+          node-version: "24"
           cache: npm
       - run: npm ci
       - name: Build shared package
@@ -92,10 +94,10 @@ jobs:
     name: Browser smoke & accessibility
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: "20"
+          node-version: "24"
           cache: npm
       - run: npm ci
       - name: Install Playwright browser
@@ -111,7 +113,11 @@ jobs:
       POSTGRES_PASSWORD: composebastion-ci-password
       COMPOSEBASTION_BACKUP_DIR: /tmp/composebastion-backups
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24"
+          cache: npm
       - name: Materialize exact Git build context
         run: node scripts/materialize-git-context.mjs "${RUNNER_TEMP}/composebastion-git-context" "${GITHUB_SHA}"
       - name: Validate production compose config
@@ -131,10 +137,10 @@ jobs:
     name: Ephemeral SSH Docker host integration
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: "20"
+          node-version: "24"
           cache: npm
       - run: npm ci
       - name: Start SSH Docker host fixture
@@ -197,10 +203,10 @@ jobs:
       COMPOSEBASTION_SSH_TEST_KEY: ${{ secrets.COMPOSEBASTION_SSH_TEST_KEY }}
       COMPOSEBASTION_SSH_TEST_KEY_PASSPHRASE: ${{ secrets.COMPOSEBASTION_SSH_TEST_KEY_PASSPHRASE }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: "20"
+          node-version: "24"
           cache: npm
       - run: npm ci
       - name: Validate SSH secrets
@@ -222,12 +228,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: "20"
+          node-version: "24"
           cache: npm
       - run: npm ci
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
       - name: Run full local-stack acceptance including public upgrade
         run: npm run acceptance:local
       - name: Assert release-qualifying acceptance report

@@ -1,0 +1,37 @@
+# Optional manager hardening overlay. Apply after docker-compose.image.yml, or
+# after docker-compose.yml and docker-compose.prod.example.yml for source builds.
+services:
+  app:
+    user: "${COMPOSEBASTION_UID:-1000}:${COMPOSEBASTION_GID:-1000}"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    environment:
+      HOME: /tmp
+      TRIVY_CACHE_DIR: /var/cache/composebastion/trivy
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,mode=1777,size=256m
+    volumes:
+      - trivy-cache:/var/cache/composebastion/trivy
+
+  worker:
+    user: "${COMPOSEBASTION_UID:-1000}:${COMPOSEBASTION_GID:-1000}"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    environment:
+      HOME: /tmp
+      TRIVY_CACHE_DIR: /var/cache/composebastion/trivy
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,mode=1777,size=256m
+    volumes:
+      - trivy-cache:/var/cache/composebastion/trivy
+
+volumes:
+  trivy-cache:

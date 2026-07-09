@@ -84,6 +84,33 @@ function actionStep(job, action) {
   return (job?.steps ?? []).find((step) => typeof step.uses === "string" && step.uses.startsWith(`${action}@`));
 }
 
+function requireNode24Setup(file, jobName, job) {
+  const step = actionStep(job, "actions/setup-node");
+  if (!step) {
+    fail(`${file}:${jobName}: repository Node scripts require an explicit setup-node step`);
+    return;
+  }
+  if (String(step.with?.["node-version"] ?? "") !== "24") {
+    fail(`${file}:${jobName}: repository Node scripts must run with Node 24`);
+  }
+}
+
+const ciFile = ".github/workflows/ci.yml";
+const ciJobs = workflows[ciFile]?.jobs ?? {};
+const liveAcceptance = ciJobs["live-acceptance"];
+const ciGate = ciJobs["ci-gate"];
+requireNode24Setup(ciFile, "live-acceptance", liveAcceptance);
+const installBrowser = (liveAcceptance?.steps ?? []).find((step) => String(step.run ?? "").includes("playwright install --with-deps chromium"));
+if (!installBrowser) fail(`${ciFile}:live-acceptance: live Playwright requires an explicit Chromium installation`);
+if (!(liveAcceptance?.steps ?? []).some((step) => String(step.run ?? "").trim() === "npm run acceptance:local")
+    || !(liveAcceptance?.steps ?? []).some((step) => String(step.run ?? "").includes("acceptance:assert-report"))) {
+  fail(`${ciFile}:live-acceptance: full release acceptance and its qualifying-report assertion are both required`);
+}
+const ciGateNeeds = Array.isArray(ciGate?.needs) ? ciGate.needs : [ciGate?.needs].filter(Boolean);
+for (const dependency of ["browser-smoke", "live-acceptance"]) {
+  if (!ciGateNeeds.includes(dependency)) fail(`${ciFile}:ci-gate: aggregate must require ${dependency}`);
+}
+
 function requireExactGitBuildContext(file, jobName, job, buildStep) {
   const steps = job?.steps ?? [];
   const materializeIndex = steps.findIndex((step) => step.name === "Materialize exact Git build context");
@@ -120,7 +147,9 @@ function requireTrivy(file, jobName, job) {
 const publishFile = ".github/workflows/publish-images.yml";
 const publish = workflows[publishFile];
 const publishJobs = publish?.jobs ?? {};
+requireNode24Setup(publishFile, "metadata", publishJobs.metadata);
 const buildScan = publishJobs["build-scan"];
+requireNode24Setup(publishFile, "build-scan", buildScan);
 requireExactMatrix(publishFile, "build-scan", buildScan);
 requireTrivy(publishFile, "build-scan", buildScan);
 
@@ -290,6 +319,7 @@ if (!stableAliasRun.includes('source="${image}@${digest}"')
 const scanFile = ".github/workflows/container-scan.yml";
 const scan = workflows[scanFile];
 const imageScan = scan?.jobs?.["image-scan"];
+requireNode24Setup(scanFile, "image-scan", imageScan);
 requireExactMatrix(scanFile, "image-scan", imageScan);
 requireTrivy(scanFile, "image-scan", imageScan);
 requireExactGitBuildContext(scanFile, "image-scan", imageScan, actionStep(imageScan, "docker/build-push-action"));
@@ -325,7 +355,7 @@ for (const invariant of ["materializeGitBuildContext", "assertSafeTestResultsPat
 }
 const appDockerfile = readFileSync("Dockerfile", "utf8");
 const agentDockerfile = readFileSync("Dockerfile.agent", "utf8");
-const nodeBase = "node:20-alpine3.22@sha256:8f47899606d000b0704e992f927fe7335adcd0d6c98851600072fb6e14a13e60";
+const nodeBase = "node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a";
 const goBuilder = "golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2";
 
 function requirePinnedExternalImages(file, dockerfile) {

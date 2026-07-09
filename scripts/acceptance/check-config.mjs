@@ -77,6 +77,9 @@ for (const fragment of [
   'exactGitContext: !skipBuild',
   'exactGitContext: true',
   'operatorSavedPrivateRegistry: true',
+  'agentRegistryLoginPersistence: true',
+  'runLiveBrowserSuite()',
+  'hardenedContainersScenario',
   'restoredDataVerified: true',
   'preservedQueuedJob: true',
   'repoDigest',
@@ -99,7 +102,7 @@ for (const fragment of [
 ]) {
   if (!runnerSource.includes(fragment)) throw new Error(`Acceptance volume marker flow is missing ${fragment}`);
 }
-const expectedScenarioIds = ["candidate-images", "fresh-image-install", "source-production-install", "public-upgrade"];
+const expectedScenarioIds = ["candidate-images", "fresh-image-install", "source-production-install", "hardened-overlays", "public-upgrade"];
 if (JSON.stringify(acceptanceScenarioManifest.map((entry) => entry.id)) !== JSON.stringify(expectedScenarioIds)) {
   throw new Error("Acceptance scenario manifest IDs changed without updating the release contract");
 }
@@ -128,6 +131,17 @@ const packageJson = JSON.parse(readFileSync(new URL("../../package.json", import
 if (packageJson.scripts?.["acceptance:assert-report"] !== "node scripts/acceptance/assert-report.mjs") {
   throw new Error("package.json is missing the acceptance report assertion command");
 }
+if (packageJson.scripts?.["smoke:web:live"] !== "npm run smoke:live --workspace @composebastion/web") {
+  throw new Error("package.json is missing the real-stack Playwright command");
+}
+const webPackageJson = JSON.parse(readFileSync(new URL("../../apps/web/package.json", import.meta.url), "utf8"));
+if (webPackageJson.scripts?.["smoke:live"] !== "playwright test --config playwright.live.config.ts") {
+  throw new Error("web package is missing the separate real-stack Playwright configuration");
+}
+const liveBrowserSource = readFileSync(new URL("../../apps/web/e2e-live/application.live.spec.ts", import.meta.url), "utf8");
+for (const fragment of ["checks:", "database:", "redis:", "worker:", "/api/jobs/status", "About ComposeBastion"]) {
+  if (!liveBrowserSource.includes(fragment)) throw new Error(`Live browser suite is missing ${fragment}`);
+}
 const ciSource = readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
 if (!ciSource.includes("run: npm run acceptance:assert-report")) {
   throw new Error("Required CI does not explicitly assert the generated acceptance report");
@@ -152,6 +166,12 @@ const env = {
   COMPOSEBASTION_VERSION: candidateVersion,
   COMPOSEBASTION_ACCEPTANCE_IMAGE: `composebastion-app:${candidateVersion}`,
   COMPOSEBASTION_ACCEPTANCE_AGENT_IMAGE: `composebastion-agent:${candidateVersion}`,
+  COMPOSEBASTION_AGENT_IMAGE: "composebastion-agent",
+  COMPOSEBASTION_AGENT_VERSION: candidateVersion,
+  COMPOSEBASTION_AGENT_PORT: "18990",
+  COMPOSEBASTION_AGENT_BIND_ADDRESS: "127.0.0.1",
+  COMPOSEBASTION_UID: "12345",
+  COMPOSEBASTION_GID: "23456",
   APP_SECRET: secret(),
   POSTGRES_PASSWORD: secret(),
   MINIO_ROOT_USER: "acceptance",
@@ -166,6 +186,7 @@ const env = {
   ACCEPTANCE_MINIO_PORT: "19000",
   ACCEPTANCE_REGISTRY_PORT: "18050",
   ACCEPTANCE_AGENT_PORT: "18090",
+  ACCEPTANCE_HARDENED_AGENT_PORT: "18590",
   ACCEPTANCE_SOURCE_CONTEXT: "/tmp/composebastion-acceptance-git-context",
   COMPOSEBASTION_HTTP_BIND_ADDRESS: "127.0.0.1",
   COMPOSEBASTION_HTTP_PORT: "18080",
@@ -204,9 +225,14 @@ function assertAllComposeControlsSet(files) {
   if (missing.size > 0) throw new Error(`Acceptance environment does not explicitly set Compose controls: ${[...missing].sort().join(", ")}`);
 }
 
-function validateRenderedCompose(label, files) {
+function validateRenderedCompose(label, files, { enforcePinnedImages = true, profiles = [] } = {}) {
   assertAllComposeControlsSet(files);
-  const args = ["compose", "--env-file", "/dev/null", ...files.flatMap((file) => ["--file", file]), "config", "--format", "json"];
+  const args = [
+    "compose", "--env-file", "/dev/null",
+    ...profiles.flatMap((profile) => ["--profile", profile]),
+    ...files.flatMap((file) => ["--file", file]),
+    "config", "--format", "json"
+  ];
   const result = spawnSync("docker", args, {
     cwd: root,
     env,
@@ -218,24 +244,69 @@ function validateRenderedCompose(label, files) {
   }
   const rendered = JSON.parse(result.stdout);
   const failures = [];
-  for (const [name, service] of Object.entries(rendered.services ?? {})) {
-    if (service.build) continue;
-    const image = String(service.image ?? "");
-    const localCandidate = service.pull_policy === "never"
-      && [env.COMPOSEBASTION_ACCEPTANCE_IMAGE, env.COMPOSEBASTION_ACCEPTANCE_AGENT_IMAGE].includes(image);
-    if (!localCandidate && !/@sha256:[a-f0-9]{64}$/i.test(image)) failures.push(`${name}: ${image || "missing image"}`);
+  if (enforcePinnedImages) {
+    for (const [name, service] of Object.entries(rendered.services ?? {})) {
+      if (service.build) continue;
+      const image = String(service.image ?? "");
+      const localCandidate = service.pull_policy === "never"
+        && [env.COMPOSEBASTION_ACCEPTANCE_IMAGE, env.COMPOSEBASTION_ACCEPTANCE_AGENT_IMAGE].includes(image);
+      if (!localCandidate && !/@sha256:[a-f0-9]{64}$/i.test(image)) failures.push(`${name}: ${image || "missing image"}`);
+    }
   }
   if (failures.length > 0) throw new Error(`${label} rendered unpinned third-party images:\n${failures.join("\n")}`);
   console.log(`${label} Compose configuration is valid and reproducibly pinned.`);
   return rendered;
 }
 
-function assertLoopbackPort(rendered, serviceName, published) {
+function assertLoopbackPort(rendered, serviceName, published, target = 8080) {
   const ports = rendered.services?.[serviceName]?.ports ?? [];
   const match = ports.some((port) => String(port.published) === String(published)
-    && Number(port.target) === 8080
+    && Number(port.target) === target
     && port.host_ip === "127.0.0.1");
   if (!match) throw new Error(`${serviceName} does not publish the expected loopback port ${published}`);
+}
+
+function assertSecurityControls(label, service, expectedUser = null) {
+  const failures = [];
+  if (service?.read_only !== true) failures.push("read_only is not enabled");
+  if (service?.init !== true) failures.push("init is not enabled");
+  if (!(service?.cap_drop ?? []).includes("ALL")) failures.push("ALL capabilities are not dropped");
+  if (!(service?.security_opt ?? []).includes("no-new-privileges:true")) failures.push("no-new-privileges is not enabled");
+  if (expectedUser && service?.user !== expectedUser) failures.push(`expected user ${expectedUser}, got ${service?.user ?? "missing"}`);
+  const tmpfs = service?.tmpfs ?? [];
+  if (!tmpfs.some((entry) => String(entry).startsWith("/tmp:") && String(entry).includes("noexec"))) {
+    failures.push("/tmp tmpfs is missing or not noexec");
+  }
+  if (failures.length > 0) throw new Error(`${label} hardening controls failed:\n${failures.join("\n")}`);
+}
+
+function assertManagerHardening(label, rendered) {
+  for (const serviceName of ["app", "worker"]) {
+    const service = rendered.services?.[serviceName];
+    assertSecurityControls(`${label} ${serviceName}`, service, `${env.COMPOSEBASTION_UID}:${env.COMPOSEBASTION_GID}`);
+    if (service?.environment?.HOME !== "/tmp") throw new Error(`${label} ${serviceName} HOME is not writable /tmp`);
+    if (service?.environment?.TRIVY_CACHE_DIR !== "/var/cache/composebastion/trivy") {
+      throw new Error(`${label} ${serviceName} Trivy cache environment is incorrect`);
+    }
+    const backup = (service?.volumes ?? []).find((volume) => volume.target === "/data/backups");
+    const cache = (service?.volumes ?? []).find((volume) => volume.target === "/var/cache/composebastion/trivy");
+    if (!backup) throw new Error(`${label} ${serviceName} lost writable backup storage`);
+    if (cache?.type !== "volume") throw new Error(`${label} ${serviceName} Trivy cache is not a volume`);
+  }
+}
+
+function assertAgentHardening(label, rendered) {
+  const service = rendered.services?.["composebastion-agent"];
+  assertSecurityControls(label, service);
+  if (service?.user && service.user !== "0" && service.user !== "0:0" && service.user !== "root") {
+    throw new Error(`${label} unexpectedly configures non-root user ${service.user}`);
+  }
+  if (service?.environment?.HOME !== "/tmp/composebastion") throw new Error(`${label} HOME is not persistent`);
+  if (service?.environment?.DOCKER_CONFIG !== "/tmp/composebastion/.docker") throw new Error(`${label} Docker config is not persistent`);
+  const data = (service?.volumes ?? []).find((volume) => volume.target === "/tmp/composebastion");
+  const socket = (service?.volumes ?? []).find((volume) => volume.target === "/var/run/docker.sock");
+  if (data?.type !== "volume") throw new Error(`${label} persistent agent data is not a volume`);
+  if (!socket) throw new Error(`${label} lost the Docker socket mount`);
 }
 
 const acceptance = validateRenderedCompose("Acceptance fixture", ["docker-compose.image.yml", "docker-compose.acceptance.yml"]);
@@ -271,3 +342,38 @@ for (const serviceName of ["app", "worker"]) {
     throw new Error(`${serviceName} source build does not use the exact Git context override`);
   }
 }
+
+const hardenedAcceptance = validateRenderedCompose("Hardened acceptance fixture", [
+  "docker-compose.image.yml",
+  "docker-compose.acceptance.yml",
+  "docker-compose.hardened.yml",
+  "agent-compose.hardened.yml"
+], { profiles: ["hardening"] });
+assertManagerHardening("Hardened acceptance fixture", hardenedAcceptance);
+assertAgentHardening("Hardened acceptance fixture agent", hardenedAcceptance);
+assertLoopbackPort(hardenedAcceptance, "composebastion-agent", env.ACCEPTANCE_HARDENED_AGENT_PORT, 8090);
+
+const hardenedImage = validateRenderedCompose("Published-image hardening", [
+  "docker-compose.image.yml",
+  "docker-compose.hardened.yml"
+], { enforcePinnedImages: false });
+assertManagerHardening("Published-image hardening", hardenedImage);
+
+const hardenedSource = validateRenderedCompose("Source-production hardening", [
+  "docker-compose.yml",
+  "docker-compose.prod.example.yml",
+  "docker-compose.hardened.yml"
+], { enforcePinnedImages: false });
+assertManagerHardening("Source-production hardening", hardenedSource);
+
+const hardenedImageAgent = validateRenderedCompose("Published-agent hardening", [
+  "agent-compose.image.example.yml",
+  "agent-compose.hardened.yml"
+], { enforcePinnedImages: false });
+assertAgentHardening("Published-agent hardening", hardenedImageAgent);
+
+const hardenedSourceAgent = validateRenderedCompose("Source-agent hardening", [
+  "agent-compose.example.yml",
+  "agent-compose.hardened.yml"
+], { enforcePinnedImages: false });
+assertAgentHardening("Source-agent hardening", hardenedSourceAgent);

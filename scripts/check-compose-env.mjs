@@ -151,6 +151,53 @@ function verifySecureCookieDefault(label, files) {
   fail(label, actual === "true" ? [] : [`app.SECURE_COOKIES: expected production default "true", got ${JSON.stringify(actual)}`]);
 }
 
+function verifyManagerHardening(label, files) {
+  const config = render(files);
+  const failures = [];
+  for (const serviceName of ["app", "worker"]) {
+    const service = config.services?.[serviceName];
+    if (service?.user !== `${composeSentinels.COMPOSEBASTION_UID}:${composeSentinels.COMPOSEBASTION_GID}`) {
+      failures.push(`${serviceName}.user: configurable UID/GID is not routed correctly`);
+    }
+    if (service?.read_only !== true) failures.push(`${serviceName}.read_only: expected true`);
+    if (service?.init !== true) failures.push(`${serviceName}.init: expected true`);
+    if (!(service?.cap_drop ?? []).includes("ALL")) failures.push(`${serviceName}.cap_drop: expected ALL`);
+    if (!(service?.security_opt ?? []).includes("no-new-privileges:true")) failures.push(`${serviceName}.security_opt: missing no-new-privileges`);
+    if (!(service?.tmpfs ?? []).some((entry) => String(entry).startsWith("/tmp:") && String(entry).includes("noexec"))) {
+      failures.push(`${serviceName}.tmpfs: hardened writable /tmp is missing`);
+    }
+    if (service?.environment?.HOME !== "/tmp") failures.push(`${serviceName}.HOME: expected /tmp`);
+    if (service?.environment?.TRIVY_CACHE_DIR !== "/var/cache/composebastion/trivy") {
+      failures.push(`${serviceName}.TRIVY_CACHE_DIR: dedicated cache path is missing`);
+    }
+    const backup = (service?.volumes ?? []).find((volume) => volume.target === "/data/backups");
+    const cache = (service?.volumes ?? []).find((volume) => volume.target === "/var/cache/composebastion/trivy");
+    if (!backup) failures.push(`${serviceName}: backup storage was removed by hardening overlay`);
+    if (cache?.type !== "volume") failures.push(`${serviceName}: Trivy cache is not a volume`);
+  }
+  fail(label, failures);
+}
+
+function verifyAgentHardening(label, baseFile) {
+  const config = render([baseFile, "agent-compose.hardened.yml"]);
+  const agent = config.services?.["composebastion-agent"];
+  const failures = [];
+  if (agent?.read_only !== true) failures.push("agent.read_only: expected true");
+  if (agent?.init !== true) failures.push("agent.init: expected true");
+  if (!(agent?.cap_drop ?? []).includes("ALL")) failures.push("agent.cap_drop: expected ALL");
+  if (!(agent?.security_opt ?? []).includes("no-new-privileges:true")) failures.push("agent.security_opt: missing no-new-privileges");
+  if (!(agent?.tmpfs ?? []).some((entry) => String(entry).startsWith("/tmp:") && String(entry).includes("noexec"))) {
+    failures.push("agent.tmpfs: hardened writable /tmp is missing");
+  }
+  if (agent?.environment?.HOME !== "/tmp/composebastion") failures.push("agent.HOME: persistent path is missing");
+  if (agent?.environment?.DOCKER_CONFIG !== "/tmp/composebastion/.docker") failures.push("agent.DOCKER_CONFIG: persistent path is missing");
+  const socket = (agent?.volumes ?? []).find((volume) => volume.target === "/var/run/docker.sock");
+  const data = (agent?.volumes ?? []).find((volume) => volume.target === "/tmp/composebastion");
+  if (!socket) failures.push("agent: Docker socket mount was removed");
+  if (data?.type !== "volume") failures.push("agent: persistent data is not a volume");
+  fail(label, failures);
+}
+
 function verifyAgent(label, file, expectedImage = null) {
   const config = render([file]);
   verifyNoSentinelEnvironmentLeakage(label, config);
@@ -197,5 +244,9 @@ verifySecureCookieDefault("published-image secure-cookie default", ["docker-comp
 verifySecureCookieDefault("source-production secure-cookie default", ["docker-compose.yml", "docker-compose.prod.example.yml"]);
 verifyAgent("source-agent", "agent-compose.example.yml");
 verifyAgent("published-agent", "agent-compose.image.example.yml", agentImage);
+verifyManagerHardening("published-image hardening", ["docker-compose.image.yml", "docker-compose.hardened.yml"]);
+verifyManagerHardening("source-production hardening", ["docker-compose.yml", "docker-compose.prod.example.yml", "docker-compose.hardened.yml"]);
+verifyAgentHardening("source-agent hardening", "agent-compose.example.yml");
+verifyAgentHardening("published-agent hardening", "agent-compose.image.example.yml");
 
 console.log("Compose environment contracts passed for manager and agent production installs.");

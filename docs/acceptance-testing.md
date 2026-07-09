@@ -13,6 +13,7 @@ identity; a HEAD or worktree change during the run is also nonqualifying.
 Run the complete suite with:
 
 ```bash
+npx playwright install chromium
 npm run acceptance:local
 ```
 
@@ -47,14 +48,18 @@ values that may contain credentials are registered for output redaction.
 `ACCEPTANCE_PORT_BASE` defaults to `18000` and must be between `1024` and
 `64535`, keeping the highest reserved port within the TCP/UDP range. The harness reserves offsets `+25`
 (Mailpit), `+50` (registry), `+80` (fresh manager), `+90` (agent), `+180`
-(source-production manager), `+380` (upgrade manager), and `+1000` (MinIO).
+(source-production manager), `+380` (upgrade manager), `+550` (hardened
+registry), `+580` (hardened manager), `+590` (hardened agent), and `+1000`
+(MinIO).
 Compose project names, the bind fixture, and runtime secrets also include this
 base, so retained runs can coexist when they use different bases. Override
 `ACCEPTANCE_WORKLOAD_SUBNET` with an unused RFC1918 `/24` if the deterministic
 default conflicts with a local Docker network.
 
-The suite covers first-run setup, sessions, readiness, runtime/About/legal
-artifacts, SMTP test and worker-alert delivery, authenticated agent health and
+The suite covers first-run setup, sessions, a real Chromium login and
+Operations/About check against the live API, PostgreSQL, Redis, and worker,
+readiness, runtime/About/legal artifacts, SMTP test and worker-alert delivery,
+authenticated agent health and
 a sustained usage stream, a reachable private-registry boundary, Redis-free
 durable enqueue while readiness remains healthy, Redis diagnostics and worker
 subscription recovery, safe-job lease recovery after a killed worker, a disposable
@@ -63,7 +68,13 @@ local-cache eviction, clone restore with volume/bind/database/network behavior
 verification and cleanup, public-image upgrade state preservation (including a
 queued API job, encrypted registry credentials, and the resolved public image
 digest), and a fresh production source build with login, configuration-write,
-and shared backup-write checks using pinned fixtures.
+and shared backup-write checks using pinned fixtures. A separate hardening
+scenario layers the shipped image Compose file with the opt-in manager and agent
+overlays, verifies UID/GID, read-only roots, dropped capabilities,
+`no-new-privileges`, init, writable tmpfs/backup/Trivy-cache paths, and proves
+backup/cache persistence. It also runs Docker through the root agent, performs a
+real authenticated registry login, force-recreates the agent, and verifies both
+agent files and Docker credentials survived in its persistent data volume.
 Both candidate-image builds and the source-production build use a temporary
 context materialized from the exact recorded Git commit, rather than the live
 checkout. The report records the commit/tree and context digest and rejects the

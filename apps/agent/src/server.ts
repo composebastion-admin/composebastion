@@ -166,7 +166,7 @@ async function collectDiskStats(mountsText: string) {
   return disks;
 }
 
-async function main() {
+export async function main() {
   const app = Fastify({ logger: true, bodyLimit: 16 * 1024 });
   let activeUsageStreams = 0;
   await app.register(rateLimit, {

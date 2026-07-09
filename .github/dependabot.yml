@@ -11,6 +11,15 @@ updates:
     labels:
       - "type: dependencies"
       - "area: security"
+    groups:
+      npm-routine:
+        update-types:
+          - "minor"
+          - "patch"
+    ignore:
+      - dependency-name: "@types/node"
+        versions:
+          - ">=25"
 
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -23,6 +32,16 @@ updates:
     labels:
       - "type: dependencies"
       - "area: ci"
+    groups:
+      github-actions-routine:
+        update-types:
+          - "minor"
+          - "patch"
+      docker-actions-majors:
+        patterns:
+          - "docker/*"
+        update-types:
+          - "major"
 
   - package-ecosystem: "docker"
     directory: "/"

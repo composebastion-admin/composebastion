@@ -6,7 +6,7 @@ ARG COMPOSE_VERSION=5.3.1
 ARG COMPOSE_SOURCE_COMMIT=f32009d4a2c687dd405398cc7975d12dccaf8dff
 ARG COMPOSE_SOURCE_SHA256=34387f32377bffac7ee0a70d78435af3b59a075b6f29409172c6d6346ca0340d
 
-FROM node:20-alpine3.22@sha256:8f47899606d000b0704e992f927fe7335adcd0d6c98851600072fb6e14a13e60 AS deps
+FROM node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY apps/agent/package.json apps/agent/package.json
@@ -88,7 +88,7 @@ RUN set -eux; \
     sha256sum docker-cli-LICENSE.txt docker-cli-NOTICE.txt docker-compose-LICENSE.txt docker-compose-NOTICE.txt go-LICENSE.txt go-PATENTS.txt go-buildinfo/docker-cli.modules.tsv go-buildinfo/docker-compose.modules.tsv \
       | LC_ALL=C sort > go-buildinfo/agent.artifacts.sha256
 
-FROM node:20-alpine3.22@sha256:8f47899606d000b0704e992f927fe7335adcd0d6c98851600072fb6e14a13e60 AS runtime
+FROM node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a AS runtime
 WORKDIR /app
 ARG APP_VERSION
 ARG VCS_REF=unknown
@@ -120,6 +120,7 @@ COPY --from=build /app/apps/agent/package.json ./apps/agent/package.json
 COPY --from=build /app/apps/agent/dist ./apps/agent/dist
 COPY LICENSE.md LICENSING_SUMMARY.md COMMERCIAL-LICENSE.md NOTICE.md THIRD-PARTY-NOTICES.md TRADEMARKS.md /licenses/
 COPY LICENSES /licenses/LICENSES
+RUN mkdir -p /tmp/composebastion
 RUN set -eux; \
     docker --version | grep -F "Docker version ${DOCKER_CLI_VERSION},"; \
     test "$(docker compose version --short)" = "${COMPOSE_VERSION}"; \

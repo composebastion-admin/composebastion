@@ -9,7 +9,7 @@ ARG RCLONE_SHA256_ARM64=97685285c9ad6a0cf17d5844115d2a67245af6444db672187074bd9c
 ARG RCLONE_LICENSE_SHA256=8cd2e9e750b90a04b7d82dbbca3930c696ae0309d7c10464f90a44f45754cd04
 ARG APP_VERSION=source
 
-FROM node:20-alpine3.22@sha256:8f47899606d000b0704e992f927fe7335adcd0d6c98851600072fb6e14a13e60 AS deps
+FROM node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a AS deps
 WORKDIR /app
 RUN apk add --no-cache python3 make g++
 COPY package.json package-lock.json ./
@@ -62,7 +62,7 @@ RUN set -eux; \
     sha256sum trivy-LICENSE.txt trivy-NOTICE.txt oras-go-LICENSE.txt go-LICENSE.txt go-PATENTS.txt go-buildinfo/trivy.modules.tsv \
       | LC_ALL=C sort > go-buildinfo/trivy.artifacts.sha256
 
-FROM node:20-alpine3.22@sha256:8f47899606d000b0704e992f927fe7335adcd0d6c98851600072fb6e14a13e60 AS tools
+FROM node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a AS tools
 ARG TARGETARCH
 ARG RCLONE_VERSION
 ARG RCLONE_SOURCE_COMMIT
@@ -100,7 +100,7 @@ RUN set -eux; \
     sha256sum rclone-LICENSE.txt go-buildinfo/rclone.modules.tsv \
       | LC_ALL=C sort > go-buildinfo/rclone.artifacts.sha256
 
-FROM node:20-alpine3.22@sha256:8f47899606d000b0704e992f927fe7335adcd0d6c98851600072fb6e14a13e60 AS runtime
+FROM node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 ARG APP_VERSION
@@ -139,7 +139,8 @@ COPY --from=build /app/packages/shared/node_modules ./packages/shared/node_modul
 COPY --from=build /app/infra ./infra
 COPY LICENSE.md LICENSING_SUMMARY.md COMMERCIAL-LICENSE.md NOTICE.md THIRD-PARTY-NOTICES.md TRADEMARKS.md /licenses/
 COPY LICENSES /licenses/LICENSES
-RUN mkdir -p /data/backups
+RUN mkdir -p /data/backups /var/cache/composebastion/trivy && \
+    chown -R 1000:1000 /data/backups /var/cache/composebastion
 RUN set -eux; \
     trivy --version | grep -F "Version: ${TRIVY_VERSION}"; \
     env -u RCLONE_VERSION rclone version | grep -F "rclone v${RCLONE_VERSION}"; \

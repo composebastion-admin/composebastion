@@ -190,6 +190,10 @@ docker compose -f docker-compose.image.yml pull
 docker compose -f docker-compose.image.yml up -d
 ```
 
+To enable the optional non-root/read-only manager overlay, first prepare backup
+directory ownership and follow the [container hardening guide](container-hardening.md).
+The overlay is intentionally not a default in `1.1`.
+
 If you are building from source instead, validate and start with:
 
 ```bash

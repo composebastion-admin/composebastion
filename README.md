@@ -14,7 +14,7 @@
   <a href="https://github.com/composebastion-admin/composebastion/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/composebastion-admin/composebastion/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/composebastion-admin/composebastion/pkgs/container/composebastion-app"><img alt="Container image" src="https://img.shields.io/badge/ghcr.io-composebastion--app-2496ed"></a>
   <a href="LICENSE.md"><img alt="License" src="https://img.shields.io/badge/license-source--available-df7d27"></a>
-  <img alt="Node" src="https://img.shields.io/badge/node-%3E%3D20.11-3f7f5f">
+  <img alt="Node" src="https://img.shields.io/badge/node-%3E%3D24-3f7f5f">
   <img alt="Docker" src="https://img.shields.io/badge/docker-compose-2496ed">
 </p>
 
@@ -32,14 +32,15 @@ devices, Proxmox Docker VMs/LXCs, Portainer stacks, and any native Docker host o
 
 Latest published stable release: `v1.0.6`.
 
-- This branch prepares the untagged, unpublished `1.0.7-rc.1` candidate with a
-  Trivy scanner refresh and release-gate hardening.
-- Candidate package and OpenAPI version: `1.0.7-rc.1`.
+- This branch prepares the untagged, unpublished `1.1.0-rc.1` candidate on top
+  of the local `1.0.7-rc.1` patch candidate.
+- Candidate package and OpenAPI version: `1.1.0-rc.1`.
 - GitHub release images: `1.0.6` and `v1.0.6`.
 - Published platforms: `linux/amd64` and `linux/arm64` for both app and agent.
-- Candidate release gates include CI/OpenAPI, mocked browser smoke coverage,
-  live-stack acceptance, the full dependency audit, Compose contracts, and exact
-  four-variant image scans. The candidate is not yet the latest verified release.
+- Candidate release gates include CI/OpenAPI, per-workspace coverage, separate
+  mocked and live browser suites, the full dependency audit, Compose contracts,
+  live-stack acceptance, and exact four-variant image scans. The candidate is
+  not yet the latest verified release.
 - `main` publishes the moving `main` alias plus a full-commit
   `sha-<40-character-sha>` index. The `latest` alias moves only after an
   authorized stable `v*` tag passes the release rescans.
@@ -218,6 +219,7 @@ The full screenshot tour is in the [how-to guide](docs/how-to.md).
 - [Recovery, backups, and restore drills](docs/recovery-guide.md)
 - [Daily operations runbook](docs/operations-runbook.md)
 - [Security hardening checklist](docs/security-hardening.md)
+- [Opt-in container hardening](docs/container-hardening.md)
 - [API contract notes](docs/api-contracts.md)
 - [OpenAPI summary](docs/openapi.md)
 
@@ -230,6 +232,8 @@ The full screenshot tour is in the [how-to guide](docs/how-to.md).
   default; use `false` only for a trusted, direct-HTTP evaluation.
 - Set `CORS_ORIGINS` when the UI and API are served from different origins.
 - Restrict agent port `8090` to the manager network.
+- Consider the opt-in read-only/non-root container overlays after preparing
+  backup and scanner-cache ownership.
 - Configure `BACKUP_HOST_PATH_ALLOWED_ROOTS` for production host-path recovery.
 - Test at least one recovery point, verify, and clone restore drill before
   relying on a backup target.

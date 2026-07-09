@@ -80,7 +80,7 @@
 
 ## Quality And Security Gates
 
-- This repo is a Node 20/npm workspaces TypeScript monorepo: Fastify API,
+- This repo is a Node 24/npm workspaces TypeScript monorepo: Fastify API,
   Postgres, Redis, React/Vite web UI, host agent, Docker Compose deployment, and
   shared Zod contracts.
 - Match CI before release work: `npm run typecheck`, `npm run lint:migrations`,

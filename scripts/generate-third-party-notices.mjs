@@ -17,6 +17,8 @@ const bundledRuntimeTools = [
   ["Go standard library", "1.26.5", "BSD-3-Clause", "app and agent tool binaries"]
 ];
 
+// These packages publish an MIT LICENSE file but omit the package.json license
+// field consumed by npm's lockfile. Keep overrides explicit and narrowly pinned.
 const licenseOverrides = new Map([
   ["buildcheck@0.0.7", "MIT"],
   ["cpu-features@0.0.10", "MIT"],

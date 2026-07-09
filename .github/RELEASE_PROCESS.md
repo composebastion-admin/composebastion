@@ -150,6 +150,7 @@ COMPOSEBASTION_INTEGRATION=1 \
   NODE_ENV=test \
   npm run test --workspace @composebastion/api -- --no-file-parallelism
 npm run smoke:web
+npm run coverage
 npm audit --audit-level=high
 npm run acceptance:local
 POSTGRES_PASSWORD="${RELEASE_POSTGRES_PASSWORD}" \
@@ -164,6 +165,13 @@ POSTGRES_PASSWORD="${RELEASE_POSTGRES_PASSWORD}" \
 AGENT_TOKEN="${RELEASE_AGENT_TOKEN}" \
   COMPOSEBASTION_AGENT_BIND_ADDRESS=127.0.0.1 \
   docker compose -f agent-compose.image.example.yml config
+POSTGRES_PASSWORD="${RELEASE_POSTGRES_PASSWORD}" \
+  APP_SECRET="${RELEASE_APP_SECRET}" \
+  COMPOSEBASTION_UID=1000 COMPOSEBASTION_GID=1000 \
+  docker compose -f docker-compose.image.yml -f docker-compose.hardened.yml config
+AGENT_TOKEN="${RELEASE_AGENT_TOKEN}" \
+  COMPOSEBASTION_AGENT_BIND_ADDRESS=127.0.0.1 \
+  docker compose -f agent-compose.image.example.yml -f agent-compose.hardened.yml config
 npm run release:verify-images
 ```
 

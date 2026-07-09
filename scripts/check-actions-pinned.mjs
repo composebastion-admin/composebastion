@@ -6,17 +6,17 @@ import path from "node:path";
 // tag object. Updating an Action therefore requires changing both this record
 // and the workflow reference in the same reviewed change.
 const reviewedReferences = new Map([
-  ["actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5", "v4.3.1"],
   ["actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10", "v6.0.3"],
   ["actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48", "v4.9.0"],
   ["actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093", "v4.3.0"],
-  ["actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020", "v4.4.0"],
+  ["actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e", "v6.4.0"],
   ["actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02", "v4.6.2"],
   ["aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25", "v0.36.0"],
-  ["docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8", "v6.19.2"],
-  ["docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9", "v3.7.0"],
-  ["docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f", "v3.12.0"],
-  ["docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130", "v3.7.0"],
+  ["docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a", "v7.3.0"],
+  ["docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0", "v4.4.0"],
+  ["docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302", "v6.2.0"],
+  ["docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c", "v4.2.0"],
+  ["docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8", "v4.2.0"],
   ["github/codeql-action/analyze@cdefb33c0f6224e58673d9004f47f7cb3e328b89", "v4.31.10"],
   ["github/codeql-action/init@cdefb33c0f6224e58673d9004f47f7cb3e328b89", "v4.31.10"]
 ]);

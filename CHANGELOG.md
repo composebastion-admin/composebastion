@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Added
+- Added opt-in manager and agent hardening overlays, per-workspace V8 coverage
+  enforcement, and a separate Playwright suite against the live application
+  stack.
+
+### Changed
+- Moved source builds, CI, and runtime images to Node 24 Active LTS and raised
+  the source-build engine requirement to Node `>=24`.
+- Updated Playwright, React Router, Lucide, `concurrently`, compatible
+  patch/minor dependencies, and the supported GitHub Action majors.
+
 ### Security
 - Updated CI scanning to Trivy `0.72.0` and rebuilt the embedded Trivy `0.72.0`
   scanner from its reviewed source commit with Go `1.26.5` and ORAS Go `2.6.2`
@@ -49,7 +60,8 @@
 - Added additive migrations `029_worker_reliability.sql` and
   `030_migration_plan_binding.sql`; no existing public route was removed.
 
-The local `1.0.7-rc.1` candidate is intentionally untagged and unpublished.
+The local `1.1.0-rc.1` candidate is stacked on the local `1.0.7-rc.1` patch
+candidate. Both are intentionally untagged and unpublished.
 
 ## [v1.0.6] - 2026-07-06
 
