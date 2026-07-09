@@ -147,6 +147,32 @@ describe("port conflict behavior", () => {
     expect(result).toContain("name: demo-restore_frontend");
     expect(result).toContain("ipv4_address: 172.28.0.10");
   });
+
+  it("drops overlapping IPAM and static addresses for same-host clone networks", () => {
+    const yaml = [
+      "services:",
+      "  web:",
+      "    networks:",
+      "      frontend:",
+      "        ipv4_address: 172.28.0.10",
+      "networks:",
+      "  frontend:",
+      "    driver: bridge",
+      "    ipam:",
+      "      config:",
+      "        - subnet: 172.28.0.0/16"
+    ].join("\n");
+
+    const result = remapComposeYaml(yaml, {
+      networks: { frontend: "demo-restore_frontend" },
+      resetNetworkAddressing: true
+    });
+
+    expect(result).toContain("demo-restore_frontend:");
+    expect(result).toContain("external: true");
+    expect(result).not.toContain("ipv4_address");
+    expect(result).not.toContain("172.28.0.0/16");
+  });
 });
 
 describe("migration rollback source restart", () => {

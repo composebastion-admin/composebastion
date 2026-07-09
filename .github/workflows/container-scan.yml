@@ -36,23 +36,56 @@ concurrency:
 
 jobs:
   image-scan:
-    name: Scan runtime images
+    name: Scan ${{ matrix.component }} ${{ matrix.arch }} runtime image
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: app
+            dockerfile: Dockerfile
+            arch: amd64
+            platform: linux/amd64
+          - component: app
+            dockerfile: Dockerfile
+            arch: arm64
+            platform: linux/arm64
+          - component: agent
+            dockerfile: Dockerfile.agent
+            arch: amd64
+            platform: linux/amd64
+          - component: agent
+            dockerfile: Dockerfile.agent
+            arch: arm64
+            platform: linux/arm64
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Build app runtime image
-        run: docker build --target runtime -t composebastion-app:ci .
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
-      - name: Build agent runtime image
-        run: docker build -f Dockerfile.agent --target runtime -t composebastion-agent:ci .
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: Scan app runtime image
+      - name: Build runtime image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          target: runtime
+          platforms: ${{ matrix.platform }}
+          load: true
+          push: false
+          tags: composebastion-${{ matrix.component }}:ci-${{ matrix.arch }}
+          cache-from: type=gha,scope=scan-${{ matrix.component }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=scan-${{ matrix.component }}-${{ matrix.arch }}
+
+      - name: Scan runtime image
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: "composebastion-app:ci"
-          version: "v0.71.2"
+          image-ref: composebastion-${{ matrix.component }}:ci-${{ matrix.arch }}
+          version: "v0.72.0"
           ignore-policy: ".github/trivy-ignore.rego"
           format: "table"
           exit-code: "1"
@@ -60,14 +93,9 @@ jobs:
           vuln-type: "os,library"
           severity: "HIGH,CRITICAL"
 
-      - name: Scan agent runtime image
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          image-ref: "composebastion-agent:ci"
-          version: "v0.71.2"
-          ignore-policy: ".github/trivy-ignore.rego"
-          format: "table"
-          exit-code: "1"
-          ignore-unfixed: true
-          vuln-type: "os,library"
-          severity: "HIGH,CRITICAL"
+  container-scan-gate:
+    name: Container scan gate
+    needs: image-scan
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "All runtime image variants passed vulnerability scanning."

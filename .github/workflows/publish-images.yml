@@ -59,8 +59,100 @@ env:
   AGENT_IMAGE_NAME: ${{ github.repository_owner }}/composebastion-agent
 
 jobs:
+  validate-release:
+    name: Release metadata gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate release tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#v}"
+          package_version="$(node -p "require('./package.json').version")"
+          if [ "${tag_version}" != "${package_version}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match package version ${package_version}."
+            exit 1
+          fi
+          git fetch origin main --no-tags
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
+            echo "::error::Release tag commit is not reachable from origin/main."
+            exit 1
+          fi
+
+  scan-release-images:
+    name: Scan ${{ matrix.component }} ${{ matrix.arch }} release image
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: app
+            dockerfile: Dockerfile
+            arch: amd64
+            platform: linux/amd64
+          - component: app
+            dockerfile: Dockerfile
+            arch: arm64
+            platform: linux/arm64
+          - component: agent
+            dockerfile: Dockerfile.agent
+            arch: amd64
+            platform: linux/amd64
+          - component: agent
+            dockerfile: Dockerfile.agent
+            arch: arm64
+            platform: linux/arm64
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build scan image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          target: runtime
+          platforms: ${{ matrix.platform }}
+          load: true
+          push: false
+          tags: composebastion-${{ matrix.component }}:release-scan-${{ matrix.arch }}
+          cache-from: type=gha,scope=${{ matrix.component }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.component }}-${{ matrix.arch }}
+
+      - name: Scan release image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: composebastion-${{ matrix.component }}:release-scan-${{ matrix.arch }}
+          version: "v0.72.0"
+          ignore-policy: ".github/trivy-ignore.rego"
+          format: "table"
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: "os,library"
+          severity: "HIGH,CRITICAL"
+
+  release-image-gate:
+    name: Release image security gate
+    needs: scan-release-images
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "All app and agent release image variants passed vulnerability scanning."
+
   publish:
     name: Build and publish multi-arch images
+    needs: [validate-release, release-image-gate]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository

@@ -322,7 +322,10 @@ async function recordAlertEvent(row: any, state: string, message: string, option
 
 export async function runAlertChecks() {
   const result = await query<any>(
-    `SELECT alert_rules.*, notification_channels.*, alert_rules.id AS rule_id
+    `SELECT notification_channels.*, alert_rules.*,
+            alert_rules.id AS rule_id,
+            alert_rules.name AS rule_name,
+            notification_channels.name AS channel_name
      FROM alert_rules
      JOIN notification_channels ON notification_channels.id = alert_rules.channel_id
      WHERE alert_rules.enabled = true`
@@ -376,16 +379,16 @@ export async function runAlertChecks() {
 
       const shouldNotify = !silenced && triggered && (!row.last_notified_at || Date.now() - new Date(row.last_notified_at).getTime() > 15 * 60_000);
       if (shouldNotify) {
-        await sendChannel(row, `ComposeBastion alert: ${row.name}`, message);
+        await sendChannel(row, `ComposeBastion alert: ${row.rule_name}`, message);
         await query("UPDATE alert_rules SET last_notified_at = now() WHERE id = $1", [row.rule_id]);
       }
       const recovered = !silenced && row.last_state === "triggered" && nextState === "ok" && row.last_notified_at;
       if (recovered) {
-        await sendChannel(row, `ComposeBastion recovered: ${row.name}`, `${row.name} recovered.`);
+        await sendChannel(row, `ComposeBastion recovered: ${row.rule_name}`, `${row.rule_name} recovered.`);
         await query("UPDATE alert_rules SET last_notified_at = now() WHERE id = $1", [row.rule_id]);
       }
       if (row.last_state !== nextState || shouldNotify || recovered || silenced) {
-        await recordAlertEvent(row, nextState, silenced ? `${message || row.name} (silenced by ${silence?.name ?? "silence"})` : message || row.name, {
+        await recordAlertEvent(row, nextState, silenced ? `${message || row.rule_name} (silenced by ${silence?.name ?? "silence"})` : message || row.rule_name, {
           notified: shouldNotify || Boolean(recovered),
           silenced
         });

@@ -63,7 +63,7 @@
   - `ghcr.io/composebastion-admin/composebastion-app`
   - `ghcr.io/composebastion-admin/composebastion-agent`
 - Image publishing must preserve `latest`, branch tags, and `sha-*` tags on
-  main. Immutable version tags such as `1.0.2` and `v1.0.2` must only be
+  main. Immutable version tags such as `${VERSION}` and `v${VERSION}` must only be
   published from `v*` git tags.
 - The publish workflow must build both app and agent images before publishing
   either image so release tags are not created from a partial runtime build.
@@ -75,7 +75,7 @@
 - After release pushes, verify GitHub Actions, CodeQL, dependency review,
   container scans, and any configured container/image publishing. Distinguish
   Dependabot or bot PRs opened after the push from actual release failures.
-- For `v1.0.2`, verify CI, CodeQL, Container Scan, Publish Images, and open
+- For every `v${VERSION}`, verify CI, CodeQL, Container Scan, Publish Images, and open
   code-scanning alerts after refresh.
 
 ## Quality And Security Gates
@@ -89,7 +89,8 @@
   checks when Docker files change.
 - Current GitHub Actions jobs include typecheck/tests/audit, Postgres/Redis
   integration tests, Playwright smoke and accessibility checks, production image
-  smoke builds, ephemeral SSH Docker host integration, optional external SSH
+  smoke builds, Compose environment and acceptance fixture validation,
+  ephemeral SSH Docker host integration, optional external SSH
   integration, CodeQL, dependency review, and runtime image scanning.
 - Treat security scanning separately from feature work. CodeQL, dependency
   scanning, container scanning, secret scanning, and image publishing checks are

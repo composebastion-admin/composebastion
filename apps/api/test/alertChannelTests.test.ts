@@ -11,7 +11,7 @@ vi.mock("../src/services/webhooks.js", () => ({
   validateWebhookUrl
 }));
 
-const { createChannel, listAlertChannelTestEvents, listRecentAlertChannelTestEvents, sendTestNotification } = await import("../src/services/alerts.js");
+const { createChannel, listAlertChannelTestEvents, listRecentAlertChannelTestEvents, runAlertChecks, sendTestNotification } = await import("../src/services/alerts.js");
 
 const channelId = "11111111-1111-4111-8111-111111111111";
 const userId = "22222222-2222-4222-8222-222222222222";
@@ -93,5 +93,41 @@ describe("alert channel test history", () => {
     expect(query.mock.calls[0]?.[0]).toContain("FROM alert_channel_test_events");
     expect(query.mock.calls[0]?.[0]).not.toContain("WHERE channel_id");
     expect(query.mock.calls[0]?.[1]).toEqual([20]);
+  });
+
+  it("uses the alert rule name rather than the joined channel name in worker notifications", async () => {
+    postJsonWebhook.mockResolvedValueOnce({ ok: true, statusCode: 202 });
+    query
+      .mockResolvedValueOnce({
+        rows: [{
+          id: channelId,
+          rule_id: "44444444-4444-4444-8444-444444444444",
+          rule_name: "Production host offline",
+          channel_name: "Operations webhook",
+          condition: "host.offline",
+          host_id: "55555555-5555-4555-8555-555555555555",
+          channel_id: channelId,
+          container_id: null,
+          enabled: true,
+          type: "webhook",
+          webhook_url: "https://example.com/hook",
+          last_state: "ok",
+          last_notified_at: null
+        }]
+      })
+      .mockResolvedValueOnce({ rows: [{ name: "prod-01", last_status: "offline", last_error: "connection refused" }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+
+    await runAlertChecks();
+
+    expect(query.mock.calls[0]?.[0]).toContain("alert_rules.name AS rule_name");
+    expect(postJsonWebhook).toHaveBeenCalledWith(
+      "https://example.com/hook",
+      expect.objectContaining({ subject: "ComposeBastion alert: Production host offline" }),
+      expect.objectContaining({ allowPrivateNetwork: true })
+    );
   });
 });

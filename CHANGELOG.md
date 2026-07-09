@@ -1,6 +1,33 @@
 # Changelog
 
+## [Unreleased]
+
+### Security
+- Updated embedded and CI Trivy scanners to `0.72.0`, which contains the fix
+  for `CVE-2026-50151`; the finding is not suppressed.
+- Added per-architecture scans for both runtime images and stable aggregate
+  scan gates that must pass before a release workflow can publish either image.
+
+### Fixed
+- Forwarded the documented SMTP, proxy, CORS/cookie, agent, webhook, S3,
+  backup, interval, and scanner settings consistently through both production
+  Compose installation paths.
+- Added an automated Compose environment-routing check and local acceptance
+  harness so configuration regressions fail before release.
+- Fixed worker alert subjects so joined notification-channel fields cannot
+  replace the alert rule name.
+- Fixed recovery verification for remote-only targets by rehydrating missing
+  artifacts from their remote copy before checksum validation.
+- Fixed same-host clone restores for custom Compose networks by allocating a
+  non-overlapping Docker network and dropping captured static addresses.
+
+The local `1.0.7-rc.1` candidate is intentionally untagged and unpublished.
+
 ## [v1.0.6] - 2026-07-06
+
+> Superseded for production readiness by the pending `v1.0.7` scanner fix. The
+> published `v1.0.6` app image embeds Trivy `0.71.2`, which is reported for
+> `CVE-2026-50151`.
 
 ### Added
 - Added first-class private GitHub repository access checks for tracked repos,
@@ -23,6 +50,24 @@
   read-only deploy keys, and multi-repo host setup.
 - Bumped workspace, generated OpenAPI, runtime image defaults, and release docs
   to `1.0.6`.
+
+## [v1.0.5] - 2026-07-01
+
+### Fixed
+- Kept ComposeBastion self-update discovery aligned with published `latest`
+  tags and clarified service update status and actions.
+
+## [v1.0.4] - 2026-06-30
+
+### Fixed
+- Triggered an immediate inventory sync after a Docker host is added so the
+  new host becomes useful without waiting for the next background interval.
+
+## [v1.0.3] - 2026-06-27
+
+### Fixed
+- Improved the Hosts empty state and inline add-host workflow for first-run
+  installations.
 
 ## [v1.0.2] - 2026-06-25
 

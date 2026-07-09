@@ -305,17 +305,20 @@ export function remapComposeYaml(
     bindMounts?: Record<string, string>;
     portRemap?: Record<string, string>;
     networks?: Record<string, string>;
+    resetNetworkAddressing?: boolean;
   }
 ) {
   const volumes = mappings.volumes ?? {};
   const bindMounts = mappings.bindMounts ?? {};
   const portRemap = mappings.portRemap ?? {};
   const networks = mappings.networks ?? {};
+  const resetNetworkAddressing = mappings.resetNetworkAddressing ?? false;
   if (
     !Object.keys(volumes).length &&
     !Object.keys(bindMounts).length &&
     !Object.keys(portRemap).length &&
-    !Object.keys(networks).length
+    !Object.keys(networks).length &&
+    !resetNetworkAddressing
   ) {
     return yaml;
   }
@@ -373,6 +376,11 @@ export function remapComposeYaml(
             if (!isScalar(item.key)) continue;
             const oldName = String(item.key.value ?? "");
             if (networks[oldName]) item.key.value = networks[oldName];
+            if (resetNetworkAddressing && isMap(item.value)) {
+              item.value.delete("ipv4_address");
+              item.value.delete("ipv6_address");
+              item.value.delete("link_local_ips");
+            }
           }
         }
       }
@@ -395,6 +403,12 @@ export function remapComposeYaml(
         const value = topNetworks.get(oldName, true);
         topNetworks.delete(oldName);
         if (isMap(value)) {
+          if (resetNetworkAddressing) {
+            for (const key of ["driver", "driver_opts", "attachable", "internal", "ipam", "enable_ipv4", "enable_ipv6", "labels"]) {
+              value.delete(key);
+            }
+            value.set("external", true);
+          }
           const explicitName = getMapValue(value, "name");
           if (explicitName) setScalarString(explicitName, newName);
           else value.set("name", newName);

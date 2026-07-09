@@ -211,6 +211,7 @@ async function restoreStandaloneContainers(input: {
   bindMap: Record<string, string>;
   portRemap: Record<string, string>;
   networkMap: Record<string, string>;
+  preserveNetworkAddresses: boolean;
 }) {
   const host = await getHostForWorker(input.hostId);
   if (isDemoHost(host.public)) {
@@ -251,7 +252,7 @@ async function restoreStandaloneContainers(input: {
         const targetNetwork = input.networkMap[network] ?? network;
         const connectCommand = withDockerEnv(
           buildStandaloneNetworkConnectCommand(targetNetwork, name, {
-            ipAddress: attachment?.ipAddress ?? null,
+            ipAddress: input.preserveNetworkAddresses ? attachment?.ipAddress ?? null : null,
             aliases: attachment?.aliases ?? []
           }),
           host.public.dockerSocketPath
@@ -323,21 +324,9 @@ function buildNetworkCreateCommand(targetName: string, source: NonNullable<Recov
   for (const [key, value] of Object.entries(source?.options ?? {})) {
     if (value !== null && value !== undefined && value !== "") args.push("--opt", shQuote(`${key}=${String(value)}`));
   }
-  if (source?.ipam.driver) args.push("--ipam-driver", shQuote(source.ipam.driver));
-  for (const [key, value] of Object.entries(source?.ipam.options ?? {})) {
-    if (value !== null && value !== undefined && value !== "") args.push("--ipam-opt", shQuote(`${key}=${String(value)}`));
-  }
-  for (const config of source?.ipam.config ?? []) {
-    if (config.Subnet) args.push("--subnet", shQuote(String(config.Subnet)));
-    if (config.IPRange) args.push("--ip-range", shQuote(String(config.IPRange)));
-    if (config.Gateway) args.push("--gateway", shQuote(String(config.Gateway)));
-    const aux = config.AuxiliaryAddresses;
-    if (aux && typeof aux === "object" && !Array.isArray(aux)) {
-      for (const [key, value] of Object.entries(aux)) {
-        if (value !== null && value !== undefined && value !== "") args.push("--aux-address", shQuote(`${key}=${String(value)}`));
-      }
-    }
-  }
+  // A clone can live beside its source on the same host. Reusing the source
+  // IPAM subnet would overlap, so let Docker allocate a free pool and remove
+  // captured static addresses from the cloned Compose definition below.
   args.push(shQuote(targetName));
   return args.join(" ");
 }
@@ -459,7 +448,8 @@ export async function runRecoveryRestore(hostId: string, input: RecoveryRestoreR
       volumeMap,
       bindMap,
       portRemap,
-      networkMap
+      networkMap,
+      preserveNetworkAddresses: networkMode === "reuse"
     });
 
     return {
@@ -485,7 +475,13 @@ export async function runRecoveryRestore(hostId: string, input: RecoveryRestoreR
     ? (await readRecoveryArtifact(point, envArtifact)).toString("utf8")
     : "";
 
-  composeYaml = remapComposeYaml(composeYaml, { volumes: volumeMap, bindMounts: bindMap, portRemap, networks: networkMap });
+  composeYaml = remapComposeYaml(composeYaml, {
+    volumes: volumeMap,
+    bindMounts: bindMap,
+    portRemap,
+    networks: networkMap,
+    resetNetworkAddressing: networkMode === "clone"
+  });
 
   const restoreFiles = composeRestoreFilePaths(manifest, point.id);
   const host = await getHostForWorker(hostId);

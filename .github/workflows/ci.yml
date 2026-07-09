@@ -106,6 +106,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Validate production compose config
         run: docker compose -f docker-compose.yml -f docker-compose.prod.example.yml config
+      - name: Validate Compose environment contracts
+        run: npm run check:compose-env
+      - name: Validate local acceptance Compose stack
+        run: npm run acceptance:config
       - name: Build app runtime image
         run: docker build --target runtime -t composebastion-app:ci .
       - name: Build agent runtime image

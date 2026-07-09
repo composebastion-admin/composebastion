@@ -32,7 +32,6 @@ import { enforceScheduledRecoveryRetention } from "./recoveryRetention.js";
 import {
   artifactRelativePath,
   hashFile,
-  readRecoveryPointFile,
   safeRecoveryPointFile,
   writeRecoveryPointFile
 } from "./recoveryStorage.js";
@@ -40,6 +39,7 @@ import {
   resolveRecoveryPointStatus
 } from "./recoveryS3.js";
 import { headRemoteArtifact, uploadRemoteArtifact } from "./recoveryRemoteStorage.js";
+import { ensureRecoveryArtifactLocalPath, readRecoveryArtifact } from "./recoveryArtifactStore.js";
 import { getRecoveryProfile } from "./recoveryProfiles.js";
 import { runSshCommand, streamSshCommandToFile } from "./ssh.js";
 
@@ -689,7 +689,7 @@ export async function runRecoveryVerify(hostId: string, recoveryPointId: string)
   const manifestArtifact = point.artifacts.find((artifact) => artifact.kind === "metadata");
   if (!manifestArtifact) throw new Error("Recovery manifest artifact not found");
 
-  const manifestRaw = await readRecoveryPointFile(recoveryPointId, manifestArtifact.storageKey);
+  const manifestRaw = await readRecoveryArtifact(point, manifestArtifact);
   const manifest = JSON.parse(manifestRaw.toString("utf8")) as { artifacts?: Array<{ storageKey: string }> };
   const failures: string[] = [];
 
@@ -699,7 +699,7 @@ export async function runRecoveryVerify(hostId: string, recoveryPointId: string)
       continue;
     }
     try {
-      const filePath = safeRecoveryPointFile(recoveryPointId, artifact.storageKey);
+      const filePath = await ensureRecoveryArtifactLocalPath(point, artifact);
       const checksum = await hashFile(filePath);
       if (artifact.checksum && artifact.checksum !== checksum) {
         failures.push(`${artifact.storageKey} checksum mismatch`);

@@ -28,11 +28,13 @@ full source checkout. The published image path is the simplest option for NAS
 devices, Proxmox Docker VMs/LXCs, Portainer stacks, and any native Docker host on
 `linux/amd64` or `linux/arm64`.
 
-## Current Release
+## Published Release And Candidate
 
-Latest verified release: `v1.0.6`.
+Latest published stable release: `v1.0.6`.
 
-- Package and OpenAPI version: `1.0.6`.
+- This branch prepares the untagged, unpublished `1.0.7-rc.1` candidate with a
+  Trivy scanner refresh and release-gate hardening.
+- Candidate package and OpenAPI version: `1.0.7-rc.1`.
 - GitHub release images: `1.0.6` and `v1.0.6`.
 - Published platforms: `linux/amd64` and `linux/arm64` for both app and agent.
 - Verified release gates: CI, OpenAPI generation, web smoke, dependency audit,

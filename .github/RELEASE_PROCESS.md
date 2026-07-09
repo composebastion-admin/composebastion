@@ -59,7 +59,7 @@ Run the same gates CI expects before release:
 - Publish container images for every public release and every merge to `main`
   through `.github/workflows/publish-images.yml`.
 - Main image publishes must include `latest`, branch tags, and `sha-*` tags.
-  Immutable version tags such as `1.0.2` and `v1.0.2` must only be published
+  Immutable version tags such as `${VERSION}` and `v${VERSION}` must only be published
   from `v*` git tags.
 - The workflow must build both app and agent images before publishing either
   image so version tags are not created from a partial runtime build.
@@ -112,6 +112,8 @@ npm run openapi:check --workspace @composebastion/api
 npm test
 npm run smoke:web
 npm audit --omit=dev --audit-level=high
+npm run check:compose-env
+npm run acceptance:config
 docker compose config
 POSTGRES_PASSWORD=composebastion-ci-password \
   APP_SECRET=ci-test-secret-which-is-at-least-32-chars-long \
@@ -128,10 +130,11 @@ docker build -f Dockerfile.agent --target runtime -t composebastion-agent:v1-loc
 After publishing, verify unauthenticated pulls:
 
 ```bash
-docker pull ghcr.io/composebastion-admin/composebastion-app:1.0.2
-docker pull ghcr.io/composebastion-admin/composebastion-agent:1.0.2
-docker pull ghcr.io/composebastion-admin/composebastion-app:v1.0.2
-docker pull ghcr.io/composebastion-admin/composebastion-agent:v1.0.2
+VERSION="$(node -p "require('./package.json').version")"
+docker pull "ghcr.io/composebastion-admin/composebastion-app:${VERSION}"
+docker pull "ghcr.io/composebastion-admin/composebastion-agent:${VERSION}"
+docker pull "ghcr.io/composebastion-admin/composebastion-app:v${VERSION}"
+docker pull "ghcr.io/composebastion-admin/composebastion-agent:v${VERSION}"
 ```
 
 ## Post-Push Verification
@@ -140,7 +143,7 @@ docker pull ghcr.io/composebastion-admin/composebastion-agent:v1.0.2
   any image publishing jobs.
 - Confirm scanner alerts on the protected branch after scans refresh; alerts can
   lag until the target branch is rescanned.
-- For the `v1.0.2` release, verify CI, CodeQL, Container Scan, Publish Images,
+- For every `v${VERSION}` release, verify CI, CodeQL, Container Scan, Publish Images,
   and code-scanning alerts after the scan refresh.
 - Distinguish Dependabot or bot PRs opened after a release push from actual
   release failures.
