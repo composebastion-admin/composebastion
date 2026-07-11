@@ -248,7 +248,7 @@ jobs:
 
   publish-main:
     name: Publish scanned main images
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' }}
     needs: [metadata, build-scan, release-image-gate]
     permissions:
       contents: read
