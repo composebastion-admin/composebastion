@@ -1,10 +1,8 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import pg from "pg";
-
-const { Client } = pg;
 const postgresImage = "postgres:16.6-alpine3.20@sha256:1e59919c179e296eaf3cc701f4d50bab5c393d7ed9746c188c9d519489c998dc";
 const suffix = `${process.pid}-${Date.now()}`;
 const container = `composebastion-postgres-upgrade-${suffix}`;
+const network = `${container}-network`;
 const volume = `${container}-data`;
 const database = "composebastion";
 const user = "composebastion";
@@ -27,7 +25,8 @@ function startPostgres(password) {
   docker([
     "run", "-d",
     "--name", container,
-    "--publish", "127.0.0.1::5432",
+    "--network", network,
+    "--network-alias", "postgres",
     "--env", `POSTGRES_DB=${database}`,
     "--env", `POSTGRES_USER=${user}`,
     "--env", `POSTGRES_PASSWORD=${password}`,
@@ -67,20 +66,37 @@ function renderCompose(files, databaseUrl) {
   }));
 }
 
-async function query(databaseUrl) {
-  const client = new Client({ connectionString: databaseUrl });
-  try {
-    await client.connect();
-    const result = await client.query("select current_user as current_user, current_database() as current_database");
-    if (result.rows[0]?.current_user !== user || result.rows[0]?.current_database !== database) {
-      throw new Error(`Unexpected PostgreSQL identity: ${JSON.stringify(result.rows[0])}`);
-    }
-  } finally {
-    await client.end().catch(() => {});
+function query(password) {
+  return spawnSync("docker", [
+    "run", "--rm",
+    "--network", network,
+    "--env", `PGPASSWORD=${password}`,
+    postgresImage,
+    "psql",
+    "--no-psqlrc",
+    "--set", "VERBOSITY=verbose",
+    "--host", "postgres",
+    "--username", user,
+    "--dbname", database,
+    "--tuples-only",
+    "--no-align",
+    "--command", "select current_user, current_database()"
+  ], { encoding: "utf8" });
+}
+
+function assertLegacyConnectivity() {
+  const result = query(legacyPassword);
+  if (result.status !== 0) {
+    throw new Error(`Legacy PostgreSQL credentials were rejected:\n${String(result.stderr).trim()}`);
+  }
+  const identity = String(result.stdout).trim();
+  if (identity !== `${user}|${database}`) {
+    throw new Error(`Unexpected PostgreSQL identity: ${JSON.stringify(identity)}`);
   }
 }
 
 try {
+  docker(["network", "create", network]);
   docker(["volume", "create", volume]);
   startPostgres(legacyPassword);
   await waitForPostgres();
@@ -91,22 +107,10 @@ try {
   startPostgres(replacementPassword);
   await waitForPostgres();
 
-  const publishedPort = docker(["port", container, "5432/tcp"]).trim();
-  const port = /:(\d+)$/.exec(publishedPort)?.[1];
-  if (!port) throw new Error(`Could not parse PostgreSQL published port: ${publishedPort}`);
-
   const internalLegacyUrl = `postgres://${user}:${legacyPassword}@postgres:5432/${database}`;
-  const localLegacyUrl = `postgres://${user}:${legacyPassword}@127.0.0.1:${port}/${database}`;
-  const localReplacementUrl = `postgres://${user}:${replacementPassword}@127.0.0.1:${port}/${database}`;
 
-  let replacementRejected = false;
-  try {
-    await query(localReplacementUrl);
-  } catch (error) {
-    replacementRejected = error?.code === "28P01";
-    if (!replacementRejected) throw error;
-  }
-  if (!replacementRejected) {
+  const replacementResult = query(replacementPassword);
+  if (replacementResult.status === 0) {
     throw new Error("The fixture did not preserve its legacy role password across container recreation");
   }
 
@@ -123,7 +127,7 @@ try {
       if (actual !== internalLegacyUrl) {
         throw new Error(`${label} ${serviceName} did not preserve the legacy DATABASE_URL: ${JSON.stringify(actual)}`);
       }
-      await query(localLegacyUrl);
+      assertLegacyConnectivity();
     }
   }
 
@@ -131,4 +135,5 @@ try {
 } finally {
   removeContainer();
   spawnSync("docker", ["volume", "rm", "-f", volume], { stdio: "ignore" });
+  spawnSync("docker", ["network", "rm", network], { stdio: "ignore" });
 }
