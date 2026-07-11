@@ -248,7 +248,7 @@ jobs:
 
   publish-main:
     name: Publish scanned main images
-    if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' }}
+    if: ${{ always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' }}
     needs: [metadata, build-scan, release-image-gate]
     permissions:
       contents: read
@@ -366,7 +366,7 @@ jobs:
 
   rescan-tag-images:
     name: Rescan tagged ${{ matrix.component }} ${{ matrix.arch }}
-    if: ${{ startsWith(github.ref, 'refs/tags/') }}
+    if: ${{ always() && startsWith(github.ref, 'refs/tags/') }}
     needs: metadata
     permissions:
       contents: read
@@ -467,7 +467,7 @@ jobs:
 
   promote-tag:
     name: Promote verified stable image indexes
-    if: ${{ startsWith(github.ref, 'refs/tags/') }}
+    if: ${{ always() && startsWith(github.ref, 'refs/tags/') }}
     needs: [metadata, release-image-gate]
     permissions:
       contents: read
