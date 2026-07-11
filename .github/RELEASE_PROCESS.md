@@ -134,6 +134,7 @@ RELEASE_AGENT_TOKEN="$(openssl rand -hex 32)"
 RELEASE_POSTGRES_PASSWORD="$(openssl rand -hex 32)"
 npm run typecheck
 npm run lint:migrations
+npm run check:postgres-upgrade
 npm run openapi:check --workspace @composebastion/api
 npm run check:release-version
 npm run notices:check

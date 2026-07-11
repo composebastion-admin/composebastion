@@ -17,7 +17,7 @@ services:
       BACKUP_DIR: /data/backups
       SECURE_COOKIES: ${SECURE_COOKIES:-true}
       APP_SECRET: ${APP_SECRET:?Set APP_SECRET to a unique random value of at least 32 characters}
-      DATABASE_URL: postgres://composebastion:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/composebastion
+      DATABASE_URL: ${DATABASE_URL:-postgres://composebastion:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/composebastion}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       CORS_ORIGINS: ${CORS_ORIGINS:-}
       TRUST_PROXY: ${TRUST_PROXY:-false}
@@ -42,7 +42,7 @@ services:
       NODE_ENV: production
       BACKUP_DIR: /data/backups
       APP_SECRET: ${APP_SECRET:?Set APP_SECRET to a unique random value of at least 32 characters}
-      DATABASE_URL: postgres://composebastion:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/composebastion
+      DATABASE_URL: ${DATABASE_URL:-postgres://composebastion:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/composebastion}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       ALLOW_PRIVATE_AGENT_URLS: ${ALLOW_PRIVATE_AGENT_URLS:-false}
       ALLOW_PRIVATE_WEBHOOK_URLS: ${ALLOW_PRIVATE_WEBHOOK_URLS:-false}

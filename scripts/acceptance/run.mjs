@@ -480,6 +480,7 @@ function managerComposeControls({
     COMPOSEBASTION_VERSION: candidateVersion,
     APP_SECRET: fixture.appSecret,
     POSTGRES_PASSWORD: fixture.postgresPassword,
+    DATABASE_URL: "",
     REDIS_URL: "redis://redis:6379",
     COMPOSEBASTION_BACKUP_DIR: backupDir,
     COMPOSEBASTION_HTTP_BIND_ADDRESS: "127.0.0.1",

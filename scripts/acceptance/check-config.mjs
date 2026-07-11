@@ -174,6 +174,7 @@ const env = {
   COMPOSEBASTION_GID: "23456",
   APP_SECRET: secret(),
   POSTGRES_PASSWORD: secret(),
+  DATABASE_URL: "",
   MINIO_ROOT_USER: "acceptance",
   MINIO_ROOT_PASSWORD: secret(),
   SAMBA_USER: "acceptance",

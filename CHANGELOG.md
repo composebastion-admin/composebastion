@@ -1,5 +1,16 @@
 # Changelog
 
+## [v1.1.1] - 2026-07-11
+
+### Fixed
+- Restored the documented `DATABASE_URL` Compose override so existing
+  installations keep using the credentials stored in their persistent
+  PostgreSQL volume after upgrading from releases that used the legacy URL.
+- Kept fresh installations secure by deriving `DATABASE_URL` from the required
+  URL-safe `POSTGRES_PASSWORD` whenever the override is empty or unset.
+- Added a Docker-backed persistent-volume upgrade regression and explicit
+  database credential recovery guidance.
+
 ## [v1.1.0] - 2026-07-11
 
 ### Added

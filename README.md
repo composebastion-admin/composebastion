@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/composebastion-admin/composebastion/releases"><img alt="Release" src="https://img.shields.io/badge/release-v1.1.0-e0a23f"></a>
+  <a href="https://github.com/composebastion-admin/composebastion/releases"><img alt="Release" src="https://img.shields.io/badge/release-v1.1.1-e0a23f"></a>
   <a href="https://github.com/composebastion-admin/composebastion/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/composebastion-admin/composebastion/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/composebastion-admin/composebastion/pkgs/container/composebastion-app"><img alt="Container image" src="https://img.shields.io/badge/ghcr.io-composebastion--app-2496ed"></a>
   <a href="LICENSE.md"><img alt="License" src="https://img.shields.io/badge/license-source--available-df7d27"></a>
@@ -30,15 +30,14 @@ devices, Proxmox Docker VMs/LXCs, Portainer stacks, and any native Docker host o
 
 ## Published Release
 
-Latest published stable release: `v1.1.0`.
+Latest published stable release: `v1.1.1`.
 
-- Package and OpenAPI version: `1.1.0`.
-- GitHub release images: `1.1.0` and `v1.1.0`.
+- Package and OpenAPI version: `1.1.1`.
+- GitHub release images: `1.1.1` and `v1.1.1`.
 - Published platforms: `linux/amd64` and `linux/arm64` for both app and agent.
-- Candidate release gates include CI/OpenAPI, per-workspace coverage, separate
+- Release gates include CI/OpenAPI, per-workspace coverage, separate
   mocked and live browser suites, the full dependency audit, Compose contracts,
-  live-stack acceptance, and exact four-variant image scans. The candidate is
-  not yet the latest verified release.
+  live-stack acceptance, and exact four-variant image scans.
 - `main` publishes the moving `main` alias plus a full-commit
   `sha-<40-character-sha>` index. The `latest` alias moves only after an
   authorized stable `v*` tag passes the release rescans.
@@ -82,6 +81,7 @@ Edit `.env` and set at least:
 ```bash
 APP_SECRET=<unique random value from: openssl rand -base64 48>
 POSTGRES_PASSWORD=<URL-safe database password from: openssl rand -hex 32>
+# Leave DATABASE_URL blank for new Compose installations.
 ```
 
 `SECURE_COOKIES=true` is the production default. `http://localhost:8080` works
@@ -120,13 +120,13 @@ Image tags:
 | Tag | Use |
 |-----|-----|
 | `latest` | Latest verified stable release for simple homelab/NAS updates. |
-| `1.0.6` or `v1.0.6` | Exact V1 release pin for controlled production upgrades. |
+| `1.1.1` or `v1.1.1` | Exact V1 release pin for controlled production upgrades. |
 | `main` | Latest fully scanned build from the protected main branch. |
 | `sha-*` | Immutable full-commit verification or rollback testing. |
 
 Main builds publish `main` and full-commit `sha-*` indexes from the already
 scanned platform archives. Stable release tags rescan those exact indexes and
-then promote them to version tags such as `1.0.6` and `v1.0.6`, the minor tag,
+then promote them to version tags such as `1.1.1` and `v1.1.1`, the minor tag,
 and `latest`; they do not rebuild.
 
 ### Option B: Build From Source
@@ -260,7 +260,7 @@ The full screenshot tour is in the [how-to guide](docs/how-to.md).
 - Canonical repository: `https://github.com/composebastion-admin/composebastion`.
 - Pushes, tags, releases, and version updates must use the
   `composebastion-admin` GitHub account.
-- `v1.0.6` is the V1 public release line for this repository.
+- `v1.1.1` is the current V1 public release line for this repository.
 - Local filesystem, S3-compatible storage, and SMB are the supported guided
   recovery storage targets; imported rclone providers remain experimental.
 - Do not reintroduce personal owner, repository, image, or user fixtures.

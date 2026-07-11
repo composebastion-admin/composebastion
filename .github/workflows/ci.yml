@@ -124,6 +124,8 @@ jobs:
         run: docker compose -f docker-compose.yml -f docker-compose.prod.example.yml config
       - name: Validate Compose environment contracts
         run: npm run check:compose-env
+      - name: Validate existing PostgreSQL volume upgrades
+        run: npm run check:postgres-upgrade
       - name: Validate local acceptance Compose stack
         run: npm run acceptance:config
       - name: Validate Docker build context exclusions

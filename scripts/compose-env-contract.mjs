@@ -109,14 +109,13 @@ export const sentinelEnvironmentServices = Object.freeze({
 });
 
 export const documentedComposeVariables = Object.freeze([
-  ...new Set(Object.keys(composeSentinels))
+  ...new Set([...Object.keys(composeSentinels), "DATABASE_URL"])
 ]);
 
 // These variables are documented for direct process execution or describe
 // fixed in-container paths. Production Compose intentionally owns their
 // values rather than forwarding host overrides.
 export const documentedRuntimeOnlyVariables = Object.freeze([
-  "DATABASE_URL",
   "BACKUP_DIR",
   "API_HOST",
   "API_PORT",

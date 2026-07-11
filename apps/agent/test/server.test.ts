@@ -131,7 +131,7 @@ describe("agent server", () => {
     expect(healthyReply.statusCode).toBe(200);
     expect(healthy).toMatchObject({
       ok: true,
-      agentVersion: "1.1.0",
+      agentVersion: "1.1.1",
       dockerVersion: "29.6.1",
       composeVersion: "5.3.1",
       dockerError: null,

@@ -10,18 +10,51 @@ import {
   workerOnlyEnvironment
 } from "./compose-env-contract.mjs";
 
-function render(files, { unset = [] } = {}) {
+function render(files, { unset = [], overrides = {} } = {}) {
   // Never let a developer's ignored .env satisfy or override this contract.
   const args = ["compose", "--env-file", "/dev/null"];
   for (const file of files) args.push("-f", file);
   args.push("config", "--format", "json");
-  const env = { ...process.env, ...composeSentinels };
+  const env = { ...process.env, ...composeSentinels, ...overrides };
   for (const key of unset) delete env[key];
   return JSON.parse(execFileSync("docker", args, {
     encoding: "utf8",
     env,
     stdio: ["ignore", "pipe", "inherit"]
   }));
+}
+
+const derivedDatabaseUrl = `postgres://composebastion:${composeSentinels.POSTGRES_PASSWORD}@postgres:5432/composebastion`;
+const explicitDatabaseUrl = "postgres://legacy-user:legacy-password@legacy-postgres.internal:5432/legacy-composebastion";
+
+function verifyDatabaseUrlPrecedence(label, files) {
+  for (const mode of ["unset", "empty"]) {
+    const options = mode === "unset"
+      ? { unset: ["DATABASE_URL"] }
+      : { overrides: { DATABASE_URL: "" } };
+    const config = render(files, options);
+    const failures = [];
+    for (const serviceName of ["app", "worker"]) {
+      const actual = String(config.services?.[serviceName]?.environment?.DATABASE_URL ?? "");
+      if (actual !== derivedDatabaseUrl) {
+        failures.push(`${serviceName}.DATABASE_URL: ${mode} override must derive from POSTGRES_PASSWORD; got ${JSON.stringify(actual)}`);
+      }
+    }
+    fail(`${label} ${mode} DATABASE_URL`, failures);
+  }
+
+  const config = render(files, { overrides: { DATABASE_URL: explicitDatabaseUrl } });
+  const failures = [];
+  for (const serviceName of ["app", "worker"]) {
+    const actual = String(config.services?.[serviceName]?.environment?.DATABASE_URL ?? "");
+    if (actual !== explicitDatabaseUrl) {
+      failures.push(`${serviceName}.DATABASE_URL: explicit override was not preserved exactly; got ${JSON.stringify(actual)}`);
+    }
+  }
+  if (String(config.services?.postgres?.environment?.POSTGRES_PASSWORD ?? "") !== composeSentinels.POSTGRES_PASSWORD) {
+    failures.push("postgres.POSTGRES_PASSWORD: explicit DATABASE_URL must not replace the initialization password");
+  }
+  fail(`${label} explicit DATABASE_URL`, failures);
 }
 
 function fail(label, failures) {
@@ -238,8 +271,12 @@ verifyLeakageDetector();
 verifyDocumentedVariables();
 const managerImage = `${composeSentinels.COMPOSEBASTION_IMAGE}:${composeSentinels.COMPOSEBASTION_VERSION}`;
 const agentImage = `${composeSentinels.COMPOSEBASTION_AGENT_IMAGE}:${composeSentinels.COMPOSEBASTION_AGENT_VERSION}`;
-verifyManager("published-image", render(["docker-compose.image.yml"]), true, managerImage);
-verifyManager("source-production", render(["docker-compose.yml", "docker-compose.prod.example.yml"]), false);
+verifyManager("published-image", render(["docker-compose.image.yml"], { unset: ["DATABASE_URL"] }), true, managerImage);
+verifyManager("source-production", render(["docker-compose.yml", "docker-compose.prod.example.yml"], { unset: ["DATABASE_URL"] }), false);
+verifyDatabaseUrlPrecedence("published-image", ["docker-compose.image.yml"]);
+verifyDatabaseUrlPrecedence("published-image hardening", ["docker-compose.image.yml", "docker-compose.hardened.yml"]);
+verifyDatabaseUrlPrecedence("source-production", ["docker-compose.yml", "docker-compose.prod.example.yml"]);
+verifyDatabaseUrlPrecedence("source-production hardening", ["docker-compose.yml", "docker-compose.prod.example.yml", "docker-compose.hardened.yml"]);
 verifySecureCookieDefault("published-image secure-cookie default", ["docker-compose.image.yml"]);
 verifySecureCookieDefault("source-production secure-cookie default", ["docker-compose.yml", "docker-compose.prod.example.yml"]);
 verifyAgent("source-agent", "agent-compose.example.yml");

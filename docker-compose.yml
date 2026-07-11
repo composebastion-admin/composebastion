@@ -9,7 +9,7 @@ services:
       API_HOST: 0.0.0.0
       API_PORT: 8080
       APP_SECRET: ${APP_SECRET:?Set APP_SECRET to a unique random value of at least 32 characters}
-      DATABASE_URL: postgres://composebastion:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/composebastion
+      DATABASE_URL: ${DATABASE_URL:-postgres://composebastion:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/composebastion}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       BACKUP_DIR: /data/backups
       WEB_DIST_DIR: /app/apps/web/dist
@@ -54,7 +54,7 @@ services:
     environment:
       NODE_ENV: production
       APP_SECRET: ${APP_SECRET:?Set APP_SECRET to a unique random value of at least 32 characters}
-      DATABASE_URL: postgres://composebastion:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/composebastion
+      DATABASE_URL: ${DATABASE_URL:-postgres://composebastion:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/composebastion}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       BACKUP_DIR: /data/backups
       ALLOW_PRIVATE_AGENT_URLS: ${ALLOW_PRIVATE_AGENT_URLS:-false}

@@ -2,11 +2,12 @@
 #   cp .env.example .env
 #   docker compose -f docker-compose.image.yml up -d
 #
-# POSTGRES_PASSWORD is interpolated into DATABASE_URL, so generate it with
-# `openssl rand -hex 32` or another URL-safe method.
+# A non-empty DATABASE_URL is preserved for existing installs and external
+# databases. Otherwise POSTGRES_PASSWORD is interpolated into DATABASE_URL, so
+# generate it with `openssl rand -hex 32` or another URL-safe method.
 #
 # For production, pin COMPOSEBASTION_VERSION in .env to a release tag such as
-# 1.0.6. For homelab/NAS auto-updates, leave it as latest and run pull before up.
+# 1.1.1. For homelab/NAS auto-updates, leave it as latest and run pull before up.
 services:
   app:
     image: ${COMPOSEBASTION_IMAGE:-ghcr.io/composebastion-admin/composebastion-app}:${COMPOSEBASTION_VERSION:-latest}
@@ -17,7 +18,7 @@ services:
       API_HOST: 0.0.0.0
       API_PORT: 8080
       APP_SECRET: ${APP_SECRET:?Set APP_SECRET to a unique random value of at least 32 characters}
-      DATABASE_URL: postgres://composebastion:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/composebastion
+      DATABASE_URL: ${DATABASE_URL:-postgres://composebastion:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/composebastion}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       BACKUP_DIR: /data/backups
       WEB_DIST_DIR: /app/apps/web/dist
@@ -65,7 +66,7 @@ services:
     environment:
       NODE_ENV: production
       APP_SECRET: ${APP_SECRET:?Set APP_SECRET to a unique random value of at least 32 characters}
-      DATABASE_URL: postgres://composebastion:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/composebastion
+      DATABASE_URL: ${DATABASE_URL:-postgres://composebastion:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/composebastion}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       BACKUP_DIR: /data/backups
       ALLOW_PRIVATE_AGENT_URLS: ${ALLOW_PRIVATE_AGENT_URLS:-false}

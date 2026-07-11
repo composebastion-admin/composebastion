@@ -29,18 +29,14 @@ the base images all support the device.
 
 ## Current Published Release
 
-The most recent published stable release is `v1.0.6`, but its embedded scanner
-is superseded for production readiness by the pending `1.0.7` remediation. It
-is not being presented as the latest verified production release.
+The most recent published stable release is `v1.1.1`.
 
 - App image: `ghcr.io/composebastion-admin/composebastion-app`
 - Agent image: `ghcr.io/composebastion-admin/composebastion-agent`
-- Exact release tags: `1.0.6` and `v1.0.6`
+- Exact release tags: `1.1.1` and `v1.1.1`
 - Moving `main` alias, stable-only `latest`, and full-commit `sha-*` indexes
 
-Existing `1.0.6` installations may remain pinned while preparing an upgrade,
-but new production installs should wait for the verified `1.0.7` release. Use
-`main` only when you intentionally test protected-branch candidates.
+Use `main` only when you intentionally test protected-branch candidates.
 
 Runtime app and agent images include ComposeBastion license, notice, trademark,
 and third-party notice files under `/licenses`.
@@ -72,6 +68,7 @@ Edit `.env`:
 ```bash
 APP_SECRET=<first generated value>
 POSTGRES_PASSWORD=<second generated value>
+DATABASE_URL=
 COMPOSEBASTION_VERSION=latest
 COMPOSEBASTION_BACKUP_DIR=/srv/composebastion/backups
 # Trusted direct-HTTP evaluation only; keep true when using HTTPS.
@@ -80,6 +77,9 @@ SECURE_COOKIES=false
 
 The literal placeholder copied from `.env.example` is intentionally rejected
 in production; replace it with the generated `APP_SECRET` before starting.
+Leave `DATABASE_URL` blank for a new Compose-managed database. A non-empty value
+is an advanced/external-database or existing-install compatibility override and
+takes precedence for `app` and `worker`.
 
 Start the stack:
 
@@ -92,7 +92,7 @@ Open `http://<manager-ip>:8080`, create the first owner account, then add a
 Docker host. The `SECURE_COOKIES=false` setting is only for this trusted
 direct-HTTP evaluation path; do not expose it to an untrusted network, and set
 it back to `true` when HTTPS is configured. For production change control, pin
-`COMPOSEBASTION_VERSION` to a release tag such as `1.0.6` instead of `latest`.
+`COMPOSEBASTION_VERSION` to a release tag such as `1.1.1` instead of `latest`.
 
 ## Source Build Install
 
@@ -116,10 +116,12 @@ Edit `.env`:
 ```bash
 APP_SECRET=<first generated value>
 POSTGRES_PASSWORD=<second generated value>
+DATABASE_URL=
 ```
 
 The literal placeholder copied from `.env.example` is intentionally rejected
 in production; replace it with the generated `APP_SECRET` before starting.
+Leave `DATABASE_URL` blank for a new Compose-managed database.
 
 Start the stack:
 

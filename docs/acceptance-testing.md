@@ -39,6 +39,11 @@ unreachable and has the same non-qualifying result. Validate both fixture
 definitions and their immutable third-party image pins with
 `npm run acceptance:config`.
 
+`npm run check:postgres-upgrade` separately recreates a PostgreSQL container
+with a changed initialization password over an existing data volume. It proves
+that all production Compose variants preserve an explicit legacy
+`DATABASE_URL` for both app and worker connections.
+
 The runner disables Compose's implicit `.env` loading and passes an explicit
 safe value for every Compose interpolation control. Subprocesses inherit only
 the host path/temp/locale, Docker connection, certificate, SSH-agent, and proxy
