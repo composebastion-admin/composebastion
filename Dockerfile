@@ -135,13 +135,13 @@ COPY --from=build /app/apps/api/dist ./apps/api/dist
 COPY --from=build /app/apps/web/dist ./apps/web/dist
 COPY --from=build /app/packages/shared/package.json ./packages/shared/package.json
 COPY --from=build /app/packages/shared/dist ./packages/shared/dist
-COPY --from=build /app/packages/shared/node_modules ./packages/shared/node_modules
 COPY --from=build /app/infra ./infra
 COPY LICENSE.md LICENSING_SUMMARY.md COMMERCIAL-LICENSE.md NOTICE.md THIRD-PARTY-NOTICES.md TRADEMARKS.md /licenses/
 COPY LICENSES /licenses/LICENSES
 RUN mkdir -p /data/backups /var/cache/composebastion/trivy && \
     chown -R 1000:1000 /data/backups /var/cache/composebastion
 RUN set -eux; \
+    node -e "Promise.all([import('@composebastion/shared'), import('semver')])"; \
     trivy --version | grep -F "Version: ${TRIVY_VERSION}"; \
     env -u RCLONE_VERSION rclone version | grep -F "rclone v${RCLONE_VERSION}"; \
     test -s /licenses/third-party/trivy-LICENSE.txt; \

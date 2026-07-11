@@ -400,6 +400,7 @@ for (const [invariant, message] of [
   ['echo "${RCLONE_LICENSE_SHA256}  /tmp/rclone-LICENSE" | sha256sum -c -', "rclone license verification"],
   ["COPY --from=trivy-builder /out/licenses/ /licenses/third-party/", "Trivy/ORAS/Go licenses"],
   ["COPY --from=rclone-evidence /out/licenses/ /licenses/third-party/", "rclone license and linked-module evidence"],
+  ["node -e \"Promise.all([import('@composebastion/shared'), import('semver')])\"", "runtime workspace dependency resolution check"],
   ["go-buildinfo/trivy.modules.tsv", "Trivy linked-module inventory"],
   ["go-buildinfo/rclone.modules.tsv", "rclone linked-module inventory"],
   ["go-buildinfo/trivy.artifacts.sha256", "Trivy legal-artifact checksums"],
