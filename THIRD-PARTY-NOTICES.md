@@ -3,7 +3,7 @@
 ComposeBastion may include or depend on third-party software components.
 Third-party components are governed by their own license terms and are not relicensed by LICENSE.md.
 
-This inventory was generated from package-lock.json for ComposeBastion 1.1.0-rc.1. It is a best-effort dependency notice for the npm workspace.
+This inventory was generated from package-lock.json for ComposeBastion 1.1.0. It is a best-effort dependency notice for the npm workspace.
 
 ## Bundled Runtime Tools
 

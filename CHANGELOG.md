@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [v1.1.0] - 2026-07-11
 
 ### Added
 - Added opt-in manager and agent hardening overlays, per-workspace V8 coverage
@@ -59,9 +59,6 @@
   secure-cookie defaults still permit an explicit `false` value.
 - Added additive migrations `029_worker_reliability.sql` and
   `030_migration_plan_binding.sql`; no existing public route was removed.
-
-The local `1.1.0-rc.1` candidate is stacked on the local `1.0.7-rc.1` patch
-candidate. Both are intentionally untagged and unpublished.
 
 ## [v1.0.6] - 2026-07-06
 

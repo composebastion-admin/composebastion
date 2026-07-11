@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/composebastion-admin/composebastion/releases"><img alt="Release" src="https://img.shields.io/badge/release-v1.0.6-e0a23f"></a>
+  <a href="https://github.com/composebastion-admin/composebastion/releases"><img alt="Release" src="https://img.shields.io/badge/release-v1.1.0-e0a23f"></a>
   <a href="https://github.com/composebastion-admin/composebastion/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/composebastion-admin/composebastion/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/composebastion-admin/composebastion/pkgs/container/composebastion-app"><img alt="Container image" src="https://img.shields.io/badge/ghcr.io-composebastion--app-2496ed"></a>
   <a href="LICENSE.md"><img alt="License" src="https://img.shields.io/badge/license-source--available-df7d27"></a>
@@ -28,14 +28,12 @@ full source checkout. The published image path is the simplest option for NAS
 devices, Proxmox Docker VMs/LXCs, Portainer stacks, and any native Docker host on
 `linux/amd64` or `linux/arm64`.
 
-## Published Release And Candidate
+## Published Release
 
-Latest published stable release: `v1.0.6`.
+Latest published stable release: `v1.1.0`.
 
-- This branch prepares the untagged, unpublished `1.1.0-rc.1` candidate on top
-  of the local `1.0.7-rc.1` patch candidate.
-- Candidate package and OpenAPI version: `1.1.0-rc.1`.
-- GitHub release images: `1.0.6` and `v1.0.6`.
+- Package and OpenAPI version: `1.1.0`.
+- GitHub release images: `1.1.0` and `v1.1.0`.
 - Published platforms: `linux/amd64` and `linux/arm64` for both app and agent.
 - Candidate release gates include CI/OpenAPI, per-workspace coverage, separate
   mocked and live browser suites, the full dependency audit, Compose contracts,
