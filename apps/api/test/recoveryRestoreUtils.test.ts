@@ -139,10 +139,12 @@ describe("port conflict behavior", () => {
       networks: { frontend: "demo-restore_frontend" }
     });
 
-    expect(result).toContain("demo-restore_data:/data");
+    expect(result).toContain("data:/data");
     expect(result).toContain("source: /var/lib/composebastion/restores/rp-1/srv_app");
     expect(result).toMatch(/published: ["']?18081["']?/);
-    expect(result).toContain("demo-restore_data:");
+    expect(result).toMatch(/^\s{2}data:\s*$/m);
+    expect(result).toContain("name: demo-restore_data");
+    expect(result).not.toMatch(/^\s+external: true\s*$/m);
     expect(result).toContain("demo-restore_frontend:");
     expect(result).toContain("name: demo-restore_frontend");
     expect(result).toContain("ipv4_address: 172.28.0.10");
@@ -172,6 +174,53 @@ describe("port conflict behavior", () => {
     expect(result).toContain("external: true");
     expect(result).not.toContain("ipv4_address");
     expect(result).not.toContain("172.28.0.0/16");
+  });
+
+  it("mounts the exact pre-restored volume instead of a project-prefixed empty volume", () => {
+    const yaml = [
+      "services:",
+      "  workload:",
+      "    image: alpine",
+      "    volumes:",
+      "      - workload-data:/data",
+      "volumes:",
+      "  workload-data:"
+    ].join("\n");
+
+    const result = remapComposeYaml(yaml, {
+      volumes: {
+        "source_workload-data": "clone-restore-abc12345_workload-data",
+        "workload-data": "clone-restore-abc12345_workload-data"
+      }
+    });
+
+    expect(result).toContain("workload-data:/data");
+    expect(result).toContain("name: clone-restore-abc12345_workload-data");
+    expect(result).not.toContain("clone-restore-abc12345_clone-restore-abc12345-workload-data");
+    expect(result).not.toContain("external: true");
+  });
+
+  it("maps Compose keys backed by explicitly named source volumes", () => {
+    const yaml = [
+      "services:",
+      "  workload:",
+      "    image: alpine",
+      "    volumes:",
+      "      - data:/data",
+      "volumes:",
+      "  data:",
+      "    name: shared-source-data",
+      "    external: true"
+    ].join("\n");
+
+    const result = remapComposeYaml(yaml, {
+      volumes: { "shared-source-data": "clone-restore-abc12345_data" }
+    });
+
+    expect(result).toContain("data:/data");
+    expect(result).toContain("name: clone-restore-abc12345_data");
+    expect(result).not.toContain("shared-source-data");
+    expect(result).not.toContain("external: true");
   });
 });
 

@@ -328,6 +328,7 @@ export function remapComposeYaml(
     const root = document.contents;
     if (!isMap(root)) return yaml;
 
+    const topVolumes = getMapValue(root, "volumes");
     const services = getMapValue(root, "services");
     if (isMap(services)) {
       for (const service of services.items) {
@@ -337,13 +338,16 @@ export function remapComposeYaml(
           for (const item of serviceVolumes.items) {
             const raw = scalarString(item);
             if (raw) {
-              setScalarString(item, remapVolumeString(raw, { volumes, bindMounts }));
+              // Keep named-volume references on their logical Compose key.
+              // The top-level definition below binds that key to the exact
+              // pre-restored engine volume while preserving `down -v` cleanup.
+              setScalarString(item, remapVolumeString(raw, { volumes: {}, bindMounts }));
               continue;
             }
             if (!isMap(item)) continue;
             const source = getMapValue(item, "source");
             const sourceValue = scalarString(source);
-            const replacement = sourceValue ? bindMounts[sourceValue] ?? volumes[sourceValue] : null;
+            const replacement = sourceValue ? bindMounts[sourceValue] : null;
             if (replacement) setScalarString(source, replacement);
           }
         }
@@ -386,13 +390,23 @@ export function remapComposeYaml(
       }
     }
 
-    const topVolumes = getMapValue(root, "volumes");
     if (isMap(topVolumes)) {
-      for (const [oldName, newName] of Object.entries(volumes)) {
-        if (!topVolumes.has(oldName)) continue;
-        const value = topVolumes.get(oldName, true);
-        topVolumes.delete(oldName);
-        topVolumes.set(newName, value ?? {});
+      const remappedDefinitions: Array<{ logicalName: string; targetName: string }> = [];
+      for (const item of topVolumes.items) {
+        if (!isScalar(item.key)) continue;
+        const logicalName = String(item.key.value ?? "");
+        if (!logicalName) continue;
+        const explicitName = isMap(item.value)
+          ? scalarString(getMapValue(item.value, "name"))
+          : null;
+        const targetName = volumes[logicalName] ?? (explicitName ? volumes[explicitName] : undefined);
+        if (targetName) remappedDefinitions.push({ logicalName, targetName });
+      }
+      for (const { logicalName, targetName } of remappedDefinitions) {
+        // The data was restored into this exact, pre-created engine volume.
+        // Keep the logical key and set only `name`: marking it external would
+        // prevent Compose-down-with-volumes from cleaning up the clone.
+        topVolumes.set(logicalName, { name: targetName });
       }
     }
 

@@ -66,8 +66,10 @@ const forbidden = [
   "nested/repository/.git/config",
   ".claude/settings.local.json",
   ".codex/config.toml",
+  ".DS_Store",
   "nested/tools/.claude/settings.local.json",
-  "nested/tools/.codex/config.toml"
+  "nested/tools/.codex/config.toml",
+  "nested/tools/.DS_Store"
 ];
 
 for (const relativePath of forbidden) writeFixture(relativePath, "credential or runtime sentinel\n");

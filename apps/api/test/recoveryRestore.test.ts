@@ -350,6 +350,11 @@ describe("recovery standalone restore cleanup", () => {
       "/home/docker/DemoApp/docker-compose.release.yml",
       expect.stringContaining("data:/app/data")
     );
+    expect(writeRemoteFile).toHaveBeenCalledWith(
+      expect.anything(),
+      "/home/docker/DemoApp/docker-compose.release.yml",
+      expect.stringContaining(`name: ${restoredDemoAppData}`)
+    );
     const commands = runSshCommand.mock.calls.map((call) => String(call[1]));
     expect(commands.some((command) => command.includes("cd '/home/docker/DemoApp'"))).toBe(true);
   });
