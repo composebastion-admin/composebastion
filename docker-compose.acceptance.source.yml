@@ -1,0 +1,19 @@
+# Final local-only override for the source-production acceptance scenario.
+# It restores a loopback-only browser/API port after the production example
+# removes public ports and pins every third-party runtime fixture by digest.
+services:
+  app:
+    build:
+      context: ${ACCEPTANCE_SOURCE_CONTEXT:?Set ACCEPTANCE_SOURCE_CONTEXT to the exact Git build context}
+    ports:
+      - "127.0.0.1:${ACCEPTANCE_SOURCE_HTTP_PORT:-18180}:8080"
+
+  worker:
+    build:
+      context: ${ACCEPTANCE_SOURCE_CONTEXT:?Set ACCEPTANCE_SOURCE_CONTEXT to the exact Git build context}
+
+  postgres:
+    image: postgres:16.6-alpine3.20@sha256:1e59919c179e296eaf3cc701f4d50bab5c393d7ed9746c188c9d519489c998dc
+
+  redis:
+    image: redis:7.4.1-alpine3.20@sha256:c1e88455c85225310bbea54816e9c3f4b5295815e6dbf80c34d40afc6df28275

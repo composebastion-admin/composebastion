@@ -4,8 +4,10 @@ import type { AdminUser } from "@composebastion/shared";
 import { api, deleteJson, postJson, putJson } from "../../api.js";
 import { emptyToUndefined } from "../../lib/format.js";
 import { ButtonRow, DataTable, Panel } from "../ui/primitives.js";
+import { useConfirm } from "../ConfirmProvider.js";
 
-export function UsersPanel() {
+export function UsersPanel({ currentUser }: { currentUser: AdminUser }) {
+  const { confirm } = useConfirm();
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [form, setForm] = useState({ name: "", username: "", email: "", password: "", role: "operator" });
   const load = useCallback(async () => {
@@ -33,7 +35,27 @@ export function UsersPanel() {
         user.email,
         user.role,
         user.isActive ? "yes" : "no",
-        <ButtonRow key="actions"><button onClick={() => void putJson(`/api/users/${user.id}`, { isActive: !user.isActive }).then(load)}>{user.isActive ? "Disable" : "Enable"}</button><button className="danger" disabled={user.role === "owner"} onClick={() => void deleteJson(`/api/users/${user.id}`).then(load)}><Trash2 size={16} /></button></ButtonRow>
+        <ButtonRow key="actions">
+          <button
+            disabled={user.id === currentUser.id && user.isActive}
+            title={user.id === currentUser.id && user.isActive ? "You cannot disable your own account" : undefined}
+            onClick={() => void (async () => {
+              if (user.isActive && !await confirm({ title: "Disable user", tone: "danger", confirmLabel: "Disable", message: `Disable ${user.email} and revoke their active sessions?` })) return;
+              await putJson(`/api/users/${user.id}`, { isActive: !user.isActive });
+              await load();
+            })()}
+          >{user.isActive ? "Disable" : "Enable"}</button>
+          <button
+            className="danger"
+            disabled={user.id === currentUser.id}
+            title={user.id === currentUser.id ? "You cannot delete your own account" : undefined}
+            onClick={() => void (async () => {
+              if (!await confirm({ title: "Delete user", tone: "danger", confirmLabel: "Delete", message: `Permanently delete ${user.email}?` })) return;
+              await deleteJson(`/api/users/${user.id}`);
+              await load();
+            })()}
+          ><Trash2 size={16} /></button>
+        </ButtonRow>
       ]} />
     </Panel>
   );

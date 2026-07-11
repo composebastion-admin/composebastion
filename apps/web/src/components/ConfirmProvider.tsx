@@ -6,6 +6,8 @@ type ConfirmOptions = {
   confirmLabel?: string;
   cancelLabel?: string;
   tone?: "danger" | "default";
+  verificationText?: string;
+  verificationLabel?: string;
 };
 
 type ConfirmState = ConfirmOptions & {
@@ -20,11 +22,15 @@ const ConfirmContext = createContext<ConfirmContextValue | null>(null);
 
 export function ConfirmProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<ConfirmState | null>(null);
+  const [verificationValue, setVerificationValue] = useState("");
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const confirmButtonRef = useRef<HTMLButtonElement | null>(null);
+  const cancelButtonRef = useRef<HTMLButtonElement | null>(null);
+  const verificationInputRef = useRef<HTMLInputElement | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
 
   const confirm = useCallback((options: ConfirmOptions) => new Promise<boolean>((resolve) => {
+    setVerificationValue("");
     setState({ ...options, resolve });
   }), []);
 
@@ -72,7 +78,9 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
     if (!state) return;
     previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     window.requestAnimationFrame(() => {
-      confirmButtonRef.current?.focus();
+      if (state.verificationText) verificationInputRef.current?.focus();
+      else if (state.tone === "danger") cancelButtonRef.current?.focus();
+      else confirmButtonRef.current?.focus();
     });
     return () => {
       const previous = previousFocusRef.current;
@@ -100,12 +108,25 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
           >
             <h3 id="confirm-title">{state.title}</h3>
             <p id="confirm-message">{state.message}</p>
+            {state.verificationText && (
+              <label className="confirmVerification">
+                <span>{state.verificationLabel ?? `Type ${state.verificationText} to continue`}</span>
+                <input
+                  ref={verificationInputRef}
+                  value={verificationValue}
+                  onChange={(event) => setVerificationValue(event.target.value)}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </label>
+            )}
             <div className="confirmActions">
-              <button type="button" onClick={() => close(false)}>{state.cancelLabel ?? "Cancel"}</button>
+              <button ref={cancelButtonRef} type="button" onClick={() => close(false)}>{state.cancelLabel ?? "Cancel"}</button>
               <button
                 ref={confirmButtonRef}
                 type="button"
                 className={state.tone === "danger" ? "danger" : "primary"}
+                disabled={Boolean(state.verificationText && verificationValue !== state.verificationText)}
                 onClick={() => close(true)}
               >
                 {state.confirmLabel ?? "Confirm"}

@@ -13,19 +13,10 @@ import { GlobalSettingsPanel } from "../settings/GlobalSettingsPanel.js";
 import { HostSettingsPanel } from "../settings/HostSettingsPanel.js";
 import { SessionsPanel } from "../settings/SessionsPanel.js";
 import { ButtonRow, Panel } from "../ui/primitives.js";
+import { useAuthorization } from "../AuthorizationContext.js";
+import { resolveAdminSection, type AdminSection } from "../../lib/authorization.js";
 
 const APP_VERSION = import.meta.env.VITE_APP_VERSION ?? "dev";
-
-type AdminSection =
-  | "settings"
-  | "operations"
-  | "appearance"
-  | "alerts"
-  | "registries"
-  | "users"
-  | "jobs"
-  | "audit"
-  | "about";
 
 const adminSections: Array<{ id: AdminSection; label: string }> = [
   { id: "settings", label: "Settings" },
@@ -63,11 +54,13 @@ export function AdminPanel({
   theme: Theme;
   onToggleTheme: () => void;
 }) {
-  const [section, setSection] = useState<AdminSection>(defaultSection);
+  const authorization = useAuthorization();
+  const visibleSections = adminSections.filter((item) => authorization.allowedAdminSections.includes(item.id));
+  const [section, setSection] = useState<AdminSection>(() => resolveAdminSection(defaultSection, authorization.allowedAdminSections));
 
   useEffect(() => {
-    setSection(defaultSection);
-  }, [defaultSection]);
+    setSection(resolveAdminSection(defaultSection, authorization.allowedAdminSections));
+  }, [authorization.allowedAdminSections, defaultSection]);
 
   return (
     <div className="adminShell">
@@ -79,7 +72,7 @@ export function AdminPanel({
       </div>
       <div className="adminLayout">
         <nav className="adminNav" aria-label="Admin sections">
-          {adminSections.map((item) => (
+          {visibleSections.map((item) => (
             <button
               key={item.id}
               type="button"
@@ -94,7 +87,8 @@ export function AdminPanel({
           {section === "settings" && (
             <>
               <SessionsPanel />
-              {selectedHost ? <HostSettingsPanel host={selectedHost} onChanged={refresh} /> : <GlobalSettingsPanel onChanged={refresh} />}
+              {authorization.canOperate && selectedHost && <HostSettingsPanel host={selectedHost} onChanged={refresh} />}
+              {authorization.canAdminister && !selectedHost && <GlobalSettingsPanel onChanged={refresh} />}
             </>
           )}
           {section === "operations" && <OperationsPanel />}
@@ -109,11 +103,11 @@ export function AdminPanel({
               </ButtonRow>
             </Panel>
           )}
-          {section === "alerts" && <AlertsPanel hosts={hosts} containers={resources.filter((resource) => resource.kind === "container")} refresh={refresh} userRole={user.role} />}
+          {section === "alerts" && <AlertsPanel hosts={hosts} containers={resources.filter((resource) => resource.kind === "container")} refresh={refresh} />}
           {section === "registries" && selectedHost && <RegistriesPanel hosts={hosts} selectedHost={selectedHost} refresh={refresh} runJob={runJob} />}
           {section === "registries" && !selectedHost && <Panel title="Registries"><p>Add a host before logging it into registries.</p></Panel>}
-          {section === "users" && <UsersPanel />}
-          {section === "jobs" && <JobsPanel jobs={jobs} userRole={user.role} refresh={refresh} />}
+          {section === "users" && <UsersPanel currentUser={user} />}
+          {section === "jobs" && <JobsPanel jobs={jobs} refresh={refresh} />}
           {section === "audit" && <AuditPanel />}
           {section === "about" && <AboutPanel />}
         </div>

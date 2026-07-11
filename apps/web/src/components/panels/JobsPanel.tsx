@@ -1,19 +1,16 @@
 import { useState } from "react";
-import type { AdminUser, OperationJob } from "@composebastion/shared";
+import type { OperationJob } from "@composebastion/shared";
 import { postJson } from "../../api.js";
 import { formatDate } from "../../lib/format.js";
 import { activeJobPhase, jobProgressSteps, jobRecoveryHint } from "../../lib/jobProgress.js";
 import { useConfirm } from "../ConfirmProvider.js";
 import { CardSection, InlineStatus, Panel, ProgressSteps, StatusPill, Toolbar, VirtualDataTable } from "../ui/primitives.js";
+import { useAuthorization } from "../AuthorizationContext.js";
 
-function canOperate(role: AdminUser["role"]) {
-  return role === "owner" || role === "admin" || role === "operator";
-}
-
-export function JobsPanel({ jobs, userRole, refresh }: { jobs: OperationJob[]; userRole: AdminUser["role"]; refresh: () => Promise<void> }) {
+export function JobsPanel({ jobs, refresh }: { jobs: OperationJob[]; refresh: () => Promise<void> }) {
   const { confirm } = useConfirm();
   const [busyJobId, setBusyJobId] = useState<string | null>(null);
-  const showActions = canOperate(userRole);
+  const { canOperate: showActions } = useAuthorization();
 
   async function retry(job: OperationJob) {
     setBusyJobId(job.id);
@@ -49,7 +46,15 @@ export function JobsPanel({ jobs, userRole, refresh }: { jobs: OperationJob[]; u
       >
         <VirtualDataTable
           rows={jobs}
-          columns={["Type", "Status", "Progress", "Created", "Correlation", "Failure / Recovery", "Actions"]}
+          columns={[
+            "Type",
+            "Status",
+            "Progress",
+            "Created",
+            "Correlation",
+            "Failure / Recovery",
+            ...(showActions ? ["Actions"] : [])
+          ]}
           render={(job) => [
             job.type,
             <StatusPill key="status" status={job.status} />,
@@ -64,16 +69,14 @@ export function JobsPanel({ jobs, userRole, refresh }: { jobs: OperationJob[]; u
               <small>{jobRecoveryHint(job)}</small>
               {job.completedAt && <small>Finished {formatDate(job.completedAt)}</small>}
             </div>,
-            showActions ? (
-              <Toolbar key="actions" className="compactToolbar">
+            ...(showActions ? [<Toolbar key="actions" className="compactToolbar">
                 {(job.status === "failed" || job.status === "canceled") && (
                   <button type="button" disabled={busyJobId === job.id} onClick={() => void retry(job)}>Retry</button>
                 )}
                 {job.status === "queued" && (
                   <button type="button" className="danger" disabled={busyJobId === job.id} onClick={() => void cancel(job)}>Cancel</button>
                 )}
-              </Toolbar>
-            ) : ""
+              </Toolbar>] : [])
           ]}
         />
       </CardSection>

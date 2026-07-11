@@ -5,14 +5,16 @@ import { Terminal as XTerm } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import type { DockerHost } from "@composebastion/shared";
 import { hostTerminalUrl } from "../../lib/hostTerminal.js";
-
-type DrawerPhase = "warning" | "connecting" | "ready" | "error";
+import { terminalPhaseLabel, type HostTerminalPhase } from "../../lib/hostTerminalStatus.js";
 
 export function HostTerminalDrawer({ host, onClose }: { host: DockerHost; onClose: () => void }) {
-  const [phase, setPhase] = useState<DrawerPhase>("warning");
+  const [phase, setPhase] = useState<HostTerminalPhase>("warning");
   const [error, setError] = useState<string | null>(null);
   const [confirmed, setConfirmed] = useState(false);
   const frameRef = useRef<HTMLDivElement | null>(null);
+  const drawerRef = useRef<HTMLDivElement | null>(null);
+  const cancelRef = useRef<HTMLButtonElement | null>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
   const termRef = useRef<XTerm | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
@@ -26,6 +28,42 @@ export function HostTerminalDrawer({ host, onClose }: { host: DockerHost; onClos
   }, []);
 
   useEffect(() => () => cleanup(), [cleanup]);
+
+  useEffect(() => {
+    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    window.requestAnimationFrame(() => cancelRef.current?.focus());
+    return () => {
+      const previous = previousFocusRef.current;
+      if (previous && document.contains(previous)) previous.focus();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (confirmed) return;
+    function handleWarningKeys(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        handleClose();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const drawer = drawerRef.current;
+      if (!drawer) return;
+      const focusable = Array.from(drawer.querySelectorAll<HTMLElement>("button:not(:disabled), [href], input:not(:disabled), [tabindex]:not([tabindex='-1'])"));
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (!first || !last) return;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+    window.addEventListener("keydown", handleWarningKeys);
+    return () => window.removeEventListener("keydown", handleWarningKeys);
+  }, [confirmed]);
 
   useLayoutEffect(() => {
     if (!confirmed) return;
@@ -122,6 +160,7 @@ export function HostTerminalDrawer({ host, onClose }: { host: DockerHost; onClos
     });
 
     socket.addEventListener("close", () => {
+      setPhase((current) => current === "error" ? current : "closed");
       term.writeln("\r\n\r\n[session closed]");
     });
 
@@ -153,13 +192,30 @@ export function HostTerminalDrawer({ host, onClose }: { host: DockerHost; onClos
   }
 
   return (
-    <div className={`drawer hostTerminalDrawer ${confirmed ? "terminalOpen" : ""}`} role="dialog" aria-modal="true" aria-label={`Host SSH terminal for ${host.name}`}>
+    <div
+      ref={drawerRef}
+      className={`drawer hostTerminalDrawer ${confirmed ? "terminalOpen" : ""}`}
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Host SSH terminal for ${host.name}`}
+      aria-describedby={!confirmed ? "host-terminal-warning" : undefined}
+    >
       <div className="panelHeader">
         <div>
-          <h3><Terminal size={18} /> Host SSH terminal</h3>
+          <h3 id="host-terminal-title"><Terminal size={18} /> Host SSH terminal</h3>
           <p>{host.name} · {host.username}@{host.hostname}:{host.port}</p>
+          {confirmed && (
+            <span
+              className={`pill ${phase === "ready" ? "online" : phase === "connecting" ? "unknown" : phase === "closed" ? "offline" : "error"}`}
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+            >
+              {terminalPhaseLabel(phase, host.name)}
+            </span>
+          )}
         </div>
-        <button type="button" onClick={handleClose} title="Close terminal"><X size={18} /></button>
+        <button type="button" onClick={handleClose} title="Close terminal" aria-label="Close host terminal"><X size={18} /></button>
       </div>
 
       {!confirmed && (
@@ -167,22 +223,21 @@ export function HostTerminalDrawer({ host, onClose }: { host: DockerHost; onClos
           <AlertTriangle size={20} />
           <div>
             <strong>Privileged shell access</strong>
-            <p>
-              You are about to open an interactive SSH shell on this host. All commands are attributed to your account
-              and recorded in the audit log.
+            <p id="host-terminal-warning">
+              You are about to open an interactive SSH shell on this host. The audit log records your identity, host,
+              session timestamps, duration, and byte counts. Command text and terminal output are not captured.
             </p>
           </div>
           <div className="buttonRow">
-            <button type="button" className="primary" onClick={() => setConfirmed(true)}>Open shell</button>
-            <button type="button" onClick={handleClose}>Cancel</button>
+            <button type="button" className="primary" onClick={() => { setPhase("connecting"); setConfirmed(true); }}>Open shell</button>
+            <button ref={cancelRef} type="button" onClick={handleClose}>Cancel</button>
           </div>
         </div>
       )}
 
       {confirmed && (
         <>
-          {phase === "connecting" && <div className="notice">Connecting to {host.name}…</div>}
-          {error && <div className="notice error">{error}</div>}
+          {error && <div className="notice error" role="alert" aria-live="assertive">{error}</div>}
           <div ref={frameRef} className="hostTerminalFrame" aria-label="Host SSH terminal" />
         </>
       )}

@@ -6,8 +6,10 @@ import { useAsyncAction } from "../../hooks/useAsyncAction.js";
 import type { Jobish, JobResult } from "../../lib/dashboardTypes.js";
 import { ButtonRow, DataTable, Panel } from "../ui/primitives.js";
 import { HostSelect } from "../dashboard/HostSelect.js";
+import { useConfirm } from "../ConfirmProvider.js";
 
 export function RegistriesPanel({ hosts, selectedHost, runJob }: { hosts: DockerHost[]; selectedHost: DockerHost; refresh: () => Promise<void>; runJob: <T extends Jobish>(request: () => Promise<T>) => Promise<T> }) {
+  const { confirm } = useConfirm();
   const [registries, setRegistries] = useState<Registry[]>([]);
   const [form, setForm] = useState({ name: "", url: "", username: "", password: "", insecure: false });
   const [hostId, setHostId] = useState(selectedHost.id);
@@ -38,7 +40,11 @@ export function RegistriesPanel({ hosts, selectedHost, runJob }: { hosts: Docker
         registry.name,
         registry.url,
         registry.username ?? "",
-        <ButtonRow key="actions"><button disabled={action.busy} onClick={() => void action.run(() => runJob(() => postJson<JobResult>(`/api/hosts/${hostId}/registries/${registry.id}/login`, {})))}>Login</button><button className="danger" onClick={() => void deleteJson(`/api/registries/${registry.id}`).then(load)}><Trash2 size={16} /></button></ButtonRow>
+        <ButtonRow key="actions"><button disabled={action.busy} onClick={() => void action.run(() => runJob(() => postJson<JobResult>(`/api/hosts/${hostId}/registries/${registry.id}/login`, {})))}>Login</button><button className="danger" onClick={() => void (async () => {
+          if (!await confirm({ title: "Delete registry", tone: "danger", confirmLabel: "Delete", message: `Delete registry ${registry.name} and its stored credentials?` })) return;
+          await deleteJson(`/api/registries/${registry.id}`);
+          await load();
+        })()}><Trash2 size={16} /></button></ButtonRow>
       ]} />
     </Panel>
   );

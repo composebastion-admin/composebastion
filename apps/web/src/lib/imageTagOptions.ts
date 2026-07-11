@@ -1,3 +1,5 @@
+import { compareReleaseVersions, isStableReleaseVersion, parseReleaseVersion } from "@composebastion/shared";
+
 const channelPriority = new Map([
   ["latest", 0],
   ["main", 1],
@@ -9,32 +11,21 @@ const channelPriority = new Map([
 ]);
 
 type ParsedVersion = {
-  numbers: number[];
-  prerelease: string;
-  prereleaseNumber: number;
+  normalized: string;
+  prerelease: boolean;
 };
 
 function parseVersionTag(value: string): ParsedVersion | null {
-  const match = value.trim().match(/^v?(\d+(?:\.\d+){0,4})(?:[-._]?([a-z][a-z0-9-]*?)(?:[.-]?(\d+))?)?$/i);
-  if (!match) return null;
+  const normalized = parseReleaseVersion(value);
+  if (!normalized) return null;
   return {
-    numbers: match[1]!.split(".").map((part) => Number(part)),
-    prerelease: (match[2] ?? "").toLowerCase(),
-    prereleaseNumber: Number(match[3] ?? 0)
+    normalized,
+    prerelease: !isStableReleaseVersion(normalized)
   };
 }
 
 function compareParsedVersions(left: ParsedVersion, right: ParsedVersion) {
-  const length = Math.max(left.numbers.length, right.numbers.length);
-  for (let index = 0; index < length; index += 1) {
-    const diff = (right.numbers[index] ?? 0) - (left.numbers[index] ?? 0);
-    if (diff !== 0) return diff;
-  }
-  if (!left.prerelease && right.prerelease) return -1;
-  if (left.prerelease && !right.prerelease) return 1;
-  const prereleaseDiff = left.prerelease.localeCompare(right.prerelease);
-  if (prereleaseDiff !== 0) return prereleaseDiff;
-  return right.prereleaseNumber - left.prereleaseNumber;
+  return compareReleaseVersions(right.normalized, left.normalized) ?? 0;
 }
 
 export function isImageChannelTag(tag: string) {
@@ -74,7 +65,7 @@ export function isNewerVersionTag(candidate: string | null | undefined, current:
   const candidateEntry = candidate ? parsedVersionEntry(candidate) : null;
   const currentEntry = current ? parsedVersionEntry(current) : null;
   if (!candidateEntry || !currentEntry) return false;
-  return compareParsedVersions(candidateEntry.parsed, currentEntry.parsed) < 0;
+  return (compareReleaseVersions(candidateEntry.parsed.normalized, currentEntry.parsed.normalized) ?? 0) > 0;
 }
 
 export function recommendedImageVersionTag(tags: string[], currentTag: string) {

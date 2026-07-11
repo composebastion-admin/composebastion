@@ -38,7 +38,7 @@ import { registerUserRoutes } from "./routes/users.js";
 import { registerRequestId } from "./plugins/requestId.js";
 import { registerApiVersionAliasRoutes } from "./routes/apiVersion.js";
 import { isAllowedCorsOrigin, isTrustedUnsafeRequestOrigin, isUnsafeHttpMethod } from "./services/httpSecurity.js";
-import { createRedis } from "./services/redis.js";
+import { createRedis, redisErrorType } from "./services/redis.js";
 import { getWorkerStatus } from "./services/jobs.js";
 import { sendApiError } from "./services/apiError.js";
 import { apiLogFields } from "./services/operationLogs.js";
@@ -116,23 +116,23 @@ export async function buildServer() {
     return { ok: true };
   });
   app.get("/api/health/ready", { config: { rateLimit: healthCheckRateLimit } }, async (_request, reply) => {
-    const checks: Record<string, { ok: boolean; error?: string }> = {};
+    const checks: Record<string, { ok: boolean; required: boolean; error?: string }> = {};
     try {
       await pool.query("SELECT 1");
-      checks.database = { ok: true };
+      checks.database = { ok: true, required: true };
     } catch (error) {
-      checks.database = { ok: false, error: error instanceof Error ? error.message : "Database unavailable" };
+      checks.database = { ok: false, required: true, error: error instanceof Error ? error.message : "Database unavailable" };
     }
 
     const redis = createRedis();
     if (!redis) {
-      checks.redis = { ok: false, error: "Redis not configured" };
+      checks.redis = { ok: false, required: false, error: "Redis not configured" };
     } else {
       try {
         await redis.connect();
-        checks.redis = { ok: (await redis.ping()) === "PONG" };
+        checks.redis = { ok: (await redis.ping()) === "PONG", required: false };
       } catch (error) {
-        checks.redis = { ok: false, error: error instanceof Error ? error.message : "Redis unavailable" };
+        checks.redis = { ok: false, required: false, error: redisErrorType(error) };
       } finally {
         redis.disconnect();
       }
@@ -140,19 +140,24 @@ export async function buildServer() {
 
     try {
       accessSync(env.BACKUP_DIR, constants.W_OK | constants.R_OK);
-      checks.backups = { ok: true };
+      checks.backups = { ok: true, required: false };
     } catch (error) {
-      checks.backups = { ok: false, error: error instanceof Error ? error.message : "Backup directory unavailable" };
+      checks.backups = { ok: false, required: false, error: error instanceof Error ? error.message : "Backup directory unavailable" };
     }
 
     try {
       const worker = await getWorkerStatus();
-      checks.worker = { ok: true, ...worker };
+      checks.worker = {
+        ok: worker.available,
+        required: true,
+        ...worker,
+        ...(worker.available ? {} : { error: `Worker is ${worker.state}` })
+      };
     } catch (error) {
-      checks.worker = { ok: false, error: error instanceof Error ? error.message : "Worker status unavailable" };
+      checks.worker = { ok: false, required: true, error: error instanceof Error ? error.message : "Worker status unavailable" };
     }
 
-    const ok = Object.values(checks).every((check) => check.ok);
+    const ok = Object.values(checks).filter((check) => check.required).every((check) => check.ok);
     if (!ok) reply.code(503);
     return { ok, checks };
   });
@@ -165,12 +170,14 @@ export async function buildServer() {
     try {
       await redis.connect();
       const pong = await redis.ping();
-      return { ok: pong === "PONG", configured: true };
+      const ok = pong === "PONG";
+      if (!ok) reply.code(503);
+      return { ok, configured: true };
     } catch (error) {
       reply.code(503).send({
         ok: false,
         configured: true,
-        error: error instanceof Error ? error.message : "Redis unavailable"
+        error: redisErrorType(error)
       });
     } finally {
       redis.disconnect();

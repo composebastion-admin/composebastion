@@ -4,12 +4,15 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import { v4 as uuid } from "uuid";
 import type { AdminUser } from "@composebastion/shared";
 import { env } from "../config/env.js";
-import { query } from "../db/pool.js";
+import { query, withTransaction } from "../db/pool.js";
 import { sendApiError } from "./apiError.js";
 import { mapAdmin } from "./mappers.js";
 
 const SESSION_COOKIE = "cb_session";
 const SESSION_DAYS = 7;
+// Serialize bootstrap with account mutations that can change the active-owner
+// invariant. The transaction-scoped lock is shared by every API replica.
+export const OWNER_INVARIANT_LOCK_KEY = 763_291_407;
 
 type SessionContext = {
   ipAddress?: string | null;
@@ -26,22 +29,26 @@ export async function adminCount() {
 }
 
 export async function createAdmin(input: { email?: string; username?: string; password: string; name?: string }) {
-  if ((await adminCount()) > 0) {
-    throw new Error("Initial admin already exists");
-  }
-
   const username = input.username?.trim().toLowerCase() || null;
   const email = input.email?.trim().toLowerCase() || (username ? `${username}@local.composebastion` : null);
   if (!email) throw new Error("Username or email is required");
 
   const passwordHash = await bcrypt.hash(input.password, 12);
-  const result = await query(
-    `INSERT INTO admin_users (id, name, username, email, password_hash, role)
-     VALUES ($1, $2, $3, $4, $5, 'owner')
-     RETURNING id, name, username, email, role, is_active, created_at`,
-    [uuid(), input.name ?? null, username, email, passwordHash]
-  );
-  return mapAdmin(result.rows[0]);
+  return withTransaction(async (client) => {
+    await client.query("SELECT pg_advisory_xact_lock($1)", [OWNER_INVARIANT_LOCK_KEY]);
+    const existing = await client.query<{ count: string }>("SELECT count(*)::text AS count FROM admin_users");
+    if (Number(existing.rows[0]?.count ?? 0) > 0) {
+      throw Object.assign(new Error("Initial admin already exists"), { statusCode: 409 });
+    }
+
+    const result = await client.query(
+      `INSERT INTO admin_users (id, name, username, email, password_hash, role)
+       VALUES ($1, $2, $3, $4, $5, 'owner')
+       RETURNING id, name, username, email, role, is_active, created_at`,
+      [uuid(), input.name ?? null, username, email, passwordHash]
+    );
+    return mapAdmin(result.rows[0]);
+  });
 }
 
 export async function verifyAdmin(identifier: string, password: string) {

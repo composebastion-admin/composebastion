@@ -163,7 +163,10 @@ ComposeBastion imports third-party catalog data into a review screen instead of 
 
 Open `SSH`, choose a host, and open the terminal. SSH terminal access is owner/admin only and is intended for direct host repair work.
 
-The terminal opens as a near full-screen audited shell. Commands are attributed to the signed-in user.
+The terminal opens as a near full-screen privileged shell. The audit event
+records the signed-in user, host, start/end time, duration, and byte counts;
+command text and terminal output are deliberately not captured because they can
+contain secrets.
 
 ## Use Recovery
 

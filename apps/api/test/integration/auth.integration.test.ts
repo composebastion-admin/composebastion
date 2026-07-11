@@ -57,6 +57,27 @@ describe.skipIf(!integrationEnabled)("auth API integration", () => {
     expect(me.json().user.email).toContain("admin");
   });
 
+  it("allows exactly one owner when setup requests race", async () => {
+    const responses = await Promise.all([
+      app.inject({
+        method: "POST",
+        url: "/api/auth/setup",
+        remoteAddress: "192.0.2.10",
+        payload: { username: "owner-one", password: strongPassword }
+      }),
+      app.inject({
+        method: "POST",
+        url: "/api/auth/setup",
+        remoteAddress: "192.0.2.10",
+        payload: { username: "owner-two", password: strongPassword }
+      })
+    ]);
+
+    expect(responses.map((response) => response.statusCode).sort()).toEqual([200, 409]);
+    const owners = await pool.query("SELECT id FROM admin_users WHERE role = 'owner' AND is_active = true");
+    expect(owners.rowCount).toBe(1);
+  });
+
   it("rejects weak setup passwords", async () => {
     const response = await app.inject({
       method: "POST",

@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { dockerActionSchema, resourceKindSchema } from "@composebastion/shared";
-import { createHost, deleteHost, getHost, listHosts, restoreHost, updateHost } from "../services/hosts.js";
+import { createHostWithSync, deleteHost, getHost, listHosts, restoreHost, updateHost } from "../services/hosts.js";
 import { auditContextFromRequest } from "../services/audit.js";
 import { sendApiError } from "../services/apiError.js";
 import { listImageCleanupCandidates, listResources } from "../services/docker.js";
@@ -19,8 +19,7 @@ export async function registerHostRoutes(app: FastifyInstance) {
 
   app.post("/api/hosts", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request, reply) => {
     try {
-      const host = await createHost(request.body);
-      const job = await enqueueJob({ type: "host.sync", hostId: host.id, payload: {} }, request.user?.id);
+      const { host, job } = await createHostWithSync(request.body, request.user?.id);
       await writeAuditEvent({
         userId: request.user?.id,
         hostId: host.id,

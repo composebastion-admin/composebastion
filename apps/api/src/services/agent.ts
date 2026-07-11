@@ -1,12 +1,19 @@
 import http from "node:http";
 import https from "node:https";
-import type { HostDisk } from "@composebastion/shared";
+import { compareReleaseVersions, parseReleaseVersion, type HostDisk } from "@composebastion/shared";
 import { env } from "../config/env.js";
 import { createAgentLookup, shouldAllowPrivateAgentUrls } from "./ssrf.js";
 
 export interface AgentTarget {
   url: string;
   token: string;
+}
+
+export class AgentHttpError extends Error {
+  constructor(message: string, public readonly status: number) {
+    super(message);
+    this.name = "AgentHttpError";
+  }
 }
 
 type AgentRequestInit = {
@@ -132,37 +139,35 @@ export async function checkAgent(target: AgentTarget) {
   const response = await agentRequest(target, "api/health", {
     headers: { Authorization: `Bearer ${target.token}` }
   });
-  if (!response.ok) throw new Error(`Agent health check failed with ${response.status}`);
-  return parseAgentJson<{ ok: boolean; agentVersion?: string; dockerVersion?: string; composeVersion?: string }>(response.body);
+  if (!response.ok) throw new AgentHttpError(`Agent health check failed with ${response.status}`, response.status);
+  const data = parseAgentJson<{ ok?: boolean; agentVersion?: string; dockerVersion?: string; composeVersion?: string }>(response.body);
+  if (data.ok !== true) throw new Error("Agent reported that Docker or Compose is unavailable");
+  return { ...data, ok: true as const };
 }
 
-function versionParts(version: string | null | undefined) {
-  const match = String(version ?? "").match(/^(\d+)\.(\d+)\.(\d+)(?:-pre\.(\d+))?$/);
-  if (!match) return null;
-  return {
-    major: Number(match[1]),
-    minor: Number(match[2]),
-    patch: Number(match[3]),
-    pre: match[4] === undefined ? null : Number(match[4])
-  };
+export async function getAgentContainerUsage(target: AgentTarget, timeoutMs = 15_000) {
+  const response = await agentRequest(target, "api/containers/usage", {
+    headers: { Authorization: `Bearer ${target.token}` },
+    timeoutMs
+  });
+  const data = parseAgentJson<{ usage?: unknown; error?: string }>(response.body);
+  if (!response.ok) {
+    throw new AgentHttpError(data.error ?? `Agent container usage failed with ${response.status}`, response.status);
+  }
+  if (!Array.isArray(data.usage)) throw new Error("Agent returned malformed container usage data");
+  return data.usage.filter((row): row is Record<string, unknown> => Boolean(row) && typeof row === "object");
 }
 
 export function agentCompatibilityStatus(version: string | null | undefined) {
-  const current = versionParts(version);
-  const minimum = versionParts(MIN_COMPATIBLE_AGENT_VERSION)!;
-  if (!current) {
+  const current = parseReleaseVersion(version);
+  const comparison = compareReleaseVersions(current, MIN_COMPATIBLE_AGENT_VERSION);
+  if (!current || comparison === null) {
     return {
       status: "unknown" as const,
       message: "Agent version is unknown; upgrade the agent if live logs or host stats are unavailable."
     };
   }
-  const compatible = current.major !== minimum.major
-    ? current.major > minimum.major
-    : current.minor !== minimum.minor
-      ? current.minor > minimum.minor
-      : current.patch !== minimum.patch
-        ? current.patch > minimum.patch
-        : current.pre === null || (minimum.pre !== null && current.pre >= minimum.pre);
+  const compatible = comparison >= 0;
   return compatible
     ? { status: "compatible" as const, message: `Agent ${version} supports the current V1 agent API surface.` }
     : { status: "outdated" as const, message: `Agent ${version} is older than ${MIN_COMPATIBLE_AGENT_VERSION}; upgrade it for live logs and host metrics parity.` };
@@ -203,6 +208,56 @@ export function consumeAgentSseChunk(buffer: { value: string }, chunk: Buffer, o
   }
 }
 
+async function streamAgentEvents(
+  target: AgentTarget,
+  path: string,
+  onEvent: (event: string, data: string) => void,
+  onError: (error: Error) => void,
+  connectionTimeoutMs = 15_000
+) {
+  const url = new URL(agentUrl(target, path));
+  const transport = url.protocol === "https:" ? https : url.protocol === "http:" ? http : null;
+  if (!transport) throw new Error("Agent URL must use http or https");
+
+  return new Promise<() => void>((resolve, reject) => {
+    let connected = false;
+    let connectionSettled = false;
+    const request = transport.request(url, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${target.token}` },
+      lookup: createAgentLookup(shouldAllowPrivateAgentUrls(env.NODE_ENV, env.ALLOW_PRIVATE_AGENT_URLS))
+    }, (response) => {
+      clearTimeout(connectionTimer);
+      const status = response.statusCode ?? 0;
+      if (status < 200 || status >= 300) {
+        connectionSettled = true;
+        reject(new AgentHttpError(`Agent stream failed with ${status}`, status));
+        response.resume();
+        return;
+      }
+      connected = true;
+      connectionSettled = true;
+      const buffer = { value: "" };
+      response.on("data", (chunk: Buffer) => consumeAgentSseChunk(buffer, chunk, onEvent));
+      response.on("error", onError);
+      response.on("end", () => onError(new Error("Agent stream ended")));
+      resolve(() => request.destroy());
+    });
+    const connectionTimer = setTimeout(() => {
+      request.destroy(new Error(`Agent stream connection timed out after ${connectionTimeoutMs}ms`));
+    }, connectionTimeoutMs);
+    request.on("error", (error) => {
+      clearTimeout(connectionTimer);
+      if (connected) onError(error);
+      else if (!connectionSettled) {
+        connectionSettled = true;
+        reject(error);
+      }
+    });
+    request.end();
+  });
+}
+
 export async function streamAgentContainerLogs(
   target: AgentTarget,
   containerId: string,
@@ -211,43 +266,44 @@ export async function streamAgentContainerLogs(
   onError: (error: Error) => void
 ) {
   const safeTail = Math.min(Math.max(Number(tail) || 500, 1), 5000);
-  const url = new URL(agentUrl(target, `api/containers/${encodeURIComponent(containerId)}/logs-stream?tail=${safeTail}`));
-  const transport = url.protocol === "https:" ? https : url.protocol === "http:" ? http : null;
-  if (!transport) throw new Error("Agent URL must use http or https");
-
-  return new Promise<() => void>((resolve, reject) => {
-    let settled = false;
-    const request = transport.request(url, {
-      method: "GET",
-      headers: { Authorization: `Bearer ${target.token}` },
-      lookup: createAgentLookup(shouldAllowPrivateAgentUrls(env.NODE_ENV, env.ALLOW_PRIVATE_AGENT_URLS))
-    }, (response) => {
-      if ((response.statusCode ?? 0) < 200 || (response.statusCode ?? 0) >= 300) {
-        reject(new Error(`Agent log stream failed with ${response.statusCode ?? 0}`));
-        response.resume();
-        return;
+  return streamAgentEvents(
+    target,
+    `api/containers/${encodeURIComponent(containerId)}/logs-stream?tail=${safeTail}`,
+    (event, data) => {
+      try {
+        const payload = JSON.parse(data) as { line?: string; error?: string };
+        if (event === "error") onError(new Error(payload.error ?? "Agent log stream error"));
+        else if (event === "message") onLine(payload.line ?? "");
+      } catch (error) {
+        onError(error instanceof Error ? error : new Error(String(error)));
       }
-      settled = true;
-      const buffer = { value: "" };
-      response.on("data", (chunk: Buffer) => {
-        consumeAgentSseChunk(buffer, chunk, (event, data) => {
-          try {
-            const payload = JSON.parse(data) as { line?: string; error?: string };
-            if (event === "error") onError(new Error(payload.error ?? "Agent log stream error"));
-            else if (event === "message") onLine(payload.line ?? "");
-          } catch (error) {
-            onError(error instanceof Error ? error : new Error(String(error)));
-          }
-        });
-      });
-      response.on("error", onError);
-      response.on("end", () => undefined);
-      resolve(() => request.destroy());
-    });
-    request.on("error", (error) => {
-      if (settled) onError(error);
-      else reject(error);
-    });
-    request.end();
-  });
+    },
+    onError
+  );
+}
+
+export async function streamAgentContainerUsage(
+  target: AgentTarget,
+  onStats: (stats: Record<string, unknown>) => void,
+  onError: (error: Error) => void,
+  connectionTimeoutMs = 15_000
+) {
+  return streamAgentEvents(
+    target,
+    "api/containers/usage-stream",
+    (event, data) => {
+      try {
+        const payload = JSON.parse(data) as { stats?: unknown; error?: string };
+        if (event === "error") {
+          onError(new Error(payload.error ?? "Agent usage stream error"));
+        } else if (event === "message" && payload.stats && typeof payload.stats === "object") {
+          onStats(payload.stats as Record<string, unknown>);
+        }
+      } catch (error) {
+        onError(error instanceof Error ? error : new Error(String(error)));
+      }
+    },
+    onError,
+    connectionTimeoutMs
+  );
 }

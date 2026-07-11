@@ -3,6 +3,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const getHostForWorker = vi.fn();
 const runSshCommand = vi.fn();
 const streamSshCommandLines = vi.fn();
+const getAgentContainerUsage = vi.fn();
+const runAgentDockerCommand = vi.fn();
+const streamAgentContainerUsage = vi.fn();
+
+class AgentHttpError extends Error {
+  constructor(message: string, public readonly status: number) {
+    super(message);
+  }
+}
 
 vi.mock("../src/services/hosts.js", () => ({
   getHostForWorker,
@@ -16,7 +25,16 @@ vi.mock("../src/services/ssh.js", () => ({
   streamSshCommandLines
 }));
 
-const { getContainerUsage, streamContainerLogs } = await import("../src/services/docker.js");
+vi.mock("../src/services/agent.js", () => ({
+  AgentHttpError,
+  checkAgent: vi.fn(),
+  getAgentContainerUsage,
+  runAgentDockerCommand,
+  streamAgentContainerLogs: vi.fn(),
+  streamAgentContainerUsage
+}));
+
+const { getContainerUsage, streamContainerLogs, streamContainerUsage } = await import("../src/services/docker.js");
 
 function host(lastStatus: "unknown" | "online" | "offline" | "checking") {
   return {
@@ -51,11 +69,51 @@ function host(lastStatus: "unknown" | "online" | "offline" | "checking") {
   };
 }
 
+function agentHost(lastStatus: "unknown" | "online" | "offline" | "checking" = "online") {
+  const value = host(lastStatus);
+  return {
+    ...value,
+    public: { ...value.public, connectionMode: "agent" },
+    connectionMode: "agent",
+    ssh: null,
+    agent: { url: "https://agent.example.test:8090", token: "a".repeat(32) }
+  };
+}
+
 describe("container usage polling", () => {
   beforeEach(() => {
     getHostForWorker.mockReset();
     runSshCommand.mockReset();
     streamSshCommandLines.mockReset();
+    getAgentContainerUsage.mockReset();
+    runAgentDockerCommand.mockReset();
+    streamAgentContainerUsage.mockReset();
+  });
+
+  it("uses the agent read endpoint without consuming the command endpoint", async () => {
+    getHostForWorker.mockResolvedValue(agentHost());
+    getAgentContainerUsage.mockResolvedValue([{ ID: "container-1", CPUPerc: "1.00%" }]);
+
+    await expect(getContainerUsage("host-1")).resolves.toEqual([{ ID: "container-1", CPUPerc: "1.00%" }]);
+    expect(runAgentDockerCommand).not.toHaveBeenCalled();
+  });
+
+  it("falls back to one legacy agent command only when the read endpoint is absent", async () => {
+    getHostForWorker.mockResolvedValue(agentHost());
+    getAgentContainerUsage.mockRejectedValue(new AgentHttpError("missing", 404));
+    runAgentDockerCommand.mockResolvedValue({ stdout: '{"ID":"container-1"}\n', stderr: "", code: 0 });
+
+    await expect(getContainerUsage("host-1")).resolves.toEqual([{ ID: "container-1" }]);
+    expect(runAgentDockerCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it("proxies the native agent usage stream", async () => {
+    getHostForWorker.mockResolvedValue(agentHost());
+    const stop = vi.fn();
+    streamAgentContainerUsage.mockResolvedValue(stop);
+
+    await expect(streamContainerUsage("host-1", vi.fn(), vi.fn())).resolves.toBe(stop);
+    expect(streamAgentContainerUsage).toHaveBeenCalledTimes(1);
   });
 
   it("does not attempt Docker stats against known-offline hosts", async () => {

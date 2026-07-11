@@ -85,7 +85,7 @@
   shared Zod contracts.
 - Match CI before release work: `npm run typecheck`, `npm run lint:migrations`,
   `npm run openapi:check`, `npm test`, `npm run smoke:web`,
-  `npm audit --omit=dev --audit-level=high`, and Docker compose/image smoke
+  `npm audit --audit-level=high`, and Docker compose/image smoke
   checks when Docker files change.
 - Current GitHub Actions jobs include typecheck/tests/audit, Postgres/Redis
   integration tests, Playwright smoke and accessibility checks, production image

@@ -23,6 +23,7 @@ import { MoveAppPanel } from "./recovery/MoveAppPanel.js";
 import { RecoverySchedulesPanel } from "./recovery/RecoverySchedulesPanel.js";
 import { StorageTargetsPanel } from "./recovery/StorageTargetsPanel.js";
 import { RecoveryRunsPanel } from "./recovery/RecoveryRunsPanel.js";
+import { useAuthorization } from "../AuthorizationContext.js";
 
 export type RecoverySection =
   | "points"
@@ -68,6 +69,7 @@ export function RecoveryCenterPanel({
   section?: RecoverySection;
   onSectionChange?: (section: RecoverySection) => void;
 }) {
+  const { canOperate } = useAuthorization();
   const [localSection, setLocalSection] = useState<RecoverySection>(section ?? "points");
   const [points, setPoints] = useState<RecoveryPointListItem[]>([]);
   const [targets, setTargets] = useState<BackupTarget[]>([]);
@@ -82,7 +84,12 @@ export function RecoveryCenterPanel({
     () => Object.fromEntries(targets.map((target) => [target.id, target.name])),
     [targets]
   );
-  const activeSection = section ?? localSection;
+  const visibleSections = useMemo(
+    () => recoverySections.filter((item) => canOperate || item.id === "points" || item.id === "runs" || item.id === "volume-backups"),
+    [canOperate]
+  );
+  const requestedSection = section ?? localSection;
+  const activeSection = visibleSections.some((item) => item.id === requestedSection) ? requestedSection : "points";
   const setActiveSection = onSectionChange ?? setLocalSection;
   const readinessSummary = useMemo(() => ({
     ready: readinessItems.filter((item) => item.status === "ready").length,
@@ -102,7 +109,9 @@ export function RecoveryCenterPanel({
       const [pointsResult, targetsResult, schedulesResult, runsResult, readinessResult] = await Promise.all([
         api<{ points: RecoveryPointListItem[] }>("/api/recovery/points"),
         api<{ targets: BackupTarget[] }>("/api/recovery/targets"),
-        api<{ schedules: RecoverySchedule[] }>("/api/recovery/schedules"),
+        canOperate
+          ? api<{ schedules: RecoverySchedule[] }>("/api/recovery/schedules")
+          : Promise.resolve({ schedules: [] as RecoverySchedule[] }),
         api<{ runs: MigrationRun[] }>("/api/recovery/migrations"),
         api<{ readiness: RecoveryReadiness[] }>("/api/recovery/readiness")
       ]);
@@ -116,11 +125,21 @@ export function RecoveryCenterPanel({
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [canOperate]);
 
   useEffect(() => {
     void loadRecoveryData();
   }, [loadRecoveryData]);
+
+  useEffect(() => {
+    if (requestedSection === activeSection) return;
+    if (onSectionChange) onSectionChange(activeSection);
+    else setLocalSection(activeSection);
+  }, [activeSection, onSectionChange, requestedSection]);
+
+  useEffect(() => {
+    if (activeSection !== "move") setPlannedRun(null);
+  }, [activeSection]);
 
   return (
     <div className="adminShell recoveryShell">
@@ -153,7 +172,7 @@ export function RecoveryCenterPanel({
       </div>
       <div className="adminLayout">
         <nav className="adminNav" aria-label="Recovery Center sections">
-          {recoverySections.map((item) => (
+          {visibleSections.map((item) => (
             <button
               key={item.id}
               type="button"

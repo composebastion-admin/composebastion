@@ -3,7 +3,12 @@ import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const packageJson = require("../../package.json") as { version?: string };
 
-export const APP_VERSION = process.env.COMPOSEBASTION_VERSION
+const suppliedVersion = process.env.COMPOSEBASTION_VERSION;
+const normalizedSuppliedVersion = suppliedVersion && !["source", "unknown"].includes(suppliedVersion)
+  ? suppliedVersion
+  : null;
+
+export const APP_VERSION = normalizedSuppliedVersion
   || process.env.npm_package_version
   || packageJson.version
   || "unknown";

@@ -5,7 +5,7 @@ const userId = "11111111-1111-4111-8111-111111111111";
 const hostId = "22222222-2222-4222-8222-222222222222";
 const jobId = "33333333-3333-4333-8333-333333333333";
 
-const createHost = vi.hoisted(() => vi.fn());
+const createHostWithSync = vi.hoisted(() => vi.fn());
 const enqueueJob = vi.hoisted(() => vi.fn());
 const writeAuditEvent = vi.hoisted(() => vi.fn());
 
@@ -26,7 +26,7 @@ vi.mock("../src/services/docker.js", () => ({
 }));
 
 vi.mock("../src/services/hosts.js", () => ({
-  createHost,
+  createHostWithSync,
   deleteHost: vi.fn(async () => undefined),
   getHost: vi.fn(async () => null),
   listHosts: vi.fn(async () => []),
@@ -48,18 +48,18 @@ async function buildApp() {
 
 describe("host routes", () => {
   beforeEach(() => {
-    createHost.mockReset();
+    createHostWithSync.mockReset();
     enqueueJob.mockReset();
     writeAuditEvent.mockReset();
 
-    createHost.mockResolvedValue({
+    const host = {
       id: hostId,
       name: "Prod",
       hostname: "10.0.0.10",
       port: 22,
       username: "docker"
-    });
-    enqueueJob.mockResolvedValue({
+    };
+    const job = {
       id: jobId,
       correlationId: jobId,
       type: "host.sync",
@@ -74,7 +74,8 @@ describe("host routes", () => {
       updatedAt: new Date(0).toISOString(),
       startedAt: null,
       completedAt: null
-    });
+    };
+    createHostWithSync.mockResolvedValue({ host, job });
     writeAuditEvent.mockResolvedValue(undefined);
   });
 
@@ -97,7 +98,8 @@ describe("host routes", () => {
       });
 
       expect(response.statusCode).toBe(200);
-      expect(enqueueJob).toHaveBeenCalledWith({ type: "host.sync", hostId, payload: {} }, userId);
+      expect(createHostWithSync).toHaveBeenCalledWith(expect.objectContaining({ name: "Prod" }), userId);
+      expect(enqueueJob).not.toHaveBeenCalled();
       expect(response.json().job).toMatchObject({ type: "host.sync", status: "queued" });
     } finally {
       await app.close();

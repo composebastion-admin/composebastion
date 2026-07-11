@@ -1,6 +1,12 @@
-ARG APP_VERSION=1.0.7-rc.1
+ARG APP_VERSION=source
+ARG DOCKER_CLI_VERSION=29.6.1
+ARG DOCKER_CLI_SOURCE_COMMIT=8900f1d330cb39e93e16d780a26bff1d7e07ba03
+ARG DOCKER_CLI_SOURCE_SHA256=41540b35a1157e76eb1a3c3e87dd196896a8e76b27c4bfcafb826dbc15b0acd9
+ARG COMPOSE_VERSION=5.3.1
+ARG COMPOSE_SOURCE_COMMIT=f32009d4a2c687dd405398cc7975d12dccaf8dff
+ARG COMPOSE_SOURCE_SHA256=34387f32377bffac7ee0a70d78435af3b59a075b6f29409172c6d6346ca0340d
 
-FROM node:20-bookworm-slim AS deps
+FROM node:20-alpine3.22@sha256:8f47899606d000b0704e992f927fe7335adcd0d6c98851600072fb6e14a13e60 AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY apps/agent/package.json apps/agent/package.json
@@ -13,11 +19,82 @@ COPY tsconfig.base.json tsconfig.base.json
 RUN npm run build --workspace @composebastion/agent
 RUN npm prune --omit=dev
 
-FROM node:20-bookworm-slim AS runtime
+FROM --platform=$BUILDPLATFORM golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS docker-tools-builder
+ENV GOTOOLCHAIN=local
+ARG TARGETOS
+ARG TARGETARCH
+ARG DOCKER_CLI_VERSION
+ARG DOCKER_CLI_SOURCE_COMMIT
+ARG DOCKER_CLI_SOURCE_SHA256
+ARG COMPOSE_VERSION
+ARG COMPOSE_SOURCE_COMMIT
+ARG COMPOSE_SOURCE_SHA256
+RUN set -eux; \
+    apk add --no-cache ca-certificates curl; \
+    curl -fsSLo /tmp/docker-cli.tar.gz "https://github.com/docker/cli/archive/${DOCKER_CLI_SOURCE_COMMIT}.tar.gz"; \
+    echo "${DOCKER_CLI_SOURCE_SHA256}  /tmp/docker-cli.tar.gz" | sha256sum -c -; \
+    curl -fsSLo /tmp/compose.tar.gz "https://github.com/docker/compose/archive/${COMPOSE_SOURCE_COMMIT}.tar.gz"; \
+    echo "${COMPOSE_SOURCE_SHA256}  /tmp/compose.tar.gz" | sha256sum -c -; \
+    mkdir -p /go/src/github.com/docker/cli /src/compose /out/licenses /out/evidence; \
+    tar -xzf /tmp/docker-cli.tar.gz -C /go/src/github.com/docker/cli --strip-components=1; \
+    tar -xzf /tmp/compose.tar.gz -C /src/compose --strip-components=1; \
+    cd /go/src/github.com/docker/cli; \
+    GO111MODULE=off CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" \
+      go build -buildvcs=false -trimpath -tags "grpcnotrace osusergo netgo" \
+        -ldflags="-s -w -X github.com/docker/cli/cli/version.Version=${DOCKER_CLI_VERSION} -X github.com/docker/cli/cli/version.GitCommit=${DOCKER_CLI_SOURCE_COMMIT}" \
+        -o /out/docker github.com/docker/cli/cmd/docker; \
+    cd /src/compose; \
+    CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" \
+      go list -mod=readonly -tags "e2e" -deps ./cmd | LC_ALL=C sort -u > /out/evidence/docker-compose-go-dependencies.txt; \
+    test "$(grep '^github.com/docker/docker/' /out/evidence/docker-compose-go-dependencies.txt)" = "github.com/docker/docker/pkg/namesgenerator"; \
+    CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" \
+      go build -mod=readonly -buildvcs=false -trimpath -tags "e2e" \
+        -ldflags="-s -w -X github.com/docker/compose/v5/internal.Version=v${COMPOSE_VERSION}" \
+        -o /out/docker-compose ./cmd; \
+    chmod 0755 /out/docker /out/docker-compose; \
+    go version -m /out/docker | grep -F "go1.26.5"; \
+    go version -m /out/docker-compose | grep -F "go1.26.5"; \
+    install -m 0644 /go/src/github.com/docker/cli/LICENSE /out/licenses/docker-cli-LICENSE.txt; \
+    install -m 0644 /go/src/github.com/docker/cli/NOTICE /out/licenses/docker-cli-NOTICE.txt; \
+    install -m 0644 /src/compose/LICENSE /out/licenses/docker-compose-LICENSE.txt; \
+    install -m 0644 /src/compose/NOTICE /out/licenses/docker-compose-NOTICE.txt; \
+    install -m 0644 /usr/local/go/LICENSE /out/licenses/go-LICENSE.txt; \
+    install -m 0644 /usr/local/go/PATENTS /out/licenses/go-PATENTS.txt; \
+    mkdir -p /out/licenses/go-buildinfo; \
+    go version -m /out/docker-compose \
+      | awk -F '\t' '$2 == "mod" || $2 == "dep" || $2 == "=>" { print $2 "\t" $3 "\t" $4 "\t" $5 }' \
+      | LC_ALL=C sort -u > /out/licenses/go-buildinfo/docker-compose.modules.tsv; \
+    cd /go/src/github.com/docker/cli; \
+    GO111MODULE=off CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" \
+      go list -tags "grpcnotrace osusergo netgo" -deps github.com/docker/cli/cmd/docker \
+      | sed 's#^github.com/docker/cli/vendor/##' \
+      | LC_ALL=C sort -u > /tmp/docker-cli-gopath-packages.txt; \
+    cp vendor.mod go.mod; \
+    cp vendor.sum go.sum; \
+    CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" \
+      go list -mod=vendor -tags "grpcnotrace osusergo netgo" -deps ./cmd/docker \
+      | LC_ALL=C sort -u > /tmp/docker-cli-module-packages.txt; \
+    test "$(sha256sum /tmp/docker-cli-gopath-packages.txt | cut -d' ' -f1)" = "$(sha256sum /tmp/docker-cli-module-packages.txt | cut -d' ' -f1)"; \
+    { \
+      printf 'mod\tgithub.com/docker/cli\tv%s\n' "${DOCKER_CLI_VERSION}"; \
+      CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" \
+        go list -mod=vendor -tags "grpcnotrace osusergo netgo" -deps \
+          -f '{{with .Module}}{{if not .Main}}dep{{"\t"}}{{.Path}}{{"\t"}}{{.Version}}{{end}}{{end}}' ./cmd/docker; \
+    } | sed '/^$/d' | LC_ALL=C sort -u > /out/licenses/go-buildinfo/docker-cli.modules.tsv; \
+    rm go.mod go.sum; \
+    test -s /out/licenses/go-buildinfo/docker-cli.modules.tsv; \
+    test -s /out/licenses/go-buildinfo/docker-compose.modules.tsv; \
+    cd /out/licenses; \
+    sha256sum docker-cli-LICENSE.txt docker-cli-NOTICE.txt docker-compose-LICENSE.txt docker-compose-NOTICE.txt go-LICENSE.txt go-PATENTS.txt go-buildinfo/docker-cli.modules.tsv go-buildinfo/docker-compose.modules.tsv \
+      | LC_ALL=C sort > go-buildinfo/agent.artifacts.sha256
+
+FROM node:20-alpine3.22@sha256:8f47899606d000b0704e992f927fe7335adcd0d6c98851600072fb6e14a13e60 AS runtime
 WORKDIR /app
 ARG APP_VERSION
 ARG VCS_REF=unknown
 ARG BUILD_DATE=unknown
+ARG DOCKER_CLI_VERSION
+ARG COMPOSE_VERSION
 ENV COMPOSEBASTION_AGENT_VERSION="${APP_VERSION}" \
     COMPOSEBASTION_AGENT_REVISION="${VCS_REF}" \
     COMPOSEBASTION_AGENT_BUILD_DATE="${BUILD_DATE}"
@@ -31,23 +108,32 @@ LABEL org.opencontainers.image.title="ComposeBastion Agent" \
       org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.licenses="LicenseRef-ComposeBastion-SourceAvailable-PrivateUse-1.0"
 RUN set -eux; \
-    apt-get update; \
-    apt-get upgrade -y; \
-    apt-get install -y --no-install-recommends ca-certificates curl gnupg; \
-    install -m 0755 -d /etc/apt/keyrings; \
-    curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc; \
-    chmod a+r /etc/apt/keyrings/docker.asc; \
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian bookworm stable" > /etc/apt/sources.list.d/docker.list; \
-    apt-get update; \
-    apt-get install -y --no-install-recommends docker-ce-cli docker-compose-plugin; \
-    apt-get purge -y --auto-remove curl gnupg; \
-    apt-get clean; \
-    rm -rf /var/lib/apt/lists/* /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
+    apk add --no-cache 'libcrypto3=3.5.7-r0' 'libssl3=3.5.7-r0'; \
+    rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 
+COPY --from=docker-tools-builder /out/docker /usr/local/bin/docker
+COPY --from=docker-tools-builder /out/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose
+COPY --from=docker-tools-builder /out/licenses/ /licenses/third-party/
+COPY --from=docker-tools-builder /out/evidence/ /usr/share/composebastion/release-evidence/
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/apps/agent/package.json ./apps/agent/package.json
 COPY --from=build /app/apps/agent/dist ./apps/agent/dist
 COPY LICENSE.md LICENSING_SUMMARY.md COMMERCIAL-LICENSE.md NOTICE.md THIRD-PARTY-NOTICES.md TRADEMARKS.md /licenses/
 COPY LICENSES /licenses/LICENSES
+RUN set -eux; \
+    docker --version | grep -F "Docker version ${DOCKER_CLI_VERSION},"; \
+    test "$(docker compose version --short)" = "${COMPOSE_VERSION}"; \
+    test -s /licenses/third-party/docker-cli-LICENSE.txt; \
+    test -s /licenses/third-party/docker-cli-NOTICE.txt; \
+    test -s /licenses/third-party/docker-compose-LICENSE.txt; \
+    test -s /licenses/third-party/docker-compose-NOTICE.txt; \
+    test -s /licenses/third-party/go-LICENSE.txt; \
+    test -s /licenses/third-party/go-PATENTS.txt; \
+    test -s /licenses/third-party/go-buildinfo/docker-cli.modules.tsv; \
+    test -s /licenses/third-party/go-buildinfo/docker-compose.modules.tsv; \
+    test -s /licenses/third-party/go-buildinfo/agent.artifacts.sha256; \
+    cd /licenses/third-party; \
+    sha256sum -c go-buildinfo/agent.artifacts.sha256; \
+    test "$(grep '^github.com/docker/docker/' /usr/share/composebastion/release-evidence/docker-compose-go-dependencies.txt)" = "github.com/docker/docker/pkg/namesgenerator"
 EXPOSE 8090
 CMD ["node", "apps/agent/dist/server.js"]

@@ -1,4 +1,4 @@
-import { CONFIG_BACKUP_FORMAT_VERSION } from "@composebastion/shared";
+import { CONFIG_BACKUP_FORMAT_VERSION, registryCreateSchema } from "@composebastion/shared";
 import { query, withTransaction } from "../db/pool.js";
 import { decryptConfigPayload, decryptSecret, encryptConfigPayload, encryptSecret, type EncryptedConfigPayload } from "./crypto.js";
 import { exportBackupTargetSecrets } from "./recoveryBackupTargets.js";
@@ -70,6 +70,26 @@ function validateConfigBackupPayload(payload: ConfigBackupPayload) {
   if (payload.backupTargets !== undefined && !Array.isArray(payload.backupTargets)) {
     throw configImportError("Config backup backupTargets must be a list");
   }
+}
+
+function normalizeImportedRegistries(registries: Array<Record<string, any>>) {
+  return registries.map((registry, index) => {
+    if (!registry || typeof registry !== "object") {
+      throw configImportError(`Config backup registry ${index + 1} is invalid`);
+    }
+    const parsed = registryCreateSchema.safeParse({
+      name: registry.name,
+      url: registry.url,
+      username: registry.username ?? undefined,
+      password: registry.password ?? undefined,
+      insecure: registry.insecure ?? false
+    });
+    if (!parsed.success) {
+      const detail = parsed.error.issues[0]?.message ?? "Registry configuration is invalid";
+      throw configImportError(`Config backup registry ${index + 1} is invalid: ${detail}`);
+    }
+    return { ...registry, ...parsed.data, id: registry.id };
+  });
 }
 
 export async function exportConfigBackup(passphrase: string) {
@@ -210,6 +230,7 @@ export async function exportConfigBackup(passphrase: string) {
 export async function importConfigBackup(backup: Record<string, unknown>, passphrase: string) {
   const payload = decryptConfigBackupPayload(backup, passphrase);
   validateConfigBackupPayload(payload);
+  const normalizedRegistries = normalizeImportedRegistries(payload.registries ?? []);
 
   const summary = await withTransaction(async (client) => {
     const counts = {
@@ -276,7 +297,7 @@ export async function importConfigBackup(backup: Record<string, unknown>, passph
       counts.favoriteImages += 1;
     }
 
-    for (const registry of payload.registries ?? []) {
+    for (const registry of normalizedRegistries) {
       await client.query(
         `INSERT INTO registries (id, name, url, username, password_encrypted, insecure)
          VALUES ($1, $2, $3, $4, $5, $6)

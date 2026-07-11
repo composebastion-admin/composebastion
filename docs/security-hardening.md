@@ -4,15 +4,20 @@ Use this checklist before exposing ComposeBastion outside a trusted private netw
 
 ## Required
 
-- Set a unique `APP_SECRET` with at least 32 characters.
+- Set a unique `APP_SECRET` with at least 32 characters. Production rejects the
+  known fallback and `.env.example` placeholder values.
 - Set a URL-safe `POSTGRES_PASSWORD`, for example with `openssl rand -hex 32`,
   because image installs interpolate it into `DATABASE_URL`.
-- Set `SECURE_COOKIES=true` behind HTTPS.
+- Keep the production `SECURE_COOKIES=true` default behind HTTPS. Set it to
+  `false` only for a trusted direct-HTTP evaluation.
 - Use a reverse proxy that preserves the original client IP only from trusted
   proxy hops.
 - Set `CORS_ORIGINS` for any cross-origin UI/API deployment; mutating browser
   requests are rejected when their `Origin` is neither same-host nor configured.
-- Restrict agent port `8090` to the manager network.
+- Set the required `COMPOSEBASTION_AGENT_BIND_ADDRESS` to a trusted
+  manager-reachable interface and restrict agent port `8090` to the manager.
+- Treat any process with Docker-socket access, including the root agent, as
+  host-root-equivalent.
 - Use least-privilege SSH users that can run Docker but do not have broad host
   shell access unless operators intentionally need it.
 
@@ -40,7 +45,29 @@ Use this checklist before exposing ComposeBastion outside a trusted private netw
 - `npm run typecheck`
 - `npm test`
 - `npm run smoke:web`
-- `npm audit --omit=dev --audit-level=high`
+- `npm audit --audit-level=high`
+- `npm run check:actions-pinned`
+- `npm run check:release-version`
+- `npm run check:compose-env`
 
-For `v1.0.6`, run CI, CodeQL, Container Scan, Publish Images, and the refreshed
-GitHub code-scanning view before tagging the release.
+For the local `1.0.7-rc.1` candidate, also run the full acceptance suite and
+scan the app and agent for both supported architectures. Do not tag it until
+the deferred governance and manual production-readiness gates are complete.
+
+## Emergency Owner Recovery
+
+First-run setup remains closed once any user record exists, even if a legacy
+database has accidentally disabled every owner. The normal API deliberately
+cannot bypass that invariant. If no active owner remains:
+
+1. Back up Postgres and stop the `app` and `worker` services.
+2. Generate a bcrypt password hash with the same `bcryptjs` dependency shipped
+   in the app image; do not put the plaintext password in shell history.
+3. Connect to Postgres as the database operator and, inside one transaction,
+   update the chosen existing user to `role = 'owner'`, set `is_active = true`,
+   replace `password_hash`, and delete that user's rows from `sessions`.
+4. Restart the services, sign in with the temporary password, rotate it through
+   the Users screen, and record the recovery in the operator change log.
+
+Never delete all user rows to reopen public setup, and never perform this
+procedure while the API or worker can concurrently mutate accounts.

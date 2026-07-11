@@ -74,6 +74,10 @@ claims for a release.
 
 - If the worker is not processing jobs, inspect `/api/health/ready`,
   `/api/jobs/status`, API logs, and worker logs.
+- Redis is a best-effort job wake-up path. `/api/health/ready` remains healthy
+  when PostgreSQL and an active worker are healthy, even if its Redis diagnostic
+  is degraded. Inspect `/api/health/redis` and worker reconnect logs separately;
+  PostgreSQL polling must continue to complete queued jobs during the outage.
 - When reporting API failures, include the `requestId` from the error response
   so it can be matched to Fastify logs and audit records.
 - For job failures, copy the job correlation ID from Admin -> Jobs or Admin ->
@@ -106,5 +110,7 @@ claims for a release.
   but live logs and host `/proc` stats require the newer agent endpoints.
 - V1 expects app and agent images from the same release for live logs, queued
   Docker work, and host `/proc` stats.
-- For the latest verified release, use app and agent image tags `1.0.6` or
-  `v1.0.6`.
+- The most recent published app and agent tags are `1.0.6` and `v1.0.6`, but
+  that release is superseded for production readiness by the pending scanner
+  remediation. Keep existing installations pinned until verified `1.0.7`
+  images are available.

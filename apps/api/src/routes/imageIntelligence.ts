@@ -40,23 +40,35 @@ export async function registerImageIntelligenceRoutes(app: FastifyInstance) {
     status: await getImageScannerStatus((env.IMAGE_SCANNER_PROVIDER || "auto") as "auto" | "mock" | "trivy")
   }));
 
-  app.get("/api/image-tags", { preHandler: viewer, config: { rateLimit: expensiveReadRateLimit } }, async (request, reply) => {
+  app.get("/api/image-tags", { preHandler: operator, config: { rateLimit: expensiveReadRateLimit } }, async (request, reply) => {
     const { image } = z.object({ image: z.string().trim().min(1).max(512) }).parse(request.query);
     try {
       const auth = await findRegistryAuthForReference(image);
       const tags = await fetchRegistryTags(
         image,
-        auth?.username && auth.password
-          ? { username: auth.username, password: auth.password, insecure: auth.insecure }
+        auth
+          ? {
+              username: auth.username,
+              password: auth.password,
+              insecure: auth.insecure,
+              trustedOrigin: auth.trustedOrigin
+            }
           : undefined
       );
       return { image, tags };
     } catch (error) {
       if (error instanceof RegistryLookupError) {
+        const status = error.reason === "invalid" || error.reason === "private_address"
+          ? 400
+          : error.reason === "rate_limited" ? 429 : 503;
+        const code = error.reason === "invalid"
+          ? "INVALID_IMAGE_REFERENCE"
+          : error.reason === "private_address" ? "PRIVATE_REGISTRY_ADDRESS"
+            : error.reason === "rate_limited" ? "RATE_LIMITED" : "REGISTRY_UNAVAILABLE";
         return sendApiError(
           reply,
-          error.reason === "rate_limited" ? 429 : 503,
-          error.reason === "rate_limited" ? "RATE_LIMITED" : "REGISTRY_UNAVAILABLE",
+          status,
+          code,
           error.message
         );
       }

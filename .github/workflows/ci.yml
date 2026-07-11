@@ -17,8 +17,8 @@ jobs:
     name: Typecheck, tests & audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "20"
           cache: npm
@@ -29,17 +29,25 @@ jobs:
         run: npm run lint:migrations
       - name: OpenAPI docs
         run: npm run openapi:check
+      - name: Release metadata alignment
+        run: npm run check:release-version
+      - name: Third-party notices
+        run: npm run notices:check
+      - name: Immutable workflow actions
+        run: npm run check:actions-pinned
+      - name: Release workflow invariants
+        run: npm run check:release-workflows
       - name: Unit tests
         run: npm test
-      - name: Audit production dependencies
-        run: npm audit --omit=dev --audit-level=high
+      - name: Audit all dependencies
+        run: npm audit --audit-level=high
 
   integration:
     name: Postgres integration tests
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgres:16.6-alpine3.20@sha256:1e59919c179e296eaf3cc701f4d50bab5c393d7ed9746c188c9d519489c998dc
         env:
           POSTGRES_DB: composebastion
           POSTGRES_USER: composebastion
@@ -52,7 +60,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
       redis:
-        image: redis:7-alpine
+        image: redis:7.4.1-alpine3.20@sha256:c1e88455c85225310bbea54816e9c3f4b5295815e6dbf80c34d40afc6df28275
         ports:
           - 6379:6379
         options: >-
@@ -67,8 +75,8 @@ jobs:
       APP_SECRET: ci-test-secret-which-is-at-least-32-chars-long
       NODE_ENV: test
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "20"
           cache: npm
@@ -84,8 +92,8 @@ jobs:
     name: Browser smoke & accessibility
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "20"
           cache: npm
@@ -103,24 +111,28 @@ jobs:
       POSTGRES_PASSWORD: composebastion-ci-password
       COMPOSEBASTION_BACKUP_DIR: /tmp/composebastion-backups
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Materialize exact Git build context
+        run: node scripts/materialize-git-context.mjs "${RUNNER_TEMP}/composebastion-git-context" "${GITHUB_SHA}"
       - name: Validate production compose config
         run: docker compose -f docker-compose.yml -f docker-compose.prod.example.yml config
       - name: Validate Compose environment contracts
         run: npm run check:compose-env
       - name: Validate local acceptance Compose stack
         run: npm run acceptance:config
+      - name: Validate Docker build context exclusions
+        run: npm run check:docker-context
       - name: Build app runtime image
-        run: docker build --target runtime -t composebastion-app:ci .
+        run: docker build --target runtime -t composebastion-app:ci "${RUNNER_TEMP}/composebastion-git-context"
       - name: Build agent runtime image
-        run: docker build -f Dockerfile.agent --target runtime -t composebastion-agent:ci .
+        run: docker build -f "${RUNNER_TEMP}/composebastion-git-context/Dockerfile.agent" --target runtime -t composebastion-agent:ci "${RUNNER_TEMP}/composebastion-git-context"
 
   ssh-integration:
     name: Ephemeral SSH Docker host integration
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "20"
           cache: npm
@@ -133,7 +145,9 @@ jobs:
           mkdir -p "${key_dir}"
           ssh-keygen -t ed25519 -N "" -f "${key_path}" -C "composebastion-ci" >/dev/null
 
-          docker build -f infra/dev/sshhost.Dockerfile -t composebastion-dev-sshhost .
+          source_context="${RUNNER_TEMP}/composebastion-git-context"
+          node scripts/materialize-git-context.mjs "${source_context}" "${GITHUB_SHA}"
+          docker build -f "${source_context}/infra/dev/sshhost.Dockerfile" -t composebastion-dev-sshhost "${source_context}"
           docker rm -f composebastion-ci-sshhost >/dev/null 2>&1 || true
           docker run -d \
             --name composebastion-ci-sshhost \
@@ -183,8 +197,8 @@ jobs:
       COMPOSEBASTION_SSH_TEST_KEY: ${{ secrets.COMPOSEBASTION_SSH_TEST_KEY }}
       COMPOSEBASTION_SSH_TEST_KEY_PASSPHRASE: ${{ secrets.COMPOSEBASTION_SSH_TEST_KEY_PASSPHRASE }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "20"
           cache: npm
@@ -202,3 +216,42 @@ jobs:
           exit "${missing}"
       - name: Run external SSH integration test
         run: npm run test --workspace @composebastion/api -- ssh.integration.test.ts
+
+  live-acceptance:
+    name: Live release acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      - name: Run full local-stack acceptance including public upgrade
+        run: npm run acceptance:local
+      - name: Assert release-qualifying acceptance report
+        if: always()
+        run: npm run acceptance:assert-report
+
+  ci-gate:
+    name: CI quality gate
+    if: always()
+    needs: [quality, integration, browser-smoke, production-build, ssh-integration, live-acceptance]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all release CI jobs
+        env:
+          QUALITY: ${{ needs.quality.result }}
+          INTEGRATION: ${{ needs.integration.result }}
+          BROWSER: ${{ needs.browser-smoke.result }}
+          BUILD: ${{ needs.production-build.result }}
+          SSH: ${{ needs.ssh-integration.result }}
+          ACCEPTANCE: ${{ needs.live-acceptance.result }}
+        run: |
+          test "${QUALITY}" = success
+          test "${INTEGRATION}" = success
+          test "${BROWSER}" = success
+          test "${BUILD}" = success
+          test "${SSH}" = success
+          test "${ACCEPTANCE}" = success

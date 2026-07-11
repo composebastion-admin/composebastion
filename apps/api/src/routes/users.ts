@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { createUser, deleteUser, listUsers, updateUser } from "../services/users.js";
-import { requireRole } from "../services/auth.js";
+import { clearSessionCookie, requireRole } from "../services/auth.js";
 import { writeAuditEvent } from "../services/audit.js";
 import { authenticatedReadRateLimit, sensitiveMutationRateLimit } from "../services/rateLimits.js";
 
@@ -17,10 +17,13 @@ export async function registerUserRoutes(app: FastifyInstance) {
 
   app.put("/api/users/:id", { preHandler: ownerOrAdmin, config: { rateLimit: sensitiveMutationRateLimit } }, async (request, reply) => {
     const { id } = request.params as { id: string };
-    const user = await updateUser(id, request.body);
+    const user = await updateUser(id, request.body, request.user?.id);
     if (!user) {
       reply.code(404);
       return { error: "User not found" };
+    }
+    if (id === request.user?.id && typeof request.body === "object" && request.body !== null && "password" in request.body) {
+      clearSessionCookie(reply);
     }
     await writeAuditEvent({ userId: request.user?.id, action: "user.update", targetKind: "user", targetId: id });
     return { user };
@@ -29,7 +32,11 @@ export async function registerUserRoutes(app: FastifyInstance) {
   app.delete("/api/users/:id", { preHandler: ownerOrAdmin, config: { rateLimit: sensitiveMutationRateLimit } }, async (request, reply) => {
     const { id } = request.params as { id: string };
     try {
-      await deleteUser(id);
+      const deleted = await deleteUser(id, request.user?.id);
+      if (!deleted) {
+        reply.code(404);
+        return { error: "User not found" };
+      }
       await writeAuditEvent({ userId: request.user?.id, action: "user.delete", targetKind: "user", targetId: id });
       return { ok: true };
     } catch (error) {

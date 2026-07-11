@@ -15,12 +15,24 @@ services:
     environment:
       NODE_ENV: production
       BACKUP_DIR: /data/backups
-      SECURE_COOKIES: "true"
+      SECURE_COOKIES: ${SECURE_COOKIES:-true}
       APP_SECRET: ${APP_SECRET:?Set APP_SECRET to a unique random value of at least 32 characters}
       DATABASE_URL: postgres://composebastion:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/composebastion
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       CORS_ORIGINS: ${CORS_ORIGINS:-}
+      TRUST_PROXY: ${TRUST_PROXY:-false}
+      ALLOW_PRIVATE_AGENT_URLS: ${ALLOW_PRIVATE_AGENT_URLS:-false}
       ALLOW_PRIVATE_WEBHOOK_URLS: ${ALLOW_PRIVATE_WEBHOOK_URLS:-false}
+      BLOCK_PRIVATE_S3_ENDPOINTS: ${BLOCK_PRIVATE_S3_ENDPOINTS:-false}
+      BACKUP_ENCRYPTION_KEYS: ${BACKUP_ENCRYPTION_KEYS:-}
+      BACKUP_ENCRYPTION_ACTIVE_KEY_ID: ${BACKUP_ENCRYPTION_ACTIVE_KEY_ID:-app_secret}
+      BACKUP_HOST_PATH_ALLOWED_ROOTS: ${BACKUP_HOST_PATH_ALLOWED_ROOTS:-}
+      IMAGE_SCANNER_PROVIDER: ${IMAGE_SCANNER_PROVIDER:-auto}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-composebastion@example.com}
     volumes:
       - ${COMPOSEBASTION_BACKUP_DIR:-/srv/composebastion/backups}:/data/backups
     ports: !reset []  # terminate TLS at reverse proxy only
@@ -32,7 +44,20 @@ services:
       APP_SECRET: ${APP_SECRET:?Set APP_SECRET to a unique random value of at least 32 characters}
       DATABASE_URL: postgres://composebastion:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/composebastion
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      ALLOW_PRIVATE_AGENT_URLS: ${ALLOW_PRIVATE_AGENT_URLS:-false}
       ALLOW_PRIVATE_WEBHOOK_URLS: ${ALLOW_PRIVATE_WEBHOOK_URLS:-false}
+      BLOCK_PRIVATE_S3_ENDPOINTS: ${BLOCK_PRIVATE_S3_ENDPOINTS:-false}
+      BACKUP_ENCRYPTION_KEYS: ${BACKUP_ENCRYPTION_KEYS:-}
+      BACKUP_ENCRYPTION_ACTIVE_KEY_ID: ${BACKUP_ENCRYPTION_ACTIVE_KEY_ID:-app_secret}
+      BACKUP_HOST_PATH_ALLOWED_ROOTS: ${BACKUP_HOST_PATH_ALLOWED_ROOTS:-}
+      IMAGE_SCANNER_PROVIDER: ${IMAGE_SCANNER_PROVIDER:-auto}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-composebastion@example.com}
+      HOST_CHECK_INTERVAL_MS: ${HOST_CHECK_INTERVAL_MS:-60000}
+      INVENTORY_SYNC_INTERVAL_MS: ${INVENTORY_SYNC_INTERVAL_MS:-300000}
     volumes:
       - ${COMPOSEBASTION_BACKUP_DIR:-/srv/composebastion/backups}:/data/backups
 

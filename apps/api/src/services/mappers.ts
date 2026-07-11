@@ -240,6 +240,7 @@ export function mapRecoverySchedule(row: any): RecoverySchedule {
 export function mapMigrationRun(row: any): MigrationRun {
   return {
     id: row.id,
+    planRunId: row.plan_run_id ?? null,
     sourceHostId: row.source_host_id,
     targetHostId: row.target_host_id,
     sourceAppIdentity: parseAppIdentity(row.source_app_identity),

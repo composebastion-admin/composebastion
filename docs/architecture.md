@@ -19,7 +19,13 @@ ComposeBastion is an npm workspace monorepo:
    contract notes.
 4. Operators enqueue **typed** Docker actions → `operation_jobs` table.
 5. Worker claims jobs, runs SSH or agent transport, stores results.
-6. Redis pub/sub wakes the worker; polling is a fallback.
+6. PostgreSQL is the durable queue and the worker polls it every 2.5 seconds.
+   Redis pub/sub is an optional latency optimization; its subscription reconnects
+   after cold-start or runtime outages without interrupting database polling.
+
+`/api/health/ready` is authoritative only for PostgreSQL connectivity and a
+fresh active worker heartbeat. Redis and backup-path checks remain visible as
+non-required diagnostics; `/api/health/redis` reports Redis health directly.
 
 ## Web shell
 

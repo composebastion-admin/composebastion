@@ -5,9 +5,10 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { backupListQuerySchema, paginatedResponse, type Backup, type BackupHealthSummary } from "@composebastion/shared";
+import type { PoolClient } from "pg";
 import { v4 as uuid } from "uuid";
 import { env } from "../config/env.js";
-import { query } from "../db/pool.js";
+import { query, withTransaction } from "../db/pool.js";
 import { shQuote, withDockerEnv } from "./commands.js";
 import { isDemoHost } from "./demo.js";
 import { getHostForWorker } from "./hosts.js";
@@ -32,11 +33,25 @@ import { deleteRemoteArtifact, downloadRemoteArtifactAtomically, headRemoteArtif
 import { hashFile } from "./recoveryStorage.js";
 import { pipeReadableToSshCommand, runSshCommand, streamSshCommandToFile } from "./ssh.js";
 import { sanitizeDockerName } from "./recoveryRestoreUtils.js";
+import { enqueueJobInTransaction, notifyJobQueued, type JobExecutionFence } from "./jobs.js";
 
 export const BACKUP_DRILL_ROOT = "/var/lib/composebastion/drills";
 const BACKUP_HEALTH_WINDOW_MS = 24 * 60 * 60 * 1000;
 const BACKUP_PROOF_STALE_MS = 30 * 24 * 60 * 60 * 1000;
 const BACKUP_HEALTH_ATTENTION_LIMIT = 20;
+
+async function executionCheckpoint(fence?: JobExecutionFence) {
+  await fence?.assertActive();
+}
+
+async function executionQuery(
+  fence: JobExecutionFence | undefined,
+  text: string,
+  values: unknown[]
+) {
+  if (!fence) return query(text, values);
+  return fence.withActiveLease((client) => client.query(text, values));
+}
 
 function sanitizeFilePart(value: string) {
   return value.replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 120);
@@ -185,50 +200,208 @@ export async function assertBackupTargetUsable(backupTargetId?: string | null) {
   return target.id as string;
 }
 
-export async function createBackupRecord(
+type BackupRecordOptions = {
+  backupTargetId?: string | null;
+  metadata?: Record<string, unknown>;
+  fileName?: string;
+  encryption?: BackupEncryption;
+};
+
+type PreparedBackupRecordBase = {
+  id: string;
+  hostId: string;
+  fileName: string;
+  backupTargetId: string | null;
+  encryption: BackupEncryption;
+  encryptionKeyId: string | null;
+  encryptionKeyFingerprint: string | null;
+  metadata: Record<string, unknown>;
+};
+
+export type PreparedBackupRecord = PreparedBackupRecordBase & (
+  | { kind: "volume"; volumeName: string; sourcePath: null }
+  | { kind: "host_path"; volumeName: null; sourcePath: string }
+);
+
+export async function prepareBackupRecord(
   hostId: string,
   volumeName: string,
-  options: { backupTargetId?: string | null; metadata?: Record<string, unknown>; fileName?: string; encryption?: BackupEncryption } = {}
-) {
+  options: BackupRecordOptions = {}
+): Promise<PreparedBackupRecord> {
   await mkdir(env.BACKUP_DIR, { recursive: true });
   const backupTargetId = await assertBackupTargetUsable(options.backupTargetId);
   const encryption = normalizeBackupEncryption(options.encryption);
-  const keyId = backupEncryptionActiveKeyId(encryption);
-  const keyFingerprint = backupEncryptionFingerprint(encryption);
   const id = uuid();
   const fileName = options.fileName ?? backupFileName(id, volumeName);
-  const result = await query(
-    `INSERT INTO backups
-      (id, host_id, kind, volume_name, source_path, file_name, status, backup_target_id, encryption, encryption_key_id, encryption_key_fingerprint, metadata)
-     VALUES ($1, $2, 'volume', $3, NULL, $4, 'queued', $5, $6, $7, $8, $9)
-     RETURNING *`,
-    [id, hostId, volumeName, fileName, backupTargetId, encryption, keyId, keyFingerprint, options.metadata ?? {}]
-  );
-  return mapBackup(result.rows[0]);
+  return {
+    id,
+    hostId,
+    kind: "volume",
+    volumeName,
+    sourcePath: null,
+    fileName,
+    backupTargetId,
+    encryption,
+    encryptionKeyId: backupEncryptionActiveKeyId(encryption),
+    encryptionKeyFingerprint: backupEncryptionFingerprint(encryption),
+    metadata: options.metadata ?? {}
+  };
 }
 
-export async function createHostPathBackupRecord(
+export async function prepareHostPathBackupRecord(
   hostId: string,
   sourcePath: string,
-  options: { backupTargetId?: string | null; metadata?: Record<string, unknown>; fileName?: string; encryption?: BackupEncryption } = {}
-) {
+  options: BackupRecordOptions = {}
+): Promise<PreparedBackupRecord> {
   await mkdir(env.BACKUP_DIR, { recursive: true });
   const normalized = normalizeHostSourcePath(sourcePath);
   const backupTargetId = await assertBackupTargetUsable(options.backupTargetId);
   const encryption = normalizeBackupEncryption(options.encryption);
-  const keyId = backupEncryptionActiveKeyId(encryption);
-  const keyFingerprint = backupEncryptionFingerprint(encryption);
   const id = uuid();
   const label = normalized.replace(/^\//, "").replace(/\//g, "_") || "host_path";
   const fileName = options.fileName ?? backupFileName(id, `host-path-${label}`);
-  const result = await query(
+  return {
+    id,
+    hostId,
+    kind: "host_path",
+    volumeName: null,
+    sourcePath: normalized,
+    fileName,
+    backupTargetId,
+    encryption,
+    encryptionKeyId: backupEncryptionActiveKeyId(encryption),
+    encryptionKeyFingerprint: backupEncryptionFingerprint(encryption),
+    metadata: options.metadata ?? {}
+  };
+}
+
+async function persistPreparedBackupRecord(prepared: PreparedBackupRecord, client?: PoolClient) {
+  const sql =
     `INSERT INTO backups
       (id, host_id, kind, volume_name, source_path, file_name, status, backup_target_id, encryption, encryption_key_id, encryption_key_fingerprint, metadata)
-     VALUES ($1, $2, 'host_path', NULL, $3, $4, 'queued', $5, $6, $7, $8, $9)
-     RETURNING *`,
-    [id, hostId, normalized, fileName, backupTargetId, encryption, keyId, keyFingerprint, options.metadata ?? {}]
-  );
-  return mapBackup(result.rows[0]);
+     VALUES ($1, $2, $3, $4, $5, $6, 'queued', $7, $8, $9, $10, $11)
+     RETURNING *`;
+  const values = [
+    prepared.id,
+    prepared.hostId,
+    prepared.kind,
+    prepared.volumeName,
+    prepared.sourcePath,
+    prepared.fileName,
+    prepared.backupTargetId,
+    prepared.encryption,
+    prepared.encryptionKeyId,
+    prepared.encryptionKeyFingerprint,
+    prepared.metadata
+  ];
+  const result = client ? await client.query(sql, values) : await query(sql, values);
+  const row = result.rows[0];
+  if (!row) throw new Error("Failed to create backup record");
+  return mapBackup(row);
+}
+
+export async function insertPreparedBackupRecord(client: PoolClient, prepared: PreparedBackupRecord) {
+  return persistPreparedBackupRecord(prepared, client);
+}
+
+export async function createBackupRecord(hostId: string, volumeName: string, options: BackupRecordOptions = {}) {
+  return persistPreparedBackupRecord(await prepareBackupRecord(hostId, volumeName, options));
+}
+
+export async function createHostPathBackupRecord(hostId: string, sourcePath: string, options: BackupRecordOptions = {}) {
+  return persistPreparedBackupRecord(await prepareHostPathBackupRecord(hostId, sourcePath, options));
+}
+
+async function createPreparedBackupJobs(preparedRecords: PreparedBackupRecord[], createdBy?: string | null) {
+  const result = await withTransaction(async (client) => {
+    const backups: Backup[] = [];
+    const jobs = [];
+    for (const prepared of preparedRecords) {
+      const backup = await insertPreparedBackupRecord(client, prepared);
+      const job = await enqueueJobInTransaction(
+        client,
+        prepared.kind === "host_path"
+          ? {
+            type: "hostPath.backup",
+            hostId: prepared.hostId,
+            payload: { backupId: backup.id, sourcePath: prepared.sourcePath }
+          }
+          : {
+            type: "volume.backup",
+            hostId: prepared.hostId,
+            payload: { backupId: backup.id, volumeName: prepared.volumeName }
+          },
+        createdBy
+      );
+      backups.push(backup);
+      jobs.push(job);
+    }
+    return { backups, jobs };
+  });
+  await Promise.all(result.jobs.map((job) => notifyJobQueued(job.id)));
+  return result;
+}
+
+export async function createBackupWithJob(
+  hostId: string,
+  volumeName: string,
+  options: BackupRecordOptions = {},
+  createdBy?: string | null
+) {
+  const result = await createPreparedBackupJobs([await prepareBackupRecord(hostId, volumeName, options)], createdBy);
+  return { backup: result.backups[0]!, job: result.jobs[0]! };
+}
+
+export async function createHostPathBackupWithJob(
+  hostId: string,
+  sourcePath: string,
+  options: BackupRecordOptions = {},
+  createdBy?: string | null
+) {
+  const result = await createPreparedBackupJobs([await prepareHostPathBackupRecord(hostId, sourcePath, options)], createdBy);
+  return { backup: result.backups[0]!, job: result.jobs[0]! };
+}
+
+export async function createVolumeBackupsWithJobs(hostId: string, volumeNames: string[], createdBy?: string | null) {
+  const prepared = await Promise.all(volumeNames.map((volumeName) => prepareBackupRecord(hostId, volumeName)));
+  return createPreparedBackupJobs(prepared, createdBy);
+}
+
+export async function createVolumeCloneWithJob(input: {
+  sourceHostId: string;
+  targetHostId: string;
+  sourceVolumeName: string;
+  targetVolumeName: string;
+  overwrite?: boolean;
+}, createdBy?: string | null) {
+  const prepared = await prepareBackupRecord(input.sourceHostId, input.sourceVolumeName, {
+    metadata: {
+      operation: "volume.clone",
+      targetHostId: input.targetHostId,
+      targetVolumeName: input.targetVolumeName
+    }
+  });
+  const result = await withTransaction(async (client) => {
+    const backup = await insertPreparedBackupRecord(client, prepared);
+    const job = await enqueueJobInTransaction(
+      client,
+      {
+        type: "volume.clone",
+        hostId: input.sourceHostId,
+        payload: {
+          backupId: backup.id,
+          targetHostId: input.targetHostId,
+          sourceVolumeName: input.sourceVolumeName,
+          targetVolumeName: input.targetVolumeName,
+          overwrite: input.overwrite ?? false
+        }
+      },
+      createdBy
+    );
+    return { backup, job };
+  });
+  await notifyJobQueued(result.job.id);
+  return result;
 }
 
 export async function getBackup(id: string) {
@@ -653,6 +826,70 @@ async function uploadBackupArtifactToRemote(backup: Backup, localPath: string, c
   };
 }
 
+async function removeRemoteOnlyLocalArtifact(
+  backupId: string,
+  localPath: string,
+  remoteObjectKey: string,
+  checksum: string
+) {
+  try {
+    await rm(localPath, { force: true });
+  } catch (cleanupError) {
+    const cleanupMessage = errorMessage(cleanupError);
+    try {
+      await query(
+        `UPDATE backups
+         SET metadata = metadata || $4::jsonb
+         WHERE id = $1
+           AND status = 'completed'
+           AND remote_object_key = $2
+           AND checksum = $3`,
+        [
+          backupId,
+          remoteObjectKey,
+          checksum,
+          JSON.stringify({ localCacheCleanupError: cleanupMessage })
+        ]
+      );
+    } catch (recordError) {
+      console.warn("Failed to remove or record the retained remote-only backup artifact", {
+        backupId,
+        cleanupError: cleanupMessage,
+        recordError: errorMessage(recordError)
+      });
+    }
+  }
+}
+
+async function recordCommittedBackupBookkeepingError(
+  backupId: string,
+  status: "completed" | "partial",
+  checksum: string,
+  remoteObjectKey: string | null,
+  field: "scheduleResultError" | "retentionCleanupError",
+  bookkeepingError: unknown
+) {
+  const message = errorMessage(bookkeepingError);
+  try {
+    await query(
+      `UPDATE backups
+       SET metadata = metadata || $5::jsonb
+       WHERE id = $1
+         AND status = $2
+         AND checksum = $3
+         AND remote_object_key IS NOT DISTINCT FROM $4`,
+      [backupId, status, checksum, remoteObjectKey, JSON.stringify({ [field]: message })]
+    );
+  } catch (recordError) {
+    console.warn("Failed to record post-commit backup bookkeeping error", {
+      backupId,
+      field,
+      bookkeepingError: message,
+      recordError: errorMessage(recordError)
+    });
+  }
+}
+
 function retentionMetadata(backup: Backup) {
   const scheduleId = backup.metadata.scheduleId;
   const retentionCount = Number(backup.metadata.retentionCount);
@@ -701,19 +938,23 @@ export async function enforceScheduledBackupRetention(backup: Backup) {
 async function completeBackupAfterCapture(
   backupId: string,
   sizeBytes: number,
-  metadata: Record<string, unknown> = {}
+  metadata: Record<string, unknown> = {},
+  executionFence?: JobExecutionFence
 ) {
+  await executionCheckpoint(executionFence);
   const backup = await getBackup(backupId);
   if (!backup) throw new Error("Backup record not found");
   const localPath = safeBackupPath(backup.fileName);
   const checksum = await hashFile(localPath);
   const finalMetadata: Record<string, unknown> = { ...metadata };
   let remoteObjectKey: string | null = null;
+  let removeLocalAfterCommit = false;
   let status: "completed" | "partial" = "completed";
   let error: string | null = null;
 
   if (backup.backupTargetId) {
     try {
+      await executionCheckpoint(executionFence);
       const upload = await uploadBackupArtifactToRemote(backup, localPath, checksum);
       if (upload) {
         remoteObjectKey = upload.remoteObjectKey;
@@ -722,7 +963,7 @@ async function completeBackupAfterCapture(
         finalMetadata.remoteEtag = upload.remoteEtag;
         finalMetadata.localCachePolicy = upload.localCachePolicy;
         if (upload.localCachePolicy === "remote_only") {
-          await rm(localPath, { force: true }).catch(() => undefined);
+          removeLocalAfterCommit = true;
         }
       }
     } catch (uploadError) {
@@ -732,7 +973,8 @@ async function completeBackupAfterCapture(
     }
   }
 
-  await query(
+  await executionQuery(
+    executionFence,
     `UPDATE backups
      SET status = $2,
          size_bytes = $3,
@@ -745,46 +987,75 @@ async function completeBackupAfterCapture(
     [backupId, status, sizeBytes, checksum, remoteObjectKey, error, JSON.stringify(finalMetadata)]
   );
 
-  const completed = await getBackup(backupId);
-  if (!completed) throw new Error("Backup record not found after completion");
+  // A remote-only backup must retain its sole local artifact until the remote
+  // locator and integrity metadata have committed through the active job lease.
+  // Cleanup is intentionally best-effort after that durability boundary: a
+  // retained local copy is harmless, while downgrading the committed backup or
+  // deleting before the update succeeds would make recovery ambiguous.
+  if (removeLocalAfterCommit && remoteObjectKey) {
+    await removeRemoteOnlyLocalArtifact(backupId, localPath, remoteObjectKey, checksum);
+  }
+
+  // Everything below this point is post-commit bookkeeping. Build the
+  // completed value from the row and values already committed so a transient
+  // follow-up read cannot make the capture handler downgrade this backup.
+  const completed: Backup = {
+    ...backup,
+    status,
+    sizeBytes,
+    checksum,
+    remoteObjectKey,
+    error,
+    completedAt: new Date().toISOString(),
+    metadata: { ...backup.metadata, ...finalMetadata }
+  };
   const scheduleId = completed.metadata.scheduleId;
   if (typeof scheduleId === "string" && scheduleId) {
-    await recordBackupScheduleResult(scheduleId, status, error);
+    try {
+      await recordBackupScheduleResult(scheduleId, status, error);
+    } catch (scheduleError) {
+      await recordCommittedBackupBookkeepingError(
+        backupId,
+        status,
+        checksum,
+        remoteObjectKey,
+        "scheduleResultError",
+        scheduleError
+      );
+    }
   }
   try {
     await enforceScheduledBackupRetention(completed);
   } catch (retentionError) {
-    await query(
-      `UPDATE backups
-       SET metadata = metadata || $2::jsonb
-       WHERE id = $1`,
-      [
-        backupId,
-        JSON.stringify({
-          retentionCleanupError: retentionError instanceof Error ? retentionError.message : String(retentionError)
-        })
-      ]
+    await recordCommittedBackupBookkeepingError(
+      backupId,
+      status,
+      checksum,
+      remoteObjectKey,
+      "retentionCleanupError",
+      retentionError
     );
   }
 
   return { fileName: completed.fileName, sizeBytes, checksum, remoteObjectKey, status };
 }
 
-export async function runVolumeBackup(hostId: string, backupId: string, volumeName: string) {
+export async function runVolumeBackup(hostId: string, backupId: string, volumeName: string, executionFence?: JobExecutionFence) {
   const backup = await getBackup(backupId);
   if (!backup) throw new Error("Backup record not found");
   if (backup.kind !== "volume") throw new Error("Backup record is not a volume backup");
 
-  await query("UPDATE backups SET status = 'running', error = null WHERE id = $1", [backupId]);
+  await executionQuery(executionFence, "UPDATE backups SET status = 'running', error = null WHERE id = $1", [backupId]);
 
   try {
     const host = await getHostForWorker(hostId);
+    await executionCheckpoint(executionFence);
     if (isDemoHost(host.public)) {
       const targetPath = safeBackupPath(backup.fileName);
       await mkdir(path.dirname(targetPath), { recursive: true });
       const content = `ComposeBastion demo backup for ${volumeName}\nCreated: ${new Date().toISOString()}\n`;
       const sizeBytes = await writeBackupBytes(targetPath, content, normalizeBackupEncryption(backup.encryption));
-      return { ...(await completeBackupAfterCapture(backupId, sizeBytes, { demo: true, volumeName })), demo: true };
+      return { ...(await completeBackupAfterCapture(backupId, sizeBytes, { demo: true, volumeName }, executionFence)), demo: true };
     }
     if (host.connectionMode !== "ssh") {
       throw new Error("Volume backup currently requires SSH host mode.");
@@ -801,10 +1072,10 @@ export async function runVolumeBackup(hostId: string, backupId: string, volumeNa
       10 * 60_000,
       createBackupEncryptTransform(normalizeBackupEncryption(backup.encryption))
     );
-    return completeBackupAfterCapture(backupId, encryptedResult.sizeBytes, { stderr: encryptedResult.stderr });
+    return completeBackupAfterCapture(backupId, encryptedResult.sizeBytes, { stderr: encryptedResult.stderr }, executionFence);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    await query("UPDATE backups SET status = 'failed', error = $2, completed_at = now() WHERE id = $1", [
+    await executionQuery(executionFence, "UPDATE backups SET status = 'failed', error = $2, completed_at = now() WHERE id = $1", [
       backupId,
       message
     ]);
@@ -816,21 +1087,22 @@ export async function runVolumeBackup(hostId: string, backupId: string, volumeNa
   }
 }
 
-export async function runHostPathBackup(hostId: string, backupId: string, sourcePath: string) {
+export async function runHostPathBackup(hostId: string, backupId: string, sourcePath: string, executionFence?: JobExecutionFence) {
   const backup = await getBackup(backupId);
   if (!backup) throw new Error("Backup record not found");
   if (backup.kind !== "host_path") throw new Error("Backup record is not a host-path backup");
   const normalizedSourcePath = normalizeHostSourcePath(sourcePath || backup.sourcePath || "");
 
-  await query("UPDATE backups SET status = 'running', error = null WHERE id = $1", [backupId]);
+  await executionQuery(executionFence, "UPDATE backups SET status = 'running', error = null WHERE id = $1", [backupId]);
 
   try {
     const host = await getHostForWorker(hostId);
+    await executionCheckpoint(executionFence);
     if (isDemoHost(host.public)) {
       const targetPath = safeBackupPath(backup.fileName);
       const content = `ComposeBastion demo host-path backup for ${normalizedSourcePath}\nCreated: ${new Date().toISOString()}\n`;
       const sizeBytes = await writeBackupBytes(targetPath, content, normalizeBackupEncryption(backup.encryption));
-      return { ...(await completeBackupAfterCapture(backupId, sizeBytes, { demo: true, sourcePath: normalizedSourcePath })), demo: true };
+      return { ...(await completeBackupAfterCapture(backupId, sizeBytes, { demo: true, sourcePath: normalizedSourcePath }, executionFence)), demo: true };
     }
     if (host.connectionMode !== "ssh") {
       throw new Error("Host-path backup currently requires SSH host mode.");
@@ -847,10 +1119,10 @@ export async function runHostPathBackup(hostId: string, backupId: string, source
     return completeBackupAfterCapture(backupId, result.sizeBytes, {
       stderr: result.stderr,
       sourcePath: normalizedSourcePath
-    });
+    }, executionFence);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    await query("UPDATE backups SET status = 'failed', error = $2, completed_at = now() WHERE id = $1", [
+    await executionQuery(executionFence, "UPDATE backups SET status = 'failed', error = $2, completed_at = now() WHERE id = $1", [
       backupId,
       message
     ]);
@@ -886,7 +1158,7 @@ async function assertSshVolumeCanBeRestored(
   }
 }
 
-export async function runVolumeRestore(hostId: string, backupId: string, targetVolumeName: string, overwrite = false) {
+export async function runVolumeRestore(hostId: string, backupId: string, targetVolumeName: string, overwrite = false, executionFence?: JobExecutionFence) {
   const backup = await getBackup(backupId);
   if (!backup) throw new Error("Backup record not found");
   if (backup.kind !== "volume") throw new Error("Backup record is not a volume backup");
@@ -894,11 +1166,13 @@ export async function runVolumeRestore(hostId: string, backupId: string, targetV
   const localPath = await ensureBackupLocalPath(backup);
 
   const host = await getHostForWorker(hostId);
+  await executionCheckpoint(executionFence);
   if (isDemoHost(host.public)) {
     if (!overwrite && await demoVolumeExists(hostId, targetVolumeName)) {
       throw new Error(`Volume ${targetVolumeName} already exists. Pass overwrite=true to restore into an existing volume.`);
     }
-    await query(
+    await executionQuery(
+      executionFence,
       `INSERT INTO resource_snapshots (id, host_id, kind, external_id, name, data, updated_at)
        VALUES ($1, $2, 'volume', $3, $3, $4, now())
        ON CONFLICT (host_id, kind, external_id)
@@ -922,6 +1196,7 @@ export async function runVolumeRestore(hostId: string, backupId: string, targetV
     throw new Error("Volume restore currently requires SSH host mode.");
   }
   await assertSshVolumeCanBeRestored(host.ssh, host.public.dockerSocketPath, targetVolumeName, overwrite);
+  await executionCheckpoint(executionFence);
   const createResult = await runSshCommand(
     host.ssh,
     withDockerEnv(`docker volume create ${shQuote(targetVolumeName)}`, host.public.dockerSocketPath),
@@ -930,6 +1205,7 @@ export async function runVolumeRestore(hostId: string, backupId: string, targetV
   if (createResult.code !== 0) {
     throw new Error(createResult.stderr || createResult.stdout || `Failed to create volume ${targetVolumeName}`);
   }
+  await executionCheckpoint(executionFence);
   const restoreCommand = withDockerEnv(
     `docker run --rm -i -v ${shQuote(`${targetVolumeName}:/volume`)} alpine:3.20 sh -c ${shQuote("cd /volume && tar xzf -")}`,
     host.public.dockerSocketPath
@@ -939,7 +1215,7 @@ export async function runVolumeRestore(hostId: string, backupId: string, targetV
   return { stdout: result.stdout, stderr: result.stderr };
 }
 
-export async function runHostPathRestore(hostId: string, backupId: string, targetPath: string, overwrite = false) {
+export async function runHostPathRestore(hostId: string, backupId: string, targetPath: string, overwrite = false, executionFence?: JobExecutionFence) {
   const backup = await getBackup(backupId);
   if (!backup) throw new Error("Backup record not found");
   if (backup.kind !== "host_path") throw new Error("Backup record is not a host-path backup");
@@ -947,6 +1223,7 @@ export async function runHostPathRestore(hostId: string, backupId: string, targe
   const localPath = await ensureBackupLocalPath(backup);
 
   const host = await getHostForWorker(hostId);
+  await executionCheckpoint(executionFence);
   if (isDemoHost(host.public)) {
     return { stdout: `Demo host-path restore completed into ${normalizedTargetPath}`, stderr: "", demo: true };
   }
@@ -954,6 +1231,7 @@ export async function runHostPathRestore(hostId: string, backupId: string, targe
     throw new Error("Host-path restore currently requires SSH host mode.");
   }
   await assertHostPathCanBeRestored(host.ssh, normalizedTargetPath, overwrite);
+  await executionCheckpoint(executionFence);
   const restoreCommand = buildHostPathRestoreCommand(normalizedTargetPath);
   const result = await pipeReadableToSshCommand(host.ssh, createStoredBackupReadStream(backup, localPath), restoreCommand);
   if (result.code !== 0) throw new Error(result.stderr || result.stdout || "Host-path restore failed");
@@ -1017,9 +1295,11 @@ function buildHostPathDrillMetricsCommand(targetPath: string) {
 async function recordBackupDrillResult(
   backupId: string,
   status: "completed" | "failed",
-  details: Record<string, unknown>
+  details: Record<string, unknown>,
+  executionFence?: JobExecutionFence
 ) {
-  await query(
+  await executionQuery(
+    executionFence,
     `UPDATE backups
      SET last_drill_at = now(),
          last_drill_status = $2,
@@ -1029,7 +1309,8 @@ async function recordBackupDrillResult(
   );
 }
 
-export async function runBackupDrill(hostId: string, backupId: string) {
+export async function runBackupDrill(hostId: string, backupId: string, executionFence?: JobExecutionFence) {
+  await executionCheckpoint(executionFence);
   const backup = await getBackup(backupId);
   if (!backup) throw new Error("Backup record not found");
   const drillId = randomUUID();
@@ -1043,18 +1324,20 @@ export async function runBackupDrill(hostId: string, backupId: string) {
     const host = await getHostForWorker(hostId);
     if (isDemoHost(host.public)) {
       const result = { backupId, drillId, status: "completed" as const, demo: true };
-      await recordBackupDrillResult(backupId, "completed", { ...result, startedAt, completedAt: new Date().toISOString() });
+      await recordBackupDrillResult(backupId, "completed", { ...result, startedAt, completedAt: new Date().toISOString() }, executionFence);
       return result;
     }
     if (host.connectionMode !== "ssh") {
       throw new Error("Backup drill currently requires SSH host mode.");
     }
 
+    await executionCheckpoint(executionFence);
     await testBackupArchiveOnHost(hostId, backup, localPath);
 
     if (backup.kind === "volume") {
       const scratchVolume = buildBackupDrillVolumeName(backup.id, drillId);
       const drill = await runBackupDrillWithTeardown(async () => {
+        await executionCheckpoint(executionFence);
         const create = await runSshCommand(
           host.ssh,
           withDockerEnv(`docker volume create ${shQuote(scratchVolume)}`, host.public.dockerSocketPath),
@@ -1066,6 +1349,7 @@ export async function runBackupDrill(hostId: string, backupId: string) {
           `docker run --rm -i -v ${shQuote(`${scratchVolume}:/volume`)} alpine:3.20 sh -c ${shQuote("cd /volume && tar xzf -")}`,
           host.public.dockerSocketPath
         );
+        await executionCheckpoint(executionFence);
         const restore = await pipeReadableToSshCommand(host.ssh, createStoredBackupReadStream(backup, localPath), restoreCommand);
         if (restore.code !== 0) throw new Error(restore.stderr || restore.stdout || "Drill restore failed");
 
@@ -1088,12 +1372,13 @@ export async function runBackupDrill(hostId: string, backupId: string) {
         ...drill.result,
         cleanupError: drill.cleanupError
       };
-      await recordBackupDrillResult(backupId, "completed", { ...result, startedAt, completedAt: new Date().toISOString() });
+      await recordBackupDrillResult(backupId, "completed", { ...result, startedAt, completedAt: new Date().toISOString() }, executionFence);
       return result;
     }
 
     const scratchPath = buildBackupDrillPath(backup.id, drillId);
     const drill = await runBackupDrillWithTeardown(async () => {
+      await executionCheckpoint(executionFence);
       const restore = await pipeReadableToSshCommand(host.ssh, createStoredBackupReadStream(backup, localPath), buildHostPathRestoreCommand(scratchPath));
       if (restore.code !== 0) throw new Error(restore.stderr || restore.stdout || "Host-path drill restore failed");
 
@@ -1113,7 +1398,7 @@ export async function runBackupDrill(hostId: string, backupId: string) {
       ...drill.result,
       cleanupError: drill.cleanupError
     };
-    await recordBackupDrillResult(backupId, "completed", { ...result, startedAt, completedAt: new Date().toISOString() });
+    await recordBackupDrillResult(backupId, "completed", { ...result, startedAt, completedAt: new Date().toISOString() }, executionFence);
     return result;
   } catch (error) {
     const cleanupError = error instanceof Error && "cleanupError" in error
@@ -1128,12 +1413,13 @@ export async function runBackupDrill(hostId: string, backupId: string) {
       error: errorMessage(error),
       cleanupError
     };
-    await recordBackupDrillResult(backupId, "failed", details).catch(() => undefined);
+    await recordBackupDrillResult(backupId, "failed", details, executionFence);
     throw error;
   }
 }
 
-export async function runBackupVerify(hostId: string, backupId: string, options: { testArchive?: boolean } = {}) {
+export async function runBackupVerify(hostId: string, backupId: string, options: { testArchive?: boolean } = {}, executionFence?: JobExecutionFence) {
+  await executionCheckpoint(executionFence);
   const backup = await getBackup(backupId);
   if (!backup) throw new Error("Backup record not found");
   const verifiedAt = new Date().toISOString();
@@ -1155,7 +1441,8 @@ export async function runBackupVerify(hostId: string, backupId: string, options:
 
   const verifyStatus = failures.length ? "failed" : "completed";
   const previousVerifyStatus = typeof backup.metadata.verifyStatus === "string" ? backup.metadata.verifyStatus : null;
-  await query(
+  await executionQuery(
+    executionFence,
     `UPDATE backups
      SET verified_at = CASE WHEN $2 = 'completed' THEN now() ELSE verified_at END,
          metadata = metadata || $3::jsonb
@@ -1173,9 +1460,24 @@ export async function runBackupVerify(hostId: string, backupId: string, options:
   return { backupId, verifiedAt, checksum: backup.checksum, testArchive: options.testArchive === true };
 }
 
-export async function runVolumeClone(sourceHostId: string, targetHostId: string, sourceVolumeName: string, targetVolumeName: string, overwrite = false) {
-  const backup = await createBackupRecord(sourceHostId, sourceVolumeName);
-  await runVolumeBackup(sourceHostId, backup.id, sourceVolumeName);
-  const restore = await runVolumeRestore(targetHostId, backup.id, targetVolumeName, overwrite);
+export async function runVolumeClone(
+  sourceHostId: string,
+  targetHostId: string,
+  sourceVolumeName: string,
+  targetVolumeName: string,
+  overwrite = false,
+  linkedBackupId?: string,
+  executionFence?: JobExecutionFence
+) {
+  await executionCheckpoint(executionFence);
+  const backup = linkedBackupId
+    ? await getBackup(linkedBackupId)
+    : await createBackupRecord(sourceHostId, sourceVolumeName);
+  if (!backup || backup.hostId !== sourceHostId || backup.kind !== "volume" || backup.volumeName !== sourceVolumeName) {
+    throw new Error("Volume clone backup link is invalid");
+  }
+  await runVolumeBackup(sourceHostId, backup.id, sourceVolumeName, executionFence);
+  await executionCheckpoint(executionFence);
+  const restore = await runVolumeRestore(targetHostId, backup.id, targetVolumeName, overwrite, executionFence);
   return { backupId: backup.id, targetHostId, targetVolumeName, ...restore };
 }

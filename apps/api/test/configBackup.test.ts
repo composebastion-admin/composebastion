@@ -98,6 +98,48 @@ describe("config backup product identity", () => {
     expect(withTransaction).not.toHaveBeenCalled();
   });
 
+  it("normalizes imported registries before an insert or conflict update", async () => {
+    const encrypted = encryptConfigPayload({
+      ...emptyConfigPayload("ComposeBastion"),
+      registries: [{
+        id: "00000000-0000-4000-8000-000000000099",
+        name: "Local registry",
+        url: "registry.internal:5000",
+        username: "operator",
+        password: "registry-secret",
+        insecure: true
+      }]
+    }, "long-test-passphrase");
+
+    await importConfigBackup(encrypted as unknown as Record<string, unknown>, "long-test-passphrase");
+
+    const registryQuery = transactionQuery.mock.calls.find(([sql]) =>
+      typeof sql === "string" && sql.includes("INSERT INTO registries")
+    );
+    expect(registryQuery).toBeTruthy();
+    const values = registryQuery?.[1] as unknown[];
+    expect(values.slice(1, 4)).toEqual(["Local registry", "http://registry.internal:5000", "operator"]);
+    expect(values[5]).toBe(true);
+  });
+
+  it("rejects an unsafe imported registry before opening a transaction", async () => {
+    const encrypted = encryptConfigPayload({
+      ...emptyConfigPayload("ComposeBastion"),
+      registries: [{
+        id: "00000000-0000-4000-8000-000000000099",
+        name: "Unsafe registry",
+        url: "https://user:secret@registry.example.com",
+        username: "operator",
+        password: "registry-secret",
+        insecure: false
+      }]
+    }, "long-test-passphrase");
+
+    await expect(importConfigBackup(encrypted as unknown as Record<string, unknown>, "long-test-passphrase"))
+      .rejects.toMatchObject({ statusCode: 400 });
+    expect(withTransaction).not.toHaveBeenCalled();
+  });
+
   it("exports rclone backup target secrets", async () => {
     query
       .mockResolvedValueOnce({ rows: [] })

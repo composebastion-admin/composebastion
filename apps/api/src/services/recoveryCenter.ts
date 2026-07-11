@@ -15,7 +15,7 @@ import {
 } from "@composebastion/shared";
 import { query, withTransaction } from "../db/pool.js";
 import type pg from "pg";
-import { enqueueJob } from "./jobs.js";
+import { enqueueJob, enqueueJobInTransaction, notifyJobQueued, type JobExecutionFence } from "./jobs.js";
 import {
   assertBackupTargetS3EndpointAllowed,
   exportBackupTargetSecrets,
@@ -35,13 +35,21 @@ import {
 } from "./mappers.js";
 import { resolveAppContext } from "./recoveryAppContext.js";
 import { runRecoveryCreate, runRecoveryPointCapture, runRecoveryVerify } from "./recoveryCapture.js";
-import { analyzeMigrationPlan, buildMigrationPlan } from "./migrationPlanning.js";
+import {
+  analyzeMigrationPlan,
+  buildMigrationPlan,
+  MigrationPlanStaleError,
+  recoveryAppIdentitiesEqual,
+  revalidateMigrationPlan,
+  refreshMigrationInventories
+} from "./migrationPlanning.js";
 import { sanitizeArtifactName } from "./recoveryManifest.js";
 import { deleteRecoveryPointRemoteArtifacts } from "./recoveryArtifactDelete.js";
 import { artifactRelativePath, deleteRecoveryPointLocalFiles } from "./recoveryStorage.js";
 import { safeErrorMessage, safeLogValue } from "./operationLogs.js";
 
 export { resolveAppContext, buildMigrationPlan };
+export { MigrationPlanStaleError } from "./migrationPlanning.js";
 export { runRecoveryCreate, runRecoveryPointCapture, runRecoveryVerify };
 export { runRecoveryRestore } from "./recoveryRestore.js";
 export { runMigrationExecute } from "./migrationExecute.js";
@@ -243,11 +251,22 @@ async function insertArtifact(
   return id;
 }
 
-export async function createRecoveryPoint(
+type PreparedRecoveryPoint = {
+  id: string;
+  body: ReturnType<typeof recoveryPointCreateSchema.parse>;
+  context: Awaited<ReturnType<typeof resolveAppContext>>;
+  profile: Awaited<ReturnType<typeof getRecoveryProfile>>;
+  effectiveCaptureMode: "hot" | "stop_first";
+  name: string;
+  scheduleMetadata: { scheduleId: string; retentionCount: number | null } | Record<string, never>;
+  createdBy: string | null;
+};
+
+async function prepareRecoveryPoint(
   input: unknown,
   createdBy?: string | null,
   internalMetadata: { scheduleId?: string; retentionCount?: number | null } = {}
-) {
+): Promise<PreparedRecoveryPoint> {
   const body = recoveryPointCreateSchema.parse(input);
   const context = await resolveAppContext(body.hostId, body.appIdentity);
   const profile = body.profileId ? await getRecoveryProfile(body.profileId) : null;
@@ -256,90 +275,211 @@ export async function createRecoveryPoint(
     : "hot";
   const id = uuid();
   const name = body.name ?? `${context.label} ${new Date().toISOString()}`;
-  const scheduleMetadata = internalMetadata.scheduleId
+  const scheduleMetadata: PreparedRecoveryPoint["scheduleMetadata"] = internalMetadata.scheduleId
     ? {
       scheduleId: internalMetadata.scheduleId,
       retentionCount: internalMetadata.retentionCount ?? null
     }
     : {};
 
-  await withTransaction(async (client) => {
-    await client.query(
-      `INSERT INTO recovery_points
-        (id, host_id, name, app_identity, trigger_kind, status, backup_target_id, profile_id, metadata, created_by)
-       VALUES ($1, $2, $3, $4, $5, 'queued', $6, $7, $8, $9)`,
-      [
-        id,
-        body.hostId,
-        name,
-        body.appIdentity,
-        body.triggerKind,
-        body.backupTargetId ?? null,
-        body.profileId ?? null,
-        {
-          projectName: context.projectName,
-          stackId: context.stackId,
-          stopFirst: body.stopFirst || effectiveCaptureMode === "stop_first",
-          captureMode: effectiveCaptureMode,
-          extraIncludePaths: body.extraIncludePaths,
-          profileId: body.profileId ?? null,
-          profileSnapshot: profile ?? null,
-          ...scheduleMetadata
-        },
-        createdBy ?? null
-      ]
-    );
+  return { id, body, context, profile, effectiveCaptureMode, name, scheduleMetadata, createdBy: createdBy ?? null };
+}
 
+async function insertPreparedRecoveryPoint(
+  client: pg.PoolClient,
+  prepared: PreparedRecoveryPoint,
+  migrationRunId: string | null = null
+) {
+  const { id, body, context, profile, effectiveCaptureMode, name, scheduleMetadata, createdBy } = prepared;
+  const stopFirst = body.stopFirst || effectiveCaptureMode === "stop_first";
+  await client.query(
+    `INSERT INTO recovery_points
+      (id, host_id, name, app_identity, trigger_kind, status, backup_target_id, profile_id, metadata, created_by, migration_run_id)
+     VALUES ($1, $2, $3, $4, $5, 'queued', $6, $7, $8, $9, $10)`,
+    [
+      id,
+      body.hostId,
+      name,
+      body.appIdentity,
+      body.triggerKind,
+      body.backupTargetId ?? null,
+      body.profileId ?? null,
+      {
+        projectName: context.projectName,
+        stackId: context.stackId,
+        stopFirst,
+        captureMode: effectiveCaptureMode,
+        extraIncludePaths: body.extraIncludePaths,
+        profileId: body.profileId ?? null,
+        profileSnapshot: profile ?? null,
+        ...scheduleMetadata
+      },
+      createdBy,
+      migrationRunId
+    ]
+  );
+
+  await insertArtifact(
+    client,
+    id,
+    "metadata",
+    body.backupTargetId ?? null,
+    "manifest.json",
+    { appIdentity: body.appIdentity, context }
+  );
+  let artifactCount = 1;
+
+  if (context.composeYaml) {
     await insertArtifact(
       client,
       id,
-      "metadata",
+      "compose_yaml",
       body.backupTargetId ?? null,
-      "manifest.json",
-      { appIdentity: body.appIdentity, context }
+      "compose.yml",
+      { projectName: context.projectName }
     );
-    let artifactCount = 1;
+    artifactCount += 1;
+  }
+  if (context.env) {
+    await insertArtifact(
+      client,
+      id,
+      "env_file",
+      body.backupTargetId ?? null,
+      ".env",
+      { projectName: context.projectName }
+    );
+    artifactCount += 1;
+  }
+  for (const volumeName of context.volumeNames) {
+    await insertArtifact(
+      client,
+      id,
+      "volume",
+      body.backupTargetId ?? null,
+      artifactRelativePath("volume", sanitizeArtifactName(volumeName)),
+      { volumeName }
+    );
+    artifactCount += 1;
+  }
 
-    if (context.composeYaml) {
-      await insertArtifact(
-        client,
-        id,
-        "compose_yaml",
-        body.backupTargetId ?? null,
-        "compose.yml",
-        { projectName: context.projectName }
-      );
-      artifactCount += 1;
-    }
-    if (context.env) {
-      await insertArtifact(
-        client,
-        id,
-        "env_file",
-        body.backupTargetId ?? null,
-        ".env",
-        { projectName: context.projectName }
-      );
-      artifactCount += 1;
-    }
-    for (const volumeName of context.volumeNames) {
-      await insertArtifact(
-        client,
-        id,
-        "volume",
-        body.backupTargetId ?? null,
-        artifactRelativePath("volume", sanitizeArtifactName(volumeName)),
-        { volumeName }
-      );
-      artifactCount += 1;
-    }
+  await client.query("UPDATE recovery_points SET artifact_count = $2 WHERE id = $1", [id, artifactCount]);
+  return { id, hostId: body.hostId, stopFirst };
+}
 
-    await client.query("UPDATE recovery_points SET artifact_count = $2 WHERE id = $1", [id, artifactCount]);
-  });
-
+async function requireCreatedRecoveryPoint(id: string) {
   const point = await getRecoveryPoint(id);
   if (!point) throw new Error("Failed to create recovery point");
   return point;
+}
+
+export async function createRecoveryPoint(
+  input: unknown,
+  createdBy?: string | null,
+  internalMetadata: { scheduleId?: string; retentionCount?: number | null } = {}
+) {
+  const prepared = await prepareRecoveryPoint(input, createdBy, internalMetadata);
+  await withTransaction((client) => insertPreparedRecoveryPoint(client, prepared));
+  return requireCreatedRecoveryPoint(prepared.id);
+}
+
+export async function createMigrationRecoveryPoint(
+  input: unknown,
+  migrationRunId: string,
+  options: { primary?: boolean; executionFence?: JobExecutionFence } = {}
+) {
+  const prepared = await prepareRecoveryPoint(input);
+  const insert = async (client: pg.PoolClient) => {
+    const migration = await client.query<{
+      source_host_id: string;
+      source_app_identity: unknown;
+      mode: string;
+      status: string;
+    }>(
+      `SELECT source_host_id, source_app_identity, mode, status
+       FROM migration_runs
+       WHERE id = $1
+       FOR UPDATE`,
+      [migrationRunId]
+    );
+    const run = migration.rows[0];
+    if (
+      !run
+      || run.mode !== "execute"
+      || run.status !== "running"
+      || run.source_host_id !== prepared.body.hostId
+      || !recoveryAppIdentitiesEqual(
+        recoveryAppIdentitySchema.parse(run.source_app_identity),
+        prepared.body.appIdentity
+      )
+    ) {
+      throw new MigrationPlanStaleError("Migration recovery point no longer matches the active reviewed execution.");
+    }
+
+    const created = await insertPreparedRecoveryPoint(client, prepared, migrationRunId);
+    if (options.primary) {
+      const linked = await client.query(
+        `UPDATE migration_runs
+         SET recovery_point_id = $2
+         WHERE id = $1 AND mode = 'execute' AND status = 'running'
+         RETURNING id`,
+        [migrationRunId, created.id]
+      );
+      if (linked.rowCount !== 1) {
+        throw new MigrationPlanStaleError("Migration execution is no longer active.");
+      }
+    }
+    return created;
+  };
+
+  return options.executionFence
+    ? options.executionFence.withActiveLease(insert)
+    : withTransaction(insert);
+}
+
+export async function getMigrationRecoveryPoint(id: string, migrationRunId: string): Promise<RecoveryPointDetail | null> {
+  const result = await query(
+    `SELECT recovery_point.*
+     FROM recovery_points AS recovery_point
+     JOIN migration_runs AS migration_run ON migration_run.id = $2
+     WHERE recovery_point.id = $1
+       AND (
+         recovery_point.migration_run_id = migration_run.id
+         OR (
+           recovery_point.migration_run_id IS NULL
+           AND migration_run.recovery_point_id = recovery_point.id
+         )
+       )`,
+    [id, migrationRunId]
+  );
+  if (!result.rows[0]) return null;
+  const artifacts = await query(
+    "SELECT * FROM recovery_artifacts WHERE recovery_point_id = $1 ORDER BY created_at ASC",
+    [id]
+  );
+  return {
+    ...mapRecoveryPoint(result.rows[0]),
+    artifacts: artifacts.rows.map(mapRecoveryArtifact)
+  };
+}
+
+export async function createRecoveryPointWithJob(input: unknown, createdBy?: string | null) {
+  const prepared = await prepareRecoveryPoint(input, createdBy);
+  const result = await withTransaction(async (client) => {
+    const created = await insertPreparedRecoveryPoint(client, prepared);
+    const job = await enqueueJobInTransaction(
+      client,
+      {
+        type: "recovery.create",
+        hostId: created.hostId,
+        payload: { recoveryPointId: created.id, stopFirst: created.stopFirst }
+      },
+      createdBy ?? undefined
+    );
+    return { job, recoveryPointId: created.id };
+  });
+  await notifyJobQueued(result.job.id);
+  return { point: await requireCreatedRecoveryPoint(result.recoveryPointId), job: result.job };
 }
 
 export async function deleteRecoveryPoint(id: string) {
@@ -397,7 +537,19 @@ export async function runDueRecoverySchedules() {
 
   for (const row of due.rows) {
     try {
-      const schedule = await withTransaction(async (client) => {
+      const prepared = await prepareRecoveryPoint({
+        hostId: row.host_id,
+        name: `${row.name} ${new Date().toISOString()}`,
+        appIdentity: recoveryAppIdentitySchema.parse(row.app_identity),
+        backupTargetId: row.backup_target_id ?? undefined,
+        profileId: row.profile_id ?? undefined,
+        triggerKind: "scheduled",
+        stopFirst: row.capture_mode === "stop_first"
+      }, row.created_by, {
+        scheduleId: row.id,
+        retentionCount: row.retention_count ?? null
+      });
+      const scheduled = await withTransaction(async (client) => {
         const locked = await client.query("SELECT * FROM recovery_schedules WHERE id = $1 FOR UPDATE", [row.id]);
         const current = locked.rows[0];
         if (!current || !current.enabled || new Date(current.next_run_at) > new Date()) return null;
@@ -408,35 +560,21 @@ export async function runDueRecoverySchedules() {
            WHERE id = $1`,
           [current.id, nextRunAt]
         );
-        return current;
+        const created = await insertPreparedRecoveryPoint(client, prepared);
+        const job = await enqueueJobInTransaction(
+          client,
+          {
+            type: "recovery.create",
+            hostId: created.hostId,
+            payload: { recoveryPointId: created.id, stopFirst: created.stopFirst }
+          },
+          current.created_by
+        );
+        return { job };
       });
 
-      if (!schedule) continue;
-
-      const point = await createRecoveryPoint({
-        hostId: schedule.host_id,
-        name: `${schedule.name} ${new Date().toISOString()}`,
-        appIdentity: recoveryAppIdentitySchema.parse(schedule.app_identity),
-        backupTargetId: schedule.backup_target_id ?? undefined,
-        profileId: schedule.profile_id ?? undefined,
-        triggerKind: "scheduled",
-        stopFirst: schedule.capture_mode === "stop_first"
-      }, schedule.created_by, {
-        scheduleId: schedule.id,
-        retentionCount: schedule.retention_count ?? null
-      });
-
-      await enqueueJob(
-        {
-          type: "recovery.create",
-          hostId: schedule.host_id,
-          payload: {
-            recoveryPointId: point.id,
-            stopFirst: Boolean(point.metadata.stopFirst)
-          }
-        },
-        schedule.created_by
-      );
+      if (!scheduled) continue;
+      await notifyJobQueued(scheduled.job.id);
     } catch (error) {
       console.error("Recovery schedule failed", {
         scheduleId: safeLogValue(row.id),
@@ -447,6 +585,9 @@ export async function runDueRecoverySchedules() {
 }
 
 export async function createMigrationPlan(input: MigrationPlanRequest, createdBy?: string | null) {
+  // Planning should use current inventories. A failed refresh is represented by
+  // the availability checks in the resulting plan instead of hiding the plan.
+  await refreshMigrationInventories(input.sourceHostId, input.targetHostId).catch(() => undefined);
   const context = await resolveAppContext(input.sourceHostId, input.sourceAppIdentity);
   const plan = await analyzeMigrationPlan(input, context);
   const id = uuid();
@@ -471,38 +612,115 @@ export async function listMigrationRuns() {
 }
 
 export async function startMigrationExecute(input: MigrationExecuteRequest, createdBy?: string | null) {
+  let planRun;
+  let recoveryPointId: string | undefined;
+  if ("planRunId" in input) {
+    planRun = await getMigrationRun(input.planRunId);
+    recoveryPointId = undefined;
+    if (!planRun) {
+      throw new MigrationPlanStaleError("Migration plan was not found; create and review a new plan.");
+    }
+  } else {
+    recoveryPointId = input.recoveryPointId;
+    planRun = await createMigrationPlan({
+      sourceHostId: input.sourceHostId,
+      targetHostId: input.targetHostId,
+      sourceAppIdentity: input.sourceAppIdentity,
+      createRecoveryPoint: true,
+      strategy: input.strategy,
+      options: input.options
+    }, createdBy);
+  }
+
+  const currentPlan = await revalidateMigrationPlan(planRun);
+  if (!currentPlan.intent) {
+    throw new MigrationPlanStaleError("Migration plan has no execution intent; create and review a new plan.");
+  }
+  const intent = currentPlan.intent;
+
   const id = uuid();
-  const result = await query(
-    `INSERT INTO migration_runs
-      (id, source_host_id, target_host_id, source_app_identity, mode, status, recovery_point_id, created_by)
-     VALUES ($1, $2, $3, $4, 'execute', 'queued', $5, $6)
-     RETURNING *`,
-    [
-      id,
-      input.sourceHostId,
-      input.targetHostId,
-      input.sourceAppIdentity,
-      input.recoveryPointId ?? null,
-      createdBy ?? null
-    ]
-  );
-  const run = mapMigrationRun(result.rows[0]);
-  const job = await enqueueJob(
-    {
-      type: "migration.execute",
-      hostId: input.sourceHostId,
-      payload: {
-        migrationRunId: run.id,
-        strategy: input.strategy,
-        stopSource: input.options.stopSource,
-        projectNameOverride: input.options.projectNameOverride,
-        remapPorts: input.options.remapPorts,
-        networkMode: input.options.networkMode
+  const transactionResult = await withTransaction(async (client) => {
+    const lockedPlan = await client.query(
+      "SELECT id FROM migration_runs WHERE id = $1 AND mode = 'plan' AND status = 'completed' FOR UPDATE",
+      [planRun.id]
+    );
+    if (!lockedPlan.rows[0]) {
+      throw new MigrationPlanStaleError("Migration plan is unavailable; create and review a new plan.");
+    }
+    const alreadyUsed = await client.query(
+      "SELECT id FROM migration_runs WHERE plan_run_id = $1 LIMIT 1",
+      [planRun.id]
+    );
+    if (alreadyUsed.rows[0]) {
+      throw new MigrationPlanStaleError("Migration plan has already been used; create and review a new plan.");
+    }
+    if (recoveryPointId) {
+      const selectedPoint = await client.query<{
+        host_id: string;
+        app_identity: unknown;
+        status: string;
+        migration_run_id: string | null;
+      }>(
+        `SELECT host_id, app_identity, status, migration_run_id
+         FROM recovery_points
+         WHERE id = $1
+         FOR UPDATE`,
+        [recoveryPointId]
+      );
+      const point = selectedPoint.rows[0];
+      if (
+        !point
+        || point.host_id !== planRun.sourceHostId
+        || (point.status !== "completed" && point.status !== "partial")
+        || point.migration_run_id !== null
+        || !recoveryAppIdentitiesEqual(
+          recoveryAppIdentitySchema.parse(point.app_identity),
+          planRun.sourceAppIdentity
+        )
+      ) {
+        throw new MigrationPlanStaleError(
+          "Supplied recovery point is unavailable or does not match the reviewed source application."
+        );
       }
-    },
-    createdBy ?? undefined
-  );
-  return { run, job };
+    }
+    const result = await client.query(
+      `INSERT INTO migration_runs
+        (id, plan_run_id, source_host_id, target_host_id, source_app_identity, mode, status,
+         recovery_point_id, plan, created_by)
+       VALUES ($1, $2, $3, $4, $5, 'execute', 'queued', $6, $7, $8)
+       RETURNING *`,
+      [
+        id,
+        planRun.id,
+        planRun.sourceHostId,
+        planRun.targetHostId,
+        planRun.sourceAppIdentity,
+        recoveryPointId ?? null,
+        currentPlan,
+        createdBy ?? null
+      ]
+    );
+    const run = mapMigrationRun(result.rows[0]);
+    const job = await enqueueJobInTransaction(
+      client,
+      {
+        type: "migration.execute",
+        hostId: run.sourceHostId,
+        payload: {
+          migrationRunId: run.id,
+          strategy: intent.strategy,
+          stopSource: intent.options.stopSource,
+          projectNameOverride: intent.options.projectNameOverride,
+          remapPorts: intent.options.remapPorts,
+          networkMode: intent.options.networkMode
+        }
+      },
+      createdBy ?? undefined
+    );
+    return { run, job };
+  });
+  await notifyJobQueued(transactionResult.job.id);
+  return transactionResult;
 }
 
 export async function enqueueRecoveryCreate(recoveryPointId: string, hostId: string, createdBy?: string | null, stopFirst = false) {
@@ -540,67 +758,90 @@ export async function enqueueRecoveryRestore(input: RecoveryRestoreRequest, crea
 }
 
 export async function enqueueRecoveryDrill(recoveryPointId: string, createdBy?: string | null) {
-  const point = await getRecoveryPoint(recoveryPointId);
-  if (!point) return null;
-  await query(
-    `UPDATE recovery_points
-     SET last_drill_at = now(),
-         last_drill_status = 'queued',
-         last_drill_error = null
-     WHERE id = $1`,
-    [point.id]
-  );
-  if (typeof point.metadata.scheduleId === "string") {
-    await query(
+  const queued = await withTransaction(async (client) => {
+    const pointResult = await client.query(
+      "SELECT * FROM recovery_points WHERE id = $1 FOR UPDATE",
+      [recoveryPointId]
+    );
+    const row = pointResult.rows[0];
+    if (!row) return null;
+    await client.query(
+      `UPDATE recovery_points
+       SET last_drill_at = now(),
+           last_drill_status = 'queued',
+           last_drill_error = null
+       WHERE id = $1`,
+      [recoveryPointId]
+    );
+    const scheduleId = row.metadata?.scheduleId;
+    if (typeof scheduleId === "string") {
+      await client.query(
       `UPDATE recovery_schedules
        SET last_drill_at = now(),
            last_drill_status = 'queued',
            last_drill_error = null,
            updated_at = now()
        WHERE id = $1`,
-      [point.metadata.scheduleId]
+        [scheduleId]
+      );
+    }
+    const job = await enqueueJobInTransaction(
+      client,
+      {
+        type: "recovery.restore",
+        hostId: row.host_id,
+        payload: {
+          recoveryPointId,
+          mode: "clone",
+          stopExisting: false,
+          remapPorts: true,
+          networkMode: "clone",
+          drill: true
+        }
+      },
+      createdBy ?? undefined
     );
-  }
-  const job = await enqueueJob(
-    {
-      type: "recovery.restore",
-      hostId: point.hostId,
-      payload: {
-        recoveryPointId: point.id,
-        mode: "clone",
-        stopExisting: false,
-        remapPorts: true,
-        networkMode: "clone",
-        drill: true
-      }
-    },
-    createdBy ?? undefined
-  );
-  return { point, job };
+    return { job };
+  });
+  if (!queued) return null;
+  await notifyJobQueued(queued.job.id);
+  return { point: await requireCreatedRecoveryPoint(recoveryPointId), job: queued.job };
 }
 
-export async function markRecoveryDrillResult(recoveryPointId: string, status: "completed" | "failed", error?: string | null) {
+export async function markRecoveryDrillResult(
+  recoveryPointId: string,
+  status: "completed" | "failed",
+  error?: string | null,
+  executionFence?: JobExecutionFence
+) {
   const successSql = status === "completed" ? ", last_successful_drill_at = now()" : "";
-  await query(
-    `UPDATE recovery_points
-     SET last_drill_at = now(),
-         last_drill_status = $2,
-         last_drill_error = $3
-         ${successSql}
-     WHERE id = $1`,
-    [recoveryPointId, status, error ?? null]
-  );
-  const point = await getRecoveryPoint(recoveryPointId);
-  const scheduleId = point?.metadata.scheduleId;
-  if (typeof scheduleId !== "string") return;
-  await query(
-    `UPDATE recovery_schedules
-     SET last_drill_at = now(),
-         last_drill_status = $2,
-         last_drill_error = $3,
-         updated_at = now()
-         ${successSql}
-     WHERE id = $1`,
-    [scheduleId, status, error ?? null]
-  );
+  const update = async (client: pg.PoolClient) => {
+    const point = await client.query<{ metadata: Record<string, unknown> }>(
+      `UPDATE recovery_points
+       SET last_drill_at = now(),
+           last_drill_status = $2,
+           last_drill_error = $3
+           ${successSql}
+       WHERE id = $1
+       RETURNING metadata`,
+      [recoveryPointId, status, error ?? null]
+    );
+    const scheduleId = point.rows[0]?.metadata?.scheduleId;
+    if (typeof scheduleId !== "string") return;
+    await client.query(
+      `UPDATE recovery_schedules
+       SET last_drill_at = now(),
+           last_drill_status = $2,
+           last_drill_error = $3,
+           updated_at = now()
+           ${successSql}
+       WHERE id = $1`,
+      [scheduleId, status, error ?? null]
+    );
+  };
+  if (executionFence) {
+    await executionFence.withActiveLease(update);
+  } else {
+    await withTransaction(update);
+  }
 }

@@ -10,10 +10,24 @@ describe("isPrivateIp", () => {
     expect(isPrivateIp("192.168.1.10")).toBe(true);
     expect(isPrivateIp("169.254.169.254")).toBe(true);
     expect(isPrivateIp("0.0.0.0")).toBe(true);
+    expect(isPrivateIp("192.0.2.1")).toBe(true);
+    expect(isPrivateIp("198.51.100.1")).toBe(true);
+    expect(isPrivateIp("203.0.113.1")).toBe(true);
+    expect(isPrivateIp("224.0.0.1")).toBe(true);
+    expect(isPrivateIp("255.255.255.255")).toBe(true);
 
     expect(isPrivateIp("::1")).toBe(true);
     expect(isPrivateIp("fe80::1")).toBe(true);
     expect(isPrivateIp("fc00::")).toBe(true);
+    expect(isPrivateIp("ff02::1")).toBe(true);
+    expect(isPrivateIp("2001:db8::1")).toBe(true);
+    expect(isPrivateIp("fec0::1")).toBe(true);
+    expect(isPrivateIp("2002:7f00:1::1")).toBe(true);
+    expect(isPrivateIp("64:ff9b::7f00:1")).toBe(true);
+    expect(isPrivateIp("2001::1")).toBe(true);
+    expect(isPrivateIp("3ffe::1")).toBe(true);
+    expect(isPrivateIp("::ffff:0:127.0.0.1")).toBe(true);
+    expect(isPrivateIp("::192.168.1.1")).toBe(true);
 
     expect(isPrivateIp("8.8.8.8")).toBe(false);
     expect(isPrivateIp("1.1.1.1")).toBe(false);
@@ -54,6 +68,15 @@ describe("agent request-time lookup guard", () => {
     });
   }
 
+  function lookupAddresses(lookup: ReturnType<typeof createAgentLookup>, hostname: string) {
+    return new Promise<Array<{ address: string; family: number }>>((resolve, reject) => {
+      lookup(hostname, { all: true }, (error, addresses) => {
+        if (error) reject(error);
+        else resolve(addresses);
+      });
+    });
+  }
+
   it("pins the connection to the public address that was validated", async () => {
     const resolve = async () => [
       { address: "8.8.8.8", family: 4 },
@@ -63,6 +86,16 @@ describe("agent request-time lookup guard", () => {
       address: "8.8.8.8",
       family: 4
     });
+  });
+
+  it("returns a pinned address array when Node requests all lookup results", async () => {
+    const resolve = async () => [
+      { address: "8.8.8.8", family: 4 },
+      { address: "1.1.1.1", family: 4 }
+    ];
+    await expect(lookupAddresses(createAgentLookup(false, resolve), "agent.example.test")).resolves.toEqual([
+      { address: "8.8.8.8", family: 4 }
+    ]);
   });
 
   it("rejects hostnames when any resolved address is private", async () => {

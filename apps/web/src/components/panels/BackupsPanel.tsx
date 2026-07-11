@@ -17,6 +17,7 @@ import { hostName, jobLabel } from "../../lib/hostScope.js";
 import { ButtonRow, CardSection, DataTable, Field, Panel, StatusPill } from "../ui/primitives.js";
 import { HostSelect } from "../dashboard/HostSelect.js";
 import { useConfirm } from "../ConfirmProvider.js";
+import { useAuthorization } from "../AuthorizationContext.js";
 
 type BackupKindFilter = "all" | "volume" | "host_path" | "recovery_point";
 type CreateKind = "volume" | "host_path";
@@ -125,6 +126,7 @@ export function BackupsPanel({
   refresh: () => Promise<void>;
   runJob: <T extends Jobish>(request: () => Promise<T>) => Promise<T>;
 }) {
+  const { canOperate } = useAuthorization();
   const { confirm } = useConfirm();
   const action = useAsyncAction();
   const [restore, setRestore] = useState<Record<string, RestoreState>>({});
@@ -168,7 +170,9 @@ export function BackupsPanel({
 
   const loadAuxiliaryData = useCallback(async () => {
     const [scheduleResult, targetResult, pointResult, healthResult] = await Promise.allSettled([
-      api<{ schedules: BackupSchedule[] }>("/api/backup-schedules"),
+      canOperate
+        ? api<{ schedules: BackupSchedule[] }>("/api/backup-schedules")
+        : Promise.resolve({ schedules: [] as BackupSchedule[] }),
       api<{ targets: BackupTarget[] }>("/api/recovery/targets"),
       api<{ points: RecoveryPointListItem[] }>("/api/recovery/points"),
       api<{ health: BackupHealthSummary }>("/api/backups/health")
@@ -180,7 +184,7 @@ export function BackupsPanel({
       const healthSummary = healthResult.value.health;
       setHealth(healthSummary ? { ...healthSummary, hosts: arrayOrEmpty(healthSummary.hosts) } : null);
     }
-  }, []);
+  }, [canOperate]);
 
   useEffect(() => {
     void loadAuxiliaryData();
@@ -410,7 +414,7 @@ export function BackupsPanel({
           </Field>
         </div>
 
-        <div className="recoveryTaskGrid">
+        {canOperate && <div className="recoveryTaskGrid">
           <form className="recoveryTaskCard" onSubmit={(event) => { event.preventDefault(); void createBackup(); }}>
             <CardSection title="Create backup">
               <div className="recoveryFieldGrid twoColumn">
@@ -513,7 +517,7 @@ export function BackupsPanel({
               </button>
             </ButtonRow>
           </form>
-        </div>
+        </div>}
       </div>
 
       {action.error && <div className="notice error">{action.error}</div>}
@@ -534,7 +538,7 @@ export function BackupsPanel({
         />
       )}
 
-      {schedules.length > 0 && (
+      {canOperate && schedules.length > 0 && (
         <DataTable
           compact
           rows={schedules}
@@ -570,7 +574,18 @@ export function BackupsPanel({
 
       <DataTable
         rows={rows}
-        columns={["Name", "Host", "Type", "Status", "Size", "Storage", "Created", "Verified", "Drilled", "Restore", "Actions"]}
+        columns={[
+          "Name",
+          "Host",
+          "Type",
+          "Status",
+          "Size",
+          "Storage",
+          "Created",
+          "Verified",
+          "Drilled",
+          ...(canOperate ? ["Restore", "Actions"] : [])
+        ]}
         render={(row) => {
           if (row.rowKind === "recovery_point") {
             const point = row.point;
@@ -584,8 +599,10 @@ export function BackupsPanel({
               formatDate(point.createdAt),
               typeof point.metadata.verifiedAt === "string" ? formatDate(point.metadata.verifiedAt) : "—",
               "—",
-              <span key="restore" className="pill muted">Recovery Center</span>,
-              <FileArchive key="actions" size={16} />
+              ...(canOperate ? [
+                <span key="restore" className="pill muted">Recovery Center</span>,
+                <FileArchive key="actions" size={16} />
+              ] : [])
             ];
           }
 
@@ -612,7 +629,7 @@ export function BackupsPanel({
               <span>{backup.lastDrillAt ? formatDate(backup.lastDrillAt) : "Never"}</span>
               {backup.lastDrillStatus && <span className={`pill ${backup.lastDrillStatus === "completed" ? "completed" : "failed"}`}>{backup.lastDrillStatus}</span>}
             </span>,
-            <div className="backupRestoreRow" key="restore">
+            ...(canOperate ? [<div className="backupRestoreRow" key="restore">
               <select value={state.hostId} onChange={(event) => setRestore((current) => ({ ...current, [backup.id]: { ...state, hostId: event.target.value } }))}>
                 {hosts.map((host) => <option key={host.id} value={host.id}>{host.name}</option>)}
               </select>
@@ -681,7 +698,7 @@ export function BackupsPanel({
               >
                 <Trash2 size={16} />
               </button>
-            </ButtonRow>
+            </ButtonRow>] : [])
           ];
         }}
       />

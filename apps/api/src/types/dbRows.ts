@@ -39,6 +39,9 @@ export type JobRow = {
   error?: string | null;
   created_by?: string | null;
   idempotency_key?: string | null;
+  lease_owner?: string | null;
+  lease_expires_at?: Date | string | null;
+  attempt_count?: number | string;
   created_at: Date | string;
   updated_at: Date | string;
   started_at?: Date | string | null;
@@ -135,6 +138,7 @@ export type RecoveryScheduleRow = {
 
 export type MigrationRunRow = {
   id: string;
+  plan_run_id?: string | null;
   source_host_id: string;
   target_host_id: string;
   source_app_identity: Record<string, unknown>;

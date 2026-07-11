@@ -5,11 +5,17 @@ const query = vi.fn();
 const enqueueJob = vi.fn();
 
 vi.mock("../src/db/pool.js", () => ({
-  query: (...args: unknown[]) => query(...args)
+  query: (...args: unknown[]) => query(...args),
+  withTransaction: async (fn: (client: { query: typeof query }) => Promise<unknown>) => fn({ query })
 }));
 
 vi.mock("../src/services/jobs.js", () => ({
-  enqueueJob: (...args: unknown[]) => enqueueJob(...args)
+  enqueueJobInTransaction: (_client: unknown, ...args: unknown[]) => enqueueJob(...args),
+  notifyJobQueued: vi.fn(async () => undefined)
+}));
+
+vi.mock("../src/services/stackVersions.js", () => ({
+  recordStackVersionInTransaction: vi.fn(async () => ({ id: "version" }))
 }));
 
 function jsonResponse(body: unknown, status = 200) {
@@ -171,6 +177,7 @@ describe("private GitHub repository credentials", () => {
         host_clone_url: "git@github-private-app:owner/private-app.git",
         host_clone_directory: "/srv/apps/private-app"
       })] })
+      .mockResolvedValueOnce({ rows: [{ id: "00000000-0000-4000-8000-000000000123" }] })
       .mockResolvedValueOnce({ rows: [] });
     enqueueJob.mockResolvedValue({
       id: "00000000-0000-4000-8000-000000000777",

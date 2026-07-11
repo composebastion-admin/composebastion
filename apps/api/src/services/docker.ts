@@ -1,9 +1,17 @@
 import { v4 as uuid } from "uuid";
 import path from "node:path";
 import type { DockerActionRequest, ImageCleanupCandidate, ImageCleanupTarget, ResourceKind } from "@composebastion/shared";
+import type { PoolClient } from "pg";
 import { query, withTransaction } from "../db/pool.js";
 import { buildComposeCommand, buildDockerActionCommand, dockerCommandFailureMessage, inventoryCommands, shQuote, withDockerEnv } from "./commands.js";
-import { checkAgent, runAgentDockerCommand, streamAgentContainerLogs } from "./agent.js";
+import {
+  AgentHttpError,
+  checkAgent,
+  getAgentContainerUsage,
+  runAgentDockerCommand,
+  streamAgentContainerLogs,
+  streamAgentContainerUsage
+} from "./agent.js";
 import {
   demoInventorySummary,
   execDemoContainer,
@@ -25,6 +33,31 @@ import { readHostTextFileFromWorker, stackRemoteDirectory, writeHostStackFiles }
 import { checkImageUpdatesForHost, findRegistryAuthForReference } from "./imageUpdates.js";
 import { extractImagesFromCompose } from "./composeImages.js";
 import { safeErrorMessage, safeLogValue } from "./operationLogs.js";
+import type { JobExecutionFence } from "./jobs.js";
+
+function isJobLeaseLost(error: unknown) {
+  return error instanceof Error && "code" in error && (error as Error & { code?: unknown }).code === "JOB_LEASE_LOST";
+}
+
+async function executionCheckpoint(fence?: JobExecutionFence) {
+  await fence?.assertActive();
+}
+
+async function withExecutionLease<T>(
+  fence: JobExecutionFence | undefined,
+  callback: (client: PoolClient) => Promise<T>
+) {
+  return fence ? fence.withActiveLease(callback) : withTransaction(callback);
+}
+
+async function executionQuery(
+  fence: JobExecutionFence | undefined,
+  text: string,
+  values: unknown[]
+) {
+  if (!fence) return query(text, values);
+  return fence.withActiveLease((client) => client.query(text, values));
+}
 
 function parseJsonLines(stdout: string) {
   return stdout
@@ -125,10 +158,15 @@ function resourceIdentity(kind: ResourceKind, data: Record<string, any>) {
   return { externalId: String(data.Name), name: String(data.Name) };
 }
 
-async function upsertResources(hostId: string, kind: ResourceKind, resources: Record<string, unknown>[]) {
+async function upsertResources(
+  hostId: string,
+  kind: ResourceKind,
+  resources: Record<string, unknown>[],
+  executionFence?: JobExecutionFence
+) {
   const externalIds: string[] = [];
 
-  await withTransaction(async (client) => {
+  await withExecutionLease(executionFence, async (client) => {
     for (const data of resources) {
       const { externalId, name } = resourceIdentity(kind, data);
       externalIds.push(externalId);
@@ -186,32 +224,63 @@ async function runComposeInWorkingDir(
   return result;
 }
 
-export async function checkDockerHost(hostId: string) {
-  await markHostChecking(hostId);
+export async function checkDockerHost(hostId: string, executionFence?: JobExecutionFence) {
+  await executionCheckpoint(executionFence);
+  if (executionFence) {
+    await executionFence.withActiveLease((client) => markHostChecking(hostId, client));
+  } else {
+    await markHostChecking(hostId);
+  }
   try {
     const host = await getHostForWorker(hostId);
     if (isDemoHost(host.public)) {
-      await markHostOnline(hostId, "29.4.0-demo", "5.1.1-demo", null);
+      await executionCheckpoint(executionFence);
+      if (executionFence) {
+        await executionFence.withActiveLease((client) => markHostOnline(hostId, "29.4.0-demo", "5.1.1-demo", null, client));
+      } else {
+        await markHostOnline(hostId, "29.4.0-demo", "5.1.1-demo", null);
+      }
       return { dockerVersion: "29.4.0-demo", composeVersion: "5.1.1-demo", demo: true };
     }
     if (host.connectionMode === "agent") {
       if (!host.agent) throw new Error("Agent host is missing agent connection details");
       const result = await checkAgent(host.agent);
-      await markHostOnline(hostId, result.dockerVersion ?? "agent", result.composeVersion ?? "agent", result.agentVersion ?? null);
+      await executionCheckpoint(executionFence);
+      if (executionFence) {
+        await executionFence.withActiveLease((client) => markHostOnline(
+          hostId,
+          result.dockerVersion ?? "agent",
+          result.composeVersion ?? "agent",
+          result.agentVersion ?? null,
+          client
+        ));
+      } else {
+        await markHostOnline(hostId, result.dockerVersion ?? "agent", result.composeVersion ?? "agent", result.agentVersion ?? null);
+      }
       return { dockerVersion: result.dockerVersion ?? "agent", composeVersion: result.composeVersion ?? "agent", agentVersion: result.agentVersion ?? null };
     }
     const version = await runDocker(hostId, "docker version --format '{{.Server.Version}}'", 30_000);
+    await executionCheckpoint(executionFence);
     const compose = await runDocker(hostId, "docker compose version --short", 30_000);
-    await markHostOnline(hostId, version.stdout.trim(), compose.stdout.trim(), null);
+    await executionCheckpoint(executionFence);
+    if (executionFence) {
+      await executionFence.withActiveLease((client) => markHostOnline(hostId, version.stdout.trim(), compose.stdout.trim(), null, client));
+    } else {
+      await markHostOnline(hostId, version.stdout.trim(), compose.stdout.trim(), null);
+    }
     return { dockerVersion: version.stdout.trim(), composeVersion: compose.stdout.trim() };
   } catch (error) {
-    await markHostOffline(hostId, error);
+    if (executionFence) {
+      await executionFence.withActiveLease((client) => markHostOffline(hostId, error, client));
+    } else {
+      await markHostOffline(hostId, error);
+    }
     throw error;
   }
 }
 
-export async function syncDockerInventory(hostId: string) {
-  await checkDockerHost(hostId);
+export async function syncDockerInventory(hostId: string, executionFence?: JobExecutionFence) {
+  await checkDockerHost(hostId, executionFence);
   const host = await getHostForWorker(hostId);
   if (isDemoHost(host.public)) {
     return demoInventorySummary(hostId);
@@ -231,13 +300,16 @@ export async function syncDockerInventory(hostId: string) {
   };
 
   for (const [kind, command] of kinds) {
+    await executionCheckpoint(executionFence);
     const result = await runDocker(hostId, command, 60_000);
     const resources = parseJsonLines(result.stdout);
-    await upsertResources(hostId, kind, resources);
+    await upsertResources(hostId, kind, resources, executionFence);
     summary[kind] = resources.length;
   }
 
-  await reconcileComposeStacks(hostId).catch((error) => {
+  await executionCheckpoint(executionFence);
+  await reconcileComposeStacks(hostId, executionFence).catch((error) => {
+    if (isJobLeaseLost(error)) throw error;
     console.warn("Compose stack reconcile failed", {
       hostId: safeLogValue(hostId),
       error: safeErrorMessage(error)
@@ -268,7 +340,7 @@ function titleCaseProject(project: string) {
 // updates stack status from container states, registers compose projects that
 // were deployed outside ComposeBastion as "external" stacks, and drops external
 // stacks whose containers are gone.
-async function reconcileComposeStacks(hostId: string) {
+async function reconcileComposeStacks(hostId: string, executionFence?: JobExecutionFence) {
   const containers = await query<any>(
     "SELECT data FROM resource_snapshots WHERE host_id = $1 AND kind = 'container'",
     [hostId]
@@ -304,7 +376,7 @@ async function reconcileComposeStacks(hostId: string) {
 
     if (existing) {
       if (existing.status !== liveStatus) {
-        await query("UPDATE compose_stacks SET status = $2, updated_at = now() WHERE id = $1", [existing.id, liveStatus]);
+        await executionQuery(executionFence, "UPDATE compose_stacks SET status = $2, updated_at = now() WHERE id = $1", [existing.id, liveStatus]);
       }
       continue;
     }
@@ -319,7 +391,8 @@ async function reconcileComposeStacks(hostId: string) {
       }
     }
 
-    await query(
+    await executionQuery(
+      executionFence,
       `INSERT INTO compose_stacks (
          id, host_id, name, project_name, compose_yaml, env, status,
          source_type, source_working_dir, source_compose_path
@@ -343,9 +416,9 @@ async function reconcileComposeStacks(hostId: string) {
     if (!projects.has(String(row.project_name))) {
       if (row.source_type === "external") {
         // Discovered projects with no containers left were removed outside ComposeBastion.
-        await query("DELETE FROM compose_stacks WHERE id = $1", [row.id]);
+        await executionQuery(executionFence, "DELETE FROM compose_stacks WHERE id = $1", [row.id]);
       } else if (row.status === "deployed") {
-        await query("UPDATE compose_stacks SET status = 'stopped', updated_at = now() WHERE id = $1", [row.id]);
+        await executionQuery(executionFence, "UPDATE compose_stacks SET status = 'stopped', updated_at = now() WHERE id = $1", [row.id]);
       }
     }
   }
@@ -423,12 +496,11 @@ async function cleanupUnusedImages(hostId: string, targets: ImageCleanupTarget[]
   return { removed, count: removed.length };
 }
 
-export async function executeDockerAction(action: DockerActionRequest) {
+export async function executeDockerAction(action: DockerActionRequest, executionFence?: JobExecutionFence) {
   const host = await getHostForWorker(action.hostId);
+  if (action.type === "host.check") return checkDockerHost(action.hostId, executionFence);
+  if (action.type === "host.sync") return syncDockerInventory(action.hostId, executionFence);
   if (isDemoHost(host.public)) return executeDemoDockerAction(action);
-
-  if (action.type === "host.check") return checkDockerHost(action.hostId);
-  if (action.type === "host.sync") return syncDockerInventory(action.hostId);
   if (action.type === "host.mkdir") return createRemoteDirectory(action.hostId, action.payload.path);
   if (action.type === "git.clone") return cloneGitRepository(action.hostId, action.payload.repositoryUrl, action.payload.directory, action.payload.branch, action.payload.shallow);
   if (action.type === "git.pull") return pullGitRepository(action.hostId, action.payload.directory, action.payload.branch);
@@ -480,7 +552,7 @@ export async function executeDockerAction(action: DockerActionRequest) {
 
   const command = buildDockerActionCommand(action);
   const result = await runDocker(action.hostId, command, 5 * 60_000);
-  await syncDockerInventory(action.hostId);
+  await syncDockerInventory(action.hostId, executionFence);
   if (action.type === "image.pull") {
     await checkImageUpdatesForHost(action.hostId).catch(() => undefined);
   }
@@ -506,6 +578,16 @@ export async function getContainerUsage(hostId: string) {
   const host = await getHostForWorker(hostId);
   if (isDemoHost(host.public)) return getDemoContainerUsage(hostId);
   if (host.public.lastStatus === "offline") return [];
+  if (host.connectionMode === "agent") {
+    if (!host.agent) throw new Error("Agent host is missing agent connection details");
+    try {
+      return await getAgentContainerUsage(host.agent);
+    } catch (error) {
+      // Agents older than 1.0.7 do not expose the read-only usage endpoint. Keep
+      // one low-frequency snapshot fallback during rolling upgrades.
+      if (!(error instanceof AgentHttpError) || error.status !== 404) throw error;
+    }
+  }
   const result = await runDocker(hostId, "docker stats --no-stream --format '{{json .}}'", 60_000);
   return parseJsonLines(result.stdout);
 }
@@ -515,8 +597,9 @@ export async function streamContainerUsage(hostId: string, onStats: (stats: Reco
   if (isDemoHost(host.public)) {
     return streamDemoContainerUsage(hostId, onStats);
   }
-  if (host.connectionMode !== "ssh") {
-    throw new Error("Live Docker stats streaming currently requires SSH host mode.");
+  if (host.connectionMode === "agent") {
+    if (!host.agent) throw new Error("Agent host is missing agent connection details");
+    return streamAgentContainerUsage(host.agent, onStats, onError);
   }
   return streamSshCommandLines(
     host.ssh,

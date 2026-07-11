@@ -6,10 +6,14 @@ export type OpenApiPath = {
   summary: string;
   tags: string[];
   auth: "public" | "session" | "viewer" | "operator" | "admin";
+  requestSchema?: Record<string, unknown>;
   responseSchema?: Record<string, unknown>;
   streaming?: boolean;
   download?: boolean;
   websocket?: boolean;
+  conflict?: boolean;
+  conflictDescription?: string;
+  additionalResponses?: Record<string, { description: string; schema: Record<string, unknown> }>;
   notes?: string[];
 };
 
@@ -21,9 +25,10 @@ const OPENAPI_VERSION = packageJson.version || "unknown";
 
 export const openApiRoutes: OpenApiPath[] = [
   { method: "get", path: "/api/v1/health", summary: "Basic API health check", tags: ["Health"], auth: "public", responseSchema: schemaRef("HealthResponse") },
-  { method: "get", path: "/api/v1/health/ready", summary: "Composite readiness check", tags: ["Health"], auth: "public", responseSchema: schemaRef("ReadinessResponse") },
+  { method: "get", path: "/api/v1/health/ready", summary: "Composite readiness check", tags: ["Health"], auth: "public", responseSchema: schemaRef("ReadinessResponse"), additionalResponses: { "503": { description: "Database or worker readiness check failed", schema: schemaRef("ReadinessResponse") } } },
+  { method: "get", path: "/api/v1/health/redis", summary: "Redis diagnostic health check", tags: ["Health"], auth: "public", responseSchema: schemaRef("RedisHealthResponse"), additionalResponses: { "503": { description: "Redis is not configured or unavailable", schema: schemaRef("RedisHealthResponse") } } },
   { method: "get", path: "/api/v1/auth/setup-state", summary: "Read setup state", tags: ["Auth"], auth: "public", responseSchema: schemaRef("SetupStateResponse") },
-  { method: "post", path: "/api/v1/auth/setup", summary: "Create the first owner account", tags: ["Auth"], auth: "public", responseSchema: schemaRef("UserResponse") },
+  { method: "post", path: "/api/v1/auth/setup", summary: "Create the first owner account", tags: ["Auth"], auth: "public", responseSchema: schemaRef("UserResponse"), conflict: true, conflictDescription: "CONFLICT: initial setup is already complete" },
   { method: "post", path: "/api/v1/auth/login", summary: "Create a session cookie", tags: ["Auth"], auth: "public", responseSchema: schemaRef("UserResponse") },
   { method: "post", path: "/api/v1/auth/logout", summary: "Destroy the current session", tags: ["Auth"], auth: "session", responseSchema: schemaRef("OkResponse") },
   { method: "get", path: "/api/v1/auth/me", summary: "Read the current signed-in user", tags: ["Auth"], auth: "session", responseSchema: schemaRef("UserResponse") },
@@ -57,6 +62,7 @@ export const openApiRoutes: OpenApiPath[] = [
   },
   { method: "get", path: "/api/v1/hosts/{hostId}/containers/{containerId}/inspect", summary: "Read redacted/full container inspect details by role", tags: ["Containers"], auth: "viewer", responseSchema: schemaRef("ContainerInspectResponse") },
   { method: "post", path: "/api/v1/hosts/{hostId}/containers/{containerId}/exec", summary: "Run audited container exec", tags: ["Containers"], auth: "operator", responseSchema: schemaRef("DockerCommandResponse") },
+  { method: "get", path: "/api/v1/hosts/{hostId}/containers/usage", summary: "Read a container usage snapshot", tags: ["Containers"], auth: "viewer", responseSchema: schemaRef("ContainerUsageResponse") },
   {
     method: "get",
     path: "/api/v1/hosts/{hostId}/containers/usage-stream",
@@ -64,7 +70,7 @@ export const openApiRoutes: OpenApiPath[] = [
     tags: ["Streams"],
     auth: "viewer",
     streaming: true,
-    notes: ["Events: `usage`, `error`, `ping`.", "`usage` payload is `{ stats }` with Docker stats rows; malformed rows are surfaced as `error` events."]
+    notes: ["Events: `message`, `error`, `ping`.", "`message` payload is `{ stats }` with one Docker stats row; malformed rows are surfaced as `error` events."]
   },
   {
     method: "get",
@@ -108,6 +114,10 @@ export const openApiRoutes: OpenApiPath[] = [
   { method: "get", path: "/api/v1/recovery/points", summary: "List recovery points", tags: ["Recovery"], auth: "viewer", responseSchema: schemaRef("RecoveryPointsResponse") },
   { method: "post", path: "/api/v1/recovery/points", summary: "Create a recovery point", tags: ["Recovery"], auth: "operator", responseSchema: schemaRef("RecoveryPointJobResponse") },
   { method: "post", path: "/api/v1/recovery/points/{id}/drill", summary: "Enqueue a clone-only recovery restore drill", tags: ["Recovery"], auth: "operator", responseSchema: schemaRef("RecoveryDrillResponse") },
+  { method: "post", path: "/api/v1/recovery/migrations/plan", summary: "Create and fingerprint a migration plan", tags: ["Recovery"], auth: "operator", requestSchema: schemaRef("MigrationPlanRequest"), responseSchema: schemaRef("MigrationRunResponse") },
+  { method: "post", path: "/api/v1/recovery/migrations/execute", summary: "Execute a single-use reviewed migration plan", tags: ["Recovery"], auth: "operator", requestSchema: schemaRef("MigrationExecuteRequest"), responseSchema: schemaRef("MigrationExecuteResponse"), conflict: true, conflictDescription: "MIGRATION_PLAN_STALE: the reviewed plan is stale or already used", notes: ["Returns `409 MIGRATION_PLAN_STALE` when the plan was already used or either host changed after planning."] },
+  { method: "get", path: "/api/v1/recovery/migrations", summary: "List migration plan and execution runs", tags: ["Recovery"], auth: "viewer", responseSchema: schemaRef("MigrationRunsResponse") },
+  { method: "get", path: "/api/v1/recovery/migrations/{id}", summary: "Read one migration plan or execution run", tags: ["Recovery"], auth: "viewer", responseSchema: schemaRef("MigrationRunResponse") },
   { method: "get", path: "/api/v1/apps", summary: "List managed apps", tags: ["Apps"], auth: "viewer", responseSchema: schemaRef("AppsResponse") },
   { method: "get", path: "/api/v1/github/repos", summary: "List tracked GitHub repositories", tags: ["GitHub"], auth: "viewer", responseSchema: schemaRef("GithubRepositoriesResponse") },
   { method: "post", path: "/api/v1/github/repos", summary: "Create a tracked GitHub repository", tags: ["GitHub"], auth: "operator", responseSchema: schemaRef("GithubRepositoryResponse") },
@@ -122,6 +132,7 @@ export const openApiRoutes: OpenApiPath[] = [
   { method: "get", path: "/api/v1/image-updates", summary: "List image update intelligence", tags: ["Images"], auth: "viewer", responseSchema: schemaRef("ImageUpdatesResponse") },
   { method: "get", path: "/api/v1/image-updates/preview", summary: "Preview an image update action", tags: ["Images"], auth: "viewer", responseSchema: schemaRef("ImageUpdatePreviewResponse") },
   { method: "get", path: "/api/v1/image-scanner/status", summary: "Read vulnerability scanner availability", tags: ["Images"], auth: "viewer", responseSchema: schemaRef("ImageScannerStatusResponse") },
+  { method: "get", path: "/api/v1/image-tags", summary: "List tags from a validated image registry", tags: ["Images"], auth: "operator", responseSchema: schemaRef("ImageTagsResponse") },
   { method: "get", path: "/api/v1/alerts/channels", summary: "List alert notification channels", tags: ["Alerts"], auth: "operator", responseSchema: schemaRef("NotificationChannelsResponse") },
   { method: "post", path: "/api/v1/alerts/channels", summary: "Create alert notification channel", tags: ["Alerts"], auth: "operator", responseSchema: schemaRef("NotificationChannelResponse") },
   { method: "post", path: "/api/v1/alerts/channels/{id}/test", summary: "Send alert channel test notification", tags: ["Alerts"], auth: "operator", responseSchema: schemaRef("AlertChannelTestResponse") },
@@ -189,11 +200,17 @@ const componentSchemas = {
     ok: { type: "boolean" },
     checks: {
       type: "object",
-      additionalProperties: object(["ok"], {
+      additionalProperties: object(["ok", "required"], {
         ok: { type: "boolean" },
+        required: { type: "boolean", description: "Whether this check contributes to the top-level readiness result" },
         error: stringOrNullSchema
       }, true)
     }
+  }),
+  RedisHealthResponse: object(["ok", "configured"], {
+    ok: { type: "boolean" },
+    configured: { type: "boolean" },
+    error: stringOrNullSchema
   }),
   SetupStateResponse: object(["needsSetup"], { needsSetup: { type: "boolean" } }),
   AdminUser: object(["id", "email", "role", "isActive", "createdAt"], {
@@ -310,11 +327,16 @@ const componentSchemas = {
   FleetMetricsResponse: namedArrayResponse("hosts", schemaRef("FleetMetricHost")),
   ContainerLogsResponse: object(["logs"], { logs: { type: "string" } }),
   ContainerInspectResponse: namedItemResponse("inspect", objectSchema),
+  ContainerUsageResponse: namedArrayResponse("usage", recordSchema),
   DockerCommandResponse: object([], {
     stdout: { type: "string" },
     stderr: { type: "string" },
     code: { type: "number" }
   }, true),
+  ImageTagsResponse: object(["image", "tags"], {
+    image: { type: "string" },
+    tags: arrayOf({ type: "string" })
+  }),
   JobProgressStep: object(["id", "label", "status"], {
     id: { type: "string" },
     label: { type: "string" },
@@ -344,10 +366,22 @@ const componentSchemas = {
     limit: { type: "number" },
     offset: { type: "number" }
   }),
-  WorkerStatusResponse: namedItemResponse("worker", object(["queued", "running"], {
+  WorkerStatusResponse: namedItemResponse("worker", object([
+    "queued",
+    "running",
+    "lastJobCompletedAt",
+    "available",
+    "activeWorkers",
+    "lastHeartbeatAt",
+    "state"
+  ], {
     queued: { type: "number" },
     running: { type: "number" },
-    lastJobCompletedAt: stringOrNullSchema
+    lastJobCompletedAt: stringOrNullSchema,
+    available: { type: "boolean" },
+    activeWorkers: { type: "number" },
+    lastHeartbeatAt: stringOrNullSchema,
+    state: enumSchema(["active", "draining", "stale", "absent"])
   }, true)),
   JobRetryResponse: object(["job", "original"], { job: schemaRef("OperationJob"), original: schemaRef("OperationJob") }),
   RuntimeVersion: object(["version", "revision", "buildDate"], {
@@ -589,6 +623,71 @@ const componentSchemas = {
   RecoveryPointsResponse: namedArrayResponse("points", schemaRef("RecoveryPoint")),
   RecoveryPointJobResponse: object(["point", "job"], { point: schemaRef("RecoveryPoint"), job: schemaRef("OperationJob") }),
   RecoveryDrillResponse: object(["point", "job"], { point: schemaRef("RecoveryPoint"), job: schemaRef("OperationJob") }),
+  MigrationExecutionOptions: object([], {
+    stopSource: { type: "boolean", default: false },
+    projectNameOverride: { type: "string", minLength: 1, maxLength: 80 },
+    remapPorts: { type: "boolean", default: true },
+    networkMode: { ...enumSchema(["clone", "reuse"]), default: "clone" }
+  }),
+  MigrationIntent: object(["strategy", "options"], {
+    strategy: enumSchema(["safe_move", "warm_move", "clone"]),
+    options: schemaRef("MigrationExecutionOptions")
+  }),
+  MigrationPlanRequest: object(["sourceHostId", "targetHostId", "sourceAppIdentity"], {
+    sourceHostId: idSchema,
+    targetHostId: idSchema,
+    sourceAppIdentity: schemaRef("RecoveryAppIdentity"),
+    createRecoveryPoint: { type: "boolean", default: true },
+    strategy: { ...enumSchema(["safe_move", "warm_move", "clone"]), default: "clone" },
+    options: schemaRef("MigrationExecutionOptions")
+  }),
+  BoundMigrationExecuteRequest: object(["planRunId"], {
+    planRunId: idSchema
+  }),
+  LegacyMigrationExecuteRequest: object(["sourceHostId", "targetHostId", "sourceAppIdentity"], {
+    sourceHostId: idSchema,
+    targetHostId: idSchema,
+    sourceAppIdentity: schemaRef("RecoveryAppIdentity"),
+    recoveryPointId: idSchema,
+    strategy: { ...enumSchema(["safe_move", "warm_move", "clone"]), default: "clone" },
+    options: schemaRef("MigrationExecutionOptions")
+  }),
+  MigrationExecuteRequest: {
+    oneOf: [schemaRef("BoundMigrationExecuteRequest"), schemaRef("LegacyMigrationExecuteRequest")]
+  },
+  MigrationPlan: object(["sourceHostId", "targetHostId", "sourceAppIdentity", "intent", "sourceFingerprint", "targetFingerprint", "steps", "warnings", "checks", "blockingIssues"], {
+    sourceHostId: idSchema,
+    targetHostId: idSchema,
+    sourceAppIdentity: schemaRef("RecoveryAppIdentity"),
+    intent: { anyOf: [schemaRef("MigrationIntent"), { type: "null" }] },
+    sourceFingerprint: stringOrNullSchema,
+    targetFingerprint: stringOrNullSchema,
+    steps: arrayOf(recordSchema),
+    warnings: arrayOf({ type: "string" }),
+    checks: recordSchema,
+    blockingIssues: arrayOf({ type: "string" })
+  }, true),
+  MigrationRun: object(["id", "planRunId", "sourceHostId", "targetHostId", "sourceAppIdentity", "mode", "status", "recoveryPointId", "plan", "error", "createdAt", "startedAt", "completedAt"], {
+    id: idSchema,
+    planRunId: idOrNullSchema,
+    sourceHostId: idSchema,
+    targetHostId: idSchema,
+    sourceAppIdentity: schemaRef("RecoveryAppIdentity"),
+    mode: enumSchema(["plan", "execute"]),
+    status: enumSchema(["queued", "running", "completed", "partial", "failed"]),
+    recoveryPointId: idOrNullSchema,
+    plan: { anyOf: [schemaRef("MigrationPlan"), { type: "null" }] },
+    error: stringOrNullSchema,
+    createdAt: dateTimeSchema,
+    startedAt: stringOrNullSchema,
+    completedAt: stringOrNullSchema
+  }),
+  MigrationRunResponse: namedItemResponse("run", schemaRef("MigrationRun")),
+  MigrationRunsResponse: namedArrayResponse("runs", schemaRef("MigrationRun")),
+  MigrationExecuteResponse: object(["run", "job"], {
+    run: schemaRef("MigrationRun"),
+    job: schemaRef("OperationJob")
+  }),
   AppsResponse: namedArrayResponse("apps", objectSchema),
   GithubRepository: object(["id", "name", "repositoryUrl", "owner", "repo", "branch", "composePath", "projectName", "env", "defaultHostId", "hostCloneUrl", "hostCloneDirectory", "lastDeployedAt", "lastDeployedCommitSha", "latestCommitSha", "updateCheckedAt", "updateCheckError", "hasGithubToken", "githubTokenStatus", "githubTokenCheckedAt", "githubTokenCheckError", "lastError", "createdAt", "updatedAt"], {
     id: idSchema,
@@ -770,6 +869,12 @@ export function buildOpenApiDocument() {
       summary: route.summary,
       tags: route.tags,
       security: route.auth === "public" ? [] : [{ cookieSession: [] }],
+      ...(route.requestSchema ? {
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: route.requestSchema } }
+        }
+      } : {}),
       responses: {
         "200": route.streaming
           ? { description: "Event stream" }
@@ -781,7 +886,14 @@ export function buildOpenApiDocument() {
         "400": response("Validation failed", { $ref: "#/components/schemas/Error" }),
         "401": response("Authentication required", { $ref: "#/components/schemas/Error" }),
         "403": response("Insufficient permissions", { $ref: "#/components/schemas/Error" }),
-        "404": response("Not found", { $ref: "#/components/schemas/Error" })
+        "404": response("Not found", { $ref: "#/components/schemas/Error" }),
+        ...(route.conflict ? {
+          "409": response(route.conflictDescription ?? "Conflict", { $ref: "#/components/schemas/Error" })
+        } : {}),
+        ...Object.fromEntries(Object.entries(route.additionalResponses ?? {}).map(([status, item]) => [
+          status,
+          response(item.description, item.schema)
+        ]))
       }
     };
     paths[route.path] = item;

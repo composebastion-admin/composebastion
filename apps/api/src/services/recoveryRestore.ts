@@ -9,6 +9,7 @@ import { pipeFileToSshCommand, runSshCommand } from "./ssh.js";
 import { stackRemoteDirectory, writeHostStackFiles } from "./remoteFiles.js";
 import { ensureRecoveryArtifactLocalPath, readRecoveryArtifact } from "./recoveryArtifactStore.js";
 import type { RecoveryManifest } from "./recoveryManifest.js";
+import type { JobExecutionFence } from "./jobs.js";
 import {
   assertAllowedRestoreRoot,
   buildComposeProjectVolumeName,
@@ -355,7 +356,8 @@ async function ensureStandaloneNetworks(hostId: string, networkMap: Record<strin
   }
 }
 
-export async function runRecoveryRestore(hostId: string, input: RecoveryRestoreRequest): Promise<RestoreResult> {
+export async function runRecoveryRestore(hostId: string, input: RecoveryRestoreRequest, executionFence?: JobExecutionFence): Promise<RestoreResult> {
+  await executionFence?.assertActive();
   const mode = input.options.mode ?? "clone";
   const networkMode = input.options.networkMode ?? "clone";
   if (mode === "in_place") {
@@ -392,6 +394,7 @@ export async function runRecoveryRestore(hostId: string, input: RecoveryRestoreR
       : buildCloneVolumeName(volumeName, projectName);
     volumeMap[volumeName] = targetVolumeName;
     if (manifest?.compose.projectName) volumeMap[composeVolumeName] = targetVolumeName;
+    await executionFence?.assertActive();
     await restoreVolumeArtifact(hostId, point, artifact, targetVolumeName);
     restoredVolumes += 1;
   }
@@ -407,6 +410,7 @@ export async function runRecoveryRestore(hostId: string, input: RecoveryRestoreR
       restorePath: artifact.metadata.restorePath
     });
     bindMap[sourcePath] = targetPath;
+    await executionFence?.assertActive();
     await restoreBindMountArtifact(hostId, point, artifact, targetPath);
     restoredBindMounts += 1;
   }
@@ -421,6 +425,7 @@ export async function runRecoveryRestore(hostId: string, input: RecoveryRestoreR
     }
   }
   const networkMap = buildNetworkMap(manifest, projectName, networkMode);
+  await executionFence?.assertActive();
   await ensureStandaloneNetworks(hostId, networkMap, manifest);
 
   const composeArtifact = point.artifacts.find((artifact) => artifact.kind === "compose_yaml" && artifact.status === "completed");
@@ -441,6 +446,7 @@ export async function runRecoveryRestore(hostId: string, input: RecoveryRestoreR
       };
     }
 
+    await executionFence?.assertActive();
     const standalone = await restoreStandaloneContainers({
       hostId,
       manifest,
@@ -502,10 +508,12 @@ export async function runRecoveryRestore(hostId: string, input: RecoveryRestoreR
     };
   }
 
+  await executionFence?.assertActive();
   const files = await writeHostStackFiles(hostId, restoreFiles.remoteDir, composeYaml, env, {
     composePath: restoreFiles.composePath,
     envPath: restoreFiles.envPath
   });
+  await executionFence?.assertActive();
   const command = `cd ${shQuote(restoreFiles.remoteDir)} && ${withDockerEnv(buildComposeCommand(projectName, files.composePath, "up"), host.public.dockerSocketPath)}`;
   const result = await runSshCommand(host.ssh, command, { timeoutMs: 10 * 60_000 });
   if (result.code !== 0) throw new Error(result.stderr || result.stdout || "Compose restore failed");

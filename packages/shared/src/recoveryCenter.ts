@@ -431,10 +431,27 @@ export const migrationPortConflictSchema = z.object({
   reason: z.string()
 });
 
+export const migrationStrategySchema = z.enum(["safe_move", "warm_move", "clone"]);
+
+export const migrationExecutionOptionsSchema = z.object({
+  stopSource: z.boolean().default(false),
+  projectNameOverride: z.string().min(1).max(80).optional(),
+  remapPorts: z.boolean().default(true),
+  networkMode: recoveryNetworkModeSchema.default("clone")
+});
+
+export const migrationIntentSchema = z.object({
+  strategy: migrationStrategySchema,
+  options: migrationExecutionOptionsSchema
+});
+
 export const migrationPlanSchema = z.object({
   sourceHostId: idSchema,
   targetHostId: idSchema,
   sourceAppIdentity: recoveryAppIdentitySchema,
+  intent: migrationIntentSchema.nullable().default(null),
+  sourceFingerprint: z.string().regex(/^[a-f0-9]{64}$/).nullable().default(null),
+  targetFingerprint: z.string().regex(/^[a-f0-9]{64}$/).nullable().default(null),
   steps: z.array(migrationPlanStepSchema),
   warnings: z.array(z.string()).default([]),
   estimatedArtifacts: z.number().int().nonnegative().default(0),
@@ -454,27 +471,41 @@ export const migrationPlanRequestSchema = z.object({
   sourceHostId: idSchema,
   targetHostId: idSchema,
   sourceAppIdentity: recoveryAppIdentitySchema,
-  createRecoveryPoint: z.boolean().default(true)
+  createRecoveryPoint: z.boolean().default(true),
+  strategy: migrationStrategySchema.default("clone"),
+  options: migrationExecutionOptionsSchema.default({})
 });
 
-export const migrationStrategySchema = z.enum(["safe_move", "warm_move", "clone"]);
-
-export const migrationExecuteRequestSchema = z.object({
+const legacyMigrationExecuteRequestSchema = z.object({
   sourceHostId: idSchema,
   targetHostId: idSchema,
   sourceAppIdentity: recoveryAppIdentitySchema,
   recoveryPointId: idSchema.optional(),
   strategy: migrationStrategySchema.default("clone"),
-  options: z.object({
-    stopSource: z.boolean().default(false),
-    projectNameOverride: z.string().min(1).max(80).optional(),
-    remapPorts: z.boolean().default(true),
-    networkMode: recoveryNetworkModeSchema.default("clone")
-  }).default({})
+  options: migrationExecutionOptionsSchema.default({})
 });
+
+const boundMigrationExecuteRequestSchema = z.object({
+  planRunId: idSchema
+});
+
+export const migrationExecuteRequestSchema = z.preprocess(
+  (input) => {
+    if (!input || typeof input !== "object" || Array.isArray(input)) return input;
+    return {
+      ...(input as Record<string, unknown>),
+      requestKind: Object.prototype.hasOwnProperty.call(input, "planRunId") ? "bound" : "legacy"
+    };
+  },
+  z.discriminatedUnion("requestKind", [
+    boundMigrationExecuteRequestSchema.extend({ requestKind: z.literal("bound") }).strict(),
+    legacyMigrationExecuteRequestSchema.extend({ requestKind: z.literal("legacy") })
+  ]).transform(({ requestKind: _requestKind, ...input }) => input)
+);
 
 export const migrationRunSchema = z.object({
   id: idSchema,
+  planRunId: idSchema.nullable().default(null),
   sourceHostId: idSchema,
   targetHostId: idSchema,
   sourceAppIdentity: recoveryAppIdentitySchema,
@@ -549,6 +580,8 @@ export type RecoveryReadinessReason = z.infer<typeof recoveryReadinessReasonSche
 export type RecoveryReadiness = z.infer<typeof recoveryReadinessSchema>;
 export type RecoveryReadinessAnalyzeRequest = z.infer<typeof recoveryReadinessAnalyzeRequestSchema>;
 export type MigrationStrategy = z.infer<typeof migrationStrategySchema>;
+export type MigrationExecutionOptions = z.infer<typeof migrationExecutionOptionsSchema>;
+export type MigrationIntent = z.infer<typeof migrationIntentSchema>;
 export type RecoveryRestoreRequest = z.infer<typeof recoveryRestoreRequestSchema>;
 export type MigrationPlan = z.infer<typeof migrationPlanSchema>;
 export type MigrationPlanRequest = z.infer<typeof migrationPlanRequestSchema>;

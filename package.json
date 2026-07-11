@@ -24,8 +24,17 @@
     "lint:migrations": "npm run lint:migrations --workspace @composebastion/api",
     "openapi:check": "npm run openapi:check --workspace @composebastion/api",
     "check:compose-env": "node scripts/check-compose-env.mjs",
+    "check:actions-pinned": "node scripts/check-actions-pinned.mjs",
+    "check:release-workflows": "node scripts/check-release-workflows.mjs",
+    "check:release-version": "node scripts/check-release-version.mjs",
+    "check:docker-context": "node scripts/check-docker-context.mjs",
+    "release:set-version": "node scripts/set-release-version.mjs",
+    "notices:write": "node scripts/generate-third-party-notices.mjs",
+    "notices:check": "node scripts/generate-third-party-notices.mjs --check",
+    "release:verify-images": "node scripts/verify-release-images.mjs",
     "acceptance:local": "node scripts/acceptance/run.mjs",
     "acceptance:config": "node scripts/acceptance/check-config.mjs",
+    "acceptance:assert-report": "node scripts/acceptance/assert-report.mjs",
     "smoke:web": "npm run build --workspace @composebastion/shared && npm run smoke --workspace @composebastion/web",
     "test": "npm run build --workspace @composebastion/shared && npm run test --workspaces --if-present",
     "typecheck": "npm run build --workspace @composebastion/shared && npm run typecheck --workspace @composebastion/api && npm run typecheck --workspace @composebastion/agent && npm run typecheck --workspace @composebastion/web",
@@ -33,7 +42,8 @@
     "docker:down": "docker compose down"
   },
   "devDependencies": {
-    "concurrently": "^9.2.1"
+    "concurrently": "^9.2.1",
+    "yaml": "^2.9.0"
   },
   "engines": {
     "node": ">=20.11.0",

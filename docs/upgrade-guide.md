@@ -7,9 +7,10 @@ every production update.
 
 - `/api/v1` is the public compatibility boundary for V1.
 - Use additive API changes whenever possible.
-- Keep app and agent images on the same release when possible. The latest
-  verified release is `v1.0.6`, with app and agent image tags `1.0.6`
-  and `v1.0.6`.
+- Keep app and agent images on the same release when possible. The most recent
+  published release is `v1.0.6`, but it is superseded for production readiness
+  by the pending scanner remediation; keep existing installs pinned while
+  preparing the verified `1.0.7` upgrade.
 - New database migrations must use the next clean `NNN_snake_case.sql` filename.
   The existing duplicate `018_` migration prefix is a published legacy exception;
   do not create new duplicates.

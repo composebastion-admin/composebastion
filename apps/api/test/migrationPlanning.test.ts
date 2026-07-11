@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const query = vi.fn();
 const getHost = vi.fn();
+const syncDockerInventory = vi.fn();
+const runDocker = vi.fn();
+const resolveAppContext = vi.fn();
 
 vi.mock("../src/db/pool.js", () => ({
   query: (...args: unknown[]) => query(...args)
@@ -11,7 +14,43 @@ vi.mock("../src/services/hosts.js", () => ({
   getHost: (...args: unknown[]) => getHost(...args)
 }));
 
-import { analyzeMigrationPlan, buildMigrationPlan } from "../src/services/migrationPlanning.js";
+vi.mock("../src/services/docker.js", () => ({
+  syncDockerInventory: (...args: unknown[]) => syncDockerInventory(...args),
+  runDocker: (...args: unknown[]) => runDocker(...args)
+}));
+
+vi.mock("../src/services/recoveryAppContext.js", () => ({
+  resolveAppContext: (...args: unknown[]) => resolveAppContext(...args)
+}));
+
+import { analyzeMigrationPlan, buildMigrationPlan, revalidateMigrationPlan, sanitizedManifestForFingerprint } from "../src/services/migrationPlanning.js";
+
+function containerInspect(input: {
+  id: string;
+  name: string;
+  env?: string[];
+  ports?: Record<string, Array<{ HostIp?: string; HostPort?: string }> | null>;
+  networks?: Record<string, Record<string, unknown>>;
+  mounts?: Array<Record<string, unknown>>;
+}) {
+  return {
+    Id: input.id,
+    Name: `/${input.name}`,
+    Config: {
+      Image: "nginx:alpine",
+      Env: input.env ?? [],
+      Labels: { "com.docker.compose.project": "demoapp" },
+      Cmd: ["nginx", "-g", "daemon off;"]
+    },
+    HostConfig: { RestartPolicy: { Name: "unless-stopped" } },
+    State: { Running: true, Status: "running" },
+    NetworkSettings: {
+      Ports: input.ports ?? {},
+      Networks: input.networks ?? {}
+    },
+    Mounts: input.mounts ?? []
+  };
+}
 
 describe("migration planning warnings", () => {
   const baseInput = {
@@ -30,6 +69,37 @@ describe("migration planning warnings", () => {
       composeVersion: "2.34.0"
     });
     query.mockResolvedValue({ rows: [] });
+    syncDockerInventory.mockResolvedValue({});
+    runDocker.mockResolvedValue({ stdout: "[]", stderr: "", code: 0 });
+  });
+
+  it("does not retain environment or label secret values in the fingerprint projection", () => {
+    const projection = sanitizedManifestForFingerprint({
+      id: "web-1",
+      name: "web",
+      image: "nginx:alpine",
+      state: "running",
+      running: true,
+      ports: [],
+      networks: [],
+      networkAttachments: [],
+      labels: { TOKEN: "top-secret-label" },
+      restartPolicy: "unless-stopped",
+      env: ["PASSWORD=top-secret-env"],
+      volumes: [],
+      bindMounts: [],
+      entrypoint: [],
+      command: ["--token", "top-secret-command"],
+      user: null,
+      workingDir: null
+    });
+    const serialized = JSON.stringify(projection);
+    expect(serialized).not.toContain("top-secret-label");
+    expect(serialized).not.toContain("top-secret-env");
+    expect(serialized).not.toContain("top-secret-command");
+    expect(serialized).toContain("PASSWORD");
+    expect(projection).toMatchObject({ running: true });
+    expect(projection).not.toHaveProperty("state");
   });
 
   it("warns when source and target hosts are the same", () => {
@@ -91,7 +161,7 @@ describe("migration planning warnings", () => {
     const targetHostId = baseInput.targetHostId;
     query.mockImplementation(async (sql: string, params: unknown[]) => {
       const [hostId, kind] = params as [string, string];
-      if (sql.includes("kind = 'container'") && hostId === sourceHostId && params.length === 1) {
+      if (kind === "container" && hostId === sourceHostId) {
         return {
           rows: [{
             external_id: "web-1",
@@ -116,6 +186,7 @@ describe("migration planning warnings", () => {
       if (kind === "container" && hostId === targetHostId) {
         return {
           rows: [{
+            external_id: "target-1",
             name: "existing-api",
             data: {
               NetworkSettings: {
@@ -132,6 +203,21 @@ describe("migration planning warnings", () => {
       }
       return { rows: [] };
     });
+    runDocker.mockImplementation(async (hostId: string) => ({
+      stdout: JSON.stringify(hostId === sourceHostId
+        ? [containerInspect({
+            id: "web-1",
+            name: "demoapp-web-1",
+            networks: { backend: { IPAddress: "172.28.0.10", Aliases: ["web"] } }
+          })]
+        : [containerInspect({
+            id: "target-1",
+            name: "existing-api",
+            networks: { backend: { IPAddress: "172.28.0.10", Aliases: ["api"] } }
+          })]),
+      stderr: "",
+      code: 0
+    }));
 
     const plan = await analyzeMigrationPlan(baseInput, {
       label: "Demo",
@@ -150,5 +236,358 @@ describe("migration planning warnings", () => {
       "Network backend already has 172.28.0.10 assigned to existing-api; reusing that network would conflict with demoapp-web-1."
     ]);
     expect(plan.warnings.some((warning) => warning.includes("static IP conflict"))).toBe(true);
+  });
+
+  it("detects published-port conflicts from direct container inspect data", async () => {
+    query.mockImplementation(async (_sql: string, params: unknown[]) => {
+      const [hostId, kind] = params as [string, string];
+      if (kind !== "container") return { rows: [] };
+      return hostId === baseInput.sourceHostId
+        ? { rows: [{ external_id: "source-web", name: "source-web", data: {} }] }
+        : { rows: [{ external_id: "target-web", name: "target-web", data: {} }] };
+    });
+    runDocker.mockImplementation(async (hostId: string) => ({
+      stdout: JSON.stringify([containerInspect({
+        id: hostId === baseInput.sourceHostId ? "source-web" : "target-web",
+        name: hostId === baseInput.sourceHostId ? "source-web" : "target-web",
+        ports: { "80/tcp": [{ HostIp: "0.0.0.0", HostPort: "8080" }] }
+      })]),
+      stderr: "",
+      code: 0
+    }));
+
+    const plan = await analyzeMigrationPlan(baseInput, {
+      label: "Demo",
+      projectName: "demoapp",
+      stackId: null,
+      composeYaml: "services:\n  web:\n    image: nginx\n",
+      env: "",
+      workingDir: null,
+      composePath: null,
+      containerIds: ["source-web"],
+      volumeNames: []
+    });
+
+    expect(plan.portConflicts).toEqual([expect.objectContaining({
+      hostPort: "8080",
+      protocol: "tcp",
+      sourceContainer: "source-web"
+    })]);
+  });
+
+  it("rejects reviewed plans when source or target network IPAM configuration drifts", async () => {
+    const context = {
+      label: "Demo",
+      projectName: "demoapp",
+      stackId: null,
+      composeYaml: "services:\n  web:\n    image: nginx\n",
+      env: "",
+      workingDir: null,
+      composePath: null,
+      containerIds: ["web-1"],
+      volumeNames: []
+    };
+    query.mockImplementation(async (_sql: string, params: unknown[]) => {
+      const [hostId, kind] = params as [string, string];
+      if (hostId === baseInput.sourceHostId && kind === "container") {
+        return { rows: [{ external_id: "web-1", name: "web", data: {} }] };
+      }
+      if (kind === "network") {
+        return {
+          rows: [{
+            external_id: hostId === baseInput.sourceHostId ? "source-network-id" : "target-network-id",
+            name: "backend",
+            data: { Name: "backend", Driver: "bridge", Scope: "local" }
+          }]
+        };
+      }
+      return { rows: [] };
+    });
+    let sourceSubnet = "172.28.0.0/24";
+    let targetGateway = "172.28.0.1";
+    runDocker.mockImplementation(async (hostId: string, command: string) => {
+      if (command.startsWith("docker network inspect")) {
+        return {
+          stdout: JSON.stringify([{
+            Id: hostId === baseInput.sourceHostId ? "source-network-id" : "target-network-id",
+            Name: "backend",
+            Driver: "bridge",
+            Scope: "local",
+            Internal: false,
+            Attachable: false,
+            Ingress: false,
+            EnableIPv6: false,
+            IPAM: {
+              Driver: "default",
+              Options: {},
+              Config: [{
+                Subnet: hostId === baseInput.sourceHostId ? sourceSubnet : "172.28.0.0/24",
+                Gateway: hostId === baseInput.sourceHostId ? "172.28.0.1" : targetGateway
+              }]
+            },
+            Labels: {},
+            Options: {}
+          }]),
+          stderr: "",
+          code: 0
+        };
+      }
+      return {
+        stdout: JSON.stringify([containerInspect({
+          id: "web-1",
+          name: "web",
+          networks: { backend: { IPAddress: "172.28.0.10", Gateway: "172.28.0.1" } }
+        })]),
+        stderr: "",
+        code: 0
+      };
+    });
+
+    const storedPlan = await analyzeMigrationPlan(baseInput, context);
+    expect(storedPlan.blockingIssues).toEqual([]);
+    resolveAppContext.mockResolvedValue(context);
+    const run = {
+      id: "00000000-0000-4000-8000-000000000023",
+      planRunId: null,
+      sourceHostId: baseInput.sourceHostId,
+      targetHostId: baseInput.targetHostId,
+      sourceAppIdentity: baseInput.sourceAppIdentity,
+      mode: "plan" as const,
+      status: "completed" as const,
+      recoveryPointId: null,
+      plan: storedPlan,
+      error: null,
+      createdAt: new Date(0).toISOString(),
+      startedAt: new Date(0).toISOString(),
+      completedAt: new Date(0).toISOString()
+    };
+
+    sourceSubnet = "172.29.0.0/24";
+    await expect(revalidateMigrationPlan(run)).rejects.toMatchObject({ code: "MIGRATION_PLAN_STALE" });
+
+    sourceSubnet = "172.28.0.0/24";
+    targetGateway = "172.28.0.254";
+    await expect(revalidateMigrationPlan(run)).rejects.toMatchObject({ code: "MIGRATION_PLAN_STALE" });
+  });
+
+  it("blocks planning when a selected app network has no inspectable source definition", async () => {
+    query.mockImplementation(async (_sql: string, params: unknown[]) => {
+      const [hostId, kind] = params as [string, string];
+      if (hostId === baseInput.sourceHostId && kind === "container") {
+        return { rows: [{ external_id: "web-1", name: "web", data: {} }] };
+      }
+      return { rows: [] };
+    });
+    runDocker.mockResolvedValue({
+      stdout: JSON.stringify([containerInspect({
+        id: "web-1",
+        name: "web",
+        networks: { backend: { IPAddress: "172.28.0.10" } }
+      })]),
+      stderr: "",
+      code: 0
+    });
+
+    const plan = await analyzeMigrationPlan(baseInput, {
+      label: "Demo",
+      projectName: "demoapp",
+      stackId: null,
+      composeYaml: "services:\n  web:\n    image: nginx\n",
+      env: "",
+      workingDir: null,
+      composePath: null,
+      containerIds: ["web-1"],
+      volumeNames: []
+    });
+
+    expect(plan.blockingIssues).toEqual(expect.arrayContaining([
+      expect.stringContaining("Source network definitions are missing for: backend")
+    ]));
+  });
+
+  it("rejects a reviewed plan when target inventory changes", async () => {
+    const context = {
+      label: "Demo",
+      projectName: "demoapp",
+      stackId: null,
+      composeYaml: "services:\n  web:\n    image: nginx\n",
+      env: "",
+      workingDir: null,
+      composePath: null,
+      containerIds: ["web-1"],
+      volumeNames: []
+    };
+    runDocker.mockImplementation(async (hostId: string) => ({
+      stdout: JSON.stringify(hostId === baseInput.sourceHostId
+        ? [containerInspect({ id: "web-1", name: "demoapp-web-1" })]
+        : []),
+      stderr: "",
+      code: 0
+    }));
+    const storedPlan = await analyzeMigrationPlan(baseInput, context);
+    resolveAppContext.mockResolvedValue(context);
+    const run = {
+      id: "00000000-0000-4000-8000-000000000020",
+      planRunId: null,
+      sourceHostId: baseInput.sourceHostId,
+      targetHostId: baseInput.targetHostId,
+      sourceAppIdentity: baseInput.sourceAppIdentity,
+      mode: "plan" as const,
+      status: "completed" as const,
+      recoveryPointId: null,
+      plan: storedPlan,
+      error: null,
+      createdAt: new Date(0).toISOString(),
+      startedAt: new Date(0).toISOString(),
+      completedAt: new Date(0).toISOString()
+    };
+
+    await expect(revalidateMigrationPlan(run)).resolves.toMatchObject({
+      sourceFingerprint: storedPlan.sourceFingerprint,
+      targetFingerprint: storedPlan.targetFingerprint
+    });
+
+    query.mockImplementation(async (_sql: string, params: unknown[]) => {
+      const [hostId, kind] = params as [string, string];
+      if (hostId === baseInput.targetHostId && kind === "volume") {
+        return { rows: [{ name: "new-target-volume", data: {} }] };
+      }
+      return { rows: [] };
+    });
+
+    await expect(revalidateMigrationPlan(run)).rejects.toMatchObject({
+      code: "MIGRATION_PLAN_STALE",
+      statusCode: 409
+    });
+    expect(syncDockerInventory).toHaveBeenCalledWith(baseInput.sourceHostId);
+    expect(syncDockerInventory).toHaveBeenCalledWith(baseInput.targetHostId);
+  });
+
+  it("ignores volatile state text but rejects a running-to-stopped transition", async () => {
+    const context = {
+      label: "Demo",
+      projectName: "demoapp",
+      stackId: null,
+      composeYaml: "services:\n  web:\n    image: nginx\n",
+      env: "",
+      workingDir: null,
+      composePath: null,
+      containerIds: [],
+      volumeNames: []
+    };
+    let state = "Up 1 minute";
+    let running = true;
+    query.mockImplementation(async (_sql: string, params: unknown[]) => {
+      const [hostId, kind] = params as [string, string];
+      if (hostId === baseInput.targetHostId && kind === "container") {
+        return {
+          rows: [{
+            external_id: "target-web-id",
+            name: "target-web",
+            data: { State: state, Status: state, RunningFor: state, Ports: "8080->80/tcp", Labels: {} }
+          }]
+        };
+      }
+      return { rows: [] };
+    });
+    runDocker.mockImplementation(async (hostId: string) => ({
+      stdout: JSON.stringify(hostId === baseInput.targetHostId
+        ? [{
+            ...containerInspect({
+              id: "target-web-id",
+              name: "target-web",
+              ports: { "80/tcp": [{ HostIp: "0.0.0.0", HostPort: "8080" }] }
+            }),
+            State: { Running: running, Status: state }
+          }]
+        : []),
+      stderr: "",
+      code: 0
+    }));
+    const storedPlan = await analyzeMigrationPlan(baseInput, context);
+    resolveAppContext.mockResolvedValue(context);
+    state = "Up 2 minutes";
+
+    const run = {
+      id: "00000000-0000-4000-8000-000000000021",
+      planRunId: null,
+      sourceHostId: baseInput.sourceHostId,
+      targetHostId: baseInput.targetHostId,
+      sourceAppIdentity: baseInput.sourceAppIdentity,
+      mode: "plan",
+      status: "completed",
+      recoveryPointId: null,
+      plan: storedPlan,
+      error: null,
+      createdAt: new Date(0).toISOString(),
+      startedAt: new Date(0).toISOString(),
+      completedAt: new Date(0).toISOString()
+    } as const;
+
+    await expect(revalidateMigrationPlan(run)).resolves.toMatchObject({
+      targetFingerprint: storedPlan.targetFingerprint
+    });
+
+    running = false;
+    state = "exited";
+    await expect(revalidateMigrationPlan(run)).rejects.toMatchObject({
+      code: "MIGRATION_PLAN_STALE",
+      statusCode: 409
+    });
+  });
+
+  it("rejects a reviewed plan when live environment or bind configuration drifts", async () => {
+    const context = {
+      label: "Demo",
+      projectName: "demoapp",
+      stackId: null,
+      composeYaml: "services:\n  web:\n    image: nginx\n",
+      env: "",
+      workingDir: null,
+      composePath: null,
+      containerIds: ["web-1"],
+      volumeNames: []
+    };
+    query.mockImplementation(async (_sql: string, params: unknown[]) => {
+      const [hostId, kind] = params as [string, string];
+      if (hostId === baseInput.sourceHostId && kind === "container") {
+        return { rows: [{ external_id: "web-1", name: "web", data: {} }] };
+      }
+      return { rows: [] };
+    });
+    let envValue = "PASSWORD=first-secret";
+    let bindSource = "/srv/demo-v1";
+    runDocker.mockImplementation(async (hostId: string) => ({
+      stdout: JSON.stringify(hostId === baseInput.sourceHostId
+        ? [containerInspect({
+            id: "web-1",
+            name: "web",
+            env: [envValue],
+            mounts: [{ Type: "bind", Source: bindSource, Destination: "/data", RW: true }]
+          })]
+        : []),
+      stderr: "",
+      code: 0
+    }));
+    const storedPlan = await analyzeMigrationPlan(baseInput, context);
+    resolveAppContext.mockResolvedValue(context);
+    envValue = "PASSWORD=second-secret";
+    bindSource = "/srv/demo-v2";
+
+    await expect(revalidateMigrationPlan({
+      id: "00000000-0000-4000-8000-000000000022",
+      planRunId: null,
+      sourceHostId: baseInput.sourceHostId,
+      targetHostId: baseInput.targetHostId,
+      sourceAppIdentity: baseInput.sourceAppIdentity,
+      mode: "plan",
+      status: "completed",
+      recoveryPointId: null,
+      plan: storedPlan,
+      error: null,
+      createdAt: new Date(0).toISOString(),
+      startedAt: new Date(0).toISOString(),
+      completedAt: new Date(0).toISOString()
+    })).rejects.toMatchObject({ code: "MIGRATION_PLAN_STALE" });
   });
 });

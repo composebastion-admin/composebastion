@@ -12,17 +12,17 @@ import {
   recoveryRestoreRequestSchema
 } from "@composebastion/shared";
 import { requireRole } from "../services/auth.js";
+import { sendApiError } from "../services/apiError.js";
 import { writeAuditEvent } from "../services/audit.js";
 import {
   createBackupTarget,
   createMigrationPlan,
-  createRecoveryPoint,
+  createRecoveryPointWithJob,
   createRecoverySchedule,
   deleteBackupTarget,
   deleteRecoveryPoint,
   deleteRecoverySchedule,
   enqueueRecoveryDrill,
-  enqueueRecoveryCreate,
   enqueueRecoveryRestore,
   enqueueRecoveryVerify,
   getBackupTarget,
@@ -32,6 +32,7 @@ import {
   listMigrationRuns,
   listRecoveryPoints,
   listRecoverySchedules,
+  MigrationPlanStaleError,
   startMigrationExecute,
   testBackupTarget,
   updateBackupTarget
@@ -176,8 +177,7 @@ export async function registerRecoveryCenterRoutes(app: FastifyInstance) {
 
   app.post("/api/recovery/points", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
     const body = recoveryPointCreateSchema.parse(request.body);
-    const point = await createRecoveryPoint(body, request.user?.id);
-    const job = await enqueueRecoveryCreate(point.id, point.hostId, request.user?.id, Boolean(point.metadata.stopFirst));
+    const { point, job } = await createRecoveryPointWithJob(body, request.user?.id);
     await writeAuditEvent({
       userId: request.user?.id,
       hostId: point.hostId,
@@ -299,16 +299,30 @@ export async function registerRecoveryCenterRoutes(app: FastifyInstance) {
     return { run };
   });
 
-  app.post("/api/recovery/migrations/execute", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
+  app.post("/api/recovery/migrations/execute", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request, reply) => {
     const body = migrationExecuteRequestSchema.parse(request.body);
-    const result = await startMigrationExecute(body, request.user?.id);
+    let result;
+    try {
+      result = await startMigrationExecute(body, request.user?.id);
+    } catch (error) {
+      if (error instanceof MigrationPlanStaleError) {
+        return sendApiError(reply, 409, "MIGRATION_PLAN_STALE", error.message, {
+          blockingIssues: error.blockingIssues
+        });
+      }
+      throw error;
+    }
     await writeAuditEvent({
       userId: request.user?.id,
-      hostId: body.sourceHostId,
+      hostId: result.run.sourceHostId,
       action: "migration.execute",
       targetKind: "migration_run",
       targetId: result.run.id,
-      details: { targetHostId: body.targetHostId, strategy: body.strategy }
+      details: {
+        targetHostId: result.run.targetHostId,
+        planRunId: result.run.planRunId,
+        strategy: result.run.plan?.intent?.strategy ?? null
+      }
     });
     return result;
   });

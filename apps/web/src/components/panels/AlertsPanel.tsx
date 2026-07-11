@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { Bell, Clock, Trash2 } from "lucide-react";
-import type { AdminUser, AlertChannelTestEvent, AlertEvent, AlertRule, AlertRuleCondition, AlertSilence, DockerHost, HostMetricAlertCondition, NotificationChannel, ResourceSnapshot } from "@composebastion/shared";
+import type { AlertChannelTestEvent, AlertEvent, AlertRule, AlertRuleCondition, AlertSilence, DockerHost, HostMetricAlertCondition, NotificationChannel, ResourceSnapshot } from "@composebastion/shared";
 import { api, deleteJson, postJson } from "../../api.js";
 import { formatDate } from "../../lib/format.js";
 import { ButtonRow, DataTable, Panel, StatusPill, VirtualDataTable } from "../ui/primitives.js";
 import { HostSelect } from "../dashboard/HostSelect.js";
+import { useConfirm } from "../ConfirmProvider.js";
+import { useAuthorization } from "../AuthorizationContext.js";
 
 const hostMetricConditionLabels: Record<HostMetricAlertCondition, string> = {
   "host.cpu": "Host CPU",
@@ -50,12 +52,9 @@ function toApiDateTime(value: string) {
   return new Date(value).toISOString();
 }
 
-function canManageAlerts(role: AdminUser["role"]) {
-  return role === "owner" || role === "admin" || role === "operator";
-}
-
-export function AlertsPanel({ hosts, containers, refresh, userRole }: { hosts: DockerHost[]; containers: ResourceSnapshot[]; refresh: () => Promise<void>; userRole: AdminUser["role"] }) {
-  const canManage = canManageAlerts(userRole);
+export function AlertsPanel({ hosts, containers, refresh }: { hosts: DockerHost[]; containers: ResourceSnapshot[]; refresh: () => Promise<void> }) {
+  const { confirm } = useConfirm();
+  const { canOperate: canManage } = useAuthorization();
   const [channels, setChannels] = useState<NotificationChannel[]>([]);
   const [rules, setRules] = useState<AlertRule[]>([]);
   const [silences, setSilences] = useState<AlertSilence[]>([]);
@@ -162,6 +161,18 @@ export function AlertsPanel({ hosts, containers, refresh, userRole }: { hosts: D
     }
   };
 
+  async function confirmDelete(kind: "rule" | "channel" | "silence", id: string, label: string) {
+    const confirmed = await confirm({
+      title: `Delete alert ${kind}`,
+      tone: "danger",
+      confirmLabel: "Delete",
+      message: `Delete ${kind} “${label}”? This cannot be undone.`
+    });
+    if (!confirmed) return;
+    await deleteJson(`/api/alerts/${kind === "rule" ? "rules" : kind === "channel" ? "channels" : "silences"}/${id}`);
+    await load();
+  }
+
   return (
     <Panel title="Alerts">
       {canManage && (
@@ -260,13 +271,13 @@ export function AlertsPanel({ hosts, containers, refresh, userRole }: { hosts: D
               {rule.breachingSince && <small>Breaching since {formatDate(rule.breachingSince)}</small>}
               {rule.lastError && <small className="errorText">{rule.lastError}</small>}
             </div>,
-            <button key="delete" className="danger" onClick={() => void deleteJson(`/api/alerts/rules/${rule.id}`).then(load)}><Trash2 size={16} /></button>
+            <button key="delete" className="danger" onClick={() => void confirmDelete("rule", rule.id, rule.name)}><Trash2 size={16} /></button>
           ]} />
           <DataTable rows={channels} columns={["Channel", "Type", "Target", "Actions"]} render={(channel) => [
             channel.name,
             channel.type,
             channel.emailTo ?? channel.webhookUrl ?? "",
-            <ButtonRow key="actions"><button onClick={() => void testChannel(channel.id)}>Test</button><button className="danger" onClick={() => void deleteJson(`/api/alerts/channels/${channel.id}`).then(load)}><Trash2 size={16} /></button></ButtonRow>
+            <ButtonRow key="actions"><button onClick={() => void testChannel(channel.id)}>Test</button><button className="danger" onClick={() => void confirmDelete("channel", channel.id, channel.name)}><Trash2 size={16} /></button></ButtonRow>
           ]} />
         </>
       )}
@@ -305,7 +316,7 @@ export function AlertsPanel({ hosts, containers, refresh, userRole }: { hosts: D
         silence.ruleId ? `Rule ${rules.find((rule) => rule.id === silence.ruleId)?.name ?? silence.ruleId}` : `Host ${hosts.find((host) => host.id === silence.hostId)?.name ?? silence.hostId ?? "all"}`,
         `${formatDate(silence.startsAt)} - ${formatDate(silence.endsAt)}`,
         silence.reason ?? "",
-        ...(canManage ? [<button key="delete" className="danger" onClick={() => void deleteJson(`/api/alerts/silences/${silence.id}`).then(load)}><Trash2 size={16} /></button>] : [])
+        ...(canManage ? [<button key="delete" className="danger" onClick={() => void confirmDelete("silence", silence.id, silence.name)}><Trash2 size={16} /></button>] : [])
       ]} />
       <div className="panelSectionTitle">History</div>
       <VirtualDataTable rows={events} maxRows={100} columns={["When", "State", "Message", "Delivery"]} render={(event) => [

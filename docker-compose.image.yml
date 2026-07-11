@@ -18,11 +18,11 @@ services:
       API_PORT: 8080
       APP_SECRET: ${APP_SECRET:?Set APP_SECRET to a unique random value of at least 32 characters}
       DATABASE_URL: postgres://composebastion:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/composebastion
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       BACKUP_DIR: /data/backups
       WEB_DIST_DIR: /app/apps/web/dist
       CORS_ORIGINS: ${CORS_ORIGINS:-}
-      SECURE_COOKIES: ${SECURE_COOKIES:-false}
+      SECURE_COOKIES: ${SECURE_COOKIES:-true}
       TRUST_PROXY: ${TRUST_PROXY:-false}
       ALLOW_PRIVATE_AGENT_URLS: ${ALLOW_PRIVATE_AGENT_URLS:-false}
       ALLOW_PRIVATE_WEBHOOK_URLS: ${ALLOW_PRIVATE_WEBHOOK_URLS:-false}
@@ -37,14 +37,19 @@ services:
       SMTP_PASS: ${SMTP_PASS:-}
       SMTP_FROM: ${SMTP_FROM:-composebastion@example.com}
     ports:
-      - "${COMPOSEBASTION_HTTP_PORT:-8080}:8080"
+      - name: http
+        target: 8080
+        published: "${COMPOSEBASTION_HTTP_PORT:-8080}"
+        host_ip: ${COMPOSEBASTION_HTTP_BIND_ADDRESS:-0.0.0.0}
+        protocol: tcp
     volumes:
       - ${COMPOSEBASTION_BACKUP_DIR:-/srv/composebastion/backups}:/data/backups
     depends_on:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_healthy
+        condition: service_started
+        required: false
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/api/health/ready').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
@@ -61,8 +66,9 @@ services:
       NODE_ENV: production
       APP_SECRET: ${APP_SECRET:?Set APP_SECRET to a unique random value of at least 32 characters}
       DATABASE_URL: postgres://composebastion:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/composebastion
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       BACKUP_DIR: /data/backups
+      ALLOW_PRIVATE_AGENT_URLS: ${ALLOW_PRIVATE_AGENT_URLS:-false}
       ALLOW_PRIVATE_WEBHOOK_URLS: ${ALLOW_PRIVATE_WEBHOOK_URLS:-false}
       BLOCK_PRIVATE_S3_ENDPOINTS: ${BLOCK_PRIVATE_S3_ENDPOINTS:-false}
       BACKUP_ENCRYPTION_KEYS: ${BACKUP_ENCRYPTION_KEYS:-}
@@ -82,7 +88,9 @@ services:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_healthy
+        condition: service_started
+        required: false
+    stop_grace_period: 45s
     restart: unless-stopped
 
   postgres:

@@ -8,6 +8,7 @@ Stable JSON endpoints are documented under `/api/v1/*`. Existing `/api/*` endpoi
 |--------|------|------|---------|
 | GET | `/api/v1/health` | public | Basic API health check |
 | GET | `/api/v1/health/ready` | public | Composite readiness check |
+| GET | `/api/v1/health/redis` | public | Redis diagnostic health check |
 | GET | `/api/v1/auth/setup-state` | public | Read setup state |
 | POST | `/api/v1/auth/setup` | public | Create the first owner account |
 | POST | `/api/v1/auth/login` | public | Create a session cookie |
@@ -27,6 +28,7 @@ Stable JSON endpoints are documented under `/api/v1/*`. Existing `/api/*` endpoi
 | GET | `/api/v1/hosts/{hostId}/containers/{containerId}/logs-stream` | viewer | SSE container log stream |
 | GET | `/api/v1/hosts/{hostId}/containers/{containerId}/inspect` | viewer | Read redacted/full container inspect details by role |
 | POST | `/api/v1/hosts/{hostId}/containers/{containerId}/exec` | operator | Run audited container exec |
+| GET | `/api/v1/hosts/{hostId}/containers/usage` | viewer | Read a container usage snapshot |
 | GET | `/api/v1/hosts/{hostId}/containers/usage-stream` | viewer | SSE container usage stream |
 | GET | `/api/v1/hosts/{hostId}/terminal` | admin | Interactive host terminal websocket |
 | GET | `/api/v1/jobs` | viewer | List operation jobs |
@@ -54,6 +56,10 @@ Stable JSON endpoints are documented under `/api/v1/*`. Existing `/api/*` endpoi
 | GET | `/api/v1/recovery/points` | viewer | List recovery points |
 | POST | `/api/v1/recovery/points` | operator | Create a recovery point |
 | POST | `/api/v1/recovery/points/{id}/drill` | operator | Enqueue a clone-only recovery restore drill |
+| POST | `/api/v1/recovery/migrations/plan` | operator | Create and fingerprint a migration plan |
+| POST | `/api/v1/recovery/migrations/execute` | operator | Execute a single-use reviewed migration plan |
+| GET | `/api/v1/recovery/migrations` | viewer | List migration plan and execution runs |
+| GET | `/api/v1/recovery/migrations/{id}` | viewer | Read one migration plan or execution run |
 | GET | `/api/v1/apps` | viewer | List managed apps |
 | GET | `/api/v1/github/repos` | viewer | List tracked GitHub repositories |
 | POST | `/api/v1/github/repos` | operator | Create a tracked GitHub repository |
@@ -68,6 +74,7 @@ Stable JSON endpoints are documented under `/api/v1/*`. Existing `/api/*` endpoi
 | GET | `/api/v1/image-updates` | viewer | List image update intelligence |
 | GET | `/api/v1/image-updates/preview` | viewer | Preview an image update action |
 | GET | `/api/v1/image-scanner/status` | viewer | Read vulnerability scanner availability |
+| GET | `/api/v1/image-tags` | operator | List tags from a validated image registry |
 | GET | `/api/v1/alerts/channels` | operator | List alert notification channels |
 | POST | `/api/v1/alerts/channels` | operator | Create alert notification channel |
 | POST | `/api/v1/alerts/channels/{id}/test` | operator | Send alert channel test notification |
@@ -106,8 +113,8 @@ Transport: Server-Sent Events (`text/event-stream`).
 
 Auth: viewer.
 Transport: Server-Sent Events (`text/event-stream`).
-- Events: `usage`, `error`, `ping`.
-- `usage` payload is `{ stats }` with Docker stats rows; malformed rows are surfaced as `error` events.
+- Events: `message`, `error`, `ping`.
+- `message` payload is `{ stats }` with one Docker stats row; malformed rows are surfaced as `error` events.
 
 ### GET /api/v1/hosts/{hostId}/terminal
 

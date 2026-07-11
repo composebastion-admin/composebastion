@@ -37,10 +37,12 @@ Latest published stable release: `v1.0.6`.
 - Candidate package and OpenAPI version: `1.0.7-rc.1`.
 - GitHub release images: `1.0.6` and `v1.0.6`.
 - Published platforms: `linux/amd64` and `linux/arm64` for both app and agent.
-- Verified release gates: CI, OpenAPI generation, web smoke, dependency audit,
-  Compose config validation, local image builds, and image license inspection.
-- `main` publishes moving image tags only: `latest`, branch tags, and `sha-*`.
-  Immutable version tags publish from `v*` release tags.
+- Candidate release gates include CI/OpenAPI, mocked browser smoke coverage,
+  live-stack acceptance, the full dependency audit, Compose contracts, and exact
+  four-variant image scans. The candidate is not yet the latest verified release.
+- `main` publishes the moving `main` alias plus a full-commit
+  `sha-<40-character-sha>` index. The `latest` alias moves only after an
+  authorized stable `v*` tag passes the release rescans.
 
 ## Product Screenshots
 
@@ -83,6 +85,12 @@ APP_SECRET=<unique random value from: openssl rand -base64 48>
 POSTGRES_PASSWORD=<URL-safe database password from: openssl rand -hex 32>
 ```
 
+`SECURE_COOKIES=true` is the production default. `http://localhost:8080` works
+for same-machine evaluation; if you must evaluate from another machine over a
+trusted direct-HTTP network, explicitly set `SECURE_COOKIES=false` and restore
+the secure default when HTTPS is configured. Never use that opt-out across an
+untrusted network.
+
 Start ComposeBastion:
 
 ```bash
@@ -112,12 +120,15 @@ Image tags:
 
 | Tag | Use |
 |-----|-----|
-| `latest` | Simple homelab/NAS updates that intentionally follow `main`. |
+| `latest` | Latest verified stable release for simple homelab/NAS updates. |
 | `1.0.6` or `v1.0.6` | Exact V1 release pin for controlled production upgrades. |
-| `sha-*` | Commit-level verification or rollback testing. |
+| `main` | Latest fully scanned build from the protected main branch. |
+| `sha-*` | Immutable full-commit verification or rollback testing. |
 
-Main builds publish `latest`, branch tags, and `sha-*` tags. Release tags
-publish immutable version tags such as `1.0.6` and `v1.0.6`.
+Main builds publish `main` and full-commit `sha-*` indexes from the already
+scanned platform archives. Stable release tags rescan those exact indexes and
+then promote them to version tags such as `1.0.6` and `v1.0.6`, the minor tag,
+and `latest`; they do not rebuild.
 
 ### Option B: Build From Source
 
@@ -215,7 +226,8 @@ The full screenshot tour is in the [how-to guide](docs/how-to.md).
 - Use a unique `APP_SECRET` and a URL-safe `POSTGRES_PASSWORD`.
 - Mount recovery storage outside the container, for example
   `/srv/composebastion/backups`.
-- Put ComposeBastion behind HTTPS and set `SECURE_COOKIES=true`.
+- Put ComposeBastion behind HTTPS and keep the production `SECURE_COOKIES=true`
+  default; use `false` only for a trusted, direct-HTTP evaluation.
 - Set `CORS_ORIGINS` when the UI and API are served from different origins.
 - Restrict agent port `8090` to the manager network.
 - Configure `BACKUP_HOST_PATH_ALLOWED_ROOTS` for production host-path recovery.
@@ -285,5 +297,5 @@ Useful checks:
 ```bash
 npm run lint:migrations
 npm run openapi:check
-npm audit --omit=dev --audit-level=high
+npm audit --audit-level=high
 ```

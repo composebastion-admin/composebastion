@@ -5,8 +5,10 @@ import { networkDriverExplanations, type NetworkDriver } from "@composebastion/s
 import { useConfirm } from "../ConfirmProvider.js";
 import { ButtonRow, DataTable, Panel } from "../ui/primitives.js";
 import { hostName } from "../../lib/hostScope.js";
+import { useAuthorization } from "../AuthorizationContext.js";
 
 export function NetworksPanel({ host, hosts, networks, onAction }: { host: DockerHost; hosts: DockerHost[]; networks: ResourceSnapshot[]; onAction: (type: string, payload?: Record<string, unknown>, hostId?: string) => Promise<void> }) {
+  const { canOperate } = useAuthorization();
   const { confirm } = useConfirm();
   const [name, setName] = useState("");
   const [driver, setDriver] = useState<NetworkDriver>("bridge");
@@ -17,7 +19,7 @@ export function NetworksPanel({ host, hosts, networks, onAction }: { host: Docke
 
   return (
     <Panel title="Networks" count={networks.length}>
-      <ButtonRow>
+      {canOperate && <ButtonRow>
         <button
           type="button"
           onClick={() => void (async () => {
@@ -28,8 +30,8 @@ export function NetworksPanel({ host, hosts, networks, onAction }: { host: Docke
         >
           <Trash2 size={18} />Prune Unused
         </button>
-      </ButtonRow>
-      <div className="split">
+      </ButtonRow>}
+      {canOperate && <div className="split">
         <form
           className="stack"
           onSubmit={(event) => {
@@ -52,10 +54,12 @@ export function NetworksPanel({ host, hosts, networks, onAction }: { host: Docke
           <span>{explanation.bestFor}</span>
           <small>{explanation.watchOut}</small>
         </aside>
-      </div>
+      </div>}
       <DataTable
         rows={networks}
-        columns={showHostColumn ? ["Host", "Name", "Driver", "Scope", "Actions"] : ["Name", "Driver", "Scope", "Actions"]}
+        columns={showHostColumn
+          ? ["Host", "Name", "Driver", "Scope", ...(canOperate ? ["Actions"] : [])]
+          : ["Name", "Driver", "Scope", ...(canOperate ? ["Actions"] : [])]}
         render={(network) => {
           const data = network.data as any;
           const protectedNetwork = ["bridge", "host", "none"].includes(String(data.Name));
@@ -63,9 +67,16 @@ export function NetworksPanel({ host, hosts, networks, onAction }: { host: Docke
             data.Name ?? network.name,
             data.Driver ?? "",
             data.Scope ?? "",
-            <ButtonRow key="actions">
-              <button title="Remove network" className="danger" disabled={protectedNetwork} onClick={() => void onAction("network.remove", { networkId: network.externalId }, network.hostId)}><Trash2 size={16} /></button>
-            </ButtonRow>
+            ...(canOperate ? [<ButtonRow key="actions">
+              <button title="Remove network" className="danger" disabled={protectedNetwork} onClick={() => void (async () => {
+                if (await confirm({
+                  title: "Remove network",
+                  tone: "danger",
+                  confirmLabel: "Remove network",
+                  message: `Remove Docker network ${network.name}? Containers still using it may fail to reconnect.`
+                })) await onAction("network.remove", { networkId: network.externalId }, network.hostId);
+              })()}><Trash2 size={16} /></button>
+            </ButtonRow>] : [])
           ];
           return showHostColumn ? [hostName(hosts, network.hostId), ...cells] : cells;
         }}

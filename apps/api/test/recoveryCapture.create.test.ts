@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { JobExecutionFence } from "../src/services/jobs.js";
 
 const query = vi.fn();
 const getHostForWorker = vi.fn();
@@ -9,7 +10,10 @@ const writeRecoveryPointFile = vi.fn();
 const enforceScheduledRecoveryRetention = vi.fn();
 
 vi.mock("../src/db/pool.js", () => ({
-  query: (...args: unknown[]) => query(...args)
+  query: (...args: unknown[]) => query(...args),
+  withTransaction: (callback: (client: { query: (...args: unknown[]) => unknown }) => unknown) => callback({
+    query: (...args: unknown[]) => query(...args)
+  })
 }));
 
 vi.mock("../src/services/demo.js", () => ({
@@ -169,6 +173,27 @@ describe("runRecoveryCreate stop-first restart behavior", () => {
     });
   });
 
+  it("fences and preserves terminal failure state when recording a restart failure", async () => {
+    startContainersOneByOne.mockRejectedValueOnce(new Error("restart failed"));
+    const fencedQueries: Array<{ sql: string; values: unknown[] }> = [];
+    const executionFence = {
+      assertActive: vi.fn().mockResolvedValue(undefined),
+      withActiveLease: vi.fn(async (callback: (client: { query: (sql: string, values?: unknown[]) => Promise<unknown> }) => Promise<unknown>) => callback({
+        query: async (sql: string, values: unknown[] = []) => {
+          fencedQueries.push({ sql, values });
+          return query(sql, values);
+        }
+      }))
+    } as unknown as JobExecutionFence;
+
+    const { runRecoveryCreate } = await import("../src/services/recoveryCapture.js");
+    await runRecoveryCreate(hostId, recoveryPointId, { stopFirst: true, executionFence });
+
+    const restartFailureWrite = fencedQueries.find(({ sql }) => sql.includes("Restart failed") || sql.includes("SET status = CASE"));
+    expect(restartFailureWrite?.sql).toContain("SET status = CASE WHEN status IN ('completed', 'partial') THEN 'partial' ELSE status END");
+    expect(restartFailureWrite?.values).toEqual([recoveryPointId, " Restart failed: restart failed"]);
+  });
+
   it("leaves source stopped and records metadata when restartAfterStopFirst is false", async () => {
     const { runRecoveryCreate } = await import("../src/services/recoveryCapture.js");
     const result = await runRecoveryCreate(hostId, recoveryPointId, {
@@ -206,6 +231,33 @@ describe("runRecoveryCreate stop-first restart behavior", () => {
       expect((error as Error & { sourceStoppedIds?: string[] }).sourceStoppedIds).toEqual(["source-web"]);
     }
 
+    expect(startContainersOneByOne).not.toHaveBeenCalled();
+  });
+
+  it("preserves stopped source ids when fenced failure finalization loses the lease", async () => {
+    writeRecoveryPointFile.mockRejectedValueOnce(new Error("manifest write failed"));
+    const leaseLost = new Error("job lease lost");
+    const executionFence = {
+      assertActive: vi.fn().mockResolvedValue(undefined),
+      withActiveLease: vi.fn(async (callback: (client: { query: (sql: string, values?: unknown[]) => Promise<unknown> }) => Promise<unknown>) => callback({
+        query: async (sql: string, values: unknown[] = []) => {
+          if (sql.includes("SET status = 'failed'")) throw leaseLost;
+          return query(sql, values);
+        }
+      }))
+    } as unknown as JobExecutionFence;
+
+    const { runRecoveryCreate } = await import("../src/services/recoveryCapture.js");
+    await expect(runRecoveryCreate(hostId, recoveryPointId, {
+      stopFirst: true,
+      restartAfterStopFirst: false,
+      executionFence
+    })).rejects.toMatchObject({
+      message: "job lease lost",
+      sourceStoppedIds: ["source-web"]
+    });
+
+    expect(stopContainersWithRestartOnFailure).toHaveBeenCalledWith(hostId, ["source-web"], ["source-web"]);
     expect(startContainersOneByOne).not.toHaveBeenCalled();
   });
 

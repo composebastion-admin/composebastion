@@ -1,5 +1,5 @@
 import { v4 as uuid } from "uuid";
-import { registryCreateSchema } from "@composebastion/shared";
+import { normalizeSavedRegistryOrigin, registryCreateSchema } from "@composebastion/shared";
 import { query } from "../db/pool.js";
 import { decryptSecret, encryptSecret } from "./crypto.js";
 
@@ -39,12 +39,16 @@ export async function getRegistryForWorker(id: string) {
   const result = await query<any>("SELECT * FROM registries WHERE id = $1", [id]);
   const row = result.rows[0];
   if (!row) throw new Error("Registry not found");
+  const origin = normalizeSavedRegistryOrigin(String(row.url), {
+    defaultProtocol: row.insecure ? "http" : "https"
+  });
   return {
     id: row.id,
     name: row.name,
-    url: row.url,
+    // `docker login` takes a registry server authority rather than an API URL.
+    url: new URL(origin).host,
     username: row.username as string | null,
     password: row.password_encrypted ? decryptSecret(row.password_encrypted) : null,
-    insecure: row.insecure as boolean
+    insecure: origin.startsWith("http://")
   };
 }

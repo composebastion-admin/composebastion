@@ -6,6 +6,7 @@ import { useAsyncAction } from "../../hooks/useAsyncAction.js";
 import { findUsageRow } from "../../lib/dockerMetrics.js";
 import { ButtonRow, StatusPill } from "../ui/primitives.js";
 import { ContainerStatePill } from "../dashboard/ContainerStatePill.js";
+import { useAuthorization } from "../AuthorizationContext.js";
 
 type ContainerInspectDetails = {
   image: string;
@@ -61,14 +62,18 @@ function KeyValueGrid({ values }: { values: Record<string, unknown> }) {
 export function ContainerDetailDrawer({
   host,
   container,
+  usageRows,
   onClose,
   onAction
 }: {
   host: DockerHost;
   container: ResourceSnapshot;
+  usageRows: Record<string, unknown>[];
   onClose: () => void;
   onAction: (type: string, payload?: Record<string, unknown>, hostId?: string) => Promise<void>;
 }) {
+  const { canOperate } = useAuthorization();
+  const visibleTabs = canOperate ? tabs : tabs.filter((tab) => tab.id !== "exec");
   const [activeTab, setActiveTab] = useState<DetailTab>("overview");
   const [logs, setLogs] = useState<string[]>([]);
   const [logFilter, setLogFilter] = useState("");
@@ -76,7 +81,6 @@ export function ContainerDetailDrawer({
   const [followLogs, setFollowLogs] = useState(false);
   const [tail, setTail] = useState(500);
   const [stats, setStats] = useState<Record<string, unknown>>({});
-  const [usageStats, setUsageStats] = useState<Record<string, unknown> | null>(null);
   const [inspect, setInspect] = useState<ContainerInspectDetails | null>(null);
   const [command, setCommand] = useState("pwd && ls -la");
   const [output, setOutput] = useState("");
@@ -84,7 +88,7 @@ export function ContainerDetailDrawer({
   const action = useAsyncAction();
   const data = container.data as Record<string, unknown>;
   const canFollowLogs = host.connectionMode === "ssh" || host.connectionMode === "agent";
-  const canStreamUsage = host.connectionMode === "ssh";
+  const usageStats = findUsageRow(container, usageRows);
   const displayedStats = usageStats ?? stats;
   const filteredLogs = useMemo(() => {
     const query = logFilter.trim().toLowerCase();
@@ -110,10 +114,11 @@ export function ContainerDetailDrawer({
     setLoadError(null);
     setLogs([]);
     setStats({});
-    setUsageStats(null);
     setInspect(null);
-    void Promise.all([refreshLogs(), refreshStats(), refreshInspect()]).catch((caught) => setLoadError(caught instanceof Error ? caught.message : String(caught)));
-  }, [refreshLogs, refreshStats, refreshInspect]);
+    const initialRequests = [refreshLogs(), refreshInspect()];
+    if (host.connectionMode !== "agent") initialRequests.push(refreshStats());
+    void Promise.all(initialRequests).catch((caught) => setLoadError(caught instanceof Error ? caught.message : String(caught)));
+  }, [host.connectionMode, refreshLogs, refreshStats, refreshInspect]);
 
   useEffect(() => {
     if (followLogs && canFollowLogs) return undefined;
@@ -152,28 +157,15 @@ export function ContainerDetailDrawer({
   }, [canFollowLogs, container.externalId, followLogs, host.id, tail]);
 
   useEffect(() => {
+    if (host.connectionMode === "agent") return undefined;
     void refreshStats().catch(() => undefined);
-    const timer = window.setInterval(() => void refreshStats().catch(() => undefined), 3_000);
+    const timer = window.setInterval(() => void refreshStats().catch(() => undefined), 10_000);
     return () => window.clearInterval(timer);
-  }, [refreshStats]);
-
-  useEffect(() => {
-    if (!("EventSource" in window) || !canStreamUsage) return undefined;
-    const source = new EventSource(`/api/hosts/${host.id}/containers/usage-stream`);
-    source.onmessage = (event) => {
-      try {
-        const payload = JSON.parse(event.data) as { stats?: Record<string, unknown> };
-        if (payload.stats && findUsageRow(container, [payload.stats])) setUsageStats(payload.stats);
-      } catch {
-        // Stats polling remains active as the fallback.
-      }
-    };
-    source.onerror = () => source.close();
-    return () => source.close();
-  }, [canStreamUsage, container, host.id]);
+  }, [host.connectionMode, refreshStats]);
 
   async function exec(event: React.FormEvent) {
     event.preventDefault();
+    if (!canOperate) return;
     await action.run(async () => {
       const result = await postJson<{ stdout: string; stderr: string }>(`/api/hosts/${host.id}/containers/${encodeURIComponent(container.externalId)}/exec`, { command });
       setOutput([result.stdout, result.stderr].filter(Boolean).join("\n"));
@@ -205,7 +197,7 @@ export function ContainerDetailDrawer({
       </div>
 
       <div className="drawerTabs" role="tablist" aria-label="Container detail sections">
-        {tabs.map((tab) => (
+        {visibleTabs.map((tab) => (
           <button key={tab.id} className={activeTab === tab.id ? "active" : ""} onClick={() => setActiveTab(tab.id)}>
             {tab.label}
           </button>
@@ -236,9 +228,9 @@ export function ContainerDetailDrawer({
             </span>
           </div>
           <ButtonRow>
-            <button onClick={() => void quickAction("container.start")}><Play size={16} />Start</button>
-            <button onClick={() => void quickAction("container.stop")}><Square size={16} />Stop</button>
-            <button onClick={() => void quickAction("container.restart")}><RotateCcw size={16} />Restart</button>
+            {canOperate && <button onClick={() => void quickAction("container.start")}><Play size={16} />Start</button>}
+            {canOperate && <button onClick={() => void quickAction("container.stop")}><Square size={16} />Stop</button>}
+            {canOperate && <button onClick={() => void quickAction("container.restart")}><RotateCcw size={16} />Restart</button>}
             <button onClick={() => void refreshInspect()}><RefreshCw size={16} />Refresh</button>
           </ButtonRow>
         </div>
@@ -296,7 +288,7 @@ export function ContainerDetailDrawer({
         </div>
       )}
 
-      {activeTab === "exec" && (
+      {canOperate && activeTab === "exec" && (
         <div className="detailStack">
           <form className="inlineForm" onSubmit={exec}>
             <input value={command} onChange={(event) => setCommand(event.target.value)} />

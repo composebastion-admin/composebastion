@@ -22,6 +22,13 @@ import { runSshCommand } from "./ssh.js";
 import { buildCloneContainerName, shouldRestartSourceAfterFailure } from "./recoveryRestoreUtils.js";
 import { syncDockerInventory } from "./docker.js";
 import { checkImageUpdatesForHost } from "./imageUpdates.js";
+import {
+  MigrationPlanStaleError,
+  migrationIntentsEqual,
+  recoveryAppIdentitiesEqual,
+  revalidateMigrationPlan
+} from "./migrationPlanning.js";
+import type { JobExecutionFence } from "./jobs.js";
 
 async function getMigrationRun(id: string) {
   const result = await query("SELECT * FROM migration_runs WHERE id = $1", [id]);
@@ -34,6 +41,7 @@ type ExecuteConfig = {
   projectNameOverride?: string;
   remapPorts: boolean;
   networkMode?: RecoveryNetworkMode;
+  executionFence?: JobExecutionFence;
   onProgress?: (stepId: MigrationProgressStep, detail: string) => Promise<void> | void;
   inventoryPollAttempts?: number;
   inventoryPollDelayMs?: number;
@@ -47,7 +55,13 @@ type CaptureResult = {
 type MigrationProgressStep = "plan" | "capture" | "transfer" | "deploy" | "verify";
 
 async function reportProgress(config: ExecuteConfig, stepId: MigrationProgressStep, detail: string) {
+  await config.executionFence?.assertActive();
   await config.onProgress?.(stepId, detail);
+}
+
+async function executionQuery(config: ExecuteConfig, text: string, values: unknown[]) {
+  if (!config.executionFence) return query(text, values);
+  return config.executionFence.withActiveLease((client) => client.query(text, values));
 }
 
 function sleep(ms: number) {
@@ -67,12 +81,19 @@ function parseContainerLabels(value: unknown): Record<string, string> {
   return labels;
 }
 
-function assertMigrationRecoveryPointReady(point: { status?: string; hostId?: string } | null, sourceHostId: string): asserts point is RecoveryPointDetail {
+function assertMigrationRecoveryPointReady(
+  point: Pick<RecoveryPointDetail, "status" | "hostId" | "appIdentity"> | null,
+  sourceHostId: string,
+  sourceAppIdentity: RecoveryPointDetail["appIdentity"]
+): asserts point is RecoveryPointDetail {
   if (!point || (point.status !== "completed" && point.status !== "partial")) {
     throw new Error("Migration recovery point is not ready");
   }
-  if (point.hostId && point.hostId !== sourceHostId) {
+  if (point.hostId !== sourceHostId) {
     throw new Error("Migration recovery point belongs to a different source host");
+  }
+  if (!recoveryAppIdentitiesEqual(point.appIdentity, sourceAppIdentity)) {
+    throw new MigrationPlanStaleError("Migration recovery point belongs to a different source application");
   }
 }
 
@@ -411,13 +432,17 @@ async function rollbackSource(input: {
   strategy: MigrationStrategy;
   sourceWasStopped: boolean;
   sourceHadRunningContainers: boolean;
+  stoppedContainerIdsConfirmed: boolean;
   reason: string;
 }) {
-  if (!shouldRestartSourceAfterFailure({
-    strategy: input.strategy,
-    sourceWasStopped: input.sourceWasStopped,
-    sourceHadRunningContainers: input.sourceHadRunningContainers
-  })) {
+  const shouldRestart = input.stoppedContainerIdsConfirmed
+    ? input.strategy !== "clone" && input.sourceWasStopped && input.containerIds.length > 0
+    : shouldRestartSourceAfterFailure({
+      strategy: input.strategy,
+      sourceWasStopped: input.sourceWasStopped,
+      sourceHadRunningContainers: input.sourceHadRunningContainers
+    });
+  if (!shouldRestart) {
     return { restarted: false };
   }
 
@@ -440,102 +465,137 @@ export async function runMigrationExecute(
   const run = await getMigrationRun(migrationRunId);
   if (!run || run.sourceHostId !== sourceHostId) throw new Error("Migration run not found");
 
-  await query(
+  await executionQuery(
+    config,
     "UPDATE migration_runs SET status = 'running', started_at = now(), error = null WHERE id = $1",
     [migrationRunId]
   );
 
-  await reportProgress(config, "plan", "Resolving source app and inspecting source containers");
-  const context = await resolveAppContext(run.sourceHostId, run.sourceAppIdentity);
-  const inspects = await inspectSourceContainers(run.sourceHostId, context.containerIds);
-  const runningStates = recordRunningStates(inspects);
-  const sourceHadRunningContainers = wasAnyContainerRunning(runningStates);
+  let sourceHadRunningContainers = false;
   let sourceWasStopped = false;
-  const restartIds = containersToRestart(runningStates);
+  let restartIds: string[] = [];
+  let runningStates: ContainerRunningState[] = [];
+
+  const assertExecutionPlanFresh = async (refreshSource = true) => {
+    const currentPlan = await revalidateMigrationPlan(run, { refreshSource, refreshTarget: true });
+    const expectedIntent = run.plan?.intent;
+    const actualIntent = {
+      strategy: config.strategy,
+      options: {
+        stopSource: config.stopSource,
+        projectNameOverride: config.projectNameOverride,
+        remapPorts: config.remapPorts,
+        networkMode: config.networkMode ?? "clone"
+      }
+    };
+    if (!expectedIntent || !migrationIntentsEqual(expectedIntent, actualIntent)) {
+      throw new MigrationPlanStaleError("Migration job intent does not match its reviewed plan");
+    }
+    return currentPlan;
+  };
 
   try {
+    await reportProgress(config, "plan", "Refreshing both hosts and validating the reviewed migration plan");
+    await assertExecutionPlanFresh();
+    await reportProgress(config, "plan", "Resolving source app and inspecting source containers");
+    const context = await resolveAppContext(run.sourceHostId, run.sourceAppIdentity);
+    const inspects = await inspectSourceContainers(run.sourceHostId, context.containerIds);
+    runningStates = recordRunningStates(inspects);
+    sourceHadRunningContainers = wasAnyContainerRunning(runningStates);
+    restartIds = containersToRestart(runningStates);
+
     let recoveryPointId = run.recoveryPointId;
     const recoveryCenter = await import("./recoveryCenter.js");
 
     if (recoveryPointId && (config.strategy === "safe_move" || config.strategy === "warm_move")) {
       await reportProgress(config, "capture", "Creating final stop-first recovery point from supplied pre-copy");
       assertMigrationRecoveryPointReady(
-        await recoveryCenter.getRecoveryPoint(recoveryPointId),
-        run.sourceHostId
+        await recoveryCenter.getMigrationRecoveryPoint(recoveryPointId, migrationRunId),
+        run.sourceHostId,
+        run.sourceAppIdentity
       );
-      const finalPoint = await recoveryCenter.createRecoveryPoint({
+      const finalPoint = await recoveryCenter.createMigrationRecoveryPoint({
         hostId: run.sourceHostId,
         appIdentity: run.sourceAppIdentity,
         triggerKind: "pre_migration",
         name: `Migration final ${migrationRunId}`,
         stopFirst: true
-      });
+      }, migrationRunId, { primary: true, executionFence: config.executionFence });
       recoveryPointId = finalPoint.id;
-      await query("UPDATE migration_runs SET recovery_point_id = $2 WHERE id = $1", [migrationRunId, recoveryPointId]);
+      await reportProgress(config, "plan", "Revalidating plan immediately before stopping the source");
+      await assertExecutionPlanFresh();
       const capture = await runRecoveryCreate(run.sourceHostId, recoveryPointId, {
         stopFirst: true,
-        restartAfterStopFirst: false
+        restartAfterStopFirst: false,
+        ...(config.executionFence ? { executionFence: config.executionFence } : {})
       }) as CaptureResult;
       sourceWasStopped = Boolean(capture.sourceLeftStopped);
     } else if (config.strategy === "warm_move" && !recoveryPointId) {
       await reportProgress(config, "capture", "Creating warm pre-copy recovery point while source keeps running");
-      const prePoint = await recoveryCenter.createRecoveryPoint({
+      const prePoint = await recoveryCenter.createMigrationRecoveryPoint({
         hostId: run.sourceHostId,
         appIdentity: run.sourceAppIdentity,
         triggerKind: "pre_migration",
         name: `Migration pre-copy ${migrationRunId}`,
         stopFirst: false
+      }, migrationRunId, { executionFence: config.executionFence });
+      await runRecoveryCreate(run.sourceHostId, prePoint.id, {
+        stopFirst: false,
+        ...(config.executionFence ? { executionFence: config.executionFence } : {})
       });
-      await runRecoveryCreate(run.sourceHostId, prePoint.id, { stopFirst: false });
-      const finalPoint = await recoveryCenter.createRecoveryPoint({
+      const finalPoint = await recoveryCenter.createMigrationRecoveryPoint({
         hostId: run.sourceHostId,
         appIdentity: run.sourceAppIdentity,
         triggerKind: "pre_migration",
         name: `Migration final ${migrationRunId}`,
         stopFirst: true
-      });
+      }, migrationRunId, { primary: true, executionFence: config.executionFence });
       recoveryPointId = finalPoint.id;
-      await query("UPDATE migration_runs SET recovery_point_id = $2 WHERE id = $1", [migrationRunId, recoveryPointId]);
       await reportProgress(config, "capture", "Stopping source containers for final migration capture");
+      await reportProgress(config, "plan", "Revalidating plan immediately before stopping the source");
+      await assertExecutionPlanFresh();
       const capture = await runRecoveryCreate(run.sourceHostId, recoveryPointId, {
         stopFirst: true,
-        restartAfterStopFirst: false
+        restartAfterStopFirst: false,
+        ...(config.executionFence ? { executionFence: config.executionFence } : {})
       }) as CaptureResult;
       sourceWasStopped = Boolean(capture.sourceLeftStopped);
     } else if (config.strategy === "safe_move" && !recoveryPointId) {
       await reportProgress(config, "capture", "Creating stop-first recovery point for safe move");
-      const finalPoint = await recoveryCenter.createRecoveryPoint({
+      const finalPoint = await recoveryCenter.createMigrationRecoveryPoint({
         hostId: run.sourceHostId,
         appIdentity: run.sourceAppIdentity,
         triggerKind: "pre_migration",
         name: `Migration final ${migrationRunId}`,
         stopFirst: true
-      });
+      }, migrationRunId, { primary: true, executionFence: config.executionFence });
       recoveryPointId = finalPoint.id;
-      await query("UPDATE migration_runs SET recovery_point_id = $2 WHERE id = $1", [migrationRunId, recoveryPointId]);
+      await reportProgress(config, "plan", "Revalidating plan immediately before stopping the source");
+      await assertExecutionPlanFresh();
       const capture = await runRecoveryCreate(run.sourceHostId, recoveryPointId, {
         stopFirst: true,
-        restartAfterStopFirst: false
+        restartAfterStopFirst: false,
+        ...(config.executionFence ? { executionFence: config.executionFence } : {})
       }) as CaptureResult;
       sourceWasStopped = Boolean(capture.sourceLeftStopped);
     } else if (!recoveryPointId) {
       await reportProgress(config, "capture", "Creating online recovery point for clone migration");
-      const created = await recoveryCenter.createRecoveryPoint({
+      const created = await recoveryCenter.createMigrationRecoveryPoint({
         hostId: run.sourceHostId,
         appIdentity: run.sourceAppIdentity,
         triggerKind: "pre_migration",
         name: `Migration ${migrationRunId}`,
         stopFirst: false
-      });
+      }, migrationRunId, { primary: true, executionFence: config.executionFence });
       recoveryPointId = created.id;
-      await query("UPDATE migration_runs SET recovery_point_id = $2 WHERE id = $1", [migrationRunId, recoveryPointId]);
       await runRecoveryCreate(run.sourceHostId, recoveryPointId, {
-        stopFirst: false
+        stopFirst: false,
+        ...(config.executionFence ? { executionFence: config.executionFence } : {})
       });
     }
 
-    const point = await recoveryCenter.getRecoveryPoint(recoveryPointId);
-    assertMigrationRecoveryPointReady(point, run.sourceHostId);
+    const point = await recoveryCenter.getMigrationRecoveryPoint(recoveryPointId, migrationRunId);
+    assertMigrationRecoveryPointReady(point, run.sourceHostId, run.sourceAppIdentity);
     await reportProgress(
       config,
       "transfer",
@@ -543,8 +603,11 @@ export async function runMigrationExecute(
     );
     assertMigrationDataCaptureComplete(point);
 
-    const restoreMode = config.strategy === "clone" ? "clone" : "clone";
-    const restore = await runRecoveryRestore(run.targetHostId, {
+    await reportProgress(config, "plan", "Revalidating target state immediately before deployment");
+    await assertExecutionPlanFresh(false);
+
+    const restoreMode = "clone" as const;
+    const restoreInput = {
       recoveryPointId,
       targetHostId: run.targetHostId,
       options: {
@@ -554,7 +617,10 @@ export async function runMigrationExecute(
         remapPorts: config.remapPorts,
         networkMode: config.networkMode ?? "clone"
       }
-    });
+    };
+    const restore = config.executionFence
+      ? await runRecoveryRestore(run.targetHostId, restoreInput, config.executionFence)
+      : await runRecoveryRestore(run.targetHostId, restoreInput);
 
     validateMigrationDataRestore(point, restore);
     await reportProgress(
@@ -603,7 +669,8 @@ export async function runMigrationExecute(
       // Source is intentionally left stopped after a successful move.
     }
 
-    await query(
+    await executionQuery(
+      config,
       "UPDATE migration_runs SET status = 'completed', completed_at = now() WHERE id = $1",
       [migrationRunId]
     );
@@ -632,20 +699,23 @@ export async function runMigrationExecute(
           strategy: config.strategy,
           sourceWasStopped,
           sourceHadRunningContainers,
+          stoppedContainerIdsConfirmed: captureStoppedIds.length > 0,
           reason: message
         });
         if (rollback.restarted && !finalMessage.includes("source restarted")) {
           finalMessage = `${finalMessage}; source restarted`;
         }
       } catch (rollbackError) {
-        await query(
+        await executionQuery(
+          config,
           "UPDATE migration_runs SET status = 'failed', error = $2, completed_at = now() WHERE id = $1",
           [migrationRunId, `${message}; rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`]
         );
         throw rollbackError;
       }
     }
-    await query(
+    await executionQuery(
+      config,
       "UPDATE migration_runs SET status = 'failed', error = $2, completed_at = now() WHERE id = $1",
       [migrationRunId, finalMessage]
     );

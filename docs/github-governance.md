@@ -2,6 +2,10 @@
 
 These controls are intentionally deferred until the release-candidate branches
 have been reviewed and the maintainer separately authorizes remote changes.
+The current CODEOWNERS file names the canonical `@composebastion-admin` account,
+but a pull-request author cannot approve their own CODEOWNER review. Do not
+activate the rule until a distinct trusted reviewer or team has been added to
+CODEOWNERS and a test pull request proves the review path works.
 
 ## Required `main-release-gate` Rule
 

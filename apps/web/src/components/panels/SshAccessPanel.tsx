@@ -6,6 +6,7 @@ import { canOpenHostTerminal } from "../../lib/hostTerminal.js";
 import type { Jobish } from "../../lib/dashboardTypes.js";
 import { HostForm } from "../dashboard/HostForm.js";
 import { ButtonRow, DataTable, EmptyState, StatusPill } from "../ui/primitives.js";
+import { useAuthorization } from "../AuthorizationContext.js";
 
 export function SshAccessPanel({
   hosts,
@@ -28,6 +29,7 @@ export function SshAccessPanel({
   refresh: () => Promise<void>;
   runJob: <T extends Jobish>(request: () => Promise<T>) => Promise<T>;
 }) {
+  const { canOperate, canUseTerminal } = useAuthorization();
   const [showAddForm, setShowAddForm] = useState(false);
   const sshHosts = hosts.filter((host) => host.connectionMode === "ssh");
   const agentHosts = hosts.filter((host) => host.connectionMode === "agent");
@@ -42,9 +44,9 @@ export function SshAccessPanel({
           <p>Add and open SSH-backed Docker hosts from one place.</p>
         </div>
         <ButtonRow>
-          <button type="button" className="primary" onClick={() => setShowAddForm((value) => !value)}>
+          {canOperate && <button type="button" className="primary" onClick={() => setShowAddForm((value) => !value)}>
             <Plus size={16} />Add SSH connection
-          </button>
+          </button>}
         </ButtonRow>
       </div>
 
@@ -67,7 +69,7 @@ export function SshAccessPanel({
         </div>
       </div>
 
-      {showAddForm && (
+      {canOperate && showAddForm && (
         <section className="sshFormPanel" aria-label="Add SSH connection">
           <HostForm
             runJob={runJob}
@@ -88,8 +90,8 @@ export function SshAccessPanel({
         <EmptyState
           headline="No SSH connections"
           hint="Add an SSH-backed Docker host to sync inventory and open a managed shell."
-          actionLabel="Add SSH connection"
-          onAction={() => setShowAddForm(true)}
+          actionLabel={canOperate ? "Add SSH connection" : undefined}
+          onAction={canOperate ? () => setShowAddForm(true) : undefined}
         />
       ) : (
         <DataTable
@@ -106,13 +108,13 @@ export function SshAccessPanel({
             <code key="socket">{host.dockerSocketPath}</code>,
             formatDate(host.lastSeenAt ?? host.updatedAt),
             <ButtonRow key="actions">
-              <button title="Check SSH host" onClick={() => void onHostAction("host.check", host.id)}><Activity size={16} /></button>
-              <button title="Refresh inventory" onClick={() => void onHostAction("host.sync", host.id)}><RefreshCw size={16} /></button>
-              {canOpenHostTerminal(user, host) && (
+              {canOperate && <button title="Check SSH host" onClick={() => void onHostAction("host.check", host.id)}><Activity size={16} /></button>}
+              {canOperate && <button title="Refresh inventory" onClick={() => void onHostAction("host.sync", host.id)}><RefreshCw size={16} /></button>}
+              {canUseTerminal && canOpenHostTerminal(user, host) && (
                 <button title="Open SSH terminal" onClick={() => onOpenTerminal(host)}><Terminal size={16} /></button>
               )}
               <button title="Open in Hosts" onClick={() => onSelectHost(host.id)}><Server size={16} /></button>
-              <button title="SSH host settings" onClick={() => onOpenHostSettings(host.id)}><Settings size={16} /></button>
+              {canOperate && <button title="SSH host settings" onClick={() => onOpenHostSettings(host.id)}><Settings size={16} /></button>}
             </ButtonRow>
           ]}
         />

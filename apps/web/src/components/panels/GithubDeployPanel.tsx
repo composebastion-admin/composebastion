@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { FileText, FolderOpen, GitBranch, Github, Hammer, KeyRound, Pencil, Play, RefreshCw, Save, ShieldCheck, Trash2, Wand2, X } from "lucide-react";
+import { FileText, FolderOpen, GitBranch, Hammer, KeyRound, Pencil, Play, RefreshCw, Save, ShieldCheck, Trash2, Wand2, X } from "lucide-react";
 import type { ComposeStack, DockerHost, GithubRepository, OperationJob } from "@composebastion/shared";
 import { api, deleteJson, postJson, putJson } from "../../api.js";
 import { useConfirm } from "../ConfirmProvider.js";
@@ -684,13 +684,13 @@ export function GithubDeployPanel({
   }
 
   const deployVariableOverrides = deployPreview ? composeVariableOverrides(deployPreview.composeYaml, deployPreview.env) : [];
-  const SubmitIcon = editingRepoId ? Save : Github;
+  const SubmitIcon = editingRepoId ? Save : GitBranch;
 
   return (
     <Panel title="Deploy" count={repositories.length}>
       <FolderComposeDeployForm hosts={hosts} refresh={refresh} runJob={runJob} />
       <GitCloneDeployForm hosts={hosts} refresh={refresh} runJob={runJob} />
-      <h3 className="panelSectionTitle"><Github size={16} /> Tracked GitHub repositories</h3>
+      <h3 className="panelSectionTitle"><GitBranch size={16} /> Tracked GitHub repositories</h3>
       <div className="formHint">
         Track a GitHub repository to deploy its compose file straight from the GitHub API (no clone on the host),
         preview and customize the YAML before deploying, and get commit-based update checks. Private repositories work

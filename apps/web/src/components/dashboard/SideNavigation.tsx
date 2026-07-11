@@ -1,8 +1,10 @@
 import { Link } from "react-router-dom";
 import { hostlessTabs, navigationGroups, tabs, type Tab } from "../../lib/navigation.js";
 import { tabPath } from "../../lib/tabRoute.js";
+import { useAuthorization } from "../AuthorizationContext.js";
 
 export function SideNavigation({ currentTab, hasHost, onTabChange }: { currentTab: Tab; hasHost: boolean; onTabChange: (tab: Tab) => void }) {
+  const { allowedTabs } = useAuthorization();
   return (
     <nav className="sideNav" aria-label="Main navigation">
       <div className="sidebarSectionTitle">Main</div>
@@ -10,6 +12,7 @@ export function SideNavigation({ currentTab, hasHost, onTabChange }: { currentTa
         <div className="sideNavGroup" key={group.title}>
           <span className="sideNavLabel">{group.title}</span>
           {group.items.map((itemId) => {
+            if (!allowedTabs.has(itemId)) return null;
             const item = tabs.find((candidate) => candidate.id === itemId);
             if (!item) return null;
             const Icon = item.icon;

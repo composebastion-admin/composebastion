@@ -1,6 +1,6 @@
 import { v4 as uuid } from "uuid";
-import type { AppGithubVersionSelect, AppGithubVersions, AppRenameInput, AppSourceLink, AppSourceLinkInput, ComposeStack, DockerApp, DockerAppUpdate, GithubRepository, ImageUpdateCheck, ResourceSnapshot } from "@composebastion/shared";
-import { query } from "../db/pool.js";
+import type { AppGithubVersionSelect, AppGithubVersions, AppRenameInput, AppSourceLink, AppSourceLinkInput, ComposeStack, DockerActionRequest, DockerApp, DockerAppUpdate, GithubRepository, ImageUpdateCheck, ResourceSnapshot } from "@composebastion/shared";
+import { query, withTransaction } from "../db/pool.js";
 import { shQuote } from "./commands.js";
 import { isDemoHost } from "./demo.js";
 import { extractImagesFromCompose } from "./composeImages.js";
@@ -14,7 +14,7 @@ import {
   parseGithubUrl
 } from "./github.js";
 import { checkImageUpdatesForHost, listImageUpdateChecks } from "./imageUpdates.js";
-import { enqueueJob } from "./jobs.js";
+import { enqueueJob, enqueueJobInTransaction, notifyJobQueued } from "./jobs.js";
 import { mapResource, mapStack } from "./mappers.js";
 import { getHostForWorker, listHostIds } from "./hosts.js";
 import { runSshCommand } from "./ssh.js";
@@ -69,6 +69,18 @@ function latestTimestamp(values: Array<string | null | undefined>) {
 
 function projectNameFromAppName(name: string) {
   return name.toLowerCase().replace(/[^a-z0-9_-]+/g, "").slice(0, 48) || "app";
+}
+
+async function enqueueAppJobBatch(actions: DockerActionRequest[], createdBy?: string | null) {
+  const jobs = await withTransaction(async (client) => {
+    const inserted = [];
+    for (const action of actions) {
+      inserted.push(await enqueueJobInTransaction(client, action, createdBy));
+    }
+    return inserted;
+  });
+  await Promise.all(jobs.map((job) => notifyJobQueued(job.id)));
+  return jobs;
 }
 
 function gitRemoteLatestCommands() {
@@ -860,15 +872,15 @@ export async function updateApp(appId: string, createdBy?: string | null) {
   const app = await findApp(appId);
 
   if ((app.source === "git" || app.source === "compose") && app.sourceLink?.workingDir && app.sourceLink.composePath) {
-    const jobs = [];
+    const actions: DockerActionRequest[] = [];
     if (app.source === "git") {
-      jobs.push(await enqueueJob({
+      actions.push({
         type: "git.pull",
         hostId: app.hostId,
         payload: { directory: app.sourceLink.workingDir, ...(app.sourceLink.branch ? { branch: app.sourceLink.branch } : {}) }
-      }, createdBy));
+      });
     }
-    jobs.push(await enqueueJob({
+    actions.push({
       type: "compose.deployPath",
       hostId: app.hostId,
       payload: {
@@ -876,7 +888,8 @@ export async function updateApp(appId: string, createdBy?: string | null) {
         workingDir: app.sourceLink.workingDir,
         composePath: app.sourceLink.composePath
       }
-    }, createdBy));
+    });
+    const jobs = await enqueueAppJobBatch(actions, createdBy);
     return { jobs };
   }
 
@@ -886,29 +899,34 @@ export async function updateApp(appId: string, createdBy?: string | null) {
     if (!stack) throw new Error("Compose stack not found");
 
     if (app.source === "git" && stack.source_working_dir && stack.source_compose_path) {
-      const jobs = [];
-      jobs.push(await enqueueJob({
-        type: "git.pull",
-        hostId: app.hostId,
-        payload: { directory: stack.source_working_dir, ...(stack.source_branch ? { branch: stack.source_branch } : {}) }
-      }, createdBy));
-      jobs.push(await enqueueJob({
-        type: "compose.deployPath",
-        hostId: app.hostId,
-        payload: {
-          projectName: stack.project_name,
-          workingDir: stack.source_working_dir,
-          composePath: stack.source_compose_path
-        }
-      }, createdBy));
+      const jobs = await enqueueAppJobBatch(
+        [
+          {
+            type: "git.pull",
+            hostId: app.hostId,
+            payload: { directory: stack.source_working_dir, ...(stack.source_branch ? { branch: stack.source_branch } : {}) }
+          },
+          {
+            type: "compose.deployPath",
+            hostId: app.hostId,
+            payload: {
+              projectName: stack.project_name,
+              workingDir: stack.source_working_dir,
+              composePath: stack.source_compose_path
+            }
+          }
+        ],
+        createdBy
+      );
       return { jobs };
     }
 
-    const jobs = [];
+    const actions: DockerActionRequest[] = [];
     if (app.update.kind === "image" && app.update.imageReference) {
-      jobs.push(await enqueueJob({ type: "image.pull", hostId: app.hostId, payload: { image: app.update.imageReference } }, createdBy));
+      actions.push({ type: "image.pull", hostId: app.hostId, payload: { image: app.update.imageReference } });
     }
-    jobs.push(await enqueueJob({ type: "compose.deploy", hostId: app.hostId, payload: { stackId: app.stackId } }, createdBy));
+    actions.push({ type: "compose.deploy", hostId: app.hostId, payload: { stackId: app.stackId } });
+    const jobs = await enqueueAppJobBatch(actions, createdBy);
     return { jobs };
   }
 

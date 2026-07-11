@@ -12,6 +12,7 @@ import { statusClassName } from "../../../lib/dockerMetrics.js";
 import { HostSelect } from "../../dashboard/HostSelect.js";
 import { useConfirm } from "../../ConfirmProvider.js";
 import { ButtonRow, DataTable, InlineForm, Panel, StatusPill } from "../../ui/primitives.js";
+import { useAuthorization } from "../../AuthorizationContext.js";
 
 function statePill(label: string, value: string) {
   const mapped = value === "complete" || value === "synced" ? "completed" : value === "partial" ? "partial" : value;
@@ -59,6 +60,7 @@ export function RecoveryPointsPanel({
   refresh: () => Promise<void>;
   runJob: <T extends Jobish>(request: () => Promise<T>) => Promise<T>;
 }) {
+  const { canOperate } = useAuthorization();
   const { confirm } = useConfirm();
   const action = useAsyncAction();
   const [createForm, setCreateForm] = useState({
@@ -153,7 +155,7 @@ export function RecoveryPointsPanel({
 
   return (
     <Panel title="Recovery Points" count={points.length}>
-      <InlineForm
+      {canOperate && <InlineForm
         onSubmit={async () => {
           if (!selectedApp) throw new Error("Select an app to capture");
           await action.run(async () => {
@@ -261,9 +263,9 @@ export function RecoveryPointsPanel({
           <Plus size={16} />
           Capture
         </button>
-      </InlineForm>
+      </InlineForm>}
 
-      {analysis && (
+      {canOperate && analysis && (
         <div className={`notice ${analysis.status === "ready" ? "" : analysis.status === "blocked" ? "error" : "warning"}`}>
           Recovery analysis: {analysis.status}; {analysis.dataMounts.length} data location(s) detected; recommended {analysis.recommendedCaptureMode === "stop_first" ? "stop-first" : "hot"} capture.
           {analysis.warnings.length > 0 && <small>{analysis.warnings.slice(0, 2).join(" ")}</small>}
@@ -361,7 +363,18 @@ export function RecoveryPointsPanel({
 
       <DataTable
         rows={points}
-        columns={["App", "Host", "Status", "Artifacts", "Size", "Local", "Remote", "Drill", "Created", "Actions"]}
+        columns={[
+          "App",
+          "Host",
+          "Status",
+          "Artifacts",
+          "Size",
+          "Local",
+          "Remote",
+          "Drill",
+          "Created",
+          ...(canOperate ? ["Actions"] : [])
+        ]}
         render={(point) => {
           const local = recoveryLocalState(point);
           const remote = recoveryRemoteState(point);
@@ -379,7 +392,7 @@ export function RecoveryPointsPanel({
               <small>{drillSummary(point)}</small>
             </div>,
             formatDate(point.createdAt),
-            <ButtonRow key="actions">
+            ...(canOperate ? [<ButtonRow key="actions">
               <button
                 type="button"
                 title="Verify artifacts"
@@ -433,7 +446,7 @@ export function RecoveryPointsPanel({
               >
                 <Copy size={16} />
               </button>
-            </ButtonRow>
+            </ButtonRow>] : [])
           ];
         }}
       />

@@ -10,10 +10,10 @@ import {
   type ExternalCatalogCandidate,
   type ExternalCatalogQuery
 } from "@composebastion/shared";
-import { query } from "../db/pool.js";
-import { enqueueJob } from "./jobs.js";
+import { query, withTransaction } from "../db/pool.js";
+import { enqueueJobInTransaction, notifyJobQueued } from "./jobs.js";
 import { mapStack } from "./mappers.js";
-import { recordStackVersion } from "./stackVersions.js";
+import { recordStackVersionInTransaction } from "./stackVersions.js";
 
 const CUSTOM_DOCS_FALLBACK = "https://docs.docker.com/compose/";
 const AWESOME_SOURCE_URL = "https://github.com/awesome-selfhosted/awesome-selfhosted-data";
@@ -383,53 +383,56 @@ export async function deployCatalogTemplate(input: unknown, createdBy?: string |
   const name = body.name ?? template.name;
   const proxy = body.proxy;
 
-  const stackResult = await query(
-    `INSERT INTO compose_stacks (
-       id, host_id, name, project_name, compose_yaml, env, status,
-       domains, exposed_service, exposed_port, tls_desired,
-       update_policy_enabled, update_policy_channel
-     )
-     VALUES ($1, $2, $3, $4, $5, $6, 'created', $7, $8, $9, $10, false, NULL)
-     ON CONFLICT (host_id, project_name)
-     DO UPDATE SET
-       name = EXCLUDED.name,
-       compose_yaml = EXCLUDED.compose_yaml,
-       env = EXCLUDED.env,
-       domains = EXCLUDED.domains,
-       exposed_service = EXCLUDED.exposed_service,
-       exposed_port = EXCLUDED.exposed_port,
-       tls_desired = EXCLUDED.tls_desired,
-       updated_at = now()
-     RETURNING *`,
-    [
-      uuid(),
-      body.hostId,
-      name,
-      body.projectName,
-      composeYaml,
-      envString,
-      proxy?.domains ?? [],
-      proxy?.exposedService ?? template.suggestedPorts[0]?.split(":")[1] ?? null,
-      proxy?.exposedPort ?? (Number(Object.values(template.defaultEnv).find((value) => /^\d+$/.test(value)) ?? 80) || null),
-      proxy?.tlsDesired ?? false
-    ]
-  );
+  const result = await withTransaction(async (client) => {
+    const stackResult = await client.query(
+      `INSERT INTO compose_stacks (
+         id, host_id, name, project_name, compose_yaml, env, status,
+         domains, exposed_service, exposed_port, tls_desired,
+         update_policy_enabled, update_policy_channel
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, 'created', $7, $8, $9, $10, false, NULL)
+       ON CONFLICT (host_id, project_name)
+       DO UPDATE SET
+         name = EXCLUDED.name,
+         compose_yaml = EXCLUDED.compose_yaml,
+         env = EXCLUDED.env,
+         domains = EXCLUDED.domains,
+         exposed_service = EXCLUDED.exposed_service,
+         exposed_port = EXCLUDED.exposed_port,
+         tls_desired = EXCLUDED.tls_desired,
+         updated_at = now()
+       RETURNING *`,
+      [
+        uuid(),
+        body.hostId,
+        name,
+        body.projectName,
+        composeYaml,
+        envString,
+        proxy?.domains ?? [],
+        proxy?.exposedService ?? template.suggestedPorts[0]?.split(":")[1] ?? null,
+        proxy?.exposedPort ?? (Number(Object.values(template.defaultEnv).find((value) => /^\d+$/.test(value)) ?? 80) || null),
+        proxy?.tlsDesired ?? false
+      ]
+    );
 
-  const stack = mapStack(stackResult.rows[0]);
-  await recordStackVersion({
-    stackId: stack.id,
-    composeYaml: stack.composeYaml,
-    env: stack.env,
-    source: "catalog",
-    createdBy,
-    note: body.note ?? `Catalog template ${template.id}`
+    const stack = mapStack(stackResult.rows[0]);
+    await recordStackVersionInTransaction(client, {
+      stackId: stack.id,
+      composeYaml: stack.composeYaml,
+      env: stack.env,
+      source: "catalog",
+      createdBy,
+      note: body.note ?? `Catalog template ${template.id}`
+    });
+
+    const job = await enqueueJobInTransaction(client, {
+      type: "compose.deploy",
+      hostId: body.hostId,
+      payload: { stackId: stack.id }
+    }, createdBy);
+    return { stack, job };
   });
-
-  const job = await enqueueJob({
-    type: "compose.deploy",
-    hostId: body.hostId,
-    payload: { stackId: stack.id }
-  }, createdBy);
-
-  return { stack, job, templateId: template.id };
+  await notifyJobQueued(result.job.id);
+  return { ...result, templateId: template.id };
 }

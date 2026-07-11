@@ -2,10 +2,12 @@ import { useState } from "react";
 import { Download, Upload } from "lucide-react";
 import { postJson } from "../../api.js";
 import { useAsyncAction } from "../../hooks/useAsyncAction.js";
+import { useConfirm } from "../ConfirmProvider.js";
 import { ButtonRow } from "../ui/primitives.js";
 
 export function ConfigBackupPanel({ onImported }: { onImported: () => Promise<void> }) {
   const action = useAsyncAction();
+  const { confirm } = useConfirm();
   const [passphrase, setPassphrase] = useState("");
   const [backupText, setBackupText] = useState("");
   const [message, setMessage] = useState("");
@@ -27,6 +29,14 @@ export function ConfigBackupPanel({ onImported }: { onImported: () => Promise<vo
   }
 
   async function importConfig() {
+    if (!await confirm({
+      title: "Import configuration",
+      tone: "danger",
+      confirmLabel: "Import configuration",
+      message: "Importing replaces matching ComposeBastion configuration records and can change host access, credentials, and automation.",
+      verificationText: "IMPORT",
+      verificationLabel: "Type IMPORT to continue"
+    })) return;
     await action.run(async () => {
       const text = backupText.trim();
       if (!text) throw new Error("Paste an encrypted config JSON export or choose a .json file before importing.");

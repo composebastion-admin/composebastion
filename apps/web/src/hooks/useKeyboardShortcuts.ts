@@ -4,11 +4,13 @@ import type { Tab } from "../lib/navigation.js";
 export function useKeyboardShortcuts({
   setTab,
   refresh,
-  hasHost
+  hasHost,
+  allowedTabs
 }: {
   setTab: (tab: Tab) => void;
   refresh: () => void | Promise<void>;
   hasHost: boolean;
+  allowedTabs?: ReadonlySet<Tab>;
 }) {
   const sequenceTimer = useRef<number | null>(null);
   const inSequence = useRef<boolean>(false);
@@ -18,6 +20,10 @@ export function useKeyboardShortcuts({
       // Ignore if user is inside an input field
       const active = document.activeElement;
       if (active) {
+        // Once xterm owns focus every key, including Escape, belongs to the
+        // remote shell. The terminal drawer has an explicit labelled close
+        // button and intentionally does not use Escape as a global shortcut.
+        if (active instanceof HTMLElement && active.closest(".hostTerminalFrame .xterm")) return;
         const tag = active.tagName.toLowerCase();
         if (
           tag === "input" ||
@@ -77,7 +83,7 @@ export function useKeyboardShortcuts({
         if (targetTab) {
           // Some tabs require active hosts. If there is no host, skip.
           const hostRequired = ["apps", "containers", "images", "files"].includes(targetTab);
-          if (!hostRequired || hasHost) {
+          if ((!hostRequired || hasHost) && (!allowedTabs || allowedTabs.has(targetTab))) {
             event.preventDefault();
             setTab(targetTab);
           }
@@ -97,5 +103,5 @@ export function useKeyboardShortcuts({
       window.removeEventListener("keydown", onKeyDown);
       if (sequenceTimer.current) window.clearTimeout(sequenceTimer.current);
     };
-  }, [setTab, refresh, hasHost]);
+  }, [setTab, refresh, hasHost, allowedTabs]);
 }

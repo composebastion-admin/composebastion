@@ -12,7 +12,7 @@
 #
 # Password authentication is disabled. Supply an ephemeral authorized key so
 # fixture credentials never enter the repository.
-FROM alpine:3.20
+FROM alpine:3.20.8@sha256:765942a4039992336de8dd5db680586e1a206607dd06170ff0a37267a9e01958
 
 RUN apk add --no-cache openssh-server docker-cli docker-cli-compose git bash curl \
   && ssh-keygen -A \

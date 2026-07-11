@@ -35,8 +35,9 @@ Recommended SSH host settings:
 The ComposeBastion agent is a small Docker-only command proxy for hosts where you
 prefer not to give the manager direct SSH access. App and agent images are
 published together for each V1 release; keep them on the same release when
-possible. For the latest verified release, pin both manager and agent to
-`1.0.6`.
+possible. The most recent published manager and agent tags are `1.0.6`, but
+they are superseded for production readiness by the pending scanner
+remediation. Keep existing pairs pinned until verified `1.0.7` images exist.
 
 Use the published image on the target Docker host:
 
@@ -46,10 +47,14 @@ cp agent-compose.image.example.yml agent-compose.yml
 openssl rand -base64 48
 ```
 
-Set `AGENT_TOKEN` in the environment or in `agent-compose.yml`, then start:
+Set a generated token and an explicit manager-reachable bind address, then
+start. Both values are required and the examples refuse to render without
+them:
 
 ```bash
 export COMPOSEBASTION_AGENT_VERSION=1.0.6
+export AGENT_TOKEN="$(openssl rand -hex 32)"
+export COMPOSEBASTION_AGENT_BIND_ADDRESS=192.0.2.10
 docker compose -f agent-compose.yml pull
 docker compose -f agent-compose.yml up -d
 ```
@@ -59,6 +64,8 @@ Update the agent image with:
 ```bash
 cd ~/composebastion-agent
 export COMPOSEBASTION_AGENT_VERSION=1.0.6
+export AGENT_TOKEN="$(openssl rand -hex 32)"
+export COMPOSEBASTION_AGENT_BIND_ADDRESS=192.0.2.10
 docker compose -f agent-compose.image.example.yml pull
 docker compose -f agent-compose.image.example.yml up -d
 ```
@@ -70,8 +77,11 @@ If you are building the agent from a source checkout instead, start from
 cp agent-compose.example.yml agent-compose.yml
 ```
 
-Set a long `AGENT_TOKEN`, deploy the agent on the target host, and expose port
-`8090` only to the manager network.
+Set a strong random `AGENT_TOKEN`, choose the Docker host's trusted LAN address
+for `COMPOSEBASTION_AGENT_BIND_ADDRESS`, deploy the agent, and firewall port
+`8090` so only the manager can reach it. Never bind the agent directly to a
+public interface. Docker-socket access is host-root-equivalent even when Linux
+capabilities are dropped.
 
 In ComposeBastion, add the host with connection mode `Host agent`, the agent URL,
 and the same token.

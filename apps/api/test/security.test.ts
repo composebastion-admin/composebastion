@@ -1,16 +1,34 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_APP_SECRET, parseEnv } from "../src/config/env.js";
+import { randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { DOCUMENTED_APP_SECRET_PLACEHOLDER, REPOSITORY_APP_SECRET_PLACEHOLDERS, parseEnv } from "../src/config/env.js";
 import { isAllowedCorsOrigin, isLocalDevelopmentOrigin, isSameHostOrigin, isTrustedUnsafeRequestOrigin, isUnsafeHttpMethod } from "../src/services/httpSecurity.js";
 import { isPrivateIp } from "../src/services/ssrf.js";
 
 describe("HTTP security configuration", () => {
-  it("rejects the documented default app secret in production", () => {
-    expect(() => parseEnv({ NODE_ENV: "production", APP_SECRET: DEFAULT_APP_SECRET })).toThrow("APP_SECRET");
+  const uniqueAppSecret = randomBytes(32).toString("hex");
+
+  it("rejects every known app-secret placeholder in production", () => {
+    for (const placeholder of REPOSITORY_APP_SECRET_PLACEHOLDERS) {
+      expect(() => parseEnv({ NODE_ENV: "production", APP_SECRET: placeholder })).toThrow("APP_SECRET");
+    }
+    expect(() => parseEnv({ NODE_ENV: "production", APP_SECRET: `  ${REPOSITORY_APP_SECRET_PLACEHOLDERS[2].toUpperCase()}  ` })).toThrow("APP_SECRET");
+    expect(() => parseEnv({ NODE_ENV: "production" })).toThrow("APP_SECRET");
+    expect(parseEnv({ NODE_ENV: "production", APP_SECRET: uniqueAppSecret }).APP_SECRET).toBe(uniqueAppSecret);
+    expect(parseEnv({ NODE_ENV: "test", APP_SECRET: REPOSITORY_APP_SECRET_PLACEHOLDERS[2] }).APP_SECRET)
+      .toBe(REPOSITORY_APP_SECRET_PLACEHOLDERS[2]);
+  });
+
+  it("keeps the documented app-secret placeholder covered by production validation", () => {
+    const example = readFileSync(new URL("../../../.env.example", import.meta.url), "utf8");
+    const documented = /^APP_SECRET=(.+)$/m.exec(example)?.[1];
+    expect(documented).toBe(DOCUMENTED_APP_SECRET_PLACEHOLDER);
+    expect(() => parseEnv({ NODE_ENV: "production", APP_SECRET: documented })).toThrow("APP_SECRET");
   });
 
   it("parses comma separated CORS origins", () => {
     const parsed = parseEnv({
-      APP_SECRET: "a-unique-test-secret-value-with-more-than-32-characters",
+      APP_SECRET: uniqueAppSecret,
       CORS_ORIGINS: "https://console.example.com/app, http://localhost:5173"
     });
     expect(parsed.CORS_ORIGINS).toEqual(["https://console.example.com", "http://localhost:5173"]);
@@ -44,12 +62,12 @@ describe("HTTP security configuration", () => {
   it("enables Secure cookies by default in production", () => {
     const prod = parseEnv({
       NODE_ENV: "production",
-      APP_SECRET: "a-unique-test-secret-value-with-more-than-32-characters"
+      APP_SECRET: uniqueAppSecret
     });
     expect(prod.SECURE_COOKIES).toBe(true);
     const optedOut = parseEnv({
       NODE_ENV: "production",
-      APP_SECRET: "a-unique-test-secret-value-with-more-than-32-characters",
+      APP_SECRET: uniqueAppSecret,
       SECURE_COOKIES: "false"
     });
     expect(optedOut.SECURE_COOKIES).toBe(false);
@@ -57,7 +75,7 @@ describe("HTTP security configuration", () => {
   });
 
   it("parses TRUST_PROXY into boolean, hop count, or proxy list", () => {
-    const base = { APP_SECRET: "a-unique-test-secret-value-with-more-than-32-characters" };
+    const base = { APP_SECRET: uniqueAppSecret };
     expect(parseEnv(base).TRUST_PROXY).toBe(false);
     expect(parseEnv({ ...base, TRUST_PROXY: "true" }).TRUST_PROXY).toBe(true);
     expect(parseEnv({ ...base, TRUST_PROXY: "2" }).TRUST_PROXY).toBe(2);
@@ -83,7 +101,7 @@ describe("isPrivateIp", () => {
   });
 
   it("flags private IPv6, link-local, ULA, and IPv4-mapped private addresses", () => {
-    for (const ip of ["::1", "::", "fe80::1", "febf::1", "fc00::1", "fd12:3456::1", "::ffff:127.0.0.1", "::ffff:10.0.0.1", "::ffff:7f00:1", "::ffff:a00:1"]) {
+    for (const ip of ["::1", "::", "fe80::1", "febf::1", "fc00::1", "fd12:3456::1", "::ffff:127.0.0.1", "::ffff:10.0.0.1", "::ffff:7f00:1", "::ffff:a00:1", "::ffff:0:127.0.0.1", "::192.168.1.1", "2001::1", "3ffe::1"]) {
       expect(isPrivateIp(ip)).toBe(true);
     }
   });

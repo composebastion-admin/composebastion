@@ -49,7 +49,14 @@ export async function registerJobRoutes(app: FastifyInstance) {
     const id = idSchema.parse((request.params as { id: string }).id);
     const result = await retryJob(id, request.user?.id);
     if (!result.original) return sendApiError(reply, 404, "NOT_FOUND", "Job not found");
-    if (!result.retried) return sendApiError(reply, 409, "CONFLICT", "Only failed or canceled jobs can be retried");
+    if (!result.retried) {
+      return sendApiError(
+        reply,
+        409,
+        "CONFLICT",
+        "Only failed or canceled idempotent verification/sync jobs below the three-attempt limit can be retried"
+      );
+    }
     await writeAuditEvent({
       userId: request.user?.id,
       hostId: result.original.hostId,

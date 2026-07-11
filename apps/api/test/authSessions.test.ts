@@ -2,13 +2,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { FastifyRequest } from "fastify";
 
 const query = vi.fn();
+const transactionQuery = vi.fn();
+const withTransaction = vi.fn();
 
 vi.mock("../src/db/pool.js", () => ({
-  query: (...args: unknown[]) => query(...args)
+  query: (...args: unknown[]) => query(...args),
+  withTransaction: (...args: unknown[]) => withTransaction(...args)
 }));
 
 const {
   createSession,
+  createAdmin,
   deleteExpiredSessions,
   hashToken,
   listSessionsForUser,
@@ -18,6 +22,47 @@ const {
 
 beforeEach(() => {
   query.mockReset();
+  transactionQuery.mockReset();
+  withTransaction.mockReset();
+  withTransaction.mockImplementation(async (handler: (client: { query: typeof transactionQuery }) => Promise<unknown>) =>
+    handler({ query: transactionQuery })
+  );
+});
+
+describe("initial owner setup", () => {
+  it("serializes the count and insert under the owner invariant lock", async () => {
+    transactionQuery
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ count: "0" }] })
+      .mockResolvedValueOnce({ rows: [{
+        id: "00000000-0000-4000-8000-000000000001",
+        name: null,
+        username: "owner",
+        email: "owner@local.composebastion",
+        role: "owner",
+        is_active: true,
+        created_at: new Date(0)
+      }] });
+
+    const owner = await createAdmin({ username: "owner", password: "Very-Secure-Pass1" });
+
+    expect(owner.role).toBe("owner");
+    expect(transactionQuery.mock.calls[0]?.[0]).toBe("SELECT pg_advisory_xact_lock($1)");
+    expect(transactionQuery.mock.calls[1]?.[0]).toContain("count(*)");
+    expect(transactionQuery.mock.calls[2]?.[0]).toContain("INSERT INTO admin_users");
+  });
+
+  it("returns a conflict after a concurrent setup has already committed", async () => {
+    transactionQuery
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ count: "1" }] });
+
+    await expect(createAdmin({ username: "owner", password: "Very-Secure-Pass1" })).rejects.toMatchObject({
+      message: "Initial admin already exists",
+      statusCode: 409
+    });
+    expect(transactionQuery).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("session cleanup", () => {

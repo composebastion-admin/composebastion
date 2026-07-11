@@ -1,5 +1,8 @@
 import path from "node:path";
 import {
+  compareReleaseVersions,
+  isStableReleaseVersion,
+  parseReleaseVersion,
   selfUpdateConfigInputSchema,
   selfUpdateConfigSchema,
   type DockerActionRequest,
@@ -30,44 +33,14 @@ type SelfUpdatePayload = Extract<DockerActionRequest, { type: "system.self_updat
 
 const defaultSelfUpdateConfig = selfUpdateConfigSchema.parse({});
 
-type ParsedVersion = {
-  numbers: number[];
-  prerelease: string | null;
-};
-
 function normalizeVersion(value: string | null | undefined) {
   const trimmed = String(value ?? "").trim();
   if (!trimmed || trimmed === "unknown") return null;
   return trimmed.replace(/^v/i, "");
 }
 
-function parseVersion(value: string | null | undefined): ParsedVersion | null {
-  const normalized = normalizeVersion(value);
-  if (!normalized || normalized === "latest") return null;
-  const match = normalized.match(/^(\d+(?:\.\d+){0,4})(?:[-._]?([a-z][a-z0-9.-]*))?$/i);
-  if (!match) return null;
-  return {
-    numbers: match[1]!.split(".").map((part) => Number(part)),
-    prerelease: match[2]?.toLowerCase() ?? null
-  };
-}
-
 export function compareVersions(left: string | null | undefined, right: string | null | undefined) {
-  const a = normalizeVersion(left);
-  const b = normalizeVersion(right);
-  if (!a || !b || a === "latest" || b === "latest") return 0;
-  const parsedA = parseVersion(a);
-  const parsedB = parseVersion(b);
-  if (!parsedA || !parsedB) return 0;
-  for (let index = 0; index < Math.max(parsedA.numbers.length, parsedB.numbers.length, 3); index += 1) {
-    const nextA = parsedA.numbers[index] ?? 0;
-    const nextB = parsedB.numbers[index] ?? 0;
-    if (nextA !== nextB) return nextA > nextB ? 1 : -1;
-  }
-  if (!parsedA.prerelease && parsedB.prerelease) return 1;
-  if (parsedA.prerelease && !parsedB.prerelease) return -1;
-  if (parsedA.prerelease && parsedB.prerelease) return parsedA.prerelease.localeCompare(parsedB.prerelease);
-  return 0;
+  return compareReleaseVersions(left, right) ?? 0;
 }
 
 export function updateAvailable(current: string, latest: string | null) {
@@ -75,7 +48,7 @@ export function updateAvailable(current: string, latest: string | null) {
 }
 
 function isStableVersion(value: string | null | undefined) {
-  return Boolean(parseVersion(value) && !parseVersion(value)?.prerelease);
+  return isStableReleaseVersion(value);
 }
 
 async function readSetting<T>(key: string) {
@@ -159,7 +132,7 @@ async function fetchLatestRelease(): Promise<LatestRelease> {
     ...Array.from(releaseUrlByVersion.keys())
   ]));
   const stableVersions = versions.filter(isStableVersion);
-  const candidates = stableVersions.length > 0 ? stableVersions : versions.filter((version) => Boolean(parseVersion(version)));
+  const candidates = stableVersions.length > 0 ? stableVersions : versions.filter((version) => Boolean(parseReleaseVersion(version)));
   const version = candidates.sort((left, right) => compareVersions(right, left))[0] ?? null;
 
   return {
@@ -212,6 +185,12 @@ export async function enqueueSelfUpdate(input: { targetVersion?: string }, creat
   const targetVersion = input.targetVersion?.trim()
     || (config.versionMode === "latest" ? "latest" : config.targetVersion)
     || "latest";
+  if (targetVersion !== "latest" && !parseReleaseVersion(targetVersion)) {
+    throw Object.assign(new Error("Self-updates require latest or a valid semantic release version"), { statusCode: 400 });
+  }
+  if (config.versionMode === "pinned" && targetVersion === "latest") {
+    throw Object.assign(new Error("Pinned updates require a valid semantic release version"), { statusCode: 400 });
+  }
 
   const action: DockerActionRequest = {
     type: "system.self_update",

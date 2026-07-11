@@ -128,6 +128,12 @@ describe("API contracts", () => {
     const channelHistoryResponse = (document.paths["/api/v1/alerts/channels/{id}/test-history"] as any).get.responses["200"].content["application/json"].schema;
     const operationJob = (document.components.schemas as any).OperationJob;
     const dockerHost = (document.components.schemas as any).DockerHost;
+    const migrationRun = (document.components.schemas as any).MigrationRun;
+    const migrationPlan = (document.paths["/api/v1/recovery/migrations/plan"] as any).post;
+    const migrationExecute = (document.paths["/api/v1/recovery/migrations/execute"] as any).post;
+    const readiness = (document.paths["/api/v1/health/ready"] as any).get;
+    const redisHealth = (document.paths["/api/v1/health/redis"] as any).get;
+    const setup = (document.paths["/api/v1/auth/setup"] as any).post;
 
     expect(jobsResponse).toEqual({ $ref: "#/components/schemas/JobsResponse" });
     expect(aggregateChannelHistoryResponse).toEqual({ $ref: "#/components/schemas/AlertChannelTestHistoryResponse" });
@@ -135,6 +141,21 @@ describe("API contracts", () => {
     expect(operationJob.required).toContain("correlationId");
     expect(operationJob.required).toContain("progress");
     expect(dockerHost.required).toContain("agentVersion");
+    expect(migrationRun.required).toContain("planRunId");
+    expect(migrationPlan.requestBody.content["application/json"].schema).toEqual({ $ref: "#/components/schemas/MigrationPlanRequest" });
+    expect(migrationExecute.requestBody.content["application/json"].schema).toEqual({ $ref: "#/components/schemas/MigrationExecuteRequest" });
+    expect((document.components.schemas as any).MigrationExecuteRequest.oneOf).toEqual([
+      { $ref: "#/components/schemas/BoundMigrationExecuteRequest" },
+      { $ref: "#/components/schemas/LegacyMigrationExecuteRequest" }
+    ]);
+    expect(migrationExecute.responses["409"].description).toContain("MIGRATION_PLAN_STALE");
+    expect(readiness.responses["503"].content["application/json"].schema).toEqual({ $ref: "#/components/schemas/ReadinessResponse" });
+    expect(redisHealth.responses["503"].content["application/json"].schema).toEqual({ $ref: "#/components/schemas/RedisHealthResponse" });
+    expect((document.components.schemas as any).ReadinessResponse.properties.checks.additionalProperties.required)
+      .toContain("required");
+    expect((document.components.schemas as any).ReadinessResponse.properties.checks.additionalProperties.properties.required.description)
+      .toContain("top-level readiness");
+    expect(setup.responses["409"].description).toContain("setup is already complete");
     expect(document.info.version).toBe(packageJson.version);
     expect(document.components.schemas).toHaveProperty("AlertChannelTestEvent");
   });

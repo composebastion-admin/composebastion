@@ -1,12 +1,16 @@
 import { v4 as uuid } from "uuid";
+import type { PoolClient } from "pg";
 import type { DockerHost } from "@composebastion/shared";
 import { dockerHostCreateSchema, dockerHostUpdateSchema } from "@composebastion/shared";
-import { query } from "../db/pool.js";
+import { query, withTransaction } from "../db/pool.js";
 import { decryptSecret, encryptSecret } from "./crypto.js";
 import { mapHost } from "./mappers.js";
 import type { SshTarget } from "./ssh.js";
 import { env } from "../config/env.js";
 import { validateAgentUrl } from "./ssrf.js";
+import { enqueueJobInTransaction, notifyJobQueued } from "./jobs.js";
+
+const HOST_CREATE_LOCK_ID = "484624819832837";
 
 export async function listHosts(includeDeleted = false) {
   const result = includeDeleted
@@ -27,15 +31,20 @@ export async function getHost(id: string) {
   return result.rows[0] ? mapHost(result.rows[0]) : null;
 }
 
-async function findDuplicateHost(parsed: { name: string; hostname: string; username: string; port: number }, excludeId?: string) {
+async function findDuplicateHost(
+  parsed: { name: string; hostname: string; username: string; port: number },
+  excludeId?: string,
+  client?: PoolClient
+) {
+  const dbQuery = client ? client.query.bind(client) : query;
   const result = excludeId
-    ? await query(
+    ? await dbQuery(
         `SELECT id FROM docker_hosts
          WHERE deleted_at IS NULL AND id <> $4
            AND (lower(name) = lower($1) OR (hostname = $2 AND username = $3 AND port = $5))`,
         [parsed.name, parsed.hostname, parsed.username, excludeId, parsed.port]
       )
-    : await query(
+    : await dbQuery(
         `SELECT id FROM docker_hosts
          WHERE deleted_at IS NULL
            AND (lower(name) = lower($1) OR (hostname = $2 AND username = $3 AND port = $4))`,
@@ -69,6 +78,11 @@ export async function getHostForWorker(id: string) {
 }
 
 export async function createHost(input: unknown) {
+  const prepared = await prepareHostCreate(input);
+  return withTransaction((client) => insertPreparedHost(client, prepared));
+}
+
+async function prepareHostCreate(input: unknown) {
   const parsed = dockerHostCreateSchema.parse(input);
   if (parsed.connectionMode === "agent" && parsed.agentUrl) {
     if (env.NODE_ENV === "production" && !env.ALLOW_PRIVATE_AGENT_URLS) {
@@ -78,11 +92,23 @@ export async function createHost(input: unknown) {
       }
     }
   }
-  if (await findDuplicateHost(parsed)) {
+  return {
+    parsed,
+    sshKeyEncrypted: parsed.sshPrivateKey ? encryptSecret(parsed.sshPrivateKey) : null,
+    sshKeyPassphraseEncrypted: parsed.sshKeyPassphrase ? encryptSecret(parsed.sshKeyPassphrase) : null,
+    sshPasswordEncrypted: parsed.sshPassword ? encryptSecret(parsed.sshPassword) : null,
+    agentTokenEncrypted: parsed.agentToken ? encryptSecret(parsed.agentToken) : null
+  };
+}
+
+async function insertPreparedHost(client: PoolClient, prepared: Awaited<ReturnType<typeof prepareHostCreate>>) {
+  const { parsed } = prepared;
+  await client.query("SELECT pg_advisory_xact_lock($1::bigint)", [HOST_CREATE_LOCK_ID]);
+  if (await findDuplicateHost(parsed, undefined, client)) {
     throw Object.assign(new Error("A host with this name or connection already exists"), { statusCode: 409 });
   }
   const id = uuid();
-  const result = await query(
+  const result = await client.query(
     `INSERT INTO docker_hosts
       (id, name, hostname, port, username, connection_mode, ssh_auth_type, ssh_key_encrypted, ssh_key_passphrase_encrypted, ssh_password_encrypted, agent_url, agent_token_encrypted, docker_socket_path, tags)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
@@ -95,16 +121,33 @@ export async function createHost(input: unknown) {
       parsed.username,
       parsed.connectionMode,
       parsed.sshAuthType,
-      parsed.sshPrivateKey ? encryptSecret(parsed.sshPrivateKey) : null,
-      parsed.sshKeyPassphrase ? encryptSecret(parsed.sshKeyPassphrase) : null,
-      parsed.sshPassword ? encryptSecret(parsed.sshPassword) : null,
+      prepared.sshKeyEncrypted,
+      prepared.sshKeyPassphraseEncrypted,
+      prepared.sshPasswordEncrypted,
       parsed.agentUrl ?? null,
-      parsed.agentToken ? encryptSecret(parsed.agentToken) : null,
+      prepared.agentTokenEncrypted,
       parsed.dockerSocketPath,
       parsed.tags
     ]
   );
   return mapHost(result.rows[0]);
+}
+
+export async function createHostWithSync(input: unknown, createdBy?: string | null) {
+  // URL validation and secret encryption happen before the transaction so the
+  // database lock is held only for the two durable writes.
+  const prepared = await prepareHostCreate(input);
+  const result = await withTransaction(async (client) => {
+    const host = await insertPreparedHost(client, prepared);
+    const job = await enqueueJobInTransaction(
+      client,
+      { type: "host.sync", hostId: host.id, payload: {} },
+      createdBy
+    );
+    return { host, job };
+  });
+  await notifyJobQueued(result.job.id);
+  return result;
 }
 
 export async function updateHost(id: string, input: unknown) {
@@ -194,12 +237,20 @@ export async function restoreHost(id: string) {
   return result.rows[0] ? mapHost(result.rows[0]) : null;
 }
 
-export async function markHostChecking(id: string) {
-  await query("UPDATE docker_hosts SET last_status = 'checking', updated_at = now() WHERE id = $1", [id]);
+export async function markHostChecking(id: string, client?: PoolClient) {
+  const execute = client ? client.query.bind(client) : query;
+  await execute("UPDATE docker_hosts SET last_status = 'checking', updated_at = now() WHERE id = $1", [id]);
 }
 
-export async function markHostOnline(id: string, dockerVersion: string, composeVersion: string, agentVersion: string | null = null) {
-  await query(
+export async function markHostOnline(
+  id: string,
+  dockerVersion: string,
+  composeVersion: string,
+  agentVersion: string | null = null,
+  client?: PoolClient
+) {
+  const execute = client ? client.query.bind(client) : query;
+  await execute(
     `UPDATE docker_hosts
      SET last_status = 'online',
          last_seen_at = now(),
@@ -213,8 +264,9 @@ export async function markHostOnline(id: string, dockerVersion: string, composeV
   );
 }
 
-export async function markHostOffline(id: string, error: unknown) {
-  await query(
+export async function markHostOffline(id: string, error: unknown, client?: PoolClient) {
+  const execute = client ? client.query.bind(client) : query;
+  await execute(
     `UPDATE docker_hosts
      SET last_status = 'offline',
          last_error = $2,

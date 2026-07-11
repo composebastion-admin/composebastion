@@ -1,4 +1,12 @@
-import type { DockerApp, RecoveryAppIdentity, RecoveryPointListItem, RecoveryReadiness } from "@composebastion/shared";
+import type {
+  DockerApp,
+  MigrationExecutionOptions,
+  MigrationRun,
+  MigrationStrategy,
+  RecoveryAppIdentity,
+  RecoveryPointListItem,
+  RecoveryReadiness
+} from "@composebastion/shared";
 
 export function dockerAppToRecoveryIdentity(app: DockerApp): RecoveryAppIdentity {
   if (app.stackId) {
@@ -54,6 +62,25 @@ export function recoveryIdentityKey(identity: RecoveryAppIdentity) {
 
 export function dockerAppRecoveryKey(app: DockerApp) {
   return recoveryIdentityKey(dockerAppToRecoveryIdentity(app));
+}
+
+export function migrationPlanMatchesSelection(run: MigrationRun | null, selection: {
+  sourceHostId: string;
+  targetHostId: string;
+  sourceAppIdentity: RecoveryAppIdentity;
+  strategy: MigrationStrategy;
+  options: MigrationExecutionOptions;
+}) {
+  const plan = run?.plan;
+  if (!run || run.mode !== "plan" || run.status !== "completed" || !plan?.intent) return false;
+  return plan.sourceHostId === selection.sourceHostId
+    && plan.targetHostId === selection.targetHostId
+    && recoveryIdentityKey(plan.sourceAppIdentity) === recoveryIdentityKey(selection.sourceAppIdentity)
+    && plan.intent.strategy === selection.strategy
+    && plan.intent.options.stopSource === selection.options.stopSource
+    && plan.intent.options.projectNameOverride === selection.options.projectNameOverride
+    && plan.intent.options.remapPorts === selection.options.remapPorts
+    && plan.intent.options.networkMode === selection.options.networkMode;
 }
 
 export function recoveryReadinessLabel(status: RecoveryReadiness["status"]) {

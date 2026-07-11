@@ -1,12 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import { containerCloneSchema, containerExecRequestSchema, volumeCloneSchema } from "@composebastion/shared";
 import { z } from "zod";
-import { createBackupRecord } from "../services/backups.js";
+import { createVolumeBackupsWithJobs, createVolumeCloneWithJob } from "../services/backups.js";
 import { execInContainer, getContainerInspect, getContainerLogs, getContainerStats, getContainerUsage, getContainerVolumeMounts, redactInspectEnv, streamContainerLogs, streamContainerUsage } from "../services/docker.js";
 import { enqueueJob } from "../services/jobs.js";
 import { requireRole } from "../services/auth.js";
 import { writeAuditEvent } from "../services/audit.js";
-import { sensitiveMutationRateLimit, streamRateLimit } from "../services/rateLimits.js";
+import { authenticatedReadRateLimit, sensitiveMutationRateLimit, streamRateLimit } from "../services/rateLimits.js";
 
 const containerParamSchema = z.object({
   hostId: z.string().uuid(),
@@ -41,24 +41,28 @@ export async function registerContainerRoutes(app: FastifyInstance) {
     });
 
     let stop: () => void = () => undefined;
+    let clientClosed = false;
     const write = (event: string, payload: unknown) => {
       if (reply.raw.destroyed) return;
       reply.raw.write(`${event === "message" ? "" : `event: ${event}\n`}data: ${JSON.stringify(payload)}\n\n`);
     };
     const heartbeat = setInterval(() => write("ping", { ok: true }), 25_000);
     request.raw.on("close", () => {
+      clientClosed = true;
       clearInterval(heartbeat);
       stop();
     });
 
     try {
-      stop = await streamContainerLogs(
+      const connectedStop = await streamContainerLogs(
         hostId,
         containerId,
         tail,
         (line) => write("message", { line }),
         (error) => write("error", { error: error.message })
       );
+      if (clientClosed) connectedStop();
+      else stop = connectedStop;
     } catch (error) {
       write("error", { error: error instanceof Error ? error.message : String(error) });
       clearInterval(heartbeat);
@@ -81,10 +85,12 @@ export async function registerContainerRoutes(app: FastifyInstance) {
     };
   });
 
-  app.get("/api/hosts/:hostId/containers/usage", { preHandler: viewer }, async (request) => {
+  const usageHandler = async (request: any) => {
     const { hostId } = request.params as { hostId: string };
     return { usage: await getContainerUsage(hostId) };
-  });
+  };
+  app.get("/api/hosts/:hostId/containers/usage", { preHandler: viewer, config: { rateLimit: authenticatedReadRateLimit } }, usageHandler);
+  app.get("/api/v1/hosts/:hostId/containers/usage", { preHandler: viewer, config: { rateLimit: authenticatedReadRateLimit } }, usageHandler);
 
   const usageStreamHandler = async (request: any, reply: any) => {
     const { hostId } = request.params as { hostId: string };
@@ -97,22 +103,26 @@ export async function registerContainerRoutes(app: FastifyInstance) {
     });
 
     let stop: () => void = () => undefined;
+    let clientClosed = false;
     const write = (event: string, payload: unknown) => {
       if (reply.raw.destroyed) return;
       reply.raw.write(`${event === "message" ? "" : `event: ${event}\n`}data: ${JSON.stringify(payload)}\n\n`);
     };
     const heartbeat = setInterval(() => write("ping", { ok: true }), 25_000);
     request.raw.on("close", () => {
+      clientClosed = true;
       clearInterval(heartbeat);
       stop();
     });
 
     try {
-      stop = await streamContainerUsage(
+      const connectedStop = await streamContainerUsage(
         hostId,
         (stats) => write("message", { stats }),
         (error) => write("error", { error: error.message })
       );
+      if (clientClosed) connectedStop();
+      else stop = connectedStop;
     } catch (error) {
       write("error", { error: error instanceof Error ? error.message : String(error) });
       clearInterval(heartbeat);
@@ -129,14 +139,20 @@ export async function registerContainerRoutes(app: FastifyInstance) {
       reply.code(400);
       return { error: "Container has no named Docker volumes to back up" };
     }
-    const jobs = [];
-    const backups = [];
-    for (const mount of mounts) {
-      const backup = await createBackupRecord(hostId, mount.name);
-      const job = await enqueueJob({ type: "volume.backup", hostId, payload: { backupId: backup.id, volumeName: mount.name } }, request.user?.id);
-      await writeAuditEvent({ userId: request.user?.id, hostId, action: "container.volume_backup", targetKind: "container", targetId: containerId, details: { volumeName: mount.name, backupId: backup.id } });
-      backups.push(backup);
-      jobs.push(job);
+    const { backups, jobs } = await createVolumeBackupsWithJobs(
+      hostId,
+      mounts.map((mount: { name: string }) => mount.name),
+      request.user?.id
+    );
+    for (let index = 0; index < mounts.length; index += 1) {
+      await writeAuditEvent({
+        userId: request.user?.id,
+        hostId,
+        action: "container.volume_backup",
+        targetKind: "container",
+        targetId: containerId,
+        details: { volumeName: mounts[index]!.name, backupId: backups[index]!.id }
+      });
     }
     return { backups, jobs };
   });
@@ -151,11 +167,7 @@ export async function registerContainerRoutes(app: FastifyInstance) {
 
   app.post("/api/migrations/volume-clone", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
     const body = volumeCloneSchema.parse(request.body);
-    const job = await enqueueJob(
-      { type: "volume.clone", hostId: body.sourceHostId, payload: { targetHostId: body.targetHostId, sourceVolumeName: body.sourceVolumeName, targetVolumeName: body.targetVolumeName, overwrite: body.overwrite } },
-      request.user?.id
-    );
-    return { job };
+    return createVolumeCloneWithJob(body, request.user?.id);
   });
 
   app.post("/api/migrations/container-clone", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {

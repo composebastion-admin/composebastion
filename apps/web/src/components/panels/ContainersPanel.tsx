@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ExternalLink,
   Eye,
@@ -42,6 +42,7 @@ import { ContainerDetailDrawer } from "../containers/ContainerConsole.js";
 import { ContainerRunForm } from "../containers/ContainerRunForm.js";
 import { ContainerUpdatePanel } from "../containers/ContainerUpdatePanel.js";
 import { UsageSparkCell } from "../containers/UsageSparkCell.js";
+import { useAuthorization } from "../AuthorizationContext.js";
 
 export function ContainersPanel({
   host,
@@ -49,6 +50,7 @@ export function ContainersPanel({
   containers,
   images,
   networks,
+  usage,
   onAction,
   refresh,
   runJob,
@@ -63,6 +65,7 @@ export function ContainersPanel({
   containers: ResourceSnapshot[];
   images: ResourceSnapshot[];
   networks: ResourceSnapshot[];
+  usage: Record<string, Record<string, unknown>[]>;
   onAction: (type: string, payload?: Record<string, unknown>, hostId?: string) => Promise<void>;
   refresh: () => Promise<void>;
   runJob: <T extends Jobish>(request: () => Promise<T>) => Promise<T>;
@@ -72,6 +75,7 @@ export function ContainersPanel({
   optimisticContainerStates?: Record<string, { state: string; timestamp: number }>;
   onSetOptimisticStates?: (updates: Record<string, string>) => void;
 }) {
+  const { canOperate } = useAuthorization();
   const { confirm } = useConfirm();
   const { pushToast } = useToast();
   const [query, setQuery] = useState("");
@@ -97,101 +101,35 @@ export function ContainersPanel({
   const [selected, setSelected] = useState<ResourceSnapshot | null>(null);
   const [updateTarget, setUpdateTarget] = useState<ResourceSnapshot | null>(null);
   const [auditTarget, setAuditTarget] = useState<ResourceSnapshot | null>(null);
-  const [usage, setUsage] = useState<Record<string, Record<string, any>[]>>({});
   const [metricHistory, setMetricHistory] = useState<ContainerMetricHistory>({});
+  const lastUsageSamples = useRef<Record<string, Record<string, unknown>>>({});
   const action = useAsyncAction();
   const networkOptions = networks.filter((network) => network.hostId === host.id);
   const showHostColumn = new Set(containers.map((container) => container.hostId)).size > 1;
-  const containerHostKey = useMemo(() => Array.from(new Set(containers.map((container) => container.hostId))).sort().join(","), [containers]);
   const visibleContainers = useMemo(
     () => filterAndSortContainers(containers, query, stateFilter, sortKey, sortDesc),
     [containers, query, stateFilter, sortKey, sortDesc]
   );
   const runningCount = visibleContainers.filter((container) => containerStateLabel(String((container.data as any).State ?? "")) === "running").length;
 
-  const loadUsage = useCallback(async () => {
-    const hostIds = containerHostKey.split(",").filter(Boolean);
-    if (hostIds.length === 0) {
-      setUsage({});
-      return;
-    }
-    try {
-      const results = await Promise.all(hostIds.map(async (hostId) => ({
-        hostId,
-        result: await api<{ usage: Record<string, any>[] }>(`/api/hosts/${hostId}/containers/usage`)
-      })));
-      const nextUsage = Object.fromEntries(results.map(({ hostId, result }) => [hostId, result.usage]));
-      setUsage(nextUsage);
-      setMetricHistory((current) => {
-        const next = { ...current };
-        for (const container of containers) {
-          const stats = findUsageRow(container, nextUsage[container.hostId] ?? []);
-          if (!stats) continue;
-          const key = containerMetricKey(container);
-          const existing = next[key] ?? { cpu: [], memory: [] };
-          next[key] = {
-            cpu: pushMetricSample(existing.cpu, parsePercent(stats.CPUPerc)),
-            memory: pushMetricSample(existing.memory, parsePercent(stats.MemPerc))
-          };
-        }
-        return next;
-      });
-    } catch {
-      setUsage({});
-    }
-  }, [containerHostKey, containers]);
-
   useEffect(() => {
-    void loadUsage();
-    const timer = window.setInterval(() => void loadUsage(), 2_000);
-    return () => window.clearInterval(timer);
-  }, [loadUsage]);
-
-  useEffect(() => {
-    if (!("EventSource" in window)) return undefined;
-    const hostIds = containerHostKey.split(",").filter(Boolean);
-    if (hostIds.length === 0) return undefined;
-    const sources = hostIds.map((hostId) => {
-      const source = new EventSource(`/api/hosts/${hostId}/containers/usage-stream`);
-      source.onmessage = (event) => {
-        let payload: { stats?: Record<string, any> };
-        try {
-          payload = JSON.parse(event.data) as { stats?: Record<string, any> };
-        } catch {
-          return;
-        }
-        const stats = payload.stats;
-        if (!stats) return;
-        setUsage((current) => {
-          const rows = current[hostId] ?? [];
-          const nextRows = [
-            ...rows.filter((row) => String(row.ID) !== String(stats.ID) && String(row.Name) !== String(stats.Name)),
-            stats
-          ];
-          return { ...current, [hostId]: nextRows };
-        });
-        setMetricHistory((current) => {
-          const container = containers.find((item) => item.hostId === hostId && findUsageRow(item, [stats]));
-          if (!container) return current;
-          const key = containerMetricKey(container);
-          const existing = current[key] ?? { cpu: [], memory: [] };
-          return {
-            ...current,
-            [key]: {
-              cpu: pushMetricSample(existing.cpu, parsePercent(stats.CPUPerc)),
-              memory: pushMetricSample(existing.memory, parsePercent(stats.MemPerc))
-            }
-          };
-        });
-      };
-      source.onerror = () => {
-        source.close();
-        void loadUsage();
-      };
-      return source;
+    setMetricHistory((current) => {
+      const next = { ...current };
+      for (const container of containers) {
+        const stats = findUsageRow(container, usage[container.hostId] ?? []);
+        if (!stats) continue;
+        const key = containerMetricKey(container);
+        if (lastUsageSamples.current[key] === stats) continue;
+        lastUsageSamples.current[key] = stats;
+        const existing = next[key] ?? { cpu: [], memory: [] };
+        next[key] = {
+          cpu: pushMetricSample(existing.cpu, parsePercent(stats.CPUPerc)),
+          memory: pushMetricSample(existing.memory, parsePercent(stats.MemPerc))
+        };
+      }
+      return next;
     });
-    return () => sources.forEach((source) => source.close());
-  }, [containerHostKey, containers, loadUsage]);
+  }, [containers, usage]);
 
   function usageFor(container: ResourceSnapshot) {
     return findUsageRow(container, usage[container.hostId] ?? []) ?? {};
@@ -365,12 +303,12 @@ export function ContainersPanel({
           <input type="checkbox" checked={sortDesc} onChange={(event) => setSortDesc(event.target.checked)} />
           Descending
         </label>
-        <button type="button" className="primary" onClick={() => setShowRunForm((value) => !value)}>
+        {canOperate && <button type="button" className="primary" onClick={() => setShowRunForm((value) => !value)}>
           <Plus size={16} />
           Run container
-        </button>
+        </button>}
       </div>
-      {showRunForm && (
+      {canOperate && showRunForm && (
         <ContainerRunForm
           host={host}
           networks={networkOptions}
@@ -387,10 +325,12 @@ export function ContainersPanel({
       <VirtualDataTable
         rows={visibleContainers}
         maxRows={300}
-        columns={showHostColumn ? ["Host", "Name", "Image", "State", "CPU", "Memory", "Disk", "Web", "Ports", "Console", "Actions"] : ["Name", "Image", "State", "CPU", "Memory", "Disk", "Web", "Ports", "Console", "Actions"]}
+        columns={showHostColumn
+          ? ["Host", "Name", "Image", "State", "CPU", "Memory", "Disk", "Web", "Ports", "Console", ...(canOperate ? ["Actions"] : [])]
+          : ["Name", "Image", "State", "CPU", "Memory", "Disk", "Web", "Ports", "Console", ...(canOperate ? ["Actions"] : [])]}
         compact={true}
         tableClassName="containerTable"
-        selectable={true}
+        selectable={canOperate}
         selectedIds={selectedIds}
         onSelectToggle={handleSelectToggle}
         onSelectAllToggle={handleSelectAllToggle}
@@ -437,8 +377,8 @@ export function ContainersPanel({
             <span key="ports" className="containerPortsCell" title={String(data.Ports ?? "")}>
               {portsSummary}
             </span>,
-            <button key="console" className="containerIconButton" title="Open logs, stats, and exec" onClick={() => setSelected(container)}><Terminal size={16} /></button>,
-            <ButtonRow key="actions" className="containerActionRow">
+            <button key="console" className="containerIconButton" title={canOperate ? "Open logs, stats, inspect, and exec" : "Open logs, stats, and inspect"} onClick={() => setSelected(container)}><Terminal size={16} /></button>,
+            ...(canOperate ? [<ButtonRow key="actions" className="containerActionRow">
               <button title="Start" disabled={isTransitioning} onClick={() => void onAction("container.start", { containerId: container.externalId }, container.hostId)}><Play size={16} /></button>
               <button title="Stop" disabled={isTransitioning} onClick={() => void onAction("container.stop", { containerId: container.externalId }, container.hostId)}><Square size={16} /></button>
               <button title="Restart" disabled={isTransitioning} onClick={() => void onAction("container.restart", { containerId: container.externalId }, container.hostId)}><RotateCcw size={16} /></button>
@@ -466,12 +406,12 @@ export function ContainersPanel({
                   </button>
                 </div>
               </details>
-            </ButtonRow>
+            </ButtonRow>] : [])
           ];
           return showHostColumn ? [rowHost.name, ...cells] : cells;
         }}
       />
-      {selectedIds.size > 0 && (
+      {canOperate && selectedIds.size > 0 && (
         <div className="bulkActionBar">
           <span>{selectedIds.size} container(s) selected</span>
           <ButtonRow>
@@ -482,7 +422,7 @@ export function ContainersPanel({
           </ButtonRow>
         </div>
       )}
-      {updateTarget && (
+      {canOperate && updateTarget && (
         <ContainerUpdatePanel
           container={updateTarget}
           images={images.filter((image) => image.hostId === updateTarget.hostId)}
@@ -504,6 +444,7 @@ export function ContainersPanel({
         <ContainerDetailDrawer
           host={hosts.find((item) => item.id === selected.hostId) ?? host}
           container={selected}
+          usageRows={usage[selected.hostId] ?? []}
           onClose={() => setSelected(null)}
           onAction={onAction}
         />

@@ -1,0 +1,25 @@
+vulnerabilities:
+  # Docker Compose v5.3.1 links only github.com/docker/docker/pkg/namesgenerator
+  # from this module. Its pinned-source build records the exact e2e-tagged
+  # dependency graph and rejects daemon packages. These three advisories affect
+  # Docker Engine daemon authorization/archive code, not the Compose client.
+  # Trivy 0.72 scope proof: a duplicate binary with the same PURL at a different
+  # target retains all three findings, while this exact target is filtered.
+  - id: CVE-2026-34040
+    paths:
+      - usr/local/lib/docker/cli-plugins/docker-compose
+    purls:
+      - pkg:golang/github.com/docker/docker@v28.5.2%2Bincompatible
+    statement: Docker Engine daemon-only advisory; the e2e-tagged Compose dependency graph links only pkg/namesgenerator from this exact module version.
+  - id: CVE-2026-41567
+    paths:
+      - usr/local/lib/docker/cli-plugins/docker-compose
+    purls:
+      - pkg:golang/github.com/docker/docker@v28.5.2%2Bincompatible
+    statement: Docker Engine daemon-only archive advisory; the e2e-tagged Compose dependency graph links only pkg/namesgenerator from this exact module version.
+  - id: CVE-2026-42306
+    paths:
+      - usr/local/lib/docker/cli-plugins/docker-compose
+    purls:
+      - pkg:golang/github.com/docker/docker@v28.5.2%2Bincompatible
+    statement: Docker Engine daemon-only docker-cp advisory; the e2e-tagged Compose dependency graph links only pkg/namesgenerator from this exact module version.

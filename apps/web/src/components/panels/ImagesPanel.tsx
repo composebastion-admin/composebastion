@@ -7,6 +7,7 @@ import { useConfirm } from "../ConfirmProvider.js";
 import { useToast } from "../ToastProvider.js";
 import { ButtonRow, DataTable, EmptyState, InlineForm, Panel, VirtualDataTable } from "../ui/primitives.js";
 import { ContainerRunForm } from "../containers/ContainerRunForm.js";
+import { useAuthorization } from "../AuthorizationContext.js";
 
 function normalizeImageId(value: string) {
   return value.trim().split("@")[0] ?? "";
@@ -98,6 +99,7 @@ export function ImagesPanel({
   listQuery?: string;
   listQueryKey?: number;
 }) {
+  const { canOperate } = useAuthorization();
   const { confirm } = useConfirm();
   const { pushToast } = useToast();
   const [image, setImage] = useState("");
@@ -289,6 +291,7 @@ export function ImagesPanel({
             >
               {showDanglingImages ? "Hide dangling" : `Show dangling (${danglingImageCount})`}
             </button>
+            {canOperate && <>
             <button type="button" className="imagesPanelToolbarButton" onClick={() => {
               setShowPullTools((value) => !value);
               setShowFavorites(false);
@@ -318,6 +321,7 @@ export function ImagesPanel({
                 }
             })()}
           ><Trash2 size={16} />Prune dangling</button>
+          </>}
         </ButtonRow>
         {danglingImageCount > 0 && !showDanglingImages && (
           <div className="imagesFilterNote">
@@ -336,7 +340,7 @@ export function ImagesPanel({
         <VirtualDataTable
           rows={visibleImages}
           maxRows={300}
-          columns={["Image", "Tags", "Used by", "Update status", "Vulnerabilities", "Size", "Actions"]}
+          columns={["Image", "Tags", "Used by", "Update status", "Vulnerabilities", "Size", ...(canOperate ? ["Actions"] : [])]}
           compact
           tableClassName="imagesTable"
           render={(imageRow) => {
@@ -367,7 +371,7 @@ export function ImagesPanel({
               </span>,
               <span key="vulnerabilities">{compactVulnerabilities(scan)}</span>,
               <span key="size" className="monoText">{String(data.Size ?? "—")}</span>,
-              <ButtonRow key="actions" className="imageActionRow">
+              ...(canOperate ? [<ButtonRow key="actions" className="imageActionRow">
                 <button
                   className="imageActionButton"
                   title={dangling ? "Dangling images cannot be scanned" : "Scan image"}
@@ -399,12 +403,12 @@ export function ImagesPanel({
                 >
                   <Trash2 size={14} />
                 </button>
-              </ButtonRow>
+              </ButtonRow>] : [])
             ];
           }}
         />
       )}
-      {showPullTools && (
+      {canOperate && showPullTools && (
         <div className="compactDrawer">
           <div className="compactDrawerHeader">
             <h4>Pull image</h4>
@@ -424,7 +428,7 @@ export function ImagesPanel({
           </InlineForm>
         </div>
       )}
-      {showRunTools && runPreset && (
+      {canOperate && showRunTools && runPreset && (
         <div className="compactDrawer">
           <div className="compactDrawerHeader">
             <h4>Run image</h4>
@@ -446,7 +450,7 @@ export function ImagesPanel({
           />
         </div>
       )}
-      {showCleanupTools && (
+      {canOperate && showCleanupTools && (
         <div className="compactDrawer">
           <div className="compactDrawerHeader">
             <h4>Clean unused images</h4>
@@ -501,7 +505,7 @@ export function ImagesPanel({
           )}
         </div>
       )}
-      {showFavorites && (
+      {canOperate && showFavorites && (
         <div className="compactDrawer">
           <div className="compactDrawerHeader">
             <h4>Saved images</h4>

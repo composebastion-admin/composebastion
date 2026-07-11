@@ -3,6 +3,7 @@ import {
   compareImageTags,
   filterImageTags,
   isNewerVersionTag,
+  isVersionImageTag,
   latestPrereleaseImageTag,
   latestStableImageTag,
   recommendedImageVersionTag,
@@ -31,6 +32,14 @@ describe("image tag options", () => {
     ]);
   });
 
+  it("sorts the stable release after release candidates for the same version", () => {
+    expect(["1.1.0-rc.2", "1.1.0", "1.1.0-rc.10"].sort(compareImageTags)).toEqual([
+      "1.1.0",
+      "1.1.0-rc.10",
+      "1.1.0-rc.2"
+    ]);
+  });
+
   it("deduplicates, filters, and limits tags", () => {
     const tags = uniqueSortedImageTags(["dev", "0.9.6", "dev"], ["<none>", "0.9.7"]);
     expect(tags).toEqual(["dev", "0.9.7", "0.9.6"]);
@@ -38,18 +47,24 @@ describe("image tag options", () => {
   });
 
   it("summarizes numbered versions separately from mutable channels", () => {
-    const tags = uniqueSortedImageTags(["latest", "main", "dev", "1.6.6-beta.2", "1.6.5", "1.2", "1.1"]);
+    const tags = uniqueSortedImageTags(["latest", "main", "dev", "1.6.6-beta.2", "1.6.5", "1.2.0", "1.1.0"]);
 
     expect(latestStableImageTag(tags)).toBe("1.6.5");
     expect(latestPrereleaseImageTag(tags)).toBe("1.6.6-beta.2");
-    expect(isNewerVersionTag("1.2", "1.1")).toBe(true);
-    expect(isNewerVersionTag("dev", "1.1")).toBe(false);
-    expect(summarizeImageVersionTags(tags, "1.1")).toMatchObject({
+    expect(isNewerVersionTag("1.2.0", "1.1.0")).toBe(true);
+    expect(isNewerVersionTag("dev", "1.1.0")).toBe(false);
+    expect(summarizeImageVersionTags(tags, "1.1.0")).toMatchObject({
       latestStable: "1.6.5",
       latestPrerelease: "1.6.6-beta.2",
       stableUpdateAvailable: true,
       prereleaseUpdateAvailable: true
     });
+  });
+
+  it("does not promote shortened or calendar-like tags as semantic releases", () => {
+    expect(isVersionImageTag("1.2")).toBe(false);
+    expect(isVersionImageTag("2026")).toBe(false);
+    expect(latestStableImageTag(["2026", "1.0.7", "1.0.7-rc.1"])).toBe("1.0.7");
   });
 
   it("recommends prerelease versions for beta channel updates", () => {

@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 import { v4 as uuid } from "uuid";
-import type { ImageUpdateCheck, ImageUpdatePreview } from "@composebastion/shared";
+import {
+  canonicalizeDockerRegistryAuthority,
+  normalizeSavedRegistryOrigin,
+  type ImageUpdateCheck,
+  type ImageUpdatePreview
+} from "@composebastion/shared";
 import { query } from "../db/pool.js";
 import { isDemoHostId } from "./demo.js";
 import { listLatestScans } from "./imageScanner.js";
@@ -25,27 +30,39 @@ function mutableTagRisk(imageReference: string) {
   return null;
 }
 
-function registryHostFromUrl(url: string) {
-  const normalized = url.trim().replace(/\/+$/, "");
-  if (normalized.includes("://")) return new URL(normalized).hostname.toLowerCase();
-  return normalized.split("/")[0]?.toLowerCase() ?? "";
+function registryTargetFromUrl(url: string, insecure: boolean) {
+  try {
+    const origin = normalizeSavedRegistryOrigin(url, {
+      defaultProtocol: insecure ? "http" : "https"
+    });
+    const parsed = new URL(origin);
+    return {
+      host: canonicalizeDockerRegistryAuthority(parsed.host),
+      origin,
+      insecure: parsed.protocol === "http:"
+    };
+  } catch {
+    return null;
+  }
 }
 
 export async function findRegistryAuthForReference(imageReference: string) {
   const parsed = parseImageReference(imageReference);
+  const referenceHost = canonicalizeDockerRegistryAuthority(parsed.registry);
   const result = await query<any>("SELECT * FROM registries ORDER BY name ASC");
   for (const row of result.rows) {
-    const host = registryHostFromUrl(String(row.url));
-    const matches =
-      host === parsed.registry.toLowerCase() ||
-      (parsed.registry === "registry-1.docker.io" && (host === "docker.io" || host === "registry-1.docker.io" || host === "index.docker.io"));
-    if (!matches) continue;
+    const target = registryTargetFromUrl(String(row.url), Boolean(row.insecure));
+    if (!target) continue;
+    if (target.host !== referenceHost) continue;
     return {
       id: row.id as string,
-      url: row.url as string,
+      // Docker CLI login expects the server authority, while HTTP policy uses
+      // the exact normalized origin below.
+      url: new URL(target.origin).host,
       username: row.username as string | null,
       password: row.password_encrypted ? decryptSecret(row.password_encrypted) : null,
-      insecure: Boolean(row.insecure)
+      insecure: target.insecure,
+      trustedOrigin: target.origin
     };
   }
   return null;
@@ -265,8 +282,13 @@ export async function checkImageUpdatesForHost(hostId: string) {
         hasStoredAuth = Boolean(auth?.username && auth.password);
         const manifest = await fetchRegistryManifestDigests(
           reference,
-          hasStoredAuth
-            ? { username: auth!.username!, password: auth!.password!, insecure: auth!.insecure }
+          auth
+            ? {
+                username: auth.username,
+                password: auth.password,
+                insecure: auth.insecure,
+                trustedOrigin: auth.trustedOrigin
+              }
             : undefined,
           currentDigest
         );

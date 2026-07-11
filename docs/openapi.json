@@ -113,12 +113,17 @@
             "additionalProperties": {
               "type": "object",
               "required": [
-                "ok"
+                "ok",
+                "required"
               ],
               "additionalProperties": true,
               "properties": {
                 "ok": {
                   "type": "boolean"
+                },
+                "required": {
+                  "type": "boolean",
+                  "description": "Whether this check contributes to the top-level readiness result"
                 },
                 "error": {
                   "type": [
@@ -128,6 +133,28 @@
                 }
               }
             }
+          }
+        }
+      },
+      "RedisHealthResponse": {
+        "type": "object",
+        "required": [
+          "ok",
+          "configured"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -854,6 +881,22 @@
           }
         }
       },
+      "ContainerUsageResponse": {
+        "type": "object",
+        "required": [
+          "usage"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "usage": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        }
+      },
       "DockerCommandResponse": {
         "type": "object",
         "required": [],
@@ -867,6 +910,25 @@
           },
           "code": {
             "type": "number"
+          }
+        }
+      },
+      "ImageTagsResponse": {
+        "type": "object",
+        "required": [
+          "image",
+          "tags"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "image": {
+            "type": "string"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },
@@ -1076,7 +1138,12 @@
             "type": "object",
             "required": [
               "queued",
-              "running"
+              "running",
+              "lastJobCompletedAt",
+              "available",
+              "activeWorkers",
+              "lastHeartbeatAt",
+              "state"
             ],
             "additionalProperties": true,
             "properties": {
@@ -1090,6 +1157,27 @@
                 "type": [
                   "string",
                   "null"
+                ]
+              },
+              "available": {
+                "type": "boolean"
+              },
+              "activeWorkers": {
+                "type": "number"
+              },
+              "lastHeartbeatAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "active",
+                  "draining",
+                  "stale",
+                  "absent"
                 ]
               }
             }
@@ -2638,6 +2726,378 @@
           }
         }
       },
+      "MigrationExecutionOptions": {
+        "type": "object",
+        "required": [],
+        "additionalProperties": false,
+        "properties": {
+          "stopSource": {
+            "type": "boolean",
+            "default": false
+          },
+          "projectNameOverride": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "remapPorts": {
+            "type": "boolean",
+            "default": true
+          },
+          "networkMode": {
+            "type": "string",
+            "enum": [
+              "clone",
+              "reuse"
+            ],
+            "default": "clone"
+          }
+        }
+      },
+      "MigrationIntent": {
+        "type": "object",
+        "required": [
+          "strategy",
+          "options"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "strategy": {
+            "type": "string",
+            "enum": [
+              "safe_move",
+              "warm_move",
+              "clone"
+            ]
+          },
+          "options": {
+            "$ref": "#/components/schemas/MigrationExecutionOptions"
+          }
+        }
+      },
+      "MigrationPlanRequest": {
+        "type": "object",
+        "required": [
+          "sourceHostId",
+          "targetHostId",
+          "sourceAppIdentity"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "sourceHostId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "targetHostId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sourceAppIdentity": {
+            "$ref": "#/components/schemas/RecoveryAppIdentity"
+          },
+          "createRecoveryPoint": {
+            "type": "boolean",
+            "default": true
+          },
+          "strategy": {
+            "type": "string",
+            "enum": [
+              "safe_move",
+              "warm_move",
+              "clone"
+            ],
+            "default": "clone"
+          },
+          "options": {
+            "$ref": "#/components/schemas/MigrationExecutionOptions"
+          }
+        }
+      },
+      "BoundMigrationExecuteRequest": {
+        "type": "object",
+        "required": [
+          "planRunId"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "planRunId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "LegacyMigrationExecuteRequest": {
+        "type": "object",
+        "required": [
+          "sourceHostId",
+          "targetHostId",
+          "sourceAppIdentity"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "sourceHostId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "targetHostId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sourceAppIdentity": {
+            "$ref": "#/components/schemas/RecoveryAppIdentity"
+          },
+          "recoveryPointId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "strategy": {
+            "type": "string",
+            "enum": [
+              "safe_move",
+              "warm_move",
+              "clone"
+            ],
+            "default": "clone"
+          },
+          "options": {
+            "$ref": "#/components/schemas/MigrationExecutionOptions"
+          }
+        }
+      },
+      "MigrationExecuteRequest": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/BoundMigrationExecuteRequest"
+          },
+          {
+            "$ref": "#/components/schemas/LegacyMigrationExecuteRequest"
+          }
+        ]
+      },
+      "MigrationPlan": {
+        "type": "object",
+        "required": [
+          "sourceHostId",
+          "targetHostId",
+          "sourceAppIdentity",
+          "intent",
+          "sourceFingerprint",
+          "targetFingerprint",
+          "steps",
+          "warnings",
+          "checks",
+          "blockingIssues"
+        ],
+        "additionalProperties": true,
+        "properties": {
+          "sourceHostId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "targetHostId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sourceAppIdentity": {
+            "$ref": "#/components/schemas/RecoveryAppIdentity"
+          },
+          "intent": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MigrationIntent"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sourceFingerprint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "targetFingerprint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "checks": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "blockingIssues": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "MigrationRun": {
+        "type": "object",
+        "required": [
+          "id",
+          "planRunId",
+          "sourceHostId",
+          "targetHostId",
+          "sourceAppIdentity",
+          "mode",
+          "status",
+          "recoveryPointId",
+          "plan",
+          "error",
+          "createdAt",
+          "startedAt",
+          "completedAt"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "planRunId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sourceHostId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "targetHostId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sourceAppIdentity": {
+            "$ref": "#/components/schemas/RecoveryAppIdentity"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "plan",
+              "execute"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "completed",
+              "partial",
+              "failed"
+            ]
+          },
+          "recoveryPointId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "plan": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MigrationPlan"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "startedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "completedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "MigrationRunResponse": {
+        "type": "object",
+        "required": [
+          "run"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "run": {
+            "$ref": "#/components/schemas/MigrationRun"
+          }
+        }
+      },
+      "MigrationRunsResponse": {
+        "type": "object",
+        "required": [
+          "runs"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "runs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MigrationRun"
+            }
+          }
+        }
+      },
+      "MigrationExecuteResponse": {
+        "type": "object",
+        "required": [
+          "run",
+          "job"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "run": {
+            "$ref": "#/components/schemas/MigrationRun"
+          },
+          "job": {
+            "$ref": "#/components/schemas/OperationJob"
+          }
+        }
+      },
       "AppsResponse": {
         "type": "object",
         "required": [
@@ -3840,6 +4300,87 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Database or worker readiness check failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/health/redis": {
+      "get": {
+        "summary": "Redis diagnostic health check",
+        "tags": [
+          "Health"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedisHealthResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Redis is not configured or unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedisHealthResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -3955,6 +4496,16 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CONFLICT: initial setup is already complete",
             "content": {
               "application/json": {
                 "schema": {
@@ -5004,6 +5555,71 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/DockerCommandResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hosts/{hostId}/containers/usage": {
+      "get": {
+        "summary": "Read a container usage snapshot",
+        "tags": [
+          "Containers"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContainerUsageResponse"
                 }
               }
             }
@@ -6773,6 +7389,296 @@
         }
       }
     },
+    "/api/v1/recovery/migrations/plan": {
+      "post": {
+        "summary": "Create and fingerprint a migration plan",
+        "tags": [
+          "Recovery"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MigrationPlanRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MigrationRunResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/recovery/migrations/execute": {
+      "post": {
+        "summary": "Execute a single-use reviewed migration plan",
+        "tags": [
+          "Recovery"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MigrationExecuteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MigrationExecuteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "MIGRATION_PLAN_STALE: the reviewed plan is stale or already used",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/recovery/migrations": {
+      "get": {
+        "summary": "List migration plan and execution runs",
+        "tags": [
+          "Recovery"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MigrationRunsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/recovery/migrations/{id}": {
+      "get": {
+        "summary": "Read one migration plan or execution run",
+        "tags": [
+          "Recovery"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MigrationRunResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/apps": {
       "get": {
         "summary": "List managed apps",
@@ -7632,6 +8538,71 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ImageScannerStatusResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/image-tags": {
+      "get": {
+        "summary": "List tags from a validated image registry",
+        "tags": [
+          "Images"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImageTagsResponse"
                 }
               }
             }

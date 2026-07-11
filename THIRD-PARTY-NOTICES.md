@@ -3,15 +3,37 @@
 ComposeBastion may include or depend on third-party software components.
 Third-party components are governed by their own license terms and are not relicensed by LICENSE.md.
 
-This inventory was generated from package-lock.json and installed package metadata on 2026-06-21. It is a best-effort dependency notice for the npm workspace.
+This inventory was generated from package-lock.json for ComposeBastion 1.0.7-rc.1. It is a best-effort dependency notice for the npm workspace.
+
+## Bundled Runtime Tools
+
+These non-npm tools are distributed in the app or agent image. Their applicable
+upstream license and notice files are copied into `/licenses/third-party/` in
+the corresponding image.
+
+Each image also records deterministic linked Go module inventories and SHA-256
+evidence for the shipped upstream license/notice artifacts under
+`/licenses/third-party/go-buildinfo/`. These inventories make the exact static
+dependency set reviewable, but they are not a complete transitive attribution
+bundle. **Legal review status: pending.** A manual review of the linked module
+inventories and any additional attribution obligations remains a release gate.
+
+| Component | Reviewed version/source | License | Image |
+|-----------|-------------------------|---------|-------|
+| Trivy | 0.72.0 (8a32853686209a428179bb3a1688802b25691564) | Apache-2.0 | app |
+| ORAS Go v2 | 2.6.2 | Apache-2.0 | app (linked into Trivy) |
+| rclone | 1.74.4 (5bc93a2a7ab0ebd0a11352bc4968eabeffb18027) | MIT | app |
+| Docker CLI | 29.6.1 (8900f1d330cb39e93e16d780a26bff1d7e07ba03) | Apache-2.0 | agent |
+| Docker Compose | 5.3.1 (f32009d4a2c687dd405398cc7975d12dccaf8dff) | Apache-2.0 | agent |
+| Go standard library | 1.26.5 | BSD-3-Clause | app and agent tool binaries |
 
 ## License Summary
 
 | License | Package entries |
 |---------|-----------------|
-| MIT | 297 |
-| Apache-2.0 | 45 |
-| ISC | 20 |
+| MIT | 291 |
+| Apache-2.0 | 33 |
+| ISC | 21 |
 | BSD-3-Clause | 6 |
 | BlueOak-1.0.0 | 5 |
 | 0BSD | 1 |
@@ -27,33 +49,24 @@ No missing, GPL, AGPL, SSPL, UNKNOWN, or UNLICENSED package entries were found i
 
 | Package | Version | License | Lockfile path |
 |---------|---------|---------|---------------|
-| @aws-crypto/crc32 | 5.2.0 | Apache-2.0 | node_modules/@aws-crypto/crc32 |
-| @aws-crypto/crc32c | 5.2.0 | Apache-2.0 | node_modules/@aws-crypto/crc32c |
-| @aws-crypto/sha1-browser | 5.2.0 | Apache-2.0 | node_modules/@aws-crypto/sha1-browser |
-| @aws-crypto/sha256-browser | 5.2.0 | Apache-2.0 | node_modules/@aws-crypto/sha256-browser |
-| @aws-crypto/sha256-js | 5.2.0 | Apache-2.0 | node_modules/@aws-crypto/sha256-js |
-| @aws-crypto/supports-web-crypto | 5.2.0 | Apache-2.0 | node_modules/@aws-crypto/supports-web-crypto |
-| @aws-crypto/util | 5.2.0 | Apache-2.0 | node_modules/@aws-crypto/util |
-| @aws-sdk/checksums | 3.1000.5 | Apache-2.0 | node_modules/@aws-sdk/checksums |
-| @aws-sdk/client-s3 | 3.1068.0 | Apache-2.0 | node_modules/@aws-sdk/client-s3 |
-| @aws-sdk/core | 3.974.20 | Apache-2.0 | node_modules/@aws-sdk/core |
-| @aws-sdk/credential-provider-env | 3.972.46 | Apache-2.0 | node_modules/@aws-sdk/credential-provider-env |
-| @aws-sdk/credential-provider-http | 3.972.48 | Apache-2.0 | node_modules/@aws-sdk/credential-provider-http |
-| @aws-sdk/credential-provider-ini | 3.972.53 | Apache-2.0 | node_modules/@aws-sdk/credential-provider-ini |
-| @aws-sdk/credential-provider-login | 3.972.52 | Apache-2.0 | node_modules/@aws-sdk/credential-provider-login |
-| @aws-sdk/credential-provider-node | 3.972.55 | Apache-2.0 | node_modules/@aws-sdk/credential-provider-node |
-| @aws-sdk/credential-provider-process | 3.972.46 | Apache-2.0 | node_modules/@aws-sdk/credential-provider-process |
-| @aws-sdk/credential-provider-sso | 3.972.52 | Apache-2.0 | node_modules/@aws-sdk/credential-provider-sso |
-| @aws-sdk/credential-provider-web-identity | 3.972.52 | Apache-2.0 | node_modules/@aws-sdk/credential-provider-web-identity |
-| @aws-sdk/middleware-flexible-checksums | 3.974.30 | Apache-2.0 | node_modules/@aws-sdk/middleware-flexible-checksums |
-| @aws-sdk/middleware-sdk-s3 | 3.972.51 | Apache-2.0 | node_modules/@aws-sdk/middleware-sdk-s3 |
-| @aws-sdk/nested-clients | 3.997.20 | Apache-2.0 | node_modules/@aws-sdk/nested-clients |
-| @aws-sdk/signature-v4-multi-region | 3.996.34 | Apache-2.0 | node_modules/@aws-sdk/signature-v4-multi-region |
-| @aws-sdk/token-providers | 3.1066.0 | Apache-2.0 | node_modules/@aws-sdk/token-providers |
-| @aws-sdk/types | 3.973.12 | Apache-2.0 | node_modules/@aws-sdk/types |
-| @aws-sdk/util-locate-window | 3.965.7 | Apache-2.0 | node_modules/@aws-sdk/util-locate-window |
-| @aws-sdk/xml-builder | 3.972.29 | Apache-2.0 | node_modules/@aws-sdk/xml-builder |
-| @aws/lambda-invoke-store | 0.2.4 | Apache-2.0 | node_modules/@aws/lambda-invoke-store |
+| @aws-sdk/checksums | 3.1000.16 | Apache-2.0 | node_modules/@aws-sdk/checksums |
+| @aws-sdk/client-s3 | 3.1085.0 | Apache-2.0 | node_modules/@aws-sdk/client-s3 |
+| @aws-sdk/core | 3.975.1 | Apache-2.0 | node_modules/@aws-sdk/core |
+| @aws-sdk/credential-provider-env | 3.972.57 | Apache-2.0 | node_modules/@aws-sdk/credential-provider-env |
+| @aws-sdk/credential-provider-http | 3.972.59 | Apache-2.0 | node_modules/@aws-sdk/credential-provider-http |
+| @aws-sdk/credential-provider-ini | 3.973.1 | Apache-2.0 | node_modules/@aws-sdk/credential-provider-ini |
+| @aws-sdk/credential-provider-login | 3.972.63 | Apache-2.0 | node_modules/@aws-sdk/credential-provider-login |
+| @aws-sdk/credential-provider-node | 3.972.66 | Apache-2.0 | node_modules/@aws-sdk/credential-provider-node |
+| @aws-sdk/credential-provider-process | 3.972.57 | Apache-2.0 | node_modules/@aws-sdk/credential-provider-process |
+| @aws-sdk/credential-provider-sso | 3.973.1 | Apache-2.0 | node_modules/@aws-sdk/credential-provider-sso |
+| @aws-sdk/credential-provider-web-identity | 3.972.63 | Apache-2.0 | node_modules/@aws-sdk/credential-provider-web-identity |
+| @aws-sdk/middleware-sdk-s3 | 3.972.62 | Apache-2.0 | node_modules/@aws-sdk/middleware-sdk-s3 |
+| @aws-sdk/nested-clients | 3.997.31 | Apache-2.0 | node_modules/@aws-sdk/nested-clients |
+| @aws-sdk/signature-v4-multi-region | 3.996.39 | Apache-2.0 | node_modules/@aws-sdk/signature-v4-multi-region |
+| @aws-sdk/token-providers | 3.1083.0 | Apache-2.0 | node_modules/@aws-sdk/token-providers |
+| @aws-sdk/types | 3.974.0 | Apache-2.0 | node_modules/@aws-sdk/types |
+| @aws-sdk/xml-builder | 3.972.34 | Apache-2.0 | node_modules/@aws-sdk/xml-builder |
+| @aws/lambda-invoke-store | 0.3.0 | Apache-2.0 | node_modules/@aws/lambda-invoke-store |
 | @babel/code-frame | 7.29.7 | MIT | node_modules/@babel/code-frame |
 | @babel/compat-data | 7.29.7 | MIT | node_modules/@babel/compat-data |
 | @babel/core | 7.29.7 | MIT | node_modules/@babel/core |
@@ -146,7 +159,6 @@ No missing, GPL, AGPL, SSPL, UNKNOWN, or UNLICENSED package entries were found i
 | @jridgewell/sourcemap-codec | 1.5.5 | MIT | node_modules/@jridgewell/sourcemap-codec |
 | @jridgewell/trace-mapping | 0.3.31 | MIT | node_modules/@jridgewell/trace-mapping |
 | @lukeed/ms | 2.0.2 | MIT | node_modules/@lukeed/ms |
-| @nodable/entities | 2.2.0 | MIT | node_modules/@nodable/entities |
 | @pinojs/redact | 0.4.0 | MIT | node_modules/@pinojs/redact |
 | @playwright/test | 1.61.0 | Apache-2.0 | node_modules/@playwright/test |
 | @rolldown/pluginutils | 1.0.0-beta.27 | MIT | node_modules/@rolldown/pluginutils |
@@ -175,15 +187,12 @@ No missing, GPL, AGPL, SSPL, UNKNOWN, or UNLICENSED package entries were found i
 | @rollup/rollup-win32-ia32-msvc | 4.60.4 | MIT | node_modules/@rollup/rollup-win32-ia32-msvc |
 | @rollup/rollup-win32-x64-gnu | 4.60.4 | MIT | node_modules/@rollup/rollup-win32-x64-gnu |
 | @rollup/rollup-win32-x64-msvc | 4.60.4 | MIT | node_modules/@rollup/rollup-win32-x64-msvc |
-| @smithy/core | 3.24.7 | Apache-2.0 | node_modules/@smithy/core |
-| @smithy/credential-provider-imds | 4.3.9 | Apache-2.0 | node_modules/@smithy/credential-provider-imds |
-| @smithy/fetch-http-handler | 5.4.7 | Apache-2.0 | node_modules/@smithy/fetch-http-handler |
-| @smithy/is-array-buffer | 2.2.0 | Apache-2.0 | node_modules/@smithy/is-array-buffer |
-| @smithy/node-http-handler | 4.7.8 | Apache-2.0 | node_modules/@smithy/node-http-handler |
-| @smithy/signature-v4 | 5.4.7 | Apache-2.0 | node_modules/@smithy/signature-v4 |
-| @smithy/types | 4.14.4 | Apache-2.0 | node_modules/@smithy/types |
-| @smithy/util-buffer-from | 2.2.0 | Apache-2.0 | node_modules/@smithy/util-buffer-from |
-| @smithy/util-utf8 | 2.3.0 | Apache-2.0 | node_modules/@smithy/util-utf8 |
+| @smithy/core | 3.29.3 | Apache-2.0 | node_modules/@smithy/core |
+| @smithy/credential-provider-imds | 4.4.8 | Apache-2.0 | node_modules/@smithy/credential-provider-imds |
+| @smithy/fetch-http-handler | 5.6.5 | Apache-2.0 | node_modules/@smithy/fetch-http-handler |
+| @smithy/node-http-handler | 4.9.5 | Apache-2.0 | node_modules/@smithy/node-http-handler |
+| @smithy/signature-v4 | 5.6.4 | Apache-2.0 | node_modules/@smithy/signature-v4 |
+| @smithy/types | 4.16.1 | Apache-2.0 | node_modules/@smithy/types |
 | @standard-schema/spec | 1.1.0 | MIT | node_modules/@standard-schema/spec |
 | @types/babel__core | 7.20.5 | MIT | node_modules/@types/babel__core |
 | @types/babel__generator | 7.27.0 | MIT | node_modules/@types/babel__generator |
@@ -199,6 +208,7 @@ No missing, GPL, AGPL, SSPL, UNKNOWN, or UNLICENSED package entries were found i
 | @types/pg | 8.20.0 | MIT | node_modules/@types/pg |
 | @types/react | 19.2.17 | MIT | node_modules/@types/react |
 | @types/react-dom | 19.2.3 | MIT | node_modules/@types/react-dom |
+| @types/semver | 7.7.1 | MIT | node_modules/@types/semver |
 | @types/ssh2 | 1.15.5 | MIT | node_modules/@types/ssh2 |
 | @vitejs/plugin-react | 4.7.0 | MIT | node_modules/@vitejs/plugin-react |
 | @vitest/expect | 4.1.8 | MIT | node_modules/@vitest/expect |
@@ -215,7 +225,6 @@ No missing, GPL, AGPL, SSPL, UNKNOWN, or UNLICENSED package entries were found i
 | ajv-formats | 3.0.1 | MIT | node_modules/ajv-formats |
 | ansi-regex | 5.0.1 | MIT | node_modules/ansi-regex |
 | ansi-styles | 4.3.0 | MIT | node_modules/ansi-styles |
-| anynum | 1.0.0 | MIT | node_modules/anynum |
 | asn1 | 0.2.6 | MIT | node_modules/asn1 |
 | assertion-error | 2.0.1 | MIT | node_modules/assertion-error |
 | atomic-sleep | 1.0.0 | MIT | node_modules/atomic-sleep |
@@ -261,8 +270,6 @@ No missing, GPL, AGPL, SSPL, UNKNOWN, or UNLICENSED package entries were found i
 | fast-json-stringify | 6.4.0 | MIT | node_modules/fast-json-stringify |
 | fast-querystring | 1.1.2 | MIT | node_modules/fast-querystring |
 | fast-uri | 3.1.2 | BSD-3-Clause | node_modules/fast-uri |
-| fast-xml-builder | 1.2.0 | MIT | node_modules/fast-xml-builder |
-| fast-xml-parser | 5.7.3 | MIT | node_modules/fast-xml-parser |
 | fastify | 5.8.5 | MIT | node_modules/fastify |
 | fastify-plugin | 5.1.0 | MIT | node_modules/fastify-plugin |
 | fastq | 1.20.1 | ISC | node_modules/fastq |
@@ -303,7 +310,6 @@ No missing, GPL, AGPL, SSPL, UNKNOWN, or UNLICENSED package entries were found i
 | obug | 2.1.1 | MIT | node_modules/obug |
 | on-exit-leak-free | 2.1.2 | MIT | node_modules/on-exit-leak-free |
 | once | 1.4.0 | ISC | node_modules/once |
-| path-expression-matcher | 1.5.0 | MIT | node_modules/path-expression-matcher |
 | path-scurry | 2.0.2 | BlueOak-1.0.0 | node_modules/path-scurry |
 | pathe | 2.0.3 | MIT | node_modules/pathe |
 | pg | 8.21.0 | MIT | node_modules/pg |
@@ -354,6 +360,7 @@ No missing, GPL, AGPL, SSPL, UNKNOWN, or UNLICENSED package entries were found i
 | secure-json-parse | 4.1.0 | BSD-3-Clause | node_modules/secure-json-parse |
 | semver | 6.3.1 | ISC | node_modules/semver |
 | semver | 7.8.0 | ISC | node_modules/fastify/node_modules/semver |
+| semver | 7.8.5 | ISC | packages/shared/node_modules/semver |
 | set-cookie-parser | 2.7.2 | MIT | node_modules/set-cookie-parser |
 | setprototypeof | 1.2.0 | ISC | node_modules/setprototypeof |
 | shell-quote | 1.8.4 | MIT | node_modules/shell-quote |
@@ -370,7 +377,6 @@ No missing, GPL, AGPL, SSPL, UNKNOWN, or UNLICENSED package entries were found i
 | string_decoder | 1.3.0 | MIT | node_modules/string_decoder |
 | string-width | 4.2.3 | MIT | node_modules/string-width |
 | strip-ansi | 6.0.1 | MIT | node_modules/strip-ansi |
-| strnum | 2.4.0 | MIT | node_modules/strnum |
 | supports-color | 7.2.0 | MIT | node_modules/chalk/node_modules/supports-color |
 | supports-color | 8.1.1 | MIT | node_modules/supports-color |
 | thread-stream | 4.2.0 | MIT | node_modules/thread-stream |
@@ -396,7 +402,6 @@ No missing, GPL, AGPL, SSPL, UNKNOWN, or UNLICENSED package entries were found i
 | wrap-ansi | 7.0.0 | MIT | node_modules/wrap-ansi |
 | wrappy | 1.0.2 | ISC | node_modules/wrappy |
 | ws | 8.21.0 | MIT | node_modules/ws |
-| xml-naming | 0.1.0 | MIT | node_modules/xml-naming |
 | xtend | 4.0.2 | MIT | node_modules/xtend |
 | y18n | 5.0.8 | ISC | node_modules/y18n |
 | yallist | 3.1.1 | ISC | node_modules/yallist |

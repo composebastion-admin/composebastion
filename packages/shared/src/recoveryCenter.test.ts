@@ -114,6 +114,23 @@ describe("recovery center schemas", () => {
     });
     expect(execute.options.stopSource).toBe(false);
     expect(execute.strategy).toBe("clone");
+
+    const boundExecute = migrationExecuteRequestSchema.parse({
+      planRunId: "00000000-0000-4000-8000-000000000011"
+    });
+    expect(boundExecute).toEqual({
+      planRunId: "00000000-0000-4000-8000-000000000011"
+    });
+    expect(migrationExecuteRequestSchema.safeParse({
+      planRunId: "00000000-0000-4000-8000-000000000011",
+      recoveryPointId: pointId
+    }).success).toBe(false);
+    expect(migrationExecuteRequestSchema.safeParse({
+      planRunId: "not-a-valid-plan-id",
+      sourceHostId: hostId,
+      targetHostId: hostId,
+      sourceAppIdentity: { kind: "stack", stackId }
+    }).success).toBe(false);
   });
 
   it("accepts mapped API shapes for backup targets and recovery point detail", () => {
@@ -226,6 +243,7 @@ describe("recovery center schemas", () => {
       startedAt: new Date(0).toISOString(),
       completedAt: new Date(0).toISOString()
     });
+    expect(run.planRunId).toBeNull();
     expect(run.plan?.steps).toHaveLength(1);
   });
 

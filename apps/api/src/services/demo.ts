@@ -1,6 +1,6 @@
 import path from "node:path";
 import { v4 as uuid } from "uuid";
-import type { DockerActionRequest, DockerHost, ResourceKind } from "@composebastion/shared";
+import { registryCreateSchema, type DockerActionRequest, type DockerHost, type ResourceKind } from "@composebastion/shared";
 import { query, withTransaction } from "../db/pool.js";
 import { encryptSecret } from "./crypto.js";
 import { mapHost } from "./mappers.js";
@@ -1746,11 +1746,13 @@ volumes:
       );
     }
 
-    for (const registry of [
+    for (const registryInput of [
       { name: "Demo GHCR", url: "ghcr.io", username: "composebastion-admin", password: "demo-ghcr-token", insecure: false },
       { name: "Demo Docker Hub Mirror", url: "registry-1.docker.io", username: "composebastion-demo", password: "demo-docker-token", insecure: false },
       { name: "Demo Insecure Lab Registry", url: "registry.demo.local:5000", username: "demo", password: "demo", insecure: true }
     ]) {
+      const registry = registryCreateSchema.parse(registryInput);
+      if (!registry.password) throw new Error(`Demo registry ${registry.name} is missing its fixture password`);
       await client.query(
         `INSERT INTO registries (id, name, url, username, password_encrypted, insecure)
          VALUES ($1, $2, $3, $4, $5, $6)`,

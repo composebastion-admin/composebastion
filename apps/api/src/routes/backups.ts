@@ -9,8 +9,8 @@ import {
   hostPathBackupRestoreSchema
 } from "@composebastion/shared";
 import {
-  createBackupRecord,
-  createHostPathBackupRecord,
+  createBackupWithJob,
+  createHostPathBackupWithJob,
   deleteBackup,
   getBackup,
   getBackupDownloadStream,
@@ -43,14 +43,10 @@ export async function registerBackupRoutes(app: FastifyInstance) {
 
   app.post("/api/backups", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
     const body = backupCreateSchema.parse(request.body);
-    const backup = await createBackupRecord(body.hostId, body.volumeName, {
+    const { backup, job } = await createBackupWithJob(body.hostId, body.volumeName, {
       backupTargetId: body.backupTargetId,
       encryption: body.encryption
-    });
-    const job = await enqueueJob(
-      { type: "volume.backup", hostId: body.hostId, payload: { backupId: backup.id, volumeName: body.volumeName } },
-      request.user?.id
-    );
+    }, request.user?.id);
     await writeAuditEvent({
       userId: request.user?.id,
       hostId: body.hostId,
@@ -65,14 +61,10 @@ export async function registerBackupRoutes(app: FastifyInstance) {
 
   app.post("/api/backups/host-path", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
     const body = hostPathBackupCreateSchema.parse(request.body);
-    const backup = await createHostPathBackupRecord(body.hostId, body.sourcePath, {
+    const { backup, job } = await createHostPathBackupWithJob(body.hostId, body.sourcePath, {
       backupTargetId: body.backupTargetId,
       encryption: body.encryption
-    });
-    const job = await enqueueJob(
-      { type: "hostPath.backup", hostId: body.hostId, payload: { backupId: backup.id, sourcePath: backup.sourcePath ?? body.sourcePath } },
-      request.user?.id
-    );
+    }, request.user?.id);
     await writeAuditEvent({
       userId: request.user?.id,
       hostId: body.hostId,

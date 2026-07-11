@@ -3,7 +3,7 @@ import { rm } from "node:fs/promises";
 import { v4 as uuid } from "uuid";
 import type { RecoveryPointDetail } from "@composebastion/shared";
 import type { RecoveryProfile } from "@composebastion/shared";
-import { query } from "../db/pool.js";
+import { query, withTransaction } from "../db/pool.js";
 import { loadWorkerBackupTarget } from "./recoveryBackupTargets.js";
 import { shQuote, withDockerEnv } from "./commands.js";
 import { isDemoHost } from "./demo.js";
@@ -42,10 +42,16 @@ import { headRemoteArtifact, uploadRemoteArtifact } from "./recoveryRemoteStorag
 import { ensureRecoveryArtifactLocalPath, readRecoveryArtifact } from "./recoveryArtifactStore.js";
 import { getRecoveryProfile } from "./recoveryProfiles.js";
 import { runSshCommand, streamSshCommandToFile } from "./ssh.js";
+import type { JobExecutionFence } from "./jobs.js";
 
 type InspectRow = { id: string; inspect: Record<string, unknown> };
 
 const BUILTIN_NETWORKS = new Set(["bridge", "host", "none"]);
+
+async function executionQuery(fence: JobExecutionFence | undefined, text: string, values: unknown[]) {
+  if (!fence) return query(text, values);
+  return fence.withActiveLease((client) => client.query(text, values));
+}
 
 async function findResource(hostId: string, kind: string, externalId: string) {
   const result = await query<any>(
@@ -94,9 +100,11 @@ async function getDockerVersions(hostId: string) {
 async function updateArtifactStatus(
   artifactId: string,
   status: string,
-  fields: { sizeBytes?: number | null; checksum?: string | null; error?: string | null } = {}
+  fields: { sizeBytes?: number | null; checksum?: string | null; error?: string | null } = {},
+  executionFence?: JobExecutionFence
 ) {
-  await query(
+  await executionQuery(
+    executionFence,
     `UPDATE recovery_artifacts
      SET status = $2,
          size_bytes = COALESCE($3, size_bytes),
@@ -112,21 +120,26 @@ async function insertArtifact(
   recoveryPointId: string,
   kind: string,
   storageKey: string,
-  metadata: Record<string, unknown>
+  metadata: Record<string, unknown>,
+  executionFence?: JobExecutionFence
 ) {
   const id = uuid();
-  await query(
-    `INSERT INTO recovery_artifacts
-      (id, recovery_point_id, kind, backup_target_id, storage_key, status, metadata)
-     VALUES ($1, $2, $3, NULL, $4, 'queued', $5)`,
-    [id, recoveryPointId, kind, storageKey, metadata]
-  );
-  await query(
-    `UPDATE recovery_points
-     SET artifact_count = artifact_count + 1
-     WHERE id = $1`,
-    [recoveryPointId]
-  );
+  const insert = async (client: { query: typeof query }) => {
+    await client.query(
+      `INSERT INTO recovery_artifacts
+        (id, recovery_point_id, kind, backup_target_id, storage_key, status, metadata)
+       VALUES ($1, $2, $3, NULL, $4, 'queued', $5)`,
+      [id, recoveryPointId, kind, storageKey, metadata]
+    );
+    await client.query(
+      `UPDATE recovery_points
+       SET artifact_count = artifact_count + 1
+       WHERE id = $1`,
+      [recoveryPointId]
+    );
+  };
+  if (executionFence) await executionFence.withActiveLease(insert);
+  else await withTransaction(insert);
   return id;
 }
 
@@ -143,7 +156,8 @@ async function loadRecoveryPoint(recoveryPointId: string): Promise<RecoveryPoint
   };
 }
 
-async function finalizeRecoveryPoint(recoveryPointId: string, remoteUploadFailures = 0) {
+async function finalizeRecoveryPoint(recoveryPointId: string, remoteUploadFailures = 0, executionFence?: JobExecutionFence) {
+  await executionFence?.assertActive();
   const artifacts = await query<any>(
     "SELECT status FROM recovery_artifacts WHERE recovery_point_id = $1",
     [recoveryPointId]
@@ -158,7 +172,8 @@ async function finalizeRecoveryPoint(recoveryPointId: string, remoteUploadFailur
 
   const resolved = resolveRecoveryPointStatus({ localCompleted, localFailed, remoteUploadFailures });
 
-  await query(
+  await executionQuery(
+    executionFence,
     `UPDATE recovery_points
      SET status = $2,
          completed_artifact_count = $3,
@@ -170,7 +185,7 @@ async function finalizeRecoveryPoint(recoveryPointId: string, remoteUploadFailur
   );
 }
 
-async function uploadRecoveryArtifactsToRemote(recoveryPointId: string, backupTargetId: string) {
+async function uploadRecoveryArtifactsToRemote(recoveryPointId: string, backupTargetId: string, executionFence?: JobExecutionFence) {
   const target = await loadWorkerBackupTarget(backupTargetId);
   if ((target.kind !== "s3" && target.kind !== "rclone") || !target.enabled) return 0;
 
@@ -183,6 +198,7 @@ async function uploadRecoveryArtifactsToRemote(recoveryPointId: string, backupTa
     if (artifact.status !== "completed") continue;
     const localPath = safeRecoveryPointFile(recoveryPointId, artifact.storageKey);
     try {
+      await executionFence?.assertActive();
       const uploaded = await uploadRemoteArtifact({
         target,
         namespaceId: recoveryPointId,
@@ -191,7 +207,8 @@ async function uploadRecoveryArtifactsToRemote(recoveryPointId: string, backupTa
         checksum: artifact.checksum
       });
       if (!uploaded) continue;
-      await query(
+      await executionQuery(
+        executionFence,
         `UPDATE recovery_artifacts
          SET backup_target_id = $2,
              metadata = metadata || $3::jsonb
@@ -213,7 +230,8 @@ async function uploadRecoveryArtifactsToRemote(recoveryPointId: string, backupTa
       }
     } catch (error) {
       failures += 1;
-      await query(
+      await executionQuery(
+        executionFence,
         `UPDATE recovery_artifacts
          SET metadata = metadata || $2::jsonb
          WHERE id = $1`,
@@ -235,8 +253,10 @@ async function captureNamedVolume(
   recoveryPointId: string,
   artifactId: string,
   storageKey: string,
-  volumeName: string
+  volumeName: string,
+  executionFence?: JobExecutionFence
 ) {
+  await executionFence?.assertActive();
   const host = await getHostForWorker(hostId);
   if (isDemoHost(host.public)) {
     const written = await writeRecoveryPointFile(
@@ -244,7 +264,7 @@ async function captureNamedVolume(
       storageKey,
       `ComposeBastion demo recovery volume for ${volumeName}\n`
     );
-    await updateArtifactStatus(artifactId, "completed", written);
+    await updateArtifactStatus(artifactId, "completed", written, executionFence);
     return written;
   }
   if (host.connectionMode !== "ssh") {
@@ -257,7 +277,7 @@ async function captureNamedVolume(
   );
   const result = await streamSshCommandToFile(host.ssh, command, targetPath);
   const checksum = await hashFile(targetPath);
-  await updateArtifactStatus(artifactId, "completed", { sizeBytes: result.sizeBytes, checksum });
+  await updateArtifactStatus(artifactId, "completed", { sizeBytes: result.sizeBytes, checksum }, executionFence);
   return { sizeBytes: result.sizeBytes, checksum };
 }
 
@@ -267,8 +287,10 @@ async function captureBindMount(
   artifactId: string,
   storageKey: string,
   sourcePath: string,
-  excludePatterns: string[] = []
+  excludePatterns: string[] = [],
+  executionFence?: JobExecutionFence
 ) {
+  await executionFence?.assertActive();
   const host = await getHostForWorker(hostId);
   if (isDemoHost(host.public)) {
     const written = await writeRecoveryPointFile(
@@ -276,7 +298,7 @@ async function captureBindMount(
       storageKey,
       `ComposeBastion demo bind mount backup for ${sourcePath}\n`
     );
-    await updateArtifactStatus(artifactId, "completed", written);
+    await updateArtifactStatus(artifactId, "completed", written, executionFence);
     return written;
   }
   if (host.connectionMode !== "ssh") {
@@ -287,7 +309,7 @@ async function captureBindMount(
   const command = buildBindMountCaptureCommand(normalized, excludePatterns);
   const result = await streamSshCommandToFile(host.ssh, command, targetPath);
   const checksum = await hashFile(targetPath);
-  await updateArtifactStatus(artifactId, "completed", { sizeBytes: result.sizeBytes, checksum });
+  await updateArtifactStatus(artifactId, "completed", { sizeBytes: result.sizeBytes, checksum }, executionFence);
   return { sizeBytes: result.sizeBytes, checksum };
 }
 
@@ -295,7 +317,8 @@ async function ensurePlannedArtifacts(
   point: RecoveryPointDetail,
   inspects: InspectRow[],
   context: Awaited<ReturnType<typeof resolveAppContext>>,
-  profile: RecoveryProfile | null
+  profile: RecoveryProfile | null,
+  executionFence?: JobExecutionFence
 ) {
   const existingVolumes = new Set(
     point.artifacts.filter((artifact) => artifact.kind === "volume").map((artifact) => String(artifact.metadata.volumeName ?? ""))
@@ -315,7 +338,7 @@ async function ensurePlannedArtifacts(
       role: composeFolder.role,
       restorePath: composeFolder.restorePath,
       excludePatterns
-    });
+    }, executionFence);
     existingBinds.add(composeFolder.source);
   }
 
@@ -324,7 +347,7 @@ async function ensurePlannedArtifacts(
     for (const volume of manifest.volumes) {
       if (existingVolumes.has(volume.name)) continue;
       const storageKey = artifactRelativePath("volume", sanitizeArtifactName(volume.name));
-      await insertArtifact(point.id, "volume", storageKey, { volumeName: volume.name, destination: volume.destination });
+      await insertArtifact(point.id, "volume", storageKey, { volumeName: volume.name, destination: volume.destination }, executionFence);
       existingVolumes.add(volume.name);
     }
     for (const bind of manifest.bindMounts) {
@@ -336,7 +359,7 @@ async function ensurePlannedArtifacts(
         destination: bind.destination,
         readOnly: bind.readOnly,
         excludePatterns
-      });
+      }, executionFence);
       existingBinds.add(bind.source);
     }
   }
@@ -354,15 +377,15 @@ async function ensurePlannedArtifacts(
       role: "manual_include",
       restorePath: profile?.restorePaths[includePath] ?? null,
       excludePatterns
-    });
+    }, executionFence);
     existingBinds.add(includePath);
   }
 
   if (context.composeYaml && !point.artifacts.some((artifact) => artifact.kind === "compose_yaml")) {
-    await insertArtifact(point.id, "compose_yaml", "compose.yml", { projectName: context.projectName });
+    await insertArtifact(point.id, "compose_yaml", "compose.yml", { projectName: context.projectName }, executionFence);
   }
   if (context.env && !point.artifacts.some((artifact) => artifact.kind === "env_file")) {
-    await insertArtifact(point.id, "env_file", ".env", { projectName: context.projectName });
+    await insertArtifact(point.id, "env_file", ".env", { projectName: context.projectName }, executionFence);
   }
 }
 
@@ -417,8 +440,10 @@ async function collectNetworkManifests(hostId: string, containers: ReturnType<ty
 export async function runRecoveryCreate(
   hostId: string,
   recoveryPointId: string,
-  options: { stopFirst?: boolean; restartAfterStopFirst?: boolean } = {}
+  options: { stopFirst?: boolean; restartAfterStopFirst?: boolean; executionFence?: JobExecutionFence } = {}
 ) {
+  const executionFence = options.executionFence;
+  await executionFence?.assertActive();
   const point = await loadRecoveryPoint(recoveryPointId);
   if (!point || point.hostId !== hostId) throw new Error("Recovery point not found");
 
@@ -426,7 +451,8 @@ export async function runRecoveryCreate(
     ?? Boolean((point.metadata as Record<string, unknown>).stopFirst);
   const restartAfterStopFirst = options.restartAfterStopFirst ?? true;
 
-  await query(
+  await executionQuery(
+    executionFence,
     `UPDATE recovery_points
      SET status = 'running', started_at = now(), error = null,
          metadata = metadata || $2::jsonb
@@ -460,6 +486,7 @@ export async function runRecoveryCreate(
 
   try {
     if (shouldStopFirst) {
+      await executionFence?.assertActive();
       await stopContainersWithRestartOnFailure(
         hostId,
         containerIds,
@@ -468,9 +495,11 @@ export async function runRecoveryCreate(
       stoppedForBackup = true;
     }
 
+    await executionFence?.assertActive();
     const preHookResult = await runProfileHook(hostId, profile, "pre");
     if (preHookResult) {
-      await query(
+      await executionQuery(
+        executionFence,
         `UPDATE recovery_points
          SET metadata = metadata || $2::jsonb
          WHERE id = $1`,
@@ -478,7 +507,7 @@ export async function runRecoveryCreate(
       );
     }
 
-    await ensurePlannedArtifacts(point, inspects, context, profile);
+    await ensurePlannedArtifacts(point, inspects, context, profile, executionFence);
     const refreshed = await loadRecoveryPoint(recoveryPointId);
     if (!refreshed) throw new Error("Recovery point not found after planning artifacts");
 
@@ -491,48 +520,49 @@ export async function runRecoveryCreate(
 
     for (const artifact of refreshed.artifacts) {
       try {
+        await executionFence?.assertActive();
         if (artifact.kind === "compose_yaml") {
           if (!context.composeYaml) {
-            await updateArtifactStatus(artifact.id, "failed", { error: "Compose YAML unavailable" });
+            await updateArtifactStatus(artifact.id, "failed", { error: "Compose YAML unavailable" }, executionFence);
             continue;
           }
           const written = await writeRecoveryPointFile(recoveryPointId, artifact.storageKey, context.composeYaml);
-          await updateArtifactStatus(artifact.id, "completed", written);
+          await updateArtifactStatus(artifact.id, "completed", written, executionFence);
           continue;
         }
         if (artifact.kind === "env_file") {
           const written = await writeRecoveryPointFile(recoveryPointId, artifact.storageKey, context.env ?? "");
-          await updateArtifactStatus(artifact.id, "completed", written);
+          await updateArtifactStatus(artifact.id, "completed", written, executionFence);
           continue;
         }
         if (artifact.kind === "volume") {
           const volumeName = String(artifact.metadata.volumeName ?? "");
           if (!volumeName) {
-            await updateArtifactStatus(artifact.id, "failed", { error: "Missing volume name metadata" });
+            await updateArtifactStatus(artifact.id, "failed", { error: "Missing volume name metadata" }, executionFence);
             continue;
           }
-          await updateArtifactStatus(artifact.id, "running");
-          await captureNamedVolume(hostId, recoveryPointId, artifact.id, artifact.storageKey, volumeName);
+          await updateArtifactStatus(artifact.id, "running", {}, executionFence);
+          await captureNamedVolume(hostId, recoveryPointId, artifact.id, artifact.storageKey, volumeName, executionFence);
           continue;
         }
         if (artifact.kind === "host_folder") {
           const sourcePath = String(artifact.metadata.sourcePath ?? "");
           if (!sourcePath) {
-            await updateArtifactStatus(artifact.id, "failed", { error: "Missing bind mount source path" });
+            await updateArtifactStatus(artifact.id, "failed", { error: "Missing bind mount source path" }, executionFence);
             continue;
           }
-          await updateArtifactStatus(artifact.id, "running");
+          await updateArtifactStatus(artifact.id, "running", {}, executionFence);
           const excludePatterns = Array.isArray(artifact.metadata.excludePatterns)
             ? artifact.metadata.excludePatterns.map(String)
             : [];
-          await captureBindMount(hostId, recoveryPointId, artifact.id, artifact.storageKey, sourcePath, excludePatterns);
+          await captureBindMount(hostId, recoveryPointId, artifact.id, artifact.storageKey, sourcePath, excludePatterns, executionFence);
           continue;
         }
-        await updateArtifactStatus(artifact.id, "failed", { error: `Unsupported artifact kind: ${artifact.kind}` });
+        await updateArtifactStatus(artifact.id, "failed", { error: `Unsupported artifact kind: ${artifact.kind}` }, executionFence);
       } catch (error) {
         await updateArtifactStatus(artifact.id, "failed", {
           error: error instanceof Error ? error.message : String(error)
-        });
+        }, executionFence);
       }
     }
 
@@ -563,9 +593,11 @@ export async function runRecoveryCreate(
       profile: profile ?? (typeof point.metadata.profileSnapshot === "object" && point.metadata.profileSnapshot ? point.metadata.profileSnapshot as Record<string, unknown> : null)
     });
 
+    await executionFence?.assertActive();
     const postHookResult = await runProfileHook(hostId, profile, "post");
     if (postHookResult) {
-      await query(
+      await executionQuery(
+        executionFence,
         `UPDATE recovery_points
          SET metadata = metadata || $2::jsonb
          WHERE id = $1`,
@@ -575,27 +607,29 @@ export async function runRecoveryCreate(
 
     const metadataArtifact = latest?.artifacts.find((artifact) => artifact.kind === "metadata");
     const manifestKey = metadataArtifact?.storageKey ?? "manifest.json";
+    await executionFence?.assertActive();
     const written = await writeRecoveryPointFile(recoveryPointId, manifestKey, JSON.stringify(manifest, null, 2));
     if (metadataArtifact) {
-      await updateArtifactStatus(metadataArtifact.id, "completed", written);
+      await updateArtifactStatus(metadataArtifact.id, "completed", written, executionFence);
     } else {
-      await insertArtifact(recoveryPointId, "metadata", manifestKey, { manifestVersion: 1 });
+      await insertArtifact(recoveryPointId, "metadata", manifestKey, { manifestVersion: 1 }, executionFence);
       const created = await query(
         `SELECT id FROM recovery_artifacts
          WHERE recovery_point_id = $1 AND kind = 'metadata'
          ORDER BY created_at DESC LIMIT 1`,
         [recoveryPointId]
       );
-      if (created.rows[0]) await updateArtifactStatus(created.rows[0].id, "completed", written);
+      if (created.rows[0]) await updateArtifactStatus(created.rows[0].id, "completed", written, executionFence);
     }
 
     let remoteUploadFailures = 0;
     if (point.backupTargetId) {
       try {
-        remoteUploadFailures = await uploadRecoveryArtifactsToRemote(recoveryPointId, point.backupTargetId);
+        remoteUploadFailures = await uploadRecoveryArtifactsToRemote(recoveryPointId, point.backupTargetId, executionFence);
       } catch (error) {
         remoteUploadFailures = 1;
-        await query(
+        await executionQuery(
+          executionFence,
           `UPDATE recovery_points
            SET metadata = metadata || $2::jsonb
            WHERE id = $1`,
@@ -609,9 +643,10 @@ export async function runRecoveryCreate(
       }
     }
 
-    await finalizeRecoveryPoint(recoveryPointId, remoteUploadFailures);
+    await finalizeRecoveryPoint(recoveryPointId, remoteUploadFailures, executionFence);
     if (stoppedForBackup && !restartAfterStopFirst) {
-      await query(
+      await executionQuery(
+        executionFence,
         `UPDATE recovery_points
          SET metadata = metadata || $2::jsonb
          WHERE id = $1`,
@@ -627,6 +662,7 @@ export async function runRecoveryCreate(
     const completedPoint = await loadRecoveryPoint(recoveryPointId);
     if (completedPoint && (completedPoint.status === "completed" || completedPoint.status === "partial")) {
       try {
+        await executionFence?.assertActive();
         await enforceScheduledRecoveryRetention(completedPoint);
       } catch (retentionError) {
         await query(
@@ -655,14 +691,29 @@ export async function runRecoveryCreate(
   } catch (error) {
     const thrown = error instanceof Error ? error : new Error(String(error));
     const restartFailedIds = (thrown as Error & { restartFailedIds?: string[] }).restartFailedIds ?? [];
-    await query(
-      "UPDATE recovery_points SET status = 'failed', error = $2, completed_at = now() WHERE id = $1",
-      [recoveryPointId, thrown.message]
-    );
+    let sourceStoppedIds: string[] = [];
     if (stoppedForBackup && !restartAfterStopFirst) {
-      (thrown as Error & { sourceStoppedIds?: string[] }).sourceStoppedIds = containersToRestart(runningStates);
+      sourceStoppedIds = containersToRestart(runningStates);
     } else if (!restartAfterStopFirst && restartFailedIds.length) {
-      (thrown as Error & { sourceStoppedIds?: string[] }).sourceStoppedIds = restartFailedIds;
+      sourceStoppedIds = restartFailedIds;
+    }
+    if (sourceStoppedIds.length) {
+      (thrown as Error & { sourceStoppedIds?: string[] }).sourceStoppedIds = sourceStoppedIds;
+    }
+    try {
+      await executionQuery(
+        executionFence,
+        "UPDATE recovery_points SET status = 'failed', error = $2, completed_at = now() WHERE id = $1",
+        [recoveryPointId, thrown.message]
+      );
+    } catch (failureUpdateError) {
+      const updateThrown = failureUpdateError instanceof Error
+        ? failureUpdateError
+        : new Error(String(failureUpdateError));
+      if (sourceStoppedIds.length) {
+        (updateThrown as Error & { sourceStoppedIds?: string[] }).sourceStoppedIds = sourceStoppedIds;
+      }
+      throw updateThrown;
     }
     throw thrown;
   } finally {
@@ -670,9 +721,10 @@ export async function runRecoveryCreate(
       try {
         await startContainersOneByOne(hostId, containersToRestart(runningStates));
       } catch (restartError) {
-        await query(
+        await executionQuery(
+          executionFence,
           `UPDATE recovery_points
-           SET status = 'partial',
+           SET status = CASE WHEN status IN ('completed', 'partial') THEN 'partial' ELSE status END,
                error = COALESCE(error, '') || $2
            WHERE id = $1`,
           [recoveryPointId, restartError instanceof Error ? ` Restart failed: ${restartError.message}` : " Restart failed"]
@@ -682,7 +734,8 @@ export async function runRecoveryCreate(
   }
 }
 
-export async function runRecoveryVerify(hostId: string, recoveryPointId: string) {
+export async function runRecoveryVerify(hostId: string, recoveryPointId: string, executionFence?: JobExecutionFence) {
+  await executionFence?.assertActive();
   const point = await loadRecoveryPoint(recoveryPointId);
   if (!point || point.hostId !== hostId) throw new Error("Recovery point not found");
 
@@ -694,6 +747,7 @@ export async function runRecoveryVerify(hostId: string, recoveryPointId: string)
   const failures: string[] = [];
 
   for (const artifact of point.artifacts) {
+    await executionFence?.assertActive();
     if (artifact.status !== "completed") {
       failures.push(`${artifact.kind}:${artifact.storageKey} status=${artifact.status}`);
       continue;
@@ -732,7 +786,8 @@ export async function runRecoveryVerify(hostId: string, recoveryPointId: string)
   }
 
   const verifyStatus = failures.length ? "failed" : "completed";
-  await query(
+  await executionQuery(
+    executionFence,
     `UPDATE recovery_points
      SET metadata = metadata || $2::jsonb
      WHERE id = $1`,

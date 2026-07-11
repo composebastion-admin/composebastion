@@ -1,12 +1,14 @@
 import { v4 as uuid } from "uuid";
 import { backupScheduleCreateSchema } from "@composebastion/shared";
 import { query } from "../db/pool.js";
-import { enqueueJob } from "./jobs.js";
+import { enqueueJobInTransaction, notifyJobQueued } from "./jobs.js";
 import { withTransaction } from "../db/pool.js";
 import {
   assertBackupTargetUsable,
-  createBackupRecord,
-  createHostPathBackupRecord
+  insertPreparedBackupRecord,
+  prepareBackupRecord,
+  prepareHostPathBackupRecord,
+  type PreparedBackupRecord
 } from "./backups.js";
 import { recordBackupScheduleResult } from "./backupFailureAlerts.js";
 import { normalizeHostSourcePath } from "./backupHostPaths.js";
@@ -89,7 +91,7 @@ export async function deleteBackupSchedule(id: string) {
   return result.rows[0] ? mapBackupSchedule(result.rows[0]) : null;
 }
 
-async function createScheduledBackupRecord(schedule: any) {
+async function prepareScheduledBackupRecord(schedule: any): Promise<PreparedBackupRecord> {
   const metadata = {
     scheduleId: schedule.id,
     retentionCount: schedule.retention_count ?? null
@@ -97,14 +99,14 @@ async function createScheduledBackupRecord(schedule: any) {
 
   if (schedule.kind === "host_path") {
     const sourcePath = normalizeHostSourcePath(schedule.source_path);
-    return createHostPathBackupRecord(schedule.host_id, sourcePath, {
+    return prepareHostPathBackupRecord(schedule.host_id, sourcePath, {
       backupTargetId: schedule.backup_target_id ?? null,
       metadata,
       encryption: schedule.encryption ?? "none"
     });
   }
 
-  return createBackupRecord(schedule.host_id, schedule.volume_name, {
+  return prepareBackupRecord(schedule.host_id, schedule.volume_name, {
     backupTargetId: schedule.backup_target_id ?? null,
     metadata,
     encryption: schedule.encryption ?? "none"
@@ -122,7 +124,10 @@ export async function runDueBackupSchedules() {
 
   for (const row of due.rows) {
     try {
-      const schedule = await withTransaction(async (client) => {
+      // Resolve target policy, paths, encryption metadata, and filesystem setup
+      // before opening the schedule transaction. Only durable rows belong in it.
+      const prepared = await prepareScheduledBackupRecord(row);
+      const scheduled = await withTransaction(async (client) => {
         const locked = await client.query(
           `SELECT * FROM backup_schedules WHERE id = $1 FOR UPDATE`,
           [row.id]
@@ -140,24 +145,27 @@ export async function runDueBackupSchedules() {
            WHERE id = $1`,
           [current.id, nextRunAt]
         );
-        return current;
+        const backup = await insertPreparedBackupRecord(client, prepared);
+        const job = await enqueueJobInTransaction(
+          client,
+          prepared.kind === "host_path"
+            ? {
+              type: "hostPath.backup",
+              hostId: current.host_id,
+              payload: { backupId: backup.id, sourcePath: prepared.sourcePath }
+            }
+            : {
+              type: "volume.backup",
+              hostId: current.host_id,
+              payload: { backupId: backup.id, volumeName: prepared.volumeName }
+            },
+          current.created_by
+        );
+        return { backup, job };
       });
 
-      if (!schedule) continue;
-      const backup = await createScheduledBackupRecord(schedule);
-      if (schedule.kind === "host_path") {
-        await enqueueJob({
-          type: "hostPath.backup",
-          hostId: schedule.host_id,
-          payload: { backupId: backup.id, sourcePath: backup.sourcePath ?? schedule.source_path }
-        }, schedule.created_by);
-      } else {
-        await enqueueJob({
-          type: "volume.backup",
-          hostId: schedule.host_id,
-          payload: { backupId: backup.id, volumeName: backup.volumeName ?? schedule.volume_name }
-        }, schedule.created_by);
-      }
+      if (!scheduled) continue;
+      await notifyJobQueued(scheduled.job.id);
     } catch (error) {
       console.error("Backup schedule failed", row.id, error);
       await recordBackupScheduleResult(row.id, "failed", error instanceof Error ? error.message : String(error))

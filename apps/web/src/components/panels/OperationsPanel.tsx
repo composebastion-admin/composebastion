@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { RefreshCw, Save } from "lucide-react";
-import type { BackupHealthSummary, DockerHost, OperationJob, RecoveryPointListItem, SelfUpdateConfig } from "@composebastion/shared";
+import { compareReleaseVersions, parseReleaseVersion, type BackupHealthSummary, type DockerHost, type OperationJob, type RecoveryPointListItem, type SelfUpdateConfig, type WorkerStatus } from "@composebastion/shared";
 import { api, parseApiJson, postJson, putJson } from "../../api.js";
 import { formatDate } from "../../lib/format.js";
 import { activeJobPhase, jobProgressSteps, jobRecoveryHint } from "../../lib/jobProgress.js";
 import { sleep } from "../../lib/hostScope.js";
 import { ButtonRow, CardSection, DataTable, Field, InlineStatus, Panel, ProgressSteps, StatusPill, VirtualDataTable } from "../ui/primitives.js";
+import { useConfirm } from "../ConfirmProvider.js";
+import { useAuthorization } from "../AuthorizationContext.js";
 
 type ReadyCheck = {
   ok: boolean;
@@ -18,12 +20,6 @@ type ReadyCheck = {
 type ReadyResponse = {
   ok: boolean;
   checks: Record<string, ReadyCheck>;
-};
-
-type WorkerStatus = {
-  queued: number;
-  running: number;
-  lastJobCompletedAt: string | null;
 };
 
 type CheckRow = {
@@ -74,25 +70,8 @@ async function getReadiness() {
   return data as ReadyResponse;
 }
 
-function normalizeVersion(value: string | null | undefined) {
-  return String(value ?? "").trim().replace(/^v/i, "");
-}
-
-function compareVersions(left: string | null | undefined, right: string | null | undefined) {
-  const a = normalizeVersion(left);
-  const b = normalizeVersion(right);
-  if (!a || !b || a === "latest" || b === "latest") return 0;
-  const aParts = a.split(/[.-]/).map((part) => Number.parseInt(part, 10));
-  const bParts = b.split(/[.-]/).map((part) => Number.parseInt(part, 10));
-  for (let index = 0; index < Math.max(aParts.length, bParts.length, 3); index += 1) {
-    const nextA = Number.isFinite(aParts[index]) ? aParts[index]! : 0;
-    const nextB = Number.isFinite(bParts[index]) ? bParts[index]! : 0;
-    if (nextA !== nextB) return nextA > nextB ? 1 : -1;
-  }
-  return 0;
-}
-
 export function OperationsPanel() {
+  const { canAdminister } = useAuthorization();
   const [ready, setReady] = useState<ReadyResponse | null>(null);
   const [worker, setWorker] = useState<WorkerStatus | null>(null);
   const [failedJobs, setFailedJobs] = useState<OperationJob[]>([]);
@@ -114,7 +93,7 @@ export function OperationsPanel() {
         api<{ health: BackupHealthSummary }>("/api/backups/health").catch(() => null),
         api<{ points: RecoveryPointListItem[] }>("/api/recovery/points").catch(() => null),
         api<{ hosts: DockerHost[] }>("/api/hosts").catch(() => null),
-        api<SelfUpdateStatus>("/api/self-update").catch(() => null)
+        canAdminister ? api<SelfUpdateStatus>("/api/self-update").catch(() => null) : Promise.resolve(null)
       ]);
       setReady(readyResult);
       setWorker(workerResult.worker);
@@ -128,7 +107,7 @@ export function OperationsPanel() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [canAdminister]);
 
   useEffect(() => {
     void load();
@@ -152,7 +131,11 @@ export function OperationsPanel() {
         </div>
         <div>
           <strong>Worker</strong>
-          <span>{worker ? `${worker.queued} queued / ${worker.running} running` : "Loading"}</span>
+          <span>{worker ? `${worker.state} · ${worker.activeWorkers} active · ${worker.queued} queued / ${worker.running} running` : "Loading"}</span>
+        </div>
+        <div>
+          <strong>Worker heartbeat</strong>
+          <span>{worker?.lastHeartbeatAt ? formatDate(worker.lastHeartbeatAt) : "No heartbeat observed"}</span>
         </div>
         <div>
           <strong>Last job</strong>
@@ -200,7 +183,7 @@ export function OperationsPanel() {
           />
         )}
       </CardSection>
-      {selfUpdate && <SelfUpdateCard hosts={hosts} status={selfUpdate} onChanged={load} />}
+      {canAdminister && selfUpdate && <SelfUpdateCard hosts={hosts} status={selfUpdate} onChanged={load} />}
       <CardSection title="Failed jobs" aside={<InlineStatus tone={failedJobs.length ? "danger" : "success"}>{failedJobs.length} failed</InlineStatus>}>
         <VirtualDataTable
           rows={failedJobs}
@@ -225,6 +208,7 @@ export function OperationsPanel() {
 }
 
 function SelfUpdateCard({ hosts, status, onChanged }: { hosts: DockerHost[]; status: SelfUpdateStatus; onChanged: () => Promise<void> }) {
+  const { confirm } = useConfirm();
   const [form, setForm] = useState<SelfUpdateConfig>(status.config);
   const [busy, setBusy] = useState<"saving" | "checking" | "starting" | "waiting" | null>(null);
   const [message, setMessage] = useState<{ tone: "success" | "warning" | "error" | "info"; text: string } | null>(null);
@@ -266,9 +250,9 @@ function SelfUpdateCard({ hosts, status, onChanged }: { hosts: DockerHost[]; sta
       await sleep(2_000);
       try {
         const health = await api<RuntimeVersion & { ok: boolean }>("/api/health");
-        const current = normalizeVersion(health.version);
-        const expected = normalizeVersion(expectedVersion);
-        if ((expected && current === expected) || (!expected && current && current !== normalizeVersion(previousVersion))) {
+        const current = parseReleaseVersion(health.version);
+        const expected = parseReleaseVersion(expectedVersion);
+        if ((expected && current === expected) || (!expected && current && current !== parseReleaseVersion(previousVersion))) {
           setMessage({ tone: "success", text: `ComposeBastion is running v${health.version}.` });
           await onChanged();
           setBusy(null);
@@ -283,6 +267,15 @@ function SelfUpdateCard({ hosts, status, onChanged }: { hosts: DockerHost[]; sta
   }
 
   async function startUpdate() {
+    const requestedVersion = form.versionMode === "latest"
+      ? status.latest.version ? `v${status.latest.version}` : "the latest image tag"
+      : `v${form.targetVersion}`;
+    if (!await confirm({
+      title: "Restart ComposeBastion",
+      tone: "danger",
+      confirmLabel: "Start update",
+      message: `Update from v${status.runtime.version} to ${requestedVersion}? The app and worker will restart and this browser may disconnect briefly.`
+    })) return;
     setBusy("starting");
     setMessage(null);
     try {
@@ -304,10 +297,12 @@ function SelfUpdateCard({ hosts, status, onChanged }: { hosts: DockerHost[]; sta
     : status.latest.version
       ? `v${status.latest.version}${status.latest.checkedAt ? ` checked ${formatDate(status.latest.checkedAt)}` : ""}`
       : "Not checked";
-  const canStart = Boolean(form.hostId && form.workingDir && form.composeFile && (form.versionMode === "latest" || form.targetVersion));
+  const pinnedVersionValid = form.versionMode !== "pinned" || Boolean(parseReleaseVersion(form.targetVersion));
+  const canStart = Boolean(form.hostId && form.workingDir && form.composeFile && (form.versionMode === "latest" || pinnedVersionValid));
   const latestKnown = Boolean(status.latest.version && !status.latest.error);
   const latestNotNewer = form.versionMode === "latest" && latestKnown && !status.updateAvailable;
-  const pinnedNotNewer = form.versionMode === "pinned" && Boolean(form.targetVersion) && compareVersions(form.targetVersion, status.runtime.version) <= 0;
+  const pinnedComparison = form.versionMode === "pinned" ? compareReleaseVersions(form.targetVersion, status.runtime.version) : null;
+  const pinnedNotNewer = form.versionMode === "pinned" && pinnedComparison !== null && pinnedComparison <= 0;
   const targetLabel = form.versionMode === "latest"
     ? status.latest.version ? `latest version v${status.latest.version}` : "latest image tag"
     : `v${form.targetVersion}`;

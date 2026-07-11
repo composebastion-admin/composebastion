@@ -1,12 +1,14 @@
 import { useCallback, useEffect } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import type { Tab } from "../lib/navigation.js";
+import { resolveAuthorizedTab } from "../lib/authorization.js";
 import { tabFromPath, tabPath, tabRequiresHost } from "../lib/tabRoute.js";
 
-export function useDashboardTab(hasHost: boolean, hostsLoaded = true) {
+export function useDashboardTab(hasHost: boolean, hostsLoaded = true, allowedTabs?: ReadonlySet<Tab>) {
   const navigate = useNavigate();
   const { tab: tabParam } = useParams<{ tab?: string }>();
-  const tab = tabFromPath(tabParam);
+  const requestedTab = tabFromPath(tabParam);
+  const tab = allowedTabs ? resolveAuthorizedTab(requestedTab, allowedTabs) : requestedTab;
 
   useEffect(() => {
     if (!tabParam || tabParam !== tab) {
@@ -24,8 +26,8 @@ export function useDashboardTab(hasHost: boolean, hostsLoaded = true) {
   }, [hostsLoaded, hasHost, navigate, tab]);
 
   const setTab = useCallback((next: Tab) => {
-    navigate(tabPath(next));
-  }, [navigate]);
+    navigate(tabPath(allowedTabs ? resolveAuthorizedTab(next, allowedTabs) : next));
+  }, [allowedTabs, navigate]);
 
   return { tab, setTab };
 }

@@ -2,6 +2,17 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 
 export const DEFAULT_APP_SECRET = "change-me-to-a-long-random-secret-at-least-32-characters";
+export const DOCUMENTED_APP_SECRET_PLACEHOLDER = "replace-with-a-unique-random-value-of-at-least-32-characters";
+
+export const REPOSITORY_APP_SECRET_PLACEHOLDERS = Object.freeze([
+  DEFAULT_APP_SECRET,
+  DOCUMENTED_APP_SECRET_PLACEHOLDER,
+  "ci-test-secret-which-is-at-least-32-chars-long",
+  "release-test-secret-which-is-at-least-32-chars-long",
+  "compose-contract-app-secret-0123456789abcdef",
+  "a-unique-test-secret-value-with-more-than-32-characters"
+]);
+const INSECURE_APP_SECRET_PLACEHOLDERS = new Set(REPOSITORY_APP_SECRET_PLACEHOLDERS.map((value) => value.toLowerCase()));
 
 function parseOriginList(value: unknown) {
   if (typeof value !== "string") return [];
@@ -73,7 +84,7 @@ export const envSchema = z.object({
   IMAGE_SCANNER_PROVIDER: z.string().default("auto"),
   MIGRATIONS_DIR: z.string().optional()
 }).superRefine((value, ctx) => {
-  if (value.NODE_ENV === "production" && value.APP_SECRET === DEFAULT_APP_SECRET) {
+  if (value.NODE_ENV === "production" && INSECURE_APP_SECRET_PLACEHOLDERS.has(value.APP_SECRET.trim().toLowerCase())) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["APP_SECRET"],

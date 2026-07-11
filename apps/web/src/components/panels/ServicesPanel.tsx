@@ -45,6 +45,7 @@ import { activeSourceChannel, imageReferenceWithTag, sourceChannels } from "../.
 import { countGithubVersionUpdates, groupGithubVersionOptions, shortVersionSha } from "../../lib/sourceVersions.js";
 import { isImageChannelTag, summarizeImageVersionTags } from "../../lib/imageTagOptions.js";
 import { ServiceImageUpdateDrawer, type ServiceImageUpdateTarget } from "../services/ServiceImageUpdateDrawer.js";
+import { useAuthorization } from "../AuthorizationContext.js";
 
 type GroupActionVerb = "start" | "stop" | "restart" | "deploy" | "remove";
 type SourceLinkForm = {
@@ -245,6 +246,7 @@ export function ServicesPanel({
   transitioningContainerIds?: Set<string>;
   onSetOptimisticStates?: (updates: Record<string, string>) => void;
 }) {
+  const { canOperate } = useAuthorization();
   const { confirm } = useConfirm();
   const { pushToast } = useToast();
   const [query, setQuery] = useState("");
@@ -294,7 +296,7 @@ export function ServicesPanel({
     }),
     [appByGroupKey, groups]
   );
-  const shouldShowUpdateSummary = showUpdateSummary || (serviceUpdates > 0 && !updateSummaryDismissed);
+  const shouldShowUpdateSummary = canOperate && (showUpdateSummary || (serviceUpdates > 0 && !updateSummaryDismissed));
   const tagScanTargets = useMemo(() => {
     if (!shouldShowUpdateSummary) return [];
     const targets = new Map<string, string>();
@@ -686,7 +688,7 @@ export function ServicesPanel({
         </select>
         <ButtonRow>
           {onOpenCompose && (
-            <button type="button" onClick={onOpenCompose} title="Create or edit compose stacks">
+            <button type="button" onClick={onOpenCompose} title={canOperate ? "Create or edit compose stacks" : "View compose stacks"}>
               <Layers size={16} />
               Compose
             </button>
@@ -695,10 +697,12 @@ export function ServicesPanel({
             <ListTree size={16} />
             {allExpanded ? "Collapse all" : "Expand all"}
           </button>
-          <button type="button" onClick={() => void checkUpdates()} disabled={checkingUpdates} title="Scan service updates">
-            <RefreshCw size={16} className={checkingUpdates ? "spin" : undefined} />
-            Scan updates
-          </button>
+          {canOperate && (
+            <button type="button" onClick={() => void checkUpdates()} disabled={checkingUpdates} title="Scan service updates">
+              <RefreshCw size={16} className={checkingUpdates ? "spin" : undefined} />
+              Scan updates
+            </button>
+          )}
         </ButtonRow>
       </div>
 
@@ -789,7 +793,7 @@ export function ServicesPanel({
         </section>
       )}
 
-      {hasGitServices && (
+      {canOperate && hasGitServices && (
         <div className="formHint servicesSourceHint">
           Private GitHub repositories use Deploy -&gt; Tracked GitHub repositories with one fine-grained token per repo and read-only Contents access.
         </div>
@@ -914,31 +918,35 @@ export function ServicesPanel({
                     )}
                   </div>
                   <ButtonRow className="serviceActions">
-                    <button
-                      type="button"
-                      title={group.stack && !hasContainers ? "Deploy (compose up -d)" : "Start service"}
-                      disabled={busy || group.status === "running"}
-                      onClick={() => void groupAction(group, "start")}
-                    >
-                      <Play size={15} />
-                    </button>
-                    <button
-                      type="button"
-                      title={selfManaged ? selfManagedTitle : "Stop service"}
-                      disabled={busy || selfManaged || !hasContainers || group.runningCount === 0}
-                      onClick={() => void groupAction(group, "stop")}
-                    >
-                      <Square size={15} />
-                    </button>
-                    <button
-                      type="button"
-                      title={selfManaged ? selfManagedTitle : "Restart service"}
-                      disabled={busy || selfManaged || !hasContainers}
-                      onClick={() => void groupAction(group, "restart")}
-                    >
-                      <RotateCcw size={15} />
-                    </button>
-                    {group.stack && (
+                    {canOperate && (
+                      <>
+                        <button
+                          type="button"
+                          title={group.stack && !hasContainers ? "Deploy (compose up -d)" : "Start service"}
+                          disabled={busy || group.status === "running"}
+                          onClick={() => void groupAction(group, "start")}
+                        >
+                          <Play size={15} />
+                        </button>
+                        <button
+                          type="button"
+                          title={selfManaged ? selfManagedTitle : "Stop service"}
+                          disabled={busy || selfManaged || !hasContainers || group.runningCount === 0}
+                          onClick={() => void groupAction(group, "stop")}
+                        >
+                          <Square size={15} />
+                        </button>
+                        <button
+                          type="button"
+                          title={selfManaged ? selfManagedTitle : "Restart service"}
+                          disabled={busy || selfManaged || !hasContainers}
+                          onClick={() => void groupAction(group, "restart")}
+                        >
+                          <RotateCcw size={15} />
+                        </button>
+                      </>
+                    )}
+                    {canOperate && group.stack && (
                       <button
                         type="button"
                         title={selfManaged ? selfManagedTitle : "Redeploy (compose up -d)"}
@@ -948,7 +956,7 @@ export function ServicesPanel({
                         <UploadCloud size={15} />
                       </button>
                     )}
-                    {canOpenSource && app && (
+                    {canOperate && canOpenSource && app && (
                       <button
                         type="button"
                         title={app.source === "git" && app.repositoryUrl ? `GitHub versions for ${app.name}` : app.sourceLink ? `Edit source for ${app.name}` : `Link source for ${app.name}`}
@@ -957,7 +965,7 @@ export function ServicesPanel({
                         {app.source === "git" && app.repositoryUrl ? <GitBranch size={15} /> : <Link2 size={15} />}
                       </button>
                     )}
-                    {app && (
+                    {canOperate && app && (
                       <button
                         type="button"
                         title={`Rename ${app.name}`}
@@ -967,7 +975,7 @@ export function ServicesPanel({
                         <Pencil size={15} />
                       </button>
                     )}
-                    {hasContainers && (
+                    {canOperate && hasContainers && (
                       <button
                         type="button"
                         title={selfManaged ? selfManagedTitle : "Update service image tags"}
@@ -977,7 +985,7 @@ export function ServicesPanel({
                         <Tags size={15} />
                       </button>
                     )}
-                    {app && (
+                    {canOperate && app && (
                       <button
                         type="button"
                         className={app.update.status === "update_available" ? "servicePrimaryAction" : undefined}
@@ -988,15 +996,17 @@ export function ServicesPanel({
                         <RefreshCw size={15} />
                       </button>
                     )}
-                    <button
-                      type="button"
-                      className="danger"
-                      title={selfManaged ? selfManagedTitle : group.stack ? "Compose down" : "Remove containers"}
-                      disabled={busy || selfManaged || !hasContainers}
-                      onClick={() => void groupAction(group, "remove")}
-                    >
-                      <Trash2 size={15} />
-                    </button>
+                    {canOperate && (
+                      <button
+                        type="button"
+                        className="danger"
+                        title={selfManaged ? selfManagedTitle : group.stack ? "Compose down" : "Remove containers"}
+                        disabled={busy || selfManaged || !hasContainers}
+                        onClick={() => void groupAction(group, "remove")}
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    )}
                     <button
                       type="button"
                       title="Open in Containers"
@@ -1035,9 +1045,13 @@ export function ServicesPanel({
                             )}
                           </div>
                           <ButtonRow className="serviceMemberActions">
-                            <button type="button" title="Start" disabled={transitioning} onClick={() => void memberAction(group, member, "container.start")}><Play size={14} /></button>
-                            <button type="button" title={selfManaged ? selfManagedTitle : "Stop"} disabled={transitioning || selfManaged} onClick={() => void memberAction(group, member, "container.stop")}><Square size={14} /></button>
-                            <button type="button" title={selfManaged ? selfManagedTitle : "Restart"} disabled={transitioning || selfManaged} onClick={() => void memberAction(group, member, "container.restart")}><RotateCcw size={14} /></button>
+                            {canOperate && (
+                              <>
+                                <button type="button" title="Start" disabled={transitioning} onClick={() => void memberAction(group, member, "container.start")}><Play size={14} /></button>
+                                <button type="button" title={selfManaged ? selfManagedTitle : "Stop"} disabled={transitioning || selfManaged} onClick={() => void memberAction(group, member, "container.stop")}><Square size={14} /></button>
+                                <button type="button" title={selfManaged ? selfManagedTitle : "Restart"} disabled={transitioning || selfManaged} onClick={() => void memberAction(group, member, "container.restart")}><RotateCcw size={14} /></button>
+                              </>
+                            )}
                             <button type="button" title="Open in Containers" onClick={() => onOpenContainers(member.containerName)}><ExternalLink size={14} /></button>
                           </ButtonRow>
                         </div>
@@ -1050,7 +1064,7 @@ export function ServicesPanel({
           })}
         </div>
       )}
-      {sourceTarget && sourceForm && (
+      {canOperate && sourceTarget && sourceForm && (
         <form
           className="drawer appSourceDrawer"
           onSubmit={(event) => {
@@ -1220,7 +1234,7 @@ export function ServicesPanel({
           </ButtonRow>
         </form>
       )}
-      {renameTarget && (
+      {canOperate && renameTarget && (
         <form
           className="drawer appRenameDrawer"
           onSubmit={(event) => {
@@ -1249,7 +1263,7 @@ export function ServicesPanel({
           </ButtonRow>
         </form>
       )}
-      {imageUpdateTarget && (
+      {canOperate && imageUpdateTarget && (
         <ServiceImageUpdateDrawer
           group={imageUpdateTarget}
           images={images}

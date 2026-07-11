@@ -4,6 +4,7 @@ const getHostForWorker = vi.fn();
 const runSshCommand = vi.fn();
 const writeRemoteFile = vi.fn();
 const query = vi.fn();
+const enqueueJob = vi.fn();
 
 vi.mock("../src/services/hosts.js", () => ({
   getHost: vi.fn(),
@@ -23,6 +24,10 @@ vi.mock("../src/services/redis.js", () => ({
   createRedis: () => null
 }));
 
+vi.mock("../src/services/jobs.js", () => ({
+  enqueueJob: (...args: unknown[]) => enqueueJob(...args)
+}));
+
 const hostId = "11111111-1111-4111-8111-111111111111";
 
 function sshHost(mode: "ssh" | "agent" = "ssh") {
@@ -37,6 +42,7 @@ function sshHost(mode: "ssh" | "agent" = "ssh") {
 describe("self update service", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    enqueueJob.mockReset();
     getHostForWorker.mockResolvedValue(sshHost());
     runSshCommand
       .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
@@ -81,6 +87,25 @@ describe("self update service", () => {
       versionMode: "latest",
       targetVersion: "latest"
     })).rejects.toThrow("requires the manager host to use SSH mode");
+  });
+
+  it("rejects non-semver start overrides even while following latest", async () => {
+    query.mockResolvedValueOnce({
+      rows: [{
+        value: {
+          hostId,
+          workingDir: "/srv/composebastion",
+          composeFile: "docker-compose.image.yml",
+          versionMode: "latest",
+          targetVersion: "latest"
+        }
+      }]
+    });
+    const { enqueueSelfUpdate } = await import("../src/services/selfUpdate.js");
+
+    await expect(enqueueSelfUpdate({ targetVersion: "nightly" }, "user-1"))
+      .rejects.toMatchObject({ statusCode: 400 });
+    expect(enqueueJob).not.toHaveBeenCalled();
   });
 
   it("compares semantic versions without treating older releases as updates", async () => {

@@ -6,18 +6,14 @@ import path from "node:path";
 import rateLimit from "@fastify/rate-limit";
 import Fastify from "fastify";
 import { z } from "zod";
+import { parseAgentEnvironment, resolveAgentVersion } from "./config.js";
 import { isPermittedDockerCommand, parsePermittedDockerCommand, type ParsedDockerCommand } from "./security.js";
 import { validateAgentFilePath } from "./paths.js";
 
 const require = createRequire(import.meta.url);
 const packageJson = require("../package.json") as { version?: string };
-const AGENT_VERSION = process.env.COMPOSEBASTION_AGENT_VERSION || packageJson.version || "unknown";
-
-const env = z.object({
-  AGENT_HOST: z.string().default("0.0.0.0"),
-  AGENT_PORT: z.coerce.number().int().min(1).max(65535).default(8090),
-  AGENT_TOKEN: z.string().min(24)
-}).parse(process.env);
+const AGENT_VERSION = resolveAgentVersion(process.env.COMPOSEBASTION_AGENT_VERSION, packageJson.version);
+const env = parseAgentEnvironment(process.env);
 
 const runSchema = z.object({
   command: z.string().min(1).max(8000)
@@ -36,6 +32,8 @@ const containerLogQuerySchema = z.object({
 const agentReadRateLimit = { max: 120, timeWindow: "1 minute" } as const;
 const agentRunRateLimit = { max: 30, timeWindow: "1 minute" } as const;
 const agentFileRateLimit = { max: 60, timeWindow: "1 minute" } as const;
+const agentStreamRateLimit = { max: 10, timeWindow: "1 minute" } as const;
+const MAX_CONCURRENT_USAGE_STREAMS = 4;
 
 function safeEqual(left: string, right: string) {
   const leftBuffer = Buffer.from(left);
@@ -86,6 +84,14 @@ async function run(command: string, timeout = 120_000) {
   const parsed = parsePermittedDockerCommand(command);
   if (!parsed) return { stdout: "", stderr: "Agent only accepts ComposeBastion Docker commands", code: 1 };
   return execDocker(parsed, timeout);
+}
+
+function parseDockerStats(stdout: string) {
+  return stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
 const pseudoMountTypes = new Set([
@@ -162,6 +168,7 @@ async function collectDiskStats(mountsText: string) {
 
 async function main() {
   const app = Fastify({ logger: true, bodyLimit: 16 * 1024 });
+  let activeUsageStreams = 0;
   await app.register(rateLimit, {
     max: 300,
     timeWindow: "1 minute"
@@ -174,17 +181,22 @@ async function main() {
     }
   });
 
-  app.get("/api/health", async () => {
-    const docker = await run("docker version --format '{{.Server.Version}}'", 30_000);
-    const compose = await run("docker compose version --short", 30_000);
+  app.get("/api/health", { config: { rateLimit: agentReadRateLimit } }, async (_request, reply) => {
+    const [docker, compose] = await Promise.all([
+      run("docker version --format '{{.Server.Version}}'", 30_000),
+      run("docker compose version --short", 30_000)
+    ]);
+    const ok = docker.code === 0 && compose.code === 0;
+    if (!ok) reply.code(503);
     return {
-      ok: docker.code === 0,
+      ok,
       agentVersion: AGENT_VERSION,
       revision: process.env.COMPOSEBASTION_AGENT_REVISION || null,
       buildDate: process.env.COMPOSEBASTION_AGENT_BUILD_DATE || null,
       dockerVersion: docker.stdout.trim(),
       composeVersion: compose.stdout.trim(),
-      dockerError: docker.code === 0 ? null : docker.stderr
+      dockerError: docker.code === 0 ? null : docker.stderr,
+      composeError: compose.code === 0 ? null : compose.stderr
     };
   });
 
@@ -213,6 +225,71 @@ async function main() {
     const result = await run(body.command);
     if (result.code !== 0) reply.code(500);
     return result;
+  });
+
+  app.get("/api/containers/usage", { config: { rateLimit: agentReadRateLimit } }, async (_request, reply) => {
+    const result = await run("docker stats --no-stream --format '{{json .}}'", 60_000);
+    if (result.code !== 0) {
+      reply.code(503);
+      return { error: result.stderr || "Docker stats failed" };
+    }
+    try {
+      return { usage: parseDockerStats(result.stdout) };
+    } catch {
+      reply.code(502);
+      return { error: "Docker returned malformed container stats" };
+    }
+  });
+
+  app.get("/api/containers/usage-stream", { config: { rateLimit: agentStreamRateLimit } }, async (request, reply) => {
+    if (activeUsageStreams >= MAX_CONCURRENT_USAGE_STREAMS) {
+      reply.code(429);
+      return { error: "Too many concurrent container usage streams" };
+    }
+    activeUsageStreams += 1;
+    reply.hijack();
+    reply.raw.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no"
+    });
+
+    const child = spawn("docker", ["stats", "--format", "{{json .}}"], {
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    const stdout = { value: "" };
+    const stderr = { value: "" };
+    const heartbeat = setInterval(() => writeSseLine(reply, "ping", { ok: true }), 25_000);
+    let cleanedUp = false;
+    const cleanup = () => {
+      if (cleanedUp) return;
+      cleanedUp = true;
+      activeUsageStreams = Math.max(0, activeUsageStreams - 1);
+      clearInterval(heartbeat);
+      if (!child.killed) child.kill("SIGTERM");
+    };
+    const emitStats = (line: string) => {
+      if (!line.trim()) return;
+      try {
+        writeSseLine(reply, "message", { stats: JSON.parse(line) as Record<string, unknown> });
+      } catch {
+        writeSseLine(reply, "error", { error: "Docker returned malformed container stats" });
+      }
+    };
+    request.raw.on("close", cleanup);
+    child.stdout.on("data", (chunk: Buffer) => streamLinesFromBuffer(stdout, chunk, emitStats));
+    child.stderr.on("data", (chunk: Buffer) => streamLinesFromBuffer(stderr, chunk, (line) => {
+      if (line.trim()) writeSseLine(reply, "error", { error: line });
+    }));
+    child.on("error", (error) => writeSseLine(reply, "error", { error: error.message }));
+    child.on("close", (code) => {
+      if (stdout.value) emitStats(stdout.value);
+      if (stderr.value.trim()) writeSseLine(reply, "error", { error: stderr.value });
+      writeSseLine(reply, "end", { code: code ?? 0 });
+      cleanup();
+      if (!reply.raw.destroyed) reply.raw.end();
+    });
   });
 
   app.get("/api/containers/:id/logs-stream", { config: { rateLimit: agentRunRateLimit } }, async (request, reply) => {

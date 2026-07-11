@@ -1,4 +1,5 @@
 import Fastify from "fastify";
+import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchRegistryTags = vi.hoisted(() => vi.fn());
@@ -79,6 +80,54 @@ describe("image intelligence routes", () => {
       error: "registry.example.com/acme/app:latest is private or does not exist in the registry",
       code: "REGISTRY_UNAVAILABLE",
       requestId: "tags-private"
+    });
+    await app.close();
+  });
+
+  it("returns a validation error for malformed image references", async () => {
+    fetchRegistryTags.mockRejectedValue(new RegistryLookupError("Invalid image reference: schemes are not allowed", "invalid"));
+    const app = await buildApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/image-tags?image=https%3A%2F%2Fregistry.example.com%2Facme%2Fapp",
+      headers: { "x-request-id": "tags-invalid" }
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ code: "INVALID_IMAGE_REFERENCE", requestId: "tags-invalid" });
+    await app.close();
+  });
+
+  it("exposes blocked private registry addresses as a policy failure", async () => {
+    fetchRegistryTags.mockRejectedValue(new RegistryLookupError("Registry target resolves to a blocked network address", "private_address"));
+    const app = await buildApp();
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/image-tags?image=registry.internal%2Facme%2Fapp",
+      headers: { "x-request-id": "tags-blocked" }
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ code: "PRIVATE_REGISTRY_ADDRESS", requestId: "tags-blocked" });
+    await app.close();
+  });
+
+  it("uses operator authorization and forwards saved-registry trust", async () => {
+    const source = readFileSync(new URL("../src/routes/imageIntelligence.ts", import.meta.url), "utf8");
+    expect(source).toContain('app.get("/api/image-tags", { preHandler: operator');
+    findRegistryAuthForReference.mockResolvedValue({
+      username: null,
+      password: null,
+      insecure: true,
+      trustedOrigin: "http://registry.internal:5000"
+    });
+    fetchRegistryTags.mockResolvedValue(["latest"]);
+    const app = await buildApp();
+    const response = await app.inject({ method: "GET", url: "/api/image-tags?image=registry.internal%3A5000%2Facme%2Fapp" });
+    expect(response.statusCode).toBe(200);
+    expect(fetchRegistryTags).toHaveBeenCalledWith("registry.internal:5000/acme/app", {
+      username: null,
+      password: null,
+      insecure: true,
+      trustedOrigin: "http://registry.internal:5000"
     });
     await app.close();
   });

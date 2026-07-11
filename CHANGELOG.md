@@ -3,10 +3,20 @@
 ## [Unreleased]
 
 ### Security
-- Updated embedded and CI Trivy scanners to `0.72.0`, which contains the fix
-  for `CVE-2026-50151`; the finding is not suppressed.
+- Updated CI scanning to Trivy `0.72.0` and rebuilt the embedded Trivy `0.72.0`
+  scanner from its reviewed source commit with Go `1.26.5` and ORAS Go `2.6.2`
+  to remove the `CVE-2026-50151` path; the finding is never suppressed.
 - Added per-architecture scans for both runtime images and stable aggregate
   scan gates that must pass before a release workflow can publish either image.
+- Required explicit agent bind addresses, rejected placeholder agent tokens,
+  made agent health depend on Docker and Compose, and separated read/stream
+  capacity from the Docker mutation limiter.
+- Added DNS-pinned, redirect-controlled registry access with private-network and
+  credential boundaries, and restricted arbitrary image-tag lookup to operators.
+- Pinned every GitHub Action to an immutable commit after the 2026 Trivy action
+  supply-chain incident, and added an automated pinning gate.
+- Serialized first-owner setup and owner mutations so concurrent requests cannot
+  create multiple initial owners or remove the final active owner.
 
 ### Fixed
 - Forwarded the documented SMTP, proxy, CORS/cookie, agent, webhook, S3,
@@ -20,6 +30,24 @@
   artifacts from their remote copy before checksum validation.
 - Fixed same-host clone restores for custom Compose networks by allocating a
   non-overlapping Docker network and dropping captured static addresses.
+- Added worker heartbeats, fenced leases, safe stale-job recovery, linked-record
+  failure reconciliation, and fail-closed worker readiness.
+- Made PostgreSQL job insertion durable when Redis wake-up publication is
+  unavailable.
+- Bound migration execution to a freshly revalidated, single-use plan and
+  rejected stale source or target state before destructive work.
+- Corrected SemVer ordering for stable, prerelease, and build-metadata versions.
+- Added role-aware browser controls, typed confirmation for permanent data
+  deletion/import, and truthful terminal audit disclosure.
+
+### Configuration
+
+- Added required `COMPOSEBASTION_AGENT_BIND_ADDRESS` for agent examples and
+  optional `COMPOSEBASTION_HTTP_BIND_ADDRESS` for published manager installs.
+- Source Compose now consistently requires `POSTGRES_PASSWORD`; production
+  secure-cookie defaults still permit an explicit `false` value.
+- Added additive migrations `029_worker_reliability.sql` and
+  `030_migration_plan_binding.sql`; no existing public route was removed.
 
 The local `1.0.7-rc.1` candidate is intentionally untagged and unpublished.
 

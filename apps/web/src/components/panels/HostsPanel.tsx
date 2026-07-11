@@ -7,6 +7,7 @@ import { canOpenHostTerminal } from "../../lib/hostTerminal.js";
 import type { Jobish } from "../../lib/dashboardTypes.js";
 import { HostForm } from "../dashboard/HostForm.js";
 import { ButtonRow, DataTable, StatusPill } from "../ui/primitives.js";
+import { useAuthorization } from "../AuthorizationContext.js";
 
 export function HostsPanel({
   hosts,
@@ -33,6 +34,7 @@ export function HostsPanel({
   onOpenAdmin: () => void;
   onOpenTerminal: (host: DockerHost) => void;
 }) {
+  const { canOperate, canUseTerminal } = useAuthorization();
   const [showHostForm, setShowHostForm] = useState(false);
   const onlineHosts = hosts.filter((host) => host.lastStatus === "online").length;
   const totalContainers = Object.values(containerCounts).reduce((total, count) => total + count, 0);
@@ -61,14 +63,16 @@ export function HostsPanel({
             <strong>{totalContainers}</strong>
           </div>
         </div>
-        <ButtonRow className="hostsHeroActions">
-          <button type="button" className="primary" onClick={() => setShowHostForm((value) => !value)}>
-            <Plus size={16} />
-            {showHostForm ? "Close form" : "Add host"}
-          </button>
-        </ButtonRow>
+        {canOperate && (
+          <ButtonRow className="hostsHeroActions">
+            <button type="button" className="primary" onClick={() => setShowHostForm((value) => !value)}>
+              <Plus size={16} />
+              {showHostForm ? "Close form" : "Add host"}
+            </button>
+          </ButtonRow>
+        )}
       </div>
-      {showHostForm && (
+      {canOperate && showHostForm && (
         <div className="hostsAddPanel">
           <HostForm
             runJob={runJob}
@@ -104,10 +108,12 @@ export function HostsPanel({
               <span><GitBranch size={14} />Compose aware</span>
               <span><Activity size={14} />Health tracked</span>
             </div>
-            <button type="button" className="primary hostsEmptyAction" onClick={openHostForm}>
-              <Plus size={16} />
-              Add host
-            </button>
+            {canOperate && (
+              <button type="button" className="primary hostsEmptyAction" onClick={openHostForm}>
+                <Plus size={16} />
+                Add host
+              </button>
+            )}
           </div>
         </section>
       ) : (
@@ -129,13 +135,13 @@ export function HostsPanel({
             </div>,
             formatDate(host.updatedAt),
             <ButtonRow key="actions">
-              <button title="Check host" onClick={() => void onHostAction("host.check", host.id)}><Activity size={16} /></button>
+              {canOperate && <button title="Check host" onClick={() => void onHostAction("host.check", host.id)}><Activity size={16} /></button>}
               <button title="View metrics" onClick={() => onOpenMetrics(host)}><Server size={16} /></button>
-              <button title="Refresh inventory" onClick={() => void onHostAction("host.sync", host.id)}><RefreshCw size={16} /></button>
-              {canOpenHostTerminal(user, host) && (
+              {canOperate && <button title="Refresh inventory" onClick={() => void onHostAction("host.sync", host.id)}><RefreshCw size={16} /></button>}
+              {canUseTerminal && canOpenHostTerminal(user, host) && (
                 <button title="Open SSH terminal" onClick={() => onOpenTerminal(host)}><Terminal size={16} /></button>
               )}
-              <button title="Host settings" onClick={() => { onSelectHost(host.id); onOpenAdmin(); }}><Settings size={16} /></button>
+              {canOperate && <button title="Host settings" onClick={() => { onSelectHost(host.id); onOpenAdmin(); }}><Settings size={16} /></button>}
             </ButtonRow>
           ]}
         />

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ArrowRight, Copy, Play, Search } from "lucide-react";
 import type { DockerApp, DockerHost, MigrationRun, MigrationStrategy, OperationJob, ResourceSnapshot } from "@composebastion/shared";
 import { postJson } from "../../../api.js";
@@ -7,7 +7,7 @@ import type { Jobish, JobResult } from "../../../lib/dashboardTypes.js";
 import { formatDate } from "../../../lib/format.js";
 import { hostName } from "../../../lib/hostScope.js";
 import { activeJobPhase, jobProgressSteps } from "../../../lib/jobProgress.js";
-import { dockerAppToRecoveryIdentity } from "../../../lib/recovery.js";
+import { dockerAppToRecoveryIdentity, migrationPlanMatchesSelection } from "../../../lib/recovery.js";
 import { HostSelect } from "../../dashboard/HostSelect.js";
 import { ButtonRow, CardSection, Field, Panel, ProgressSteps, StatusPill } from "../../ui/primitives.js";
 
@@ -80,6 +80,15 @@ export function MoveAppPanel({
     [apps, form.sourceHostId]
   );
   const selectedApp = apps.find((app) => app.id === form.appId) ?? sourceApps[0] ?? null;
+  const selectedIdentity = selectedApp ? dockerAppToRecoveryIdentity(selectedApp) : null;
+  const currentOptions = { stopSource: false, remapPorts: true, networkMode: "clone" as const };
+  const planMatchesSelection = selectedIdentity ? migrationPlanMatchesSelection(plannedRun, {
+    sourceHostId: form.sourceHostId,
+    targetHostId: form.targetHostId,
+    sourceAppIdentity: selectedIdentity,
+    strategy: form.strategy,
+    options: currentOptions
+  }) : false;
   const plan = plannedRun?.plan ?? null;
   const targetHostLabel = hostName(hosts, form.targetHostId);
   const activeMigrationJob = jobs.find((job) => job.id === activeMigrationJobId) ?? null;
@@ -92,6 +101,10 @@ export function MoveAppPanel({
   const volumeMapEntries = stringMapEntries(restore?.volumeMap);
   const portMapEntries = stringMapEntries(restore?.portRemap);
 
+  useEffect(() => {
+    if (plannedRun && !planMatchesSelection) onPlanned(null);
+  }, [form.sourceHostId, form.targetHostId, form.appId, form.strategy, planMatchesSelection, plannedRun, onPlanned]);
+
   return (
     <Panel title="Migrate app">
       <form
@@ -103,7 +116,9 @@ export function MoveAppPanel({
             const result = await postJson<{ run: MigrationRun }>("/api/recovery/migrations/plan", {
               sourceHostId: form.sourceHostId,
               targetHostId: form.targetHostId,
-              sourceAppIdentity: dockerAppToRecoveryIdentity(selectedApp)
+              sourceAppIdentity: dockerAppToRecoveryIdentity(selectedApp),
+              strategy: form.strategy,
+              options: currentOptions
             });
             onPlanned(result.run);
           });
@@ -166,22 +181,23 @@ export function MoveAppPanel({
           <button
             type="button"
             className="primary"
-            disabled={action.busy || !plannedRun || !selectedApp || Boolean(plan?.blockingIssues.length)}
+            disabled={action.busy || !planMatchesSelection || Boolean(plan?.blockingIssues.length)}
             onClick={() => void action.run(async () => {
-              if (!selectedApp) return;
-              await runJob(async () => {
-                const result = await postJson<MigrationExecuteResponse>("/api/recovery/migrations/execute", {
-                  sourceHostId: form.sourceHostId,
-                  targetHostId: form.targetHostId,
-                  sourceAppIdentity: dockerAppToRecoveryIdentity(selectedApp),
-                  strategy: form.strategy,
-                  options: { remapPorts: true }
+              if (!selectedApp || !plannedRun || !planMatchesSelection) return;
+              try {
+                await runJob(async () => {
+                  const result = await postJson<MigrationExecuteResponse>("/api/recovery/migrations/execute", {
+                    planRunId: plannedRun.id
+                  });
+                  setActiveMigrationJobId(result.job.id);
+                  return result;
                 });
-                setActiveMigrationJobId(result.job.id);
-                return result;
-              });
-              onPlanned(null);
-              await refresh();
+                await refresh();
+              } finally {
+                // A plan is single-use, and an ambiguous network failure may
+                // have happened after commit. Require a new reviewed plan.
+                onPlanned(null);
+              }
             })}
           >
             <Play size={16} />

@@ -18,6 +18,7 @@ import { useAsyncAction } from "../hooks/useAsyncAction.js";
 import { useDashboardTab } from "../hooks/useDashboardTab.js";
 import { useHostPreference } from "../hooks/useHostPreference.js";
 import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts.js";
+import { useContainerUsage } from "../hooks/useContainerUsage.js";
 import { containerStateLabel } from "../lib/dockerMetrics.js";
 import type { Jobish, JobResult } from "../lib/dashboardTypes.js";
 import { getScopedHostIds, jobLabel, roleLabel, sleep } from "../lib/hostScope.js";
@@ -34,6 +35,8 @@ import { SideNavigation } from "./dashboard/SideNavigation.js";
 import type { SearchResult } from "../lib/globalSearch.js";
 import type { RecoverySection } from "./panels/RecoveryCenterPanel.js";
 import { ButtonRow, SkeletonPanel } from "./ui/primitives.js";
+import { authorizationForRole } from "../lib/authorization.js";
+import { AuthorizationProvider } from "./AuthorizationContext.js";
 
 const APP_VERSION = import.meta.env.VITE_APP_VERSION ?? "dev";
 const adminTabDefaults = {
@@ -89,6 +92,7 @@ function arrayOrEmpty<T>(value: T[] | undefined | null) {
 }
 
 export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: AdminUser; theme: Theme; onToggleTheme: () => void; onLogout: () => void }) {
+  const authorization = authorizationForRole(user.role);
   const action = useAsyncAction();
   const { pushToast } = useToast();
   const [hosts, setHosts] = useState<DockerHost[]>([]);
@@ -108,7 +112,7 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
   const [terminalHost, setTerminalHost] = useState<DockerHost | null>(null);
   const [activity, setActivity] = useState<string | null>(null);
   const [resourceListQuery, setResourceListQuery] = useState({ query: "", key: 0 });
-  const [hostUsage, setHostUsage] = useState<Record<string, Record<string, any>[]>>({});
+  const hostUsage = useContainerUsage(hosts);
   const [optimisticContainerStates, setOptimisticContainerStates] = useState<Record<string, { state: string; timestamp: number }>>({});
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
@@ -127,7 +131,7 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
 
 
   const selectedHost = hosts.find((host) => host.id === selectedHostId) ?? hosts[0] ?? null;
-  const { tab, setTab } = useDashboardTab(Boolean(selectedHost), hostsLoaded);
+  const { tab, setTab } = useDashboardTab(Boolean(selectedHost), hostsLoaded, authorization.allowedTabs);
   const scopedHostIds = useMemo(() => getScopedHostIds(hosts, selectedHost?.id ?? selectedHostId, hostScope, customHostIds), [hosts, selectedHost?.id, selectedHostId, hostScope, customHostIds]);
   const scopedHosts = useMemo(() => scopedHostIds.map((hostId) => hosts.find((host) => host.id === hostId)).filter((host): host is DockerHost => Boolean(host)), [hosts, scopedHostIds]);
   const fleetScope = hostScope !== "selected";
@@ -214,7 +218,8 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
   useKeyboardShortcuts({
     setTab,
     refresh,
-    hasHost: Boolean(selectedHost)
+    hasHost: Boolean(selectedHost),
+    allowedTabs: authorization.allowedTabs
   });
 
   useEffect(() => {
@@ -280,7 +285,6 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
     }),
     [resources]
   );
-  const hostIdsKey = useMemo(() => hosts.map((item) => item.id).sort().join(","), [hosts]);
   const hostContainerCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const container of resourcesByKind.container) counts[container.hostId] = (counts[container.hostId] ?? 0) + 1;
@@ -312,35 +316,13 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
   const showTopbarKpis = hosts.length > 0 && !recoverySection;
   const topbarTitle = tab === "files" ? "Host Files" : recoverySection ? "Recovery Center" : tab === "catalog" ? "Catalog" : scopeTitle;
 
-  const loadHostUsage = useCallback(async () => {
-    const hostIds = hostIdsKey.split(",").filter(Boolean);
-    if (hostIds.length === 0) {
-      setHostUsage({});
-      return;
-    }
-    const entries = await Promise.all(hostIds.map(async (hostId) => {
-      try {
-        const result = await api<{ usage: Record<string, any>[] }>(`/api/hosts/${hostId}/containers/usage`);
-        return [hostId, result.usage] as const;
-      } catch {
-        return [hostId, []] as const;
-      }
-    }));
-    setHostUsage(Object.fromEntries(entries));
-  }, [hostIdsKey]);
-
-  useEffect(() => {
-    void loadHostUsage();
-    const timer = window.setInterval(() => void loadHostUsage(), 10_000);
-    return () => window.clearInterval(timer);
-  }, [loadHostUsage]);
-
   async function logout() {
     await postJson("/api/auth/logout", {});
     onLogout();
   }
 
   async function hostAction(type: string, payload: Record<string, unknown> = {}, hostId = selectedHost?.id) {
+    if (!authorization.canOperate) throw new Error("Your role cannot perform Docker mutations");
     if (!hostId) return;
     let targetContainerId: string | null = null;
     if (type.startsWith("container.") && typeof payload.containerId === "string") {
@@ -382,6 +364,7 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
   }
 
   return (
+    <AuthorizationProvider role={user.role}>
     <main className={`appShell ${isSidebarCollapsed ? "sidebarCollapsed" : ""}`}>
       <aside className={`sidebar ${isSidebarOpen ? "open" : ""} ${isSidebarCollapsed ? "collapsed" : ""}`}>
         <div className="sideHeader">
@@ -416,11 +399,13 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
           </div>
         </div>
 
-        <button className="primary full" onClick={() => setShowHostForm((value) => !value)}>
-          <Plus size={18} />
-          <span className="buttonText">Host</span>
-        </button>
-        {showHostForm && <HostForm runJob={runJob} onCreated={() => { setShowHostForm(false); void refresh(); }} />}
+        {authorization.canOperate && (
+          <button className="primary full" onClick={() => setShowHostForm((value) => !value)}>
+            <Plus size={18} />
+            <span className="buttonText">Host</span>
+          </button>
+        )}
+        {authorization.canOperate && showHostForm && <HostForm runJob={runJob} onCreated={() => { setShowHostForm(false); void refresh(); }} />}
 
         <SideNavigation currentTab={tab} hasHost={Boolean(selectedHost)} onTabChange={setTab} />
       </aside>
@@ -526,8 +511,8 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
                 <h3>Host Inventory</h3>
                 <p>Add a Linux server reachable by SSH. ComposeBastion will check Docker Engine and Compose before syncing inventory.</p>
                 <ButtonRow>
-                  <button className="primary" onClick={() => setShowHostForm(true)}><Plus size={18} />Add Host</button>
-                  <Link className="buttonLink" to={tabPath("settings")}><Upload size={18} />Restore Config</Link>
+                  {authorization.canOperate && <button className="primary" onClick={() => setShowHostForm(true)}><Plus size={18} />Add Host</button>}
+                  {authorization.canAdminister && <Link className="buttonLink" to={tabPath("settings")}><Upload size={18} />Restore Config</Link>}
                 </ButtonRow>
               </section>
             ) : (
@@ -560,6 +545,7 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
                     containers={resourcesByKind.container}
                     images={resourcesByKind.image}
                     networks={resourcesByKind.network}
+                    usage={hostUsage}
                     onAction={hostAction}
                     refresh={refresh}
                     runJob={runJob}
@@ -681,7 +667,7 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
           </Suspense>
         </ErrorBoundary>
       </section>
-      {terminalHost && (
+      {authorization.canUseTerminal && terminalHost && (
         <ErrorBoundary resetKey={terminalHost.id} title="The host terminal failed to load">
           <Suspense fallback={<div className="drawer hostTerminalDrawer"><div className="notice">Loading host terminal...</div></div>}>
             <HostTerminalDrawer host={terminalHost} onClose={() => setTerminalHost(null)} />
@@ -689,5 +675,6 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
         </ErrorBoundary>
       )}
     </main>
+    </AuthorizationProvider>
   );
 }

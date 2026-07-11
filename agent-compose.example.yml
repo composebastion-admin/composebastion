@@ -6,10 +6,21 @@ services:
       context: .
       dockerfile: Dockerfile.agent
     environment:
-      AGENT_TOKEN: change-this-to-a-long-random-token
+      AGENT_TOKEN: ${AGENT_TOKEN:?Set AGENT_TOKEN to a strong random token of at least 24 characters}
+      AGENT_HOST: 0.0.0.0
       AGENT_PORT: 8090
     ports:
-      - "8090:8090"
+      - name: agent
+        target: 8090
+        published: "${COMPOSEBASTION_AGENT_PORT:-8090}"
+        host_ip: ${COMPOSEBASTION_AGENT_BIND_ADDRESS:?Set COMPOSEBASTION_AGENT_BIND_ADDRESS to a trusted manager-reachable address}
+        protocol: tcp
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8090/api/health',{headers:{authorization:'Bearer '+process.env.AGENT_TOKEN}}).then(async(r)=>process.exit(r.ok&&(await r.json()).ok===true?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     restart: unless-stopped

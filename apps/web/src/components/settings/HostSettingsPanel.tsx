@@ -8,8 +8,10 @@ import { describeAgentCompatibility } from "../../lib/agentCompatibility.js";
 import { hostFormPayload } from "../../lib/hostScope.js";
 import { ButtonRow, Panel } from "../ui/primitives.js";
 import { ConfigBackupPanel } from "./ConfigBackupPanel.js";
+import { useAuthorization } from "../AuthorizationContext.js";
 
 export function HostSettingsPanel({ host, onChanged }: { host: DockerHost; onChanged: () => Promise<void> }) {
+  const { canAdminister } = useAuthorization();
   const { confirm } = useConfirm();
   const action = useAsyncAction();
   const agentCompatibility = describeAgentCompatibility(host.agentVersion);
@@ -120,7 +122,7 @@ export function HostSettingsPanel({ host, onChanged }: { host: DockerHost; onCha
           <button type="button" className="danger" disabled={action.busy} onClick={() => void remove()}><Trash2 size={18} />Delete Host</button>
         </ButtonRow>
       </form>
-      <ConfigBackupPanel onImported={onChanged} />
+      {canAdminister && <ConfigBackupPanel onImported={onChanged} />}
     </Panel>
   );
 }

@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { RegistryHttpResponse, RegistryRequestOptions } from "../src/services/registryHttp.js";
 import {
   fetchRegistryManifestDigest,
   fetchRegistryManifestDigests,
@@ -7,6 +8,19 @@ import {
   RegistryLookupError
 } from "../src/services/registryManifest.js";
 
+function registryResponse(status: number, body: unknown = "", headers: Record<string, string> = {}): RegistryHttpResponse {
+  const bytes = Buffer.isBuffer(body)
+    ? body
+    : Buffer.from(typeof body === "string" ? body : JSON.stringify(body));
+  const normalizedHeaders = Object.fromEntries(Object.entries(headers).map(([name, value]) => [name.toLowerCase(), value]));
+  return {
+    status,
+    ok: status >= 200 && status < 300,
+    body: bytes,
+    headers: { get: (name) => normalizedHeaders[name.toLowerCase()] ?? null }
+  };
+}
+
 describe("parseImageReference", () => {
   it("normalizes docker hub library images", () => {
     expect(parseImageReference("nginx:latest")).toEqual({
@@ -14,76 +28,107 @@ describe("parseImageReference", () => {
       repository: "library/nginx",
       tag: "latest",
       digest: null,
+      reference: "latest",
       canonical: "registry-1.docker.io/library/nginx:latest"
     });
   });
 
   it("parses private registry references", () => {
-    expect(parseImageReference("registry.example.com/acme/app:1.2.3")).toEqual({
-      registry: "registry.example.com",
+    expect(parseImageReference("registry.example.com:5443/acme/app:1.2.3")).toEqual({
+      registry: "registry.example.com:5443",
       repository: "acme/app",
       tag: "1.2.3",
       digest: null,
-      canonical: "registry.example.com/acme/app:1.2.3"
+      reference: "1.2.3",
+      canonical: "registry.example.com:5443/acme/app:1.2.3"
     });
   });
 
-  it("splits digest references", () => {
-    const parsed = parseImageReference("ghcr.io/acme/app:1.0@sha256:deadbeef");
-    expect(parsed.registry).toBe("ghcr.io");
-    expect(parsed.repository).toBe("acme/app");
-    expect(parsed.tag).toBe("1.0");
-    expect(parsed.digest).toBe("sha256:deadbeef");
+  it("uses complete digest references for manifest lookup", () => {
+    const digest = `sha256:${"a".repeat(64)}`;
+    const parsed = parseImageReference(`ghcr.io/acme/app:1.0@${digest}`);
+    expect(parsed).toMatchObject({ registry: "ghcr.io", repository: "acme/app", tag: "1.0", digest, reference: digest });
+  });
+
+  it("accepts Docker Distribution separator forms and enforces length after Docker Hub normalization", () => {
+    expect(parseImageReference("registry.example.com/acme/foo__bar--baz.qux:1").repository)
+      .toBe("acme/foo__bar--baz.qux");
+    expect(parseImageReference(`${"a".repeat(247)}:latest`).repository)
+      .toBe(`library/${"a".repeat(247)}`);
+    expect(() => parseImageReference(`${"a".repeat(248)}:latest`))
+      .toThrow(RegistryLookupError);
+  });
+
+  it.each([
+    "https://registry.example.com/acme/app:latest",
+    "user@registry.example.com/acme/app:latest",
+    "registry.example.com/acme/../app:latest",
+    "registry.example.com/foo..bar/app:latest",
+    "registry.example.com/foo._bar/app:latest",
+    "registry.example.com/foo___bar/app:latest",
+    "bad_host.example/foo/app:latest",
+    "-bad.example/foo/app:latest",
+    "bad-.example/foo/app:latest",
+    "foo..example/foo/app:latest",
+    "registry.example.com:0/acme/app:latest",
+    "registry.example.com:65536/acme/app:latest",
+    "0177.0.0.1/acme/app:latest",
+    "registry.example.com/acme/app:latest?redirect=http://localhost",
+    "registry.example.com/acme/app:latest#fragment",
+    "registry.example.com/Acme/app:latest",
+    "registry.example.com/acme/app@sha256:deadbeef"
+  ])("rejects malformed or ambiguous references: %s", (reference) => {
+    expect(() => parseImageReference(reference)).toThrow(RegistryLookupError);
+    try {
+      parseImageReference(reference);
+    } catch (error) {
+      expect(error).toMatchObject({ reason: "invalid" });
+    }
   });
 });
 
-describe("fetchRegistryManifestDigest", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
+describe("registry manifest requests", () => {
+  it("preserves blocked-address policy failures for the API boundary", async () => {
+    const request = vi.fn(async () => {
+      throw Object.assign(new Error("blocked"), { code: "PRIVATE_REGISTRY_ADDRESS" });
+    });
+    await expect(fetchRegistryManifestDigest("registry.internal/blocked/app:1.0", undefined, request))
+      .rejects.toMatchObject({ reason: "private_address" });
   });
 
   it("returns docker-content-digest from an anonymous HEAD", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(null, {
-      status: 200,
-      headers: { "docker-content-digest": "sha256:abc123" }
-    })));
-
-    await expect(fetchRegistryManifestDigest("registry.example.com/anon/app:1.2.3")).resolves.toBe("abc123");
+    const request = vi.fn(async () => registryResponse(200, "", { "docker-content-digest": "sha256:abc123" }));
+    await expect(fetchRegistryManifestDigest("registry.example.com/anon/app:1.2.3", undefined, request)).resolves.toBe("abc123");
   });
 
-  it("performs the bearer token flow on a 401 challenge", async () => {
-    const calls: Array<{ url: string; auth?: string }> = [];
-    vi.stubGlobal("fetch", vi.fn(async (input: any, init?: RequestInit) => {
+  it("performs the bearer token flow on a validated challenge", async () => {
+    const calls: Array<{ url: string; auth?: string; options?: RegistryRequestOptions }> = [];
+    const request = vi.fn(async (input: string | URL, options?: RegistryRequestOptions) => {
       const url = String(input);
-      const headers = (init?.headers ?? {}) as Record<string, string>;
-      calls.push({ url, auth: headers.Authorization });
-      if (url.includes("/token")) {
-        return new Response(JSON.stringify({ token: "anon-token", expires_in: 300 }), { status: 200 });
-      }
-      if (!headers.Authorization) {
-        return new Response(null, {
-          status: 401,
-          headers: { "www-authenticate": 'Bearer realm="https://auth.example.com/token",service="registry.example.com",scope="repository:bearer/app:pull"' }
+      const auth = Object.entries(options?.headers ?? {}).find(([name]) => name.toLowerCase() === "authorization")?.[1];
+      calls.push({ url, auth, options });
+      if (url.includes("/token")) return registryResponse(200, { token: "anon-token", expires_in: 300 });
+      if (!auth) {
+        return registryResponse(401, "", {
+          "www-authenticate": 'Bearer realm="https://auth.example.com/token",service="registry.example.com",scope="repository:bearer/app:pull"'
         });
       }
-      return new Response(null, { status: 200, headers: { "docker-content-digest": "sha256:tokened" } });
-    }));
+      return registryResponse(200, "", { "docker-content-digest": "sha256:tokened" });
+    });
 
-    await expect(fetchRegistryManifestDigest("registry.example.com/bearer/app:2.0")).resolves.toBe("tokened");
+    await expect(fetchRegistryManifestDigest("registry.example.com/bearer/app:2.0", undefined, request)).resolves.toBe("tokened");
     expect(calls.some((call) => call.url.startsWith("https://auth.example.com/token"))).toBe(true);
     expect(calls.at(-1)?.auth).toBe("Bearer anon-token");
+    expect(calls.every((call) => call.options?.maxRedirects === 3)).toBe(true);
   });
 
   it("classifies missing manifests as not_found", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 404 })));
-
-    await expect(fetchRegistryManifestDigest("registry.example.com/missing/app:1.0"))
+    const request = vi.fn(async () => registryResponse(404));
+    await expect(fetchRegistryManifestDigest("registry.example.com/missing/app:1.0", undefined, request))
       .rejects.toMatchObject({ reason: "not_found" });
-    await expect(fetchRegistryManifestDigest("registry.example.com/missing/app:1.0"))
-      .rejects.toBeInstanceOf(RegistryLookupError);
   });
 
-  it("includes child manifest digests from a remote image index", async () => {
+  it("includes child manifest digests from an image index", async () => {
     const index = {
       schemaVersion: 2,
       mediaType: "application/vnd.oci.image.index.v1+json",
@@ -92,52 +137,40 @@ describe("fetchRegistryManifestDigest", () => {
         { digest: "sha256:linux-arm64", platform: { os: "linux", architecture: "arm64" } }
       ]
     };
-    const fetchMock = vi.fn(async (_input: any, init?: RequestInit) => {
-      if (init?.method === "HEAD") {
-        return new Response(null, {
-          status: 200,
-          headers: { "docker-content-digest": "sha256:index" }
-        });
-      }
-      return new Response(JSON.stringify(index), {
-        status: 200,
-        headers: {
+    const request = vi.fn(async (_input: string | URL, options?: RegistryRequestOptions) => options?.method === "HEAD"
+      ? registryResponse(200, "", { "docker-content-digest": "sha256:index" })
+      : registryResponse(200, index, {
           "content-type": "application/vnd.oci.image.index.v1+json",
           "docker-content-digest": "sha256:index"
-        }
-      });
-    });
-    vi.stubGlobal("fetch", fetchMock);
+        }));
 
-    const result = await fetchRegistryManifestDigests("registry.example.com/multi/app:latest", undefined, "linux-amd64");
-
+    const result = await fetchRegistryManifestDigests(
+      "registry.example.com/multi/app:latest",
+      undefined,
+      "linux-amd64",
+      request
+    );
     expect(result.digest).toBe("index");
     expect(result.childDigests).toEqual(["linux-amd64", "linux-arm64"]);
     expect(result.equivalentDigests).toEqual(expect.arrayContaining(["index", "linux-amd64", "linux-arm64"]));
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledTimes(2);
   });
 });
 
 describe("fetchRegistryTags", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("retries with basic credentials after a basic challenge and normalizes tags", async () => {
-    const fetchMock = vi.fn(async (_input: any, init?: RequestInit) => {
-      const headers = (init?.headers ?? {}) as Record<string, string>;
-      if (!headers.Authorization) {
-        return new Response(null, { status: 401, headers: { "www-authenticate": 'Basic realm="registry"' } });
-      }
-      expect(headers.Authorization).toMatch(/^Basic /);
-      return new Response(JSON.stringify({ tags: ["1.10.0", "latest", "1.2.0", "latest"] }), { status: 200 });
+  it("retries with basic credentials and applies bounded request policy", async () => {
+    const request = vi.fn(async (_input: string | URL, options?: RegistryRequestOptions) => {
+      const authorization = Object.entries(options?.headers ?? {}).find(([name]) => name.toLowerCase() === "authorization")?.[1];
+      if (!authorization) return registryResponse(401, "", { "www-authenticate": 'Basic realm="registry"' });
+      expect(authorization).toMatch(/^Basic /);
+      expect(options?.maxBytes).toBe(1024 * 1024);
+      return registryResponse(200, { tags: ["1.10.0", "latest", "1.2.0", "latest"] });
     });
-    vi.stubGlobal("fetch", fetchMock);
 
     await expect(fetchRegistryTags("registry.example.com/basic/app:1.2.0", {
       username: "user",
       password: "pass"
-    })).resolves.toEqual(["1.2.0", "1.10.0", "latest"]);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    }, request)).resolves.toEqual(["1.2.0", "1.10.0", "latest"]);
+    expect(request).toHaveBeenCalledTimes(2);
   });
 });

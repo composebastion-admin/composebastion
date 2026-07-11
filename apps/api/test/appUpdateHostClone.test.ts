@@ -2,13 +2,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const query = vi.fn();
 const enqueueJob = vi.fn();
+const notifyJobQueued = vi.fn();
 
 vi.mock("../src/db/pool.js", () => ({
-  query: (...args: unknown[]) => query(...args)
+  query: (...args: unknown[]) => query(...args),
+  withTransaction: async (fn: (client: { query: typeof query }) => Promise<unknown>) => fn({ query })
 }));
 
 vi.mock("../src/services/jobs.js", () => ({
-  enqueueJob: (...args: unknown[]) => enqueueJob(...args)
+  enqueueJob: (...args: unknown[]) => enqueueJob(...args),
+  enqueueJobInTransaction: (_client: unknown, ...args: unknown[]) => enqueueJob(...args),
+  notifyJobQueued: (...args: unknown[]) => notifyJobQueued(...args)
 }));
 
 vi.mock("../src/services/imageUpdates.js", () => ({
@@ -72,6 +76,7 @@ describe("app updates for tracked GitHub host clones", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     enqueueJob.mockImplementation(async (job) => ({ id: "queued-job", status: "queued", ...job }));
+    notifyJobQueued.mockResolvedValue(undefined);
     query.mockImplementation(async (sql: string) => {
       if (sql.includes("FROM docker_hosts")) return { rows: [{ id: hostId, name: "Host", hostname: "host.local" }] };
       if (sql.includes("FROM resource_snapshots")) return { rows: [] };
@@ -103,5 +108,17 @@ describe("app updates for tracked GitHub host clones", () => {
         composePath: "docker-compose.yml"
       }
     });
+    expect(notifyJobQueued).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not publish wakeups when a later insert aborts the batch transaction", async () => {
+    enqueueJob
+      .mockResolvedValueOnce({ id: "first-job", status: "queued", type: "git.pull" })
+      .mockRejectedValueOnce(new Error("second insert failed"));
+    const { updateApp } = await import("../src/services/apps.js");
+
+    await expect(updateApp(`git:${repoId}`)).rejects.toThrow("second insert failed");
+    expect(enqueueJob).toHaveBeenCalledTimes(2);
+    expect(notifyJobQueued).not.toHaveBeenCalled();
   });
 });

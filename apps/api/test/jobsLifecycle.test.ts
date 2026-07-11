@@ -4,7 +4,7 @@ const query = vi.hoisted(() => vi.fn());
 
 vi.mock("../src/db/pool.js", () => ({
   query,
-  withTransaction: vi.fn()
+  withTransaction: (callback: (client: { query: typeof query }) => Promise<unknown>) => callback({ query })
 }));
 
 vi.mock("../src/services/redis.js", () => ({
@@ -16,6 +16,7 @@ const { buildJobProgress, cancelQueuedJob, markJobProgressStep, retryJob, update
 const now = new Date("2026-06-16T12:00:00.000Z");
 const hostId = "11111111-1111-4111-8111-111111111111";
 const userId = "22222222-2222-4222-8222-222222222222";
+const lease = { workerId: "55555555-5555-4555-8555-555555555555", attemptCount: 1 };
 
 function jobRow(overrides: Record<string, unknown> = {}) {
   return {
@@ -61,13 +62,14 @@ describe("job lifecycle helpers", () => {
     expect(result).toMatchObject({ canceled: false, job: { status: "running" } });
   });
 
-  it("retries failed jobs by cloning the typed action into a new queued job", async () => {
+  it("atomically requeues an allowlisted failed job without cloning it", async () => {
     query
-      .mockResolvedValueOnce({ rows: [jobRow({ status: "failed" })] })
+      .mockResolvedValueOnce({ rows: [jobRow({ type: "host.check", status: "failed", payload: {}, attempt_count: 1 })] })
       .mockResolvedValueOnce({ rows: [jobRow({
-        id: "44444444-4444-4444-8444-444444444444",
+        type: "host.check",
         status: "queued",
-        payload: { containerId: "demo-container" },
+        payload: {},
+        attempt_count: 1,
         error: null,
         created_by: userId,
         started_at: null,
@@ -77,14 +79,18 @@ describe("job lifecycle helpers", () => {
     const result = await retryJob("33333333-3333-4333-8333-333333333333", userId);
 
     expect(result.original?.status).toBe("failed");
-    expect(result.retried?.id).toBe("44444444-4444-4444-8444-444444444444");
-    expect(query.mock.calls[1]?.[0]).toContain("INSERT INTO operation_jobs");
-    expect(query.mock.calls[1]?.[1]).toEqual(expect.arrayContaining([
-      "container.restart",
-      hostId,
-      { containerId: "demo-container" },
-      userId
-    ]));
+    expect(result.retried?.id).toBe(result.original?.id);
+    expect(query.mock.calls[0]?.[0]).toContain("FOR UPDATE");
+    expect(query.mock.calls[1]?.[0]).toContain("UPDATE operation_jobs");
+  });
+
+  it("rejects generic retry for destructive and migration jobs", async () => {
+    for (const type of ["container.restart", "migration.execute"]) {
+      query.mockResolvedValueOnce({ rows: [jobRow({ type, status: "failed", attempt_count: 1 })] });
+      const result = await retryJob("33333333-3333-4333-8333-333333333333", userId);
+      expect(result.retried).toBeNull();
+    }
+    expect(query).toHaveBeenCalledTimes(2);
   });
 
   it("does not retry running jobs", async () => {
@@ -119,7 +125,7 @@ describe("job lifecycle helpers", () => {
   it("persists normalized progress steps", async () => {
     query.mockResolvedValueOnce({ rows: [jobRow({ progress: [{ id: "run", label: "Run", status: "running" }] })] });
 
-    const result = await updateJobProgress("33333333-3333-4333-8333-333333333333", [{ id: "run", label: "Run", status: "running" }]);
+    const result = await updateJobProgress("33333333-3333-4333-8333-333333333333", [{ id: "run", label: "Run", status: "running" }], lease);
 
     expect(result?.progress).toEqual([{ id: "run", label: "Run", status: "running" }]);
     expect(query.mock.calls[0]?.[0]).toContain("SET progress = $2");
@@ -128,7 +134,7 @@ describe("job lifecycle helpers", () => {
   it("marks a named progress step active", async () => {
     query.mockResolvedValueOnce({ rows: [jobRow({ progress: buildJobProgress("host.sync", "running", "inventory") })] });
 
-    const result = await markJobProgressStep("33333333-3333-4333-8333-333333333333", "host.sync", "inventory");
+    const result = await markJobProgressStep("33333333-3333-4333-8333-333333333333", "host.sync", "inventory", undefined, lease);
 
     expect(result?.progress).toMatchObject([
       { id: "connect", status: "completed" },

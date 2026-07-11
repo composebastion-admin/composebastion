@@ -29,15 +29,18 @@ the base images all support the device.
 
 ## Current Published Release
 
-The latest verified release is `v1.0.6`.
+The most recent published stable release is `v1.0.6`, but its embedded scanner
+is superseded for production readiness by the pending `1.0.7` remediation. It
+is not being presented as the latest verified production release.
 
 - App image: `ghcr.io/composebastion-admin/composebastion-app`
 - Agent image: `ghcr.io/composebastion-admin/composebastion-agent`
 - Exact release tags: `1.0.6` and `v1.0.6`
-- Moving `main` tags: `latest`, branch tags, and `sha-*`
+- Moving `main` alias, stable-only `latest`, and full-commit `sha-*` indexes
 
-Pin `COMPOSEBASTION_VERSION=1.0.6` for controlled production upgrades. Use
-`latest` only when you intentionally want the newest `main` build.
+Existing `1.0.6` installations may remain pinned while preparing an upgrade,
+but new production installs should wait for the verified `1.0.7` release. Use
+`main` only when you intentionally test protected-branch candidates.
 
 Runtime app and agent images include ComposeBastion license, notice, trademark,
 and third-party notice files under `/licenses`.
@@ -71,7 +74,12 @@ APP_SECRET=<first generated value>
 POSTGRES_PASSWORD=<second generated value>
 COMPOSEBASTION_VERSION=latest
 COMPOSEBASTION_BACKUP_DIR=/srv/composebastion/backups
+# Trusted direct-HTTP evaluation only; keep true when using HTTPS.
+SECURE_COOKIES=false
 ```
+
+The literal placeholder copied from `.env.example` is intentionally rejected
+in production; replace it with the generated `APP_SECRET` before starting.
 
 Start the stack:
 
@@ -81,8 +89,10 @@ docker compose -f docker-compose.image.yml up -d
 ```
 
 Open `http://<manager-ip>:8080`, create the first owner account, then add a
-Docker host. For production change control, pin `COMPOSEBASTION_VERSION` to a
-release tag such as `1.0.6` instead of `latest`.
+Docker host. The `SECURE_COOKIES=false` setting is only for this trusted
+direct-HTTP evaluation path; do not expose it to an untrusted network, and set
+it back to `true` when HTTPS is configured. For production change control, pin
+`COMPOSEBASTION_VERSION` to a release tag such as `1.0.6` instead of `latest`.
 
 ## Source Build Install
 
@@ -107,6 +117,9 @@ Edit `.env`:
 APP_SECRET=<first generated value>
 POSTGRES_PASSWORD=<second generated value>
 ```
+
+The literal placeholder copied from `.env.example` is intentionally rejected
+in production; replace it with the generated `APP_SECRET` before starting.
 
 Start the stack:
 
@@ -137,7 +150,8 @@ docker compose down
 - On Proxmox, prefer a small Docker VM. LXC can work only when Docker is already
   functioning correctly in that container with nesting and storage configured.
 - If using a reverse proxy, keep `COMPOSEBASTION_HTTP_PORT` bound only to the
-  trusted LAN or proxy network and set `SECURE_COOKIES=true` once HTTPS is live.
+  trusted LAN or proxy network and keep the production `SECURE_COOKIES=true`
+  default.
 - Managed hosts still need native Docker support. SSH mode requires `docker`,
   `docker compose`, and Docker socket access for the configured SSH user.
 
@@ -157,6 +171,7 @@ Set production environment values in `.env`:
 APP_SECRET=<unique random value>
 POSTGRES_PASSWORD=<URL-safe database password from: openssl rand -hex 32>
 COMPOSEBASTION_BACKUP_DIR=/srv/composebastion/backups
+COMPOSEBASTION_HTTP_BIND_ADDRESS=127.0.0.1
 SECURE_COOKIES=true
 CORS_ORIGINS=https://composebastion.example.com
 BACKUP_HOST_PATH_ALLOWED_ROOTS=/srv,/home/docker
@@ -190,9 +205,12 @@ docker compose -f docker-compose.image.yml logs -f app worker
 
 ## Reverse Proxy Notes
 
-ComposeBastion listens on `8080` in the base Compose file. In production, the
-override removes the public port binding so your reverse proxy can be the only
-public entry point.
+The published-image Compose file binds port `8080` to
+`COMPOSEBASTION_HTTP_BIND_ADDRESS` (`0.0.0.0` by default for quick-start
+compatibility). Set it to `127.0.0.1` for a reverse proxy on the manager host,
+or to a trusted LAN address when the proxy is external. The source production
+override resets the host port entirely, so a Compose-network proxy can be the
+only entry point.
 
 Your proxy should:
 
@@ -201,8 +219,9 @@ Your proxy should:
 - Preserve websocket upgrades for the host terminal route.
 - Preserve standard forwarding headers.
 
-Set `SECURE_COOKIES=true` only when the browser reaches ComposeBastion through
-HTTPS.
+Production Compose renders use `SECURE_COOKIES=true` by default. Set it to
+`false` explicitly only for a trusted direct-HTTP evaluation; secure cookies
+require the browser-facing URL to use HTTPS.
 
 ## First Live Test
 
@@ -261,19 +280,28 @@ Admin -> Settings and confirm recent recovery points are usable.
 Before tagging or upgrading a production deployment, run:
 
 ```bash
+RELEASE_APP_SECRET="$(openssl rand -hex 32)"
+RELEASE_AGENT_TOKEN="$(openssl rand -hex 32)"
+RELEASE_POSTGRES_PASSWORD="$(openssl rand -hex 32)"
 npm run typecheck
 npm run lint:migrations
 npm run openapi:check --workspace @composebastion/api
 npm test
 npm run smoke:web
-npm audit --omit=dev --audit-level=high
-docker compose config
-POSTGRES_PASSWORD=composebastion-ci-password \
-  APP_SECRET=ci-test-secret-which-is-at-least-32-chars-long \
+npm audit --audit-level=high
+POSTGRES_PASSWORD="${RELEASE_POSTGRES_PASSWORD}" \
+  APP_SECRET="${RELEASE_APP_SECRET}" \
+  docker compose config
+POSTGRES_PASSWORD="${RELEASE_POSTGRES_PASSWORD}" \
+  APP_SECRET="${RELEASE_APP_SECRET}" \
   docker compose -f docker-compose.image.yml config
-POSTGRES_PASSWORD=composebastion-ci-password \
-  APP_SECRET=ci-test-secret-which-is-at-least-32-chars-long \
+POSTGRES_PASSWORD="${RELEASE_POSTGRES_PASSWORD}" \
+  APP_SECRET="${RELEASE_APP_SECRET}" \
   docker compose -f docker-compose.yml -f docker-compose.prod.example.yml config
-AGENT_TOKEN=ci-test-agent-token-which-is-at-least-32-chars-long \
+AGENT_TOKEN="${RELEASE_AGENT_TOKEN}" \
+  COMPOSEBASTION_AGENT_BIND_ADDRESS=127.0.0.1 \
   docker compose -f agent-compose.image.example.yml config
 ```
+
+These validation credentials exist only in the current shell. Generate a new
+set for every run, and never print, persist, or commit them.

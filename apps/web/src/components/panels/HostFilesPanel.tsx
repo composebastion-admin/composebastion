@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Database, FilePlus, Github, Pencil, Play, Plus, RefreshCw, Save, X } from "lucide-react";
+import { Database, FilePlus, GitBranch, Pencil, Play, Plus, RefreshCw, Save, X } from "lucide-react";
 import type { DockerHost } from "@composebastion/shared";
 import { api, postJson } from "../../api.js";
 import { useAsyncAction } from "../../hooks/useAsyncAction.js";
@@ -225,7 +225,7 @@ export function HostFilesPanel({
             <input placeholder="Branch, optional" value={cloneForm.branch} onChange={(event) => setCloneForm({ ...cloneForm, branch: event.target.value })} />
             <label className="checkLine"><input type="checkbox" checked={cloneForm.shallow} onChange={(event) => setCloneForm({ ...cloneForm, shallow: event.target.checked })} />Shallow clone</label>
           </div>
-          <button className="primary" disabled={action.busy}><Github size={18} />Clone</button>
+          <button className="primary" disabled={action.busy}><GitBranch size={18} />Clone</button>
         </form>
       </div>
 

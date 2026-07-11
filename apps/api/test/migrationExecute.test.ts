@@ -7,13 +7,16 @@ const getHostForWorker = vi.fn();
 const runRecoveryCreate = vi.fn();
 const runRecoveryRestore = vi.fn();
 const resolveAppContext = vi.fn();
-const getRecoveryPoint = vi.fn();
-const createRecoveryPoint = vi.fn();
+const getMigrationRecoveryPoint = vi.fn();
+const createMigrationRecoveryPoint = vi.fn();
 const stopContainersWithRestartOnFailure = vi.fn();
 const startContainersOneByOne = vi.fn();
 const runSshCommand = vi.fn();
 const syncDockerInventory = vi.fn();
 const checkImageUpdatesForHost = vi.fn();
+const revalidateMigrationPlan = vi.fn();
+const migrationIntentsEqual = vi.fn();
+const recoveryAppIdentitiesEqual = vi.fn();
 
 vi.mock("../src/db/pool.js", () => ({
   query: (...args: unknown[]) => query(...args)
@@ -40,8 +43,8 @@ vi.mock("../src/services/recoveryAppContext.js", () => ({
 }));
 
 vi.mock("../src/services/recoveryCenter.js", () => ({
-  createRecoveryPoint: (...args: unknown[]) => createRecoveryPoint(...args),
-  getRecoveryPoint: (...args: unknown[]) => getRecoveryPoint(...args)
+  createMigrationRecoveryPoint: (...args: unknown[]) => createMigrationRecoveryPoint(...args),
+  getMigrationRecoveryPoint: (...args: unknown[]) => getMigrationRecoveryPoint(...args)
 }));
 
 vi.mock("../src/services/recoveryContainerControl.js", () => ({
@@ -61,6 +64,13 @@ vi.mock("../src/services/imageUpdates.js", () => ({
   checkImageUpdatesForHost: (...args: unknown[]) => checkImageUpdatesForHost(...args)
 }));
 
+vi.mock("../src/services/migrationPlanning.js", () => ({
+  MigrationPlanStaleError: class MigrationPlanStaleError extends Error {},
+  revalidateMigrationPlan: (...args: unknown[]) => revalidateMigrationPlan(...args),
+  migrationIntentsEqual: (...args: unknown[]) => migrationIntentsEqual(...args),
+  recoveryAppIdentitiesEqual: (...args: unknown[]) => recoveryAppIdentitiesEqual(...args)
+}));
+
 const sourceHostId = "00000000-0000-4000-8000-000000000001";
 const targetHostId = "00000000-0000-4000-8000-000000000002";
 const migrationRunId = "00000000-0000-4000-8000-000000000003";
@@ -71,13 +81,44 @@ const restoredName = buildCloneContainerName("web", projectName);
 
 const migrationRow = {
   id: migrationRunId,
+  plan_run_id: "00000000-0000-4000-8000-000000000010",
   source_host_id: sourceHostId,
   target_host_id: targetHostId,
   source_app_identity: { kind: "standalone", containerIds: ["source-web"] },
   mode: "execute",
   status: "queued",
   recovery_point_id: recoveryPointId,
-  plan: null,
+  plan: {
+    sourceHostId,
+    targetHostId,
+    sourceAppIdentity: { kind: "standalone", containerIds: ["source-web"] },
+    intent: {
+      strategy: "clone",
+      options: { stopSource: false, remapPorts: true, networkMode: "clone" }
+    },
+    sourceFingerprint: "a".repeat(64),
+    targetFingerprint: "b".repeat(64),
+    steps: [],
+    warnings: [],
+    estimatedArtifacts: 1,
+    estimatedVolumes: 0,
+    estimatedHostFolders: 0,
+    checks: {
+      sourceHostAvailable: true,
+      targetHostAvailable: true,
+      sourceDockerAvailable: true,
+      targetDockerAvailable: true,
+      sourceComposeAvailable: true,
+      targetComposeAvailable: true
+    },
+    portConflicts: [],
+    volumeCollisions: [],
+    nameCollisions: [],
+    missingNetworks: [],
+    networkConflicts: [],
+    estimatedDataBytes: null,
+    blockingIssues: []
+  },
   error: null,
   created_at: new Date("2026-06-15T12:00:00.000Z"),
   started_at: null,
@@ -173,12 +214,15 @@ describe("migration execute standalone restore verification", () => {
       bindMap: {},
       portRemap: {}
     });
-    getRecoveryPoint.mockResolvedValue(recoveryPointDetail);
-    createRecoveryPoint.mockResolvedValue({ id: recoveryPointId });
+    getMigrationRecoveryPoint.mockResolvedValue(recoveryPointDetail);
+    createMigrationRecoveryPoint.mockResolvedValue({ id: recoveryPointId });
     stopContainersWithRestartOnFailure.mockResolvedValue(["source-web"]);
     startContainersOneByOne.mockResolvedValue(undefined);
     syncDockerInventory.mockResolvedValue({ container: 1, image: 1, network: 1, volume: 0 });
     checkImageUpdatesForHost.mockResolvedValue([]);
+    revalidateMigrationPlan.mockResolvedValue(migrationRow.plan);
+    migrationIntentsEqual.mockReturnValue(true);
+    recoveryAppIdentitiesEqual.mockReturnValue(true);
   });
 
   it("verifies standalone restores by restored container names instead of compose project", async () => {
@@ -205,8 +249,69 @@ describe("migration execute standalone restore verification", () => {
     expect(runRecoveryRestore).toHaveBeenCalledWith(targetHostId, expect.objectContaining({ recoveryPointId }));
     expect(syncDockerInventory).toHaveBeenCalledWith(targetHostId);
     expect(result.inventory.synced).toBe(true);
+    expect(revalidateMigrationPlan).toHaveBeenNthCalledWith(1, expect.objectContaining({ id: migrationRunId }), {
+      refreshSource: true,
+      refreshTarget: true
+    });
+    expect(revalidateMigrationPlan).toHaveBeenNthCalledWith(2, expect.objectContaining({ id: migrationRunId }), {
+      refreshSource: false,
+      refreshTarget: true
+    });
     expect(commands.some((command) => command.includes("docker compose"))).toBe(false);
     expect(commands.some((command) => command.includes(`docker inspect '${restoredName}'`))).toBe(true);
+  });
+
+  it("fails closed before capture when worker-side plan revalidation detects drift", async () => {
+    revalidateMigrationPlan.mockRejectedValueOnce(new Error("Source or target state changed after planning"));
+
+    const { runMigrationExecute } = await import("../src/services/migrationExecute.js");
+    await expect(runMigrationExecute(sourceHostId, migrationRunId, {
+      strategy: "clone",
+      stopSource: false,
+      remapPorts: true
+    })).rejects.toThrow("Source or target state changed after planning");
+
+    expect(runRecoveryCreate).not.toHaveBeenCalled();
+    expect(runRecoveryRestore).not.toHaveBeenCalled();
+    expect(runSshCommand).not.toHaveBeenCalled();
+    expect(query).toHaveBeenCalledWith(
+      "UPDATE migration_runs SET status = 'failed', error = $2, completed_at = now() WHERE id = $1",
+      [migrationRunId, "Source or target state changed after planning"]
+    );
+  });
+
+  it("rejects a linked recovery point for a different source application during worker revalidation", async () => {
+    recoveryAppIdentitiesEqual.mockReturnValue(false);
+    runSshCommand.mockImplementation(async (_ssh: unknown, command: string) => {
+      if (command.includes("docker inspect 'source-web'")) {
+        return { code: 0, stdout: inspectPayload("web", true), stderr: "" };
+      }
+      return unexpectedCommand(command);
+    });
+
+    const { runMigrationExecute } = await import("../src/services/migrationExecute.js");
+    await expect(runMigrationExecute(sourceHostId, migrationRunId, {
+      strategy: "clone",
+      stopSource: false,
+      remapPorts: true
+    })).rejects.toThrow("different source application");
+
+    expect(getMigrationRecoveryPoint).toHaveBeenCalledWith(recoveryPointId, migrationRunId);
+    expect(runRecoveryRestore).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the queued job intent differs from the reviewed plan", async () => {
+    migrationIntentsEqual.mockReturnValue(false);
+
+    const { runMigrationExecute } = await import("../src/services/migrationExecute.js");
+    await expect(runMigrationExecute(sourceHostId, migrationRunId, {
+      strategy: "safe_move",
+      stopSource: false,
+      remapPorts: true
+    })).rejects.toThrow("Migration job intent does not match its reviewed plan");
+
+    expect(runRecoveryCreate).not.toHaveBeenCalled();
+    expect(runRecoveryRestore).not.toHaveBeenCalled();
   });
 
   it("fails when target deployment verifies but inventory never sees the restored container", async () => {
@@ -242,7 +347,7 @@ describe("migration execute standalone restore verification", () => {
   });
 
   it("fails compose migrations when restored volumes are not mounted by target containers", async () => {
-    getRecoveryPoint.mockResolvedValue({
+    getMigrationRecoveryPoint.mockResolvedValue({
       ...recoveryPointDetail,
       artifactCount: 1,
       completedArtifactCount: 1,
@@ -300,7 +405,7 @@ describe("migration execute standalone restore verification", () => {
   });
 
   it("creates a fresh final recovery point for a supplied safe move point", async () => {
-    createRecoveryPoint.mockResolvedValueOnce({ id: finalRecoveryPointId });
+    createMigrationRecoveryPoint.mockResolvedValueOnce({ id: finalRecoveryPointId });
     runSshCommand.mockImplementation(async (_ssh: unknown, command: string) => {
       if (command.includes("docker inspect 'source-web'")) {
         return { code: 0, stdout: inspectPayload("web", true), stderr: "" };
@@ -318,10 +423,10 @@ describe("migration execute standalone restore verification", () => {
       remapPorts: true
     });
 
-    expect(createRecoveryPoint).toHaveBeenCalledWith(expect.objectContaining({
+    expect(createMigrationRecoveryPoint).toHaveBeenCalledWith(expect.objectContaining({
       name: `Migration final ${migrationRunId}`,
       stopFirst: true
-    }));
+    }), migrationRunId, { primary: true, executionFence: undefined });
     expect(runRecoveryCreate).toHaveBeenCalledWith(sourceHostId, finalRecoveryPointId, {
       stopFirst: true,
       restartAfterStopFirst: false
@@ -347,7 +452,7 @@ describe("migration execute standalone restore verification", () => {
       }
       return { rows: [] };
     });
-    createRecoveryPoint.mockResolvedValueOnce({ id: finalRecoveryPointId });
+    createMigrationRecoveryPoint.mockResolvedValueOnce({ id: finalRecoveryPointId });
     runRecoveryCreate.mockResolvedValueOnce({
       recoveryPointId: finalRecoveryPointId,
       sourceLeftStopped: true,
@@ -396,7 +501,7 @@ describe("migration execute standalone restore verification", () => {
       }
       return { rows: [] };
     });
-    createRecoveryPoint
+    createMigrationRecoveryPoint
       .mockResolvedValueOnce({ id: preCopyPointId })
       .mockResolvedValueOnce({ id: finalRecoveryPointId });
     runRecoveryCreate
@@ -433,7 +538,7 @@ describe("migration execute standalone restore verification", () => {
     const captureError = Object.assign(new Error("final capture failed"), {
       sourceStoppedIds: ["source-web"]
     });
-    createRecoveryPoint.mockResolvedValueOnce({ id: finalRecoveryPointId });
+    createMigrationRecoveryPoint.mockResolvedValueOnce({ id: finalRecoveryPointId });
     runRecoveryCreate.mockRejectedValueOnce(captureError);
     runSshCommand.mockImplementation(async (_ssh: unknown, command: string) => {
       if (command.includes("docker inspect 'source-web'")) {
@@ -457,8 +562,32 @@ describe("migration execute standalone restore verification", () => {
     );
   });
 
+  it("restarts capture-reported stopped containers even when the pre-capture inspect saw them stopped", async () => {
+    const captureError = Object.assign(new Error("final capture lost lease"), {
+      sourceStoppedIds: ["source-web"]
+    });
+    createMigrationRecoveryPoint.mockResolvedValueOnce({ id: finalRecoveryPointId });
+    runRecoveryCreate.mockRejectedValueOnce(captureError);
+    runSshCommand.mockImplementation(async (_ssh: unknown, command: string) => {
+      if (command.includes("docker inspect 'source-web'")) {
+        return { code: 0, stdout: inspectPayload("web", false), stderr: "" };
+      }
+      return unexpectedCommand(command);
+    });
+
+    const { runMigrationExecute } = await import("../src/services/migrationExecute.js");
+    await expect(runMigrationExecute(sourceHostId, migrationRunId, {
+      strategy: "safe_move",
+      stopSource: false,
+      remapPorts: true
+    })).rejects.toThrow("final capture lost lease; source restarted");
+
+    expect(startContainersOneByOne).toHaveBeenCalledWith(sourceHostId, ["source-web"]);
+    expect(runRecoveryRestore).not.toHaveBeenCalled();
+  });
+
   it("fails before target restore when required host folder capture is incomplete", async () => {
-    getRecoveryPoint.mockResolvedValue({
+    getMigrationRecoveryPoint.mockResolvedValue({
       ...recoveryPointDetail,
       status: "partial",
       artifactCount: 2,
@@ -493,7 +622,7 @@ describe("migration execute standalone restore verification", () => {
   });
 
   it("fails when a completed host folder artifact is not restored", async () => {
-    getRecoveryPoint.mockResolvedValue({
+    getMigrationRecoveryPoint.mockResolvedValue({
       ...recoveryPointDetail,
       artifactCount: 2,
       completedArtifactCount: 2,

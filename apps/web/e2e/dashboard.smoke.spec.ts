@@ -88,6 +88,105 @@ const containerResource = {
   updatedAt: new Date(0).toISOString()
 };
 
+const volumeResource = {
+  id: "13131313-1313-4313-8313-131313131313",
+  hostId: host.id,
+  kind: "volume",
+  externalId: "web-data",
+  name: "web-data",
+  data: { Name: "web-data", Driver: "local", Scope: "local" },
+  updatedAt: new Date(0).toISOString()
+};
+
+const networkResource = {
+  id: "14141414-1414-4414-8414-141414141414",
+  hostId: host.id,
+  kind: "network",
+  externalId: "web-network",
+  name: "web-network",
+  data: { Name: "web-network", Driver: "bridge", Scope: "local" },
+  updatedAt: new Date(0).toISOString()
+};
+
+const composeStack = {
+  id: "15151515-1515-4515-8515-151515151515",
+  hostId: host.id,
+  name: "Web stack",
+  projectName: "web",
+  composeYaml: "services:\n  web:\n    image: nginx:latest\n",
+  env: "",
+  status: "running",
+  domains: [],
+  tlsDesired: false,
+  updatePolicyEnabled: false,
+  sourceType: "ui",
+  createdAt: new Date(0).toISOString(),
+  updatedAt: new Date(0).toISOString()
+};
+
+const managedUser = {
+  id: "16161616-1616-4616-8616-161616161616",
+  name: "Managed Operator",
+  username: "managed-operator",
+  email: "managed@example.com",
+  role: "operator",
+  isActive: true,
+  createdAt: new Date(0).toISOString()
+};
+
+const registry = {
+  id: "17171717-1717-4717-8717-171717171717",
+  name: "Private registry",
+  url: "https://registry.example.com",
+  username: "robot",
+  insecure: false,
+  createdAt: new Date(0).toISOString(),
+  updatedAt: new Date(0).toISOString()
+};
+
+const migrationPlanRun = {
+  id: "18181818-1818-4818-8818-181818181818",
+  planRunId: null,
+  sourceHostId: host.id,
+  targetHostId: fileHost.id,
+  sourceAppIdentity: { kind: "stack", stackId: app.stackId, projectName: app.projectName, label: app.name },
+  mode: "plan",
+  status: "completed",
+  recoveryPointId: null,
+  plan: {
+    sourceHostId: host.id,
+    targetHostId: fileHost.id,
+    sourceAppIdentity: { kind: "stack", stackId: app.stackId, projectName: app.projectName, label: app.name },
+    intent: { strategy: "clone", options: { stopSource: false, remapPorts: true, networkMode: "clone" } },
+    sourceFingerprint: "a".repeat(64),
+    targetFingerprint: "b".repeat(64),
+    steps: [],
+    warnings: [],
+    estimatedArtifacts: 3,
+    estimatedVolumes: 1,
+    estimatedHostFolders: 0,
+    checks: {
+      sourceHostAvailable: true,
+      targetHostAvailable: true,
+      sourceDockerAvailable: true,
+      targetDockerAvailable: true,
+      sourceComposeAvailable: true,
+      targetComposeAvailable: true
+    },
+    portConflicts: [],
+    volumeCollisions: [],
+    nameCollisions: [],
+    missingNetworks: [],
+    networkConflicts: [],
+    estimatedDataBytes: 1024,
+    blockingIssues: []
+  },
+  error: null,
+  createdAt: new Date(0).toISOString(),
+  startedAt: new Date(0).toISOString(),
+  completedAt: new Date(0).toISOString()
+};
+
 const recoveryPoint = {
   id: "66666666-6666-4666-8666-666666666666",
   hostId: host.id,
@@ -162,7 +261,38 @@ type MockApiOptions = {
   containerImage?: string;
   imageTags?: string[];
   githubRepositories?: unknown[];
+  resources?: unknown[];
+  composeStacks?: unknown[];
+  users?: unknown[];
+  registries?: unknown[];
+  selfUpdateAvailable?: boolean;
+  migrationPlanRun?: unknown;
 };
+
+const unhandledApiRequests: string[] = [];
+
+test.beforeEach(() => {
+  unhandledApiRequests.length = 0;
+});
+
+test.afterEach(() => {
+  expect(unhandledApiRequests, "all mocked API requests must have an explicit method-aware handler").toEqual([]);
+});
+
+function allowedMockMethods(path: string): ReadonlySet<string> {
+  const rules: Array<[RegExp, readonly string[]]> = [
+    [/^\/api\/auth\/(?:setup|login)$/, ["POST"]],
+    [/^\/api\/apps\/[^/]+\/(?:name|version)$/, ["PUT"]],
+    [/^\/api\/alerts\/channels\/[^/]+\/test$/, ["POST"]],
+    [/^\/api\/github\/repos\/[^/]+\/(?:deploy|test-host-access)$/, ["POST"]],
+    [/^\/api\/hosts\/[^/]+\/actions$/, ["POST"]],
+    [/^\/api\/jobs\/[^/]+\/(?:cancel|retry)$/, ["POST"]],
+    [/^\/api\/recovery\/points\/[^/]+\/drill$/, ["POST"]],
+    [/^\/api\/recovery\/migrations\/plan$/, ["POST"]]
+  ];
+  const matched = rules.find(([pattern]) => pattern.test(path));
+  return new Set(matched?.[1] ?? ["GET"]);
+}
 
 async function mockApi(page: Page, options: MockApiOptions = {}) {
   const requests: string[] = [];
@@ -183,21 +313,71 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
     const request = route.request();
     const url = new URL(request.url());
     const path = url.pathname;
-    requests.push(`${request.method()} ${path}`);
+    const requestKey = `${request.method()} ${path}`;
+    requests.push(requestKey);
     const json = (body: unknown, status = 200) => route.fulfill({
       status,
       contentType: "application/json",
       body: JSON.stringify(body)
     });
 
+    if (!allowedMockMethods(path).has(request.method())) {
+      unhandledApiRequests.push(requestKey);
+      return json({ error: `Unhandled mocked API request: ${requestKey}` }, 501);
+    }
+
     if (path === "/api/auth/setup-state") return json({ needsSetup: Boolean(options.needsSetup) });
     if (path === "/api/auth/me") return options.needsSetup ? json({ error: "Authentication required" }, 401) : json({ user: currentUser });
     if (path === "/api/auth/setup" || path === "/api/auth/login") return json({ user: currentUser });
     if (path === "/api/hosts") return json({ hosts: hostList });
-    if (path === `/api/hosts/${host.id}/resources`) return json({ resources: [currentContainerResource] });
+    if (path === `/api/hosts/${host.id}/resources`) return json({ resources: options.resources ?? [currentContainerResource] });
     if (path === `/api/hosts/${fileHost.id}/resources`) return json({ resources: [] });
     if (path === `/api/hosts/${host.id}/containers/usage`) return json({ usage: [{ ID: "web", CPUPerc: "1.2%", MemPerc: "3.4%", MemUsage: "20MiB / 512MiB" }] });
     if (path === `/api/hosts/${fileHost.id}/containers/usage`) return json({ usage: [] });
+    if (path === `/api/hosts/${host.id}/containers/usage-stream`) return route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: `data: ${JSON.stringify({ usage: [{ ID: "web", CPUPerc: "1.2%", MemPerc: "3.4%", MemUsage: "20MiB / 512MiB" }] })}\n\n`
+    });
+    if (path === `/api/hosts/${fileHost.id}/containers/usage-stream`) return route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: `data: ${JSON.stringify({ usage: [] })}\n\n`
+    });
+    const metricsMatch = /^\/api\/hosts\/([^/]+)\/metrics$/.exec(path);
+    const metricsStreamMatch = /^\/api\/hosts\/([^/]+)\/metrics-stream$/.exec(path);
+    const metricsHostId = metricsMatch?.[1] ?? metricsStreamMatch?.[1];
+    if (metricsHostId && (hostList as Array<{ id: string }>).some((item) => item.id === metricsHostId)) {
+      const stats = {
+        hostId: metricsHostId,
+        collectedAt: new Date().toISOString(),
+        cpuPercent: 12,
+        load: { one: 0.42, five: 0.3, fifteen: 0.2 },
+        memory: { totalBytes: 8 * 1024 * 1024 * 1024, usedBytes: 3 * 1024 * 1024 * 1024, availableBytes: 5 * 1024 * 1024 * 1024 },
+        swap: { totalBytes: 0, usedBytes: 0 },
+        disks: [{ mount: "/", totalBytes: 1000, usedBytes: 420, usedPercent: 42 }],
+        network: null,
+        containers: { running: 2, total: 3 },
+        uptimeSeconds: 123456
+      };
+      if (metricsStreamMatch) return route.fulfill({
+        status: 200,
+        contentType: "text/event-stream",
+        body: `data: ${JSON.stringify({ stats })}\n\n`
+      });
+      return json({
+        specs: {
+          hostId: metricsHostId,
+          cpuCores: 4,
+          memTotalBytes: 8 * 1024 * 1024 * 1024,
+          os: "Linux",
+          arch: "x86_64",
+          dockerVersion: "27.0.0",
+          collectedAt: new Date().toISOString()
+        },
+        stats
+      });
+    }
     if (path === `/api/hosts/${host.id}/files`) return json({ directory: {
       path: url.searchParams.get("path") ?? "/home/docker",
       parent: null,
@@ -220,7 +400,8 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
       ports: [{ containerPort: "80", protocol: "tcp", hostIp: "0.0.0.0", hostPort: "8080" }],
       labels: { "com.composebastion.app": "web" }
     } });
-    if (path === `/api/hosts/${host.id}/compose`) return json({ stacks: [] });
+    if (path === `/api/hosts/${host.id}/compose`) return json({ stacks: options.composeStacks ?? [] });
+    if (path === `/api/hosts/${fileHost.id}/compose`) return json({ stacks: [] });
     if (path === "/api/hosts/metrics") return json([{
         hostId: host.id,
         name: host.name,
@@ -248,6 +429,7 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
         }
       }]);
     if (path === "/api/backups") return json({ backups: [] });
+    if (path === "/api/backup-schedules") return json({ schedules: [] });
     if (path === "/api/jobs") return json({
       jobs: [{
         id: "33333333-3333-4333-8333-333333333333",
@@ -284,7 +466,15 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
       limit: Number(url.searchParams.get("limit") ?? 40),
       offset: 0
     });
-    if (path === "/api/jobs/status") return json({ worker: { queued: 0, running: 0, lastJobCompletedAt: new Date(0).toISOString() } });
+    if (path === "/api/jobs/status") return json({ worker: {
+      queued: 0,
+      running: 0,
+      lastJobCompletedAt: new Date(0).toISOString(),
+      available: true,
+      activeWorkers: 1,
+      lastHeartbeatAt: new Date(0).toISOString(),
+      state: "active"
+    } });
     if (path === "/api/jobs/dddddddd-dddd-4ddd-8ddd-dddddddddddd") return json({
       job: {
         id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
@@ -337,10 +527,12 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
         targetVersion: "latest"
       },
       runtime: { version: "1.0.6", revision: null, buildDate: null },
-      latest: { version: "1.0.6", checkedAt: new Date(0).toISOString(), error: null },
-      updateAvailable: false,
+      latest: { version: options.selfUpdateAvailable ? "1.0.7" : "1.0.6", checkedAt: new Date(0).toISOString(), error: null },
+      updateAvailable: Boolean(options.selfUpdateAvailable),
       lastJob: null
     });
+    if (path === "/api/users") return json({ users: options.users ?? [currentUser] });
+    if (path === "/api/registries") return json({ registries: options.registries ?? [] });
     if (path === "/api/favorite-images") return json({ images: [] });
     if (path === "/api/catalog/templates") return json({ templates: [] });
     if (path === "/api/catalog/external") return json({
@@ -614,11 +806,15 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
       lastSuccessfulDrillAt: new Date(0).toISOString()
     }] });
     if (path === "/api/recovery/migrations") return json({ runs: [] });
-    if (["POST", "DELETE"].includes(request.method())) return json({ ok: true, job: { id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", status: "queued" } });
-    return json({});
+    if (path === "/api/recovery/migrations/plan" && request.method() === "POST") {
+      return json({ run: options.migrationPlanRun ?? migrationPlanRun });
+    }
+    if (request.method() === "POST") return json({ ok: true, job: { id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", status: "queued" } });
+    unhandledApiRequests.push(requestKey);
+    return json({ error: `Unhandled mocked API request: ${requestKey}` }, 501);
   });
 
-  return { requests };
+  return { requests, unhandledApiRequests };
 }
 
 async function gotoApp(page: Page, path: string) {
@@ -700,6 +896,8 @@ test("operations panel exposes readiness, backup health, and failed jobs", async
   await gotoApp(page, "/admin");
   await page.getByRole("button", { name: "Operations" }).click();
   await expect(page.locator(".opsSummary strong", { hasText: "Readiness" })).toBeVisible();
+  await expect(page.locator(".opsSummary")).toContainText("active · 1 active");
+  await expect(page.locator(".opsSummary strong", { hasText: "Worker heartbeat" })).toBeVisible();
   await expect(page.locator(".opsSummary strong", { hasText: "Backups" })).toBeVisible();
   await expect(page.getByText("sync failed")).toBeVisible();
   await expect(page.getByText(/Confirm SSH or agent connectivity/)).toBeVisible();
@@ -717,12 +915,95 @@ test("job actions expose recovery context and confirm focus return", async ({ pa
   await cancelJobButton.click();
   const dialog = page.getByRole("alertdialog", { name: "Cancel queued job" });
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByRole("button", { name: "Confirm" })).toBeFocused();
-  await page.keyboard.press("Tab");
   await expect(dialog.getByRole("button", { name: "Cancel" })).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(dialog.getByRole("button", { name: "Confirm" })).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
   await expect(cancelJobButton).toBeFocused();
+});
+
+test("high-impact deletion flows require exact typed confirmation", async ({ page }) => {
+  await mockApi(page, {
+    resources: [containerResource, volumeResource, networkResource],
+    composeStacks: [composeStack]
+  });
+
+  await gotoApp(page, "/volumes");
+  await page.getByTitle("Remove volume").click();
+  let dialog = page.getByRole("alertdialog", { name: "Permanently remove volume" });
+  const volumeInput = dialog.getByRole("textbox");
+  await expect(volumeInput).toBeFocused();
+  await expect(dialog.getByRole("button", { name: "Remove volume" })).toBeDisabled();
+  await volumeInput.fill("wrong-volume");
+  await expect(dialog.getByRole("button", { name: "Remove volume" })).toBeDisabled();
+  await volumeInput.fill(volumeResource.name);
+  await expect(dialog.getByRole("button", { name: "Remove volume" })).toBeEnabled();
+  await page.keyboard.press("Escape");
+
+  await page.getByRole("button", { name: "Prune", exact: true }).click();
+  dialog = page.getByRole("alertdialog", { name: "Prune volumes" });
+  await dialog.getByRole("textbox").fill(host.name);
+  await expect(dialog.getByRole("button", { name: "Prune" })).toBeEnabled();
+  await page.keyboard.press("Escape");
+
+  await gotoApp(page, "/compose");
+  await page.getByTitle("Remove from Docker and delete named volumes").click();
+  dialog = page.getByRole("alertdialog", { name: "Remove compose stack and volumes" });
+  await expect(dialog.getByRole("button", { name: "Remove stack and volumes" })).toBeDisabled();
+  await dialog.getByRole("textbox").fill(composeStack.name);
+  await expect(dialog.getByRole("button", { name: "Remove stack and volumes" })).toBeEnabled();
+  await page.keyboard.press("Escape");
+
+  await gotoApp(page, "/admin");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Import", exact: true }).click();
+  dialog = page.getByRole("alertdialog", { name: "Import configuration" });
+  await expect(dialog.getByRole("button", { name: "Import configuration" })).toBeDisabled();
+  await dialog.getByRole("textbox").fill("IMPORT");
+  await expect(dialog.getByRole("button", { name: "Import configuration" })).toBeEnabled();
+  await page.keyboard.press("Escape");
+});
+
+test("destructive network, alert, registry, user, and self-update actions use danger dialogs", async ({ page }) => {
+  await mockApi(page, {
+    resources: [containerResource, networkResource],
+    registries: [registry],
+    users: [user, managedUser],
+    selfUpdateAvailable: true
+  });
+
+  const expectDangerDialog = async (name: string) => {
+    const dialog = page.getByRole("alertdialog", { name });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Cancel" })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+  };
+
+  await gotoApp(page, "/networks");
+  await page.getByTitle("Remove network").click();
+  await expectDangerDialog("Remove network");
+
+  await gotoApp(page, "/alerts");
+  await page.getByRole("row", { name: /CPU sustained/ }).locator("button.danger").click();
+  await expectDangerDialog("Delete alert rule");
+
+  await gotoApp(page, "/admin");
+  await page.getByRole("button", { name: "Registries" }).click();
+  await page.getByRole("row", { name: /Private registry/ }).locator("button.danger").click();
+  await expectDangerDialog("Delete registry");
+
+  await page.getByRole("button", { name: "Users" }).click();
+  await page.getByRole("row", { name: /Managed Operator/ }).locator("button.danger").click();
+  await expectDangerDialog("Delete user");
+
+  await page.getByRole("button", { name: "Operations" }).click();
+  await page.getByRole("button", { name: "Update to latest version v1.0.7" }).click();
+  const updateDialog = page.getByRole("alertdialog", { name: "Restart ComposeBastion" });
+  await expect(updateDialog).toContainText("Update from v1.0.6 to v1.0.7");
+  await expect(updateDialog).toContainText("app and worker will restart");
+  await expectDangerDialog("Restart ComposeBastion");
 });
 
 test("alerts show silences and history", async ({ page }) => {
@@ -763,11 +1044,44 @@ test("viewer alerts avoid operator endpoints and show read-only history", async 
   ].includes(request))).toEqual([]);
 });
 
+test("viewer direct restricted routes redirect without issuing mutation requests", async ({ page }) => {
+  const mock = await mockApi(page, { role: "viewer" });
+  await gotoApp(page, "/deploy");
+  await expect(page).toHaveURL(/\/overview$/);
+  await expect(page.getByRole("link", { name: /Deploy/ })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Host", exact: true })).toHaveCount(0);
+  await expect(page.locator('button[title="Open SSH terminal"]')).toHaveCount(0);
+  await expect.poll(() => mock.requests.filter((request) => /^(POST|PUT|PATCH|DELETE) /.test(request))).toEqual([]);
+});
+
+test("operator sees Docker controls but not terminal or administrator-only sections", async ({ page }) => {
+  const mock = await mockApi(page, { role: "operator" });
+  await gotoApp(page, "/hosts");
+  await expect(page.getByRole("button", { name: "Host", exact: true })).toBeVisible();
+  await expect(page.locator('button[title="Open SSH terminal"]')).toHaveCount(0);
+  await gotoApp(page, "/admin");
+  await expect(page.getByRole("button", { name: "Users" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Audit" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Registries" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Config Backup" })).toHaveCount(0);
+  await expect.poll(() => mock.requests.filter((request) => request.includes("/api/config/"))).toEqual([]);
+});
+
+test("owner sees terminal and administrator-only sections", async ({ page }) => {
+  await mockApi(page);
+  await gotoApp(page, "/hosts");
+  await expect(page.locator('button[title="Open SSH terminal"]')).toHaveCount(1);
+  await gotoApp(page, "/admin");
+  await expect(page.getByRole("button", { name: "Users" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Audit" })).toBeVisible();
+});
+
 test("active sessions are reachable from admin settings", async ({ page }) => {
   await mockApi(page);
   await gotoApp(page, "/admin");
   await page.getByRole("button", { name: "Settings" }).click();
   await expect(page.getByRole("heading", { name: "Active Sessions" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Config Backup" })).toBeVisible();
   await expect(page.getByText("This device")).toBeVisible();
   await expect(page.getByRole("button", { name: "Log out everywhere" })).toBeVisible();
 });
@@ -805,6 +1119,13 @@ test("mobile admin settings remain reachable", async ({ page }) => {
 });
 
 test("host SSH terminal action opens a visible warning drawer", async ({ page }) => {
+  let closeTerminalSocket = async () => undefined;
+  const terminalMessages: Array<string | Buffer> = [];
+  await page.routeWebSocket(/\/api\/hosts\/[^/]+\/terminal$/, (socket) => {
+    closeTerminalSocket = () => socket.close({ code: 1000, reason: "test complete" });
+    socket.onMessage((message) => terminalMessages.push(message));
+    socket.send(JSON.stringify({ type: "ready" }));
+  });
   await mockApi(page);
   await gotoApp(page, "/hosts");
   const terminalButton = page.locator('button[title="Open SSH terminal"]');
@@ -814,11 +1135,18 @@ test("host SSH terminal action opens a visible warning drawer", async ({ page })
   await expect(dialog).toBeVisible();
   await expect(dialog.getByText("Privileged shell access")).toBeVisible();
   await expect(dialog.getByRole("button", { name: "Open shell" })).toBeVisible();
+  const cancelButton = dialog.getByRole("button", { name: "Cancel" });
+  await expect(cancelButton).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(dialog.getByRole("button", { name: "Close host terminal" })).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(cancelButton).toBeFocused();
 
   const box = await dialog.boundingBox();
   expect(box?.y ?? 9999).toBeLessThan(80);
 
   await dialog.getByRole("button", { name: "Open shell" }).click();
+  await expect(dialog.getByRole("status")).toHaveText("Connected to prod-01");
   const frame = dialog.locator(".hostTerminalFrame");
   const xterm = frame.locator(".terminal.xterm");
   await expect(frame).toBeVisible();
@@ -836,6 +1164,20 @@ test("host SSH terminal action opens a visible warning drawer", async ({ page })
   });
   expect(sizes.frameHeight).toBeGreaterThan(500);
   expect(sizes.terminalHeight).toBeGreaterThan(sizes.frameHeight * 0.85);
+  const terminalInput = xterm.locator("textarea.xterm-helper-textarea");
+  await terminalInput.focus();
+  await expect(terminalInput).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(terminalInput).toBeFocused();
+  await expect.poll(() => terminalMessages.some((message) => Buffer.isBuffer(message) && message.includes(0x1b))).toBe(true);
+  await expect(dialog).toBeVisible();
+  await closeTerminalSocket();
+  await expect(dialog.getByRole("status")).toHaveText("Terminal disconnected from prod-01");
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Close host terminal" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(terminalButton).toBeFocused();
 });
 
 test("hosts add button opens the host form inline", async ({ page }) => {
@@ -1015,6 +1357,29 @@ test("services allow beta channel refresh when a newer prerelease exists", async
   await expect(dialog.getByRole("button", { name: "Update 1 container" })).toBeEnabled();
 });
 
+test("services order a stable image release ahead of its release candidates", async ({ page }) => {
+  const image = "ghcr.io/composebastion-admin/example:1.1.0-rc.2";
+  await mockApi(page, {
+    containerImage: image,
+    imageTags: ["1.1.0-rc.2", "1.1.0", "1.1.0-rc.10", "1.0.9"],
+    appOverride: {
+      source: "image",
+      repositoryId: null,
+      repositoryUrl: null,
+      branch: null,
+      imageReferences: [image],
+      update: { status: "up_to_date", kind: "image", imageReference: image }
+    }
+  });
+  await gotoApp(page, "/services");
+  await page.getByTitle("Update service image tags").click();
+  const dialog = page.getByRole("dialog", { name: "Update images for Web" });
+  await expect(dialog.locator(".serviceImageVersionSummary")).toContainText("Latest stable 1.1.0");
+  await expect(dialog.locator(".serviceImageVersionSummary")).toContainText("Latest prerelease 1.1.0-rc.10");
+  const orderedTags = await dialog.locator(".imageTagOption").allTextContents();
+  expect(orderedTags.slice(0, 3).map((value) => value.trim())).toEqual(["1.1.0", "1.1.0-rc.10", "1.1.0-rc.2current"]);
+});
+
 test("files route uses an in-panel host selector and resets paths", async ({ page }) => {
   await mockApi(page, { hosts: [host, fileHost] });
   await gotoApp(page, "/files");
@@ -1052,6 +1417,17 @@ test("migrate compatibility route renders the unified migrate app panel", async 
   await page.getByText("Advanced direct clone tools").click();
   await expect(page.getByText("Clone volume data")).toBeVisible();
   await expect(page.getByText("Clone container definition")).toBeVisible();
+});
+
+test("changing migration intent invalidates the displayed reviewed plan", async ({ page }) => {
+  const mock = await mockApi(page, { hosts: [host, fileHost] });
+  await gotoApp(page, "/migrate");
+  await page.getByRole("button", { name: "Plan / check" }).click();
+  const execute = page.getByRole("button", { name: "Execute migration" });
+  await expect(execute).toBeEnabled();
+  await page.getByLabel("Safe move").check();
+  await expect(execute).toBeDisabled();
+  await expect.poll(() => mock.requests.filter((request) => request === "POST /api/recovery/migrations/execute")).toEqual([]);
 });
 
 test("catalog imports external discovery as a review draft", async ({ page }) => {
@@ -1119,7 +1495,7 @@ test("container detail drawer exposes logs, stats, inspect, and exec tabs", asyn
   await mockApi(page);
   await gotoApp(page, "/containers");
   await expect(page.getByRole("heading", { name: "Containers" })).toBeVisible();
-  await page.getByTitle("Open logs, stats, and exec").click();
+  await page.getByTitle("Open logs, stats, inspect, and exec").click();
   await expect(page.getByRole("heading", { name: "web" })).toBeVisible();
   await page.getByRole("button", { name: "Logs", exact: true }).click();
   await expect(page.getByText("server started")).toBeVisible();

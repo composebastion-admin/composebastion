@@ -11,6 +11,7 @@ import { hostName, normalizeComposeProjectName } from "../../lib/hostScope.js";
 import { ButtonRow, DataTable, Panel, StatusPill } from "../ui/primitives.js";
 import { ProxyPanel } from "../stacks/ProxyPanel.js";
 import { StackVersionsPanel } from "../stacks/StackVersionsPanel.js";
+import { useAuthorization } from "../AuthorizationContext.js";
 
 function sourceTypeLabel(sourceType?: string) {
   if (sourceType === "git" || sourceType === "github") return "Git";
@@ -21,6 +22,7 @@ function sourceTypeLabel(sourceType?: string) {
 }
 
 export function ComposePanel({ host, hosts, stacks, refresh, runJob }: { host: DockerHost; hosts: DockerHost[]; stacks: ComposeStack[]; refresh: () => Promise<void>; runJob: <T extends Jobish>(request: () => Promise<T>) => Promise<T> }) {
+  const { canOperate } = useAuthorization();
   const { confirm } = useConfirm();
   const [form, setForm] = useState({ name: "", projectName: "", composeYaml: emptyCompose, env: "" });
   const [focusedStackId, setFocusedStackId] = useState<string | null>(null);
@@ -37,15 +39,27 @@ export function ComposePanel({ host, hosts, stacks, refresh, runJob }: { host: D
     });
   }
 
-  async function stackAction(stackId: string, verb: "deploy" | "stop" | "remove", stackName?: string) {
+  async function stackAction(
+    stackId: string,
+    verb: "deploy" | "stop" | "remove",
+    stackName?: string,
+    removeVolumes = false
+  ) {
+    const label = stackName ?? stackId;
     if (verb === "remove" && !await confirm({
-      title: "Remove compose stack",
+      title: removeVolumes ? "Remove compose stack and volumes" : "Remove compose stack",
       tone: "danger",
-      confirmLabel: "Remove",
-      message: `Remove stack "${stackName ?? stackId}" from Docker on this host?`
+      confirmLabel: removeVolumes ? "Remove stack and volumes" : "Remove",
+      message: removeVolumes
+        ? `Run Compose down for "${label}" and permanently delete its named volumes? This data cannot be recovered without a separate backup.`
+        : `Remove stack "${label}" from Docker on this host? Named volumes are preserved.`,
+      ...(removeVolumes ? {
+        verificationText: label,
+        verificationLabel: `Type the stack name ${label} to continue`
+      } : {})
     })) return;
     await action.run(async () => {
-      await runJob(() => postJson<JobResult>(`/api/compose/${stackId}/${verb}`, verb === "remove" ? { removeVolumes: false } : {}));
+      await runJob(() => postJson<JobResult>(`/api/compose/${stackId}/${verb}`, verb === "remove" ? { removeVolumes } : {}));
     });
   }
 
@@ -64,7 +78,7 @@ export function ComposePanel({ host, hosts, stacks, refresh, runJob }: { host: D
 
   return (
     <Panel title="Compose Stacks" count={stacks.length}>
-      <form className="composeForm" onSubmit={createStack}>
+      {canOperate && <form className="composeForm" onSubmit={createStack}>
         <div className="formHint">New stacks are saved on {host.name}. Use the fleet selector above to view stacks from multiple hosts.</div>
         <div className="two">
           <input placeholder="Stack name" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required />
@@ -74,10 +88,12 @@ export function ComposePanel({ host, hosts, stacks, refresh, runJob }: { host: D
         <textarea placeholder="Optional .env content" value={form.env} onChange={(event) => setForm({ ...form, env: event.target.value })} />
         {action.error && <div className="notice error">{action.error}</div>}
         <button className="primary"><Plus size={18} />Save Stack</button>
-      </form>
+      </form>}
       <DataTable
         rows={stacks}
-        columns={showHostColumn ? ["Host", "Name", "Project", "Source", "Status", "Updated", "Actions"] : ["Name", "Project", "Source", "Status", "Updated", "Actions"]}
+        columns={showHostColumn
+          ? ["Host", "Name", "Project", "Source", "Status", "Updated", ...(canOperate ? ["Actions"] : [])]
+          : ["Name", "Project", "Source", "Status", "Updated", ...(canOperate ? ["Actions"] : [])]}
         render={(stack) => {
           const cells: ReactNode[] = [
             stack.name,
@@ -91,18 +107,24 @@ export function ComposePanel({ host, hosts, stacks, refresh, runJob }: { host: D
               {stack.lastDeployError && <small className="stackErrorNote" title={stack.lastDeployError}>{stack.lastDeployError}</small>}
             </span>,
             formatDate(stack.updatedAt),
-            <ButtonRow key="actions">
+            ...(canOperate ? [<ButtonRow key="actions">
               <button title="Versions & proxy" onClick={() => setFocusedStackId(stack.id)}><History size={16} /></button>
               <button title="Deploy" onClick={() => void stackAction(stack.id, "deploy")}><Play size={16} /></button>
               <button title="Stop" onClick={() => void stackAction(stack.id, "stop")}><Square size={16} /></button>
               <button title="Remove from Docker" className="danger" onClick={() => void stackAction(stack.id, "remove", stack.name)}><Trash2 size={16} /></button>
+              <button
+                title="Remove from Docker and delete named volumes"
+                aria-label={`Remove ${stack.name} and delete named volumes`}
+                className="danger"
+                onClick={() => void stackAction(stack.id, "remove", stack.name, true)}
+              ><Trash2 size={16} /></button>
               <button title="Forget record only" onClick={() => void forgetStack(stack)}><X size={16} /></button>
-            </ButtonRow>
+            </ButtonRow>] : [])
           ];
           return showHostColumn ? [hostName(hosts, stack.hostId), ...cells] : cells;
         }}
       />
-      {focusedStack && (
+      {canOperate && focusedStack && (
         <>
           <StackVersionsPanel stack={focusedStack} runJob={runJob} refresh={refresh} />
           <ProxyPanel stack={focusedStack} onChanged={refresh} />

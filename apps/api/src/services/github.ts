@@ -7,12 +7,12 @@ import {
   type AppGithubVersionOption,
   type AppGithubVersions
 } from "@composebastion/shared";
-import { query } from "../db/pool.js";
+import { query, withTransaction } from "../db/pool.js";
 import { decryptSecret, encryptSecret } from "./crypto.js";
 import { isDemoHostId } from "./demo.js";
-import { enqueueJob } from "./jobs.js";
+import { enqueueJobInTransaction, notifyJobQueued } from "./jobs.js";
 import { mapStack } from "./mappers.js";
-import { recordStackVersion } from "./stackVersions.js";
+import { recordStackVersionInTransaction } from "./stackVersions.js";
 
 const GITHUB_PAGE_SIZE = 100;
 const MAX_GITHUB_VERSION_PAGES = 20;
@@ -746,27 +746,37 @@ export async function deployGithubRepository(
       const hostCloneUrl = nullIfBlank(options.hostCloneUrl) ?? row.host_clone_url ?? defaultHostCloneUrl(row.owner, row.repo);
       const hostCloneDirectory = nullIfBlank(options.hostCloneDirectory) ?? row.host_clone_directory;
       if (!hostCloneDirectory) throw new Error("Choose a host clone directory before using Clone/Build Deploy.");
-      await query(
-        `UPDATE github_repositories
-         SET host_clone_url = $2,
-             host_clone_directory = $3,
-             last_error = null,
-             updated_at = now()
-         WHERE id = $1`,
-        [id, hostCloneUrl, hostCloneDirectory]
-      );
-      const job = await enqueueJob({
-        type: "git.cloneDeploy",
-        hostId,
-        payload: {
-          repositoryUrl: hostCloneUrl,
-          directory: hostCloneDirectory,
-          branch,
-          composePath: row.compose_path,
-          projectName,
-          repositoryId: id
-        }
-      }, createdBy);
+      const transactionResult = await withTransaction(async (client) => {
+        const lockedRepository = await client.query(
+          "SELECT id FROM github_repositories WHERE id = $1 FOR UPDATE",
+          [id]
+        );
+        if (!lockedRepository.rows[0]) throw new Error("GitHub repository not found");
+        await client.query(
+          `UPDATE github_repositories
+           SET host_clone_url = $2,
+               host_clone_directory = $3,
+               last_error = null,
+               updated_at = now()
+           WHERE id = $1`,
+          [id, hostCloneUrl, hostCloneDirectory]
+        );
+        const job = await enqueueJobInTransaction(client, {
+          type: "git.cloneDeploy",
+          hostId,
+          payload: {
+            repositoryUrl: hostCloneUrl,
+            directory: hostCloneDirectory,
+            branch,
+            composePath: row.compose_path,
+            projectName,
+            repositoryId: id
+          }
+        }, createdBy);
+        return { job };
+      });
+      await notifyJobQueued(transactionResult.job.id);
+      const { job } = transactionResult;
       return { job, branch, mode: "host_clone" };
     }
 
@@ -776,50 +786,64 @@ export async function deployGithubRepository(
       commitSha = null;
     }
     const composeYaml = options.composeYaml ?? await fetchComposeFileForRef(row, branch);
-    const stackResult = await query(
-      `INSERT INTO compose_stacks (
-         id, host_id, name, project_name, compose_yaml, env, status,
-         source_type, source_repository_url, source_branch, source_current_commit_sha,
-         source_latest_commit_sha, source_checked_at, source_check_error
-       )
-       VALUES ($1, $2, $3, $4, $5, $6, 'created', 'github', $7, $8, $9, $9, CASE WHEN $9::text IS NULL THEN null ELSE now() END, null)
-       ON CONFLICT (host_id, project_name)
-       DO UPDATE SET name = EXCLUDED.name,
-                     compose_yaml = EXCLUDED.compose_yaml,
-                     env = EXCLUDED.env,
-                     source_type = EXCLUDED.source_type,
-                     source_repository_url = EXCLUDED.source_repository_url,
-                     source_branch = EXCLUDED.source_branch,
-                     source_current_commit_sha = EXCLUDED.source_current_commit_sha,
-                     source_latest_commit_sha = EXCLUDED.source_latest_commit_sha,
-                     source_checked_at = EXCLUDED.source_checked_at,
-                     source_check_error = null,
-                     updated_at = now()
-       RETURNING *`,
-      [uuid(), hostId, row.name, projectName, composeYaml, env, row.repository_url, branch, commitSha]
-    );
-    const stack = mapStack(stackResult.rows[0]);
-    await recordStackVersion({
-      stackId: stack.id,
-      composeYaml: stack.composeYaml,
-      env: stack.env,
-      source: "github",
-      createdBy,
-      note: `GitHub deploy ${row.owner}/${row.repo}@${branch}`
+    const transactionResult = await withTransaction(async (client) => {
+      const lockedRepository = await client.query(
+        "SELECT id FROM github_repositories WHERE id = $1 FOR UPDATE",
+        [id]
+      );
+      if (!lockedRepository.rows[0]) throw new Error("GitHub repository not found");
+      const stackResult = await client.query(
+        `INSERT INTO compose_stacks (
+           id, host_id, name, project_name, compose_yaml, env, status,
+           source_type, source_repository_url, source_branch, source_current_commit_sha,
+           source_latest_commit_sha, source_checked_at, source_check_error
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, 'created', 'github', $7, $8, $9, $9, CASE WHEN $9::text IS NULL THEN null ELSE now() END, null)
+         ON CONFLICT (host_id, project_name)
+         DO UPDATE SET name = EXCLUDED.name,
+                       compose_yaml = EXCLUDED.compose_yaml,
+                       env = EXCLUDED.env,
+                       source_type = EXCLUDED.source_type,
+                       source_repository_url = EXCLUDED.source_repository_url,
+                       source_branch = EXCLUDED.source_branch,
+                       source_current_commit_sha = EXCLUDED.source_current_commit_sha,
+                       source_latest_commit_sha = EXCLUDED.source_latest_commit_sha,
+                       source_checked_at = EXCLUDED.source_checked_at,
+                       source_check_error = null,
+                       updated_at = now()
+         RETURNING *`,
+        [uuid(), hostId, row.name, projectName, composeYaml, env, row.repository_url, branch, commitSha]
+      );
+      const stack = mapStack(stackResult.rows[0]);
+      await recordStackVersionInTransaction(client, {
+        stackId: stack.id,
+        composeYaml: stack.composeYaml,
+        env: stack.env,
+        source: "github",
+        createdBy,
+        note: `GitHub deploy ${row.owner}/${row.repo}@${branch}`
+      });
+      const job = await enqueueJobInTransaction(
+        client,
+        { type: "compose.deploy", hostId, payload: { stackId: stack.id } },
+        createdBy
+      );
+      await client.query(
+        `UPDATE github_repositories
+         SET last_deployed_at = now(),
+             last_deployed_commit_sha = COALESCE($2, last_deployed_commit_sha),
+             latest_commit_sha = COALESCE($2, latest_commit_sha),
+             update_checked_at = CASE WHEN $2::text IS NULL THEN update_checked_at ELSE now() END,
+             update_check_error = CASE WHEN $2::text IS NULL THEN update_check_error ELSE null END,
+             last_error = null,
+             updated_at = now()
+         WHERE id = $1`,
+        [id, commitSha]
+      );
+      return { stack, job };
     });
-    const job = await enqueueJob({ type: "compose.deploy", hostId, payload: { stackId: stack.id } }, createdBy);
-    await query(
-      `UPDATE github_repositories
-       SET last_deployed_at = now(),
-           last_deployed_commit_sha = COALESCE($2, last_deployed_commit_sha),
-           latest_commit_sha = COALESCE($2, latest_commit_sha),
-           update_checked_at = CASE WHEN $2::text IS NULL THEN update_checked_at ELSE now() END,
-           update_check_error = CASE WHEN $2::text IS NULL THEN update_check_error ELSE null END,
-           last_error = null,
-           updated_at = now()
-       WHERE id = $1`,
-      [id, commitSha]
-    );
+    await notifyJobQueued(transactionResult.job.id);
+    const { stack, job } = transactionResult;
     return { stack, job, branch };
   } catch (error) {
     await query("UPDATE github_repositories SET last_error = $2, updated_at = now() WHERE id = $1", [

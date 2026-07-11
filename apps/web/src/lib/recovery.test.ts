@@ -3,6 +3,7 @@ import type { DockerApp, RecoveryPointListItem } from "@composebastion/shared";
 import {
   dockerAppRecoveryKey,
   dockerAppToRecoveryIdentity,
+  migrationPlanMatchesSelection,
   recoveryAppLabel,
   recoveryIdentityKey,
   recoveryLocalState,
@@ -50,6 +51,64 @@ describe("recovery helpers", () => {
     expect(recoveryReadinessLabel("needs_profile")).toBe("Needs profile");
     expect(recoveryReadinessClass("needs_profile")).toBe("needsProfile");
     expect(recoveryReadinessClass("blocked")).toBe("blocked");
+  });
+
+  it("only accepts a reviewed migration plan for the exact current selection", () => {
+    const identity = dockerAppToRecoveryIdentity(composeApp);
+    const options = { stopSource: false, remapPorts: true, networkMode: "clone" as const };
+    const run = {
+      id: "00000000-0000-4000-8000-000000000010",
+      planRunId: null,
+      sourceHostId: composeApp.hostId,
+      targetHostId: "00000000-0000-4000-8000-000000000011",
+      sourceAppIdentity: identity,
+      mode: "plan" as const,
+      status: "completed" as const,
+      recoveryPointId: null,
+      plan: {
+        sourceHostId: composeApp.hostId,
+        targetHostId: "00000000-0000-4000-8000-000000000011",
+        sourceAppIdentity: identity,
+        intent: { strategy: "clone" as const, options },
+        sourceFingerprint: "a".repeat(64),
+        targetFingerprint: "b".repeat(64),
+        steps: [],
+        warnings: [],
+        estimatedArtifacts: 0,
+        estimatedVolumes: 0,
+        estimatedHostFolders: 0,
+        checks: {
+          sourceHostAvailable: true,
+          targetHostAvailable: true,
+          sourceDockerAvailable: true,
+          targetDockerAvailable: true,
+          sourceComposeAvailable: true,
+          targetComposeAvailable: true
+        },
+        portConflicts: [],
+        volumeCollisions: [],
+        nameCollisions: [],
+        missingNetworks: [],
+        networkConflicts: [],
+        estimatedDataBytes: null,
+        blockingIssues: []
+      },
+      error: null,
+      createdAt: new Date(0).toISOString(),
+      startedAt: new Date(0).toISOString(),
+      completedAt: new Date(0).toISOString()
+    };
+    const selection = {
+      sourceHostId: composeApp.hostId,
+      targetHostId: run.targetHostId,
+      sourceAppIdentity: identity,
+      strategy: "clone" as const,
+      options
+    };
+
+    expect(migrationPlanMatchesSelection(run, selection)).toBe(true);
+    expect(migrationPlanMatchesSelection(run, { ...selection, strategy: "safe_move" })).toBe(false);
+    expect(migrationPlanMatchesSelection(run, { ...selection, targetHostId: composeApp.hostId })).toBe(false);
   });
 
   it("derives recovery point labels and artifact states", () => {

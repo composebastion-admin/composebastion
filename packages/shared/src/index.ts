@@ -1,4 +1,8 @@
 import { z } from "zod";
+import { parseReleaseVersion } from "./versions.js";
+export * from "./versions.js";
+import { normalizeSavedRegistryOrigin } from "./registry.js";
+export * from "./registry.js";
 import { validatePasswordStrength } from "./password.js";
 import { paginationQuerySchema } from "./pagination.js";
 
@@ -474,7 +478,10 @@ export const selfUpdateVersionSchema = z.string()
   .trim()
   .min(1)
   .max(80)
-  .regex(/^[a-zA-Z0-9._-]+$/, "Use a release tag such as 1.0.2, v1.0.2, or latest");
+  .refine(
+    (value) => value === "latest" || Boolean(parseReleaseVersion(value)),
+    "Use latest or a strict semantic release such as 1.0.7 or v1.0.7"
+  );
 
 const selfUpdateConfigBaseSchema = z.object({
   hostId: idSchema.nullable().default(null),
@@ -487,12 +494,16 @@ const selfUpdateConfigBaseSchema = z.object({
 export const selfUpdateConfigSchema = selfUpdateConfigBaseSchema.superRefine((value, ctx) => {
   if (value.versionMode === "pinned" && (!value.targetVersion || value.targetVersion === "latest")) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Pinned updates require a release version", path: ["targetVersion"] });
+  } else if (value.versionMode === "pinned" && !parseReleaseVersion(value.targetVersion)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Pinned updates require a valid semantic release version", path: ["targetVersion"] });
   }
 });
 
 export const selfUpdateConfigInputSchema = selfUpdateConfigBaseSchema.partial().superRefine((value, ctx) => {
   if (value.versionMode === "pinned" && (!value.targetVersion || value.targetVersion === "latest")) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Pinned updates require a release version", path: ["targetVersion"] });
+  } else if (value.versionMode === "pinned" && !parseReleaseVersion(value.targetVersion)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Pinned updates require a valid semantic release version", path: ["targetVersion"] });
   }
 });
 
@@ -578,7 +589,7 @@ export const dockerActionSchema = z.discriminatedUnion("type", [
   withHost("volume.prune", {}),
   withHost("volume.backup", { backupId: idSchema, volumeName: dockerVolumeNameSchema }),
   withHost("volume.restore", { backupId: idSchema, targetVolumeName: dockerVolumeNameSchema, overwrite: z.boolean().default(false) }),
-  withHost("volume.clone", { targetHostId: idSchema, sourceVolumeName: dockerVolumeNameSchema, targetVolumeName: dockerVolumeNameSchema, overwrite: z.boolean().default(false) }),
+  withHost("volume.clone", { backupId: idSchema.optional(), targetHostId: idSchema, sourceVolumeName: dockerVolumeNameSchema, targetVolumeName: dockerVolumeNameSchema, overwrite: z.boolean().default(false) }),
   withHost("hostPath.backup", { backupId: idSchema, sourcePath: hostPathSchema }),
   withHost("hostPath.restore", { backupId: idSchema, targetPath: hostPathSchema, overwrite: z.boolean().default(false) }),
   withHost("backup.verify", { backupId: idSchema, testArchive: z.boolean().default(false) }),
@@ -660,6 +671,17 @@ export const operationJobSchema = z.object({
   completedAt: z.string().nullable()
 });
 
+export const workerStateSchema = z.enum(["active", "draining", "stale", "absent"]);
+export const workerStatusSchema = z.object({
+  queued: z.number().int().nonnegative(),
+  running: z.number().int().nonnegative(),
+  lastJobCompletedAt: z.string().nullable(),
+  available: z.boolean(),
+  activeWorkers: z.number().int().nonnegative(),
+  lastHeartbeatAt: z.string().nullable(),
+  state: workerStateSchema
+});
+
 export const auditEventSchema = z.object({
   id: idSchema,
   userId: idSchema.nullable(),
@@ -684,6 +706,7 @@ export type BackupSchedule = z.infer<typeof backupScheduleSchema>;
 export type BackupHealthSummary = z.infer<typeof backupHealthSummarySchema>;
 export type JobProgressStep = z.infer<typeof jobProgressStepSchema>;
 export type OperationJob = z.infer<typeof operationJobSchema>;
+export type WorkerStatus = z.infer<typeof workerStatusSchema>;
 export type AuditEvent = z.infer<typeof auditEventSchema>;
 
 export const favoriteImageCreateSchema = z.object({
@@ -897,10 +920,30 @@ export const alertRuleCreateSchema = z.discriminatedUnion("condition", [
 
 export const registryCreateSchema = z.object({
   name: z.string().min(1).max(80),
-  url: z.string().min(1),
+  url: z.string().trim().min(1).max(512),
   username: z.string().optional(),
   password: z.string().optional(),
   insecure: z.boolean().default(false)
+}).transform((value, ctx) => {
+  try {
+    const url = normalizeSavedRegistryOrigin(value.url, {
+      defaultProtocol: value.insecure ? "http" : "https"
+    });
+    return {
+      ...value,
+      url,
+      // The normalized origin is authoritative so cleartext credentials can
+      // never be mislabeled as a secure registry (or the inverse).
+      insecure: url.startsWith("http://")
+    };
+  } catch (error) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["url"],
+      message: error instanceof Error ? error.message : "Registry URL is invalid"
+    });
+    return z.NEVER;
+  }
 });
 
 export const registrySchema = z.object({
