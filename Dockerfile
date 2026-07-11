@@ -9,7 +9,7 @@ ARG RCLONE_SHA256_ARM64=97685285c9ad6a0cf17d5844115d2a67245af6444db672187074bd9c
 ARG RCLONE_LICENSE_SHA256=8cd2e9e750b90a04b7d82dbbca3930c696ae0309d7c10464f90a44f45754cd04
 ARG APP_VERSION=source
 
-FROM node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a AS deps
+FROM node:26-alpine3.22@sha256:c7932b9e5e337b0e733d6e16abc1b0e104759e8b05e59ed56586cce967d26dfe AS deps
 WORKDIR /app
 RUN apk add --no-cache python3 make g++
 COPY package.json package-lock.json ./
@@ -62,7 +62,7 @@ RUN set -eux; \
     sha256sum trivy-LICENSE.txt trivy-NOTICE.txt oras-go-LICENSE.txt go-LICENSE.txt go-PATENTS.txt go-buildinfo/trivy.modules.tsv \
       | LC_ALL=C sort > go-buildinfo/trivy.artifacts.sha256
 
-FROM node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a AS tools
+FROM node:26-alpine3.22@sha256:c7932b9e5e337b0e733d6e16abc1b0e104759e8b05e59ed56586cce967d26dfe AS tools
 ARG TARGETARCH
 ARG RCLONE_VERSION
 ARG RCLONE_SOURCE_COMMIT
@@ -100,7 +100,7 @@ RUN set -eux; \
     sha256sum rclone-LICENSE.txt go-buildinfo/rclone.modules.tsv \
       | LC_ALL=C sort > go-buildinfo/rclone.artifacts.sha256
 
-FROM node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a AS runtime
+FROM node:26-alpine3.22@sha256:c7932b9e5e337b0e733d6e16abc1b0e104759e8b05e59ed56586cce967d26dfe AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 ARG APP_VERSION
