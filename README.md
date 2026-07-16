@@ -13,6 +13,7 @@
   <a href="https://github.com/composebastion-admin/composebastion/releases"><img alt="Release" src="https://img.shields.io/badge/release-v1.1.1-e0a23f"></a>
   <a href="https://github.com/composebastion-admin/composebastion/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/composebastion-admin/composebastion/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/composebastion-admin/composebastion/pkgs/container/composebastion-app"><img alt="Container image" src="https://img.shields.io/badge/ghcr.io-composebastion--app-2496ed"></a>
+  <a href="https://discord.gg/g25tEafYDX"><img alt="Discord" src="https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?logo=discord&amp;logoColor=white"></a>
   <a href="LICENSE.md"><img alt="License" src="https://img.shields.io/badge/license-source--available-df7d27"></a>
   <img alt="Node" src="https://img.shields.io/badge/node-%3E%3D24-3f7f5f">
   <img alt="Docker" src="https://img.shields.io/badge/docker-compose-2496ed">
@@ -208,6 +209,11 @@ three real servers.
 | ![Host file browser for Compose folders](docs/assets/screenshots/host-files.png) | ![Image update intelligence with affected services](docs/assets/screenshots/image-updates.png) |
 
 The full screenshot tour is in the [how-to guide](docs/how-to.md).
+
+## Community
+
+Join the [ComposeBastion Discord community](https://discord.gg/g25tEafYDX) for
+project discussion, questions, and updates.
 
 ## Guides
 
