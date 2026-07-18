@@ -25,7 +25,11 @@ export function parseAgentEnvironment(source: NodeJS.ProcessEnv) {
   return z.object({
     AGENT_HOST: z.string().default("0.0.0.0"),
     AGENT_PORT: z.coerce.number().int().min(1).max(65535).default(8090),
-    AGENT_TOKEN: agentTokenSchema
+    AGENT_TOKEN: agentTokenSchema,
+    AGENT_READ_RATE_LIMIT: z.coerce.number().int().min(1).default(120),
+    AGENT_RUN_RATE_LIMIT: z.coerce.number().int().min(1).default(30),
+    AGENT_FILE_RATE_LIMIT: z.coerce.number().int().min(1).default(60),
+    AGENT_STREAM_RATE_LIMIT: z.coerce.number().int().min(1).default(10)
   }).parse(source);
 }
 
