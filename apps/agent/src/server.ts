@@ -29,10 +29,10 @@ const containerLogQuerySchema = z.object({
   tail: z.coerce.number().int().min(1).max(5000).default(500)
 });
 
-const agentReadRateLimit = { max: 120, timeWindow: "1 minute" } as const;
-const agentRunRateLimit = { max: 30, timeWindow: "1 minute" } as const;
-const agentFileRateLimit = { max: 60, timeWindow: "1 minute" } as const;
-const agentStreamRateLimit = { max: 10, timeWindow: "1 minute" } as const;
+const agentReadRateLimit   = { max: +(env.AGENT_READ_RATE_LIMIT   || 120), timeWindow: "1 minute" } as const;
+const agentRunRateLimit    = { max: +(env.AGENT_RUN_RATE_LIMIT    || 30),  timeWindow: "1 minute" } as const;
+const agentFileRateLimit   = { max: +(env.AGENT_FILE_RATE_LIMIT   || 60),  timeWindow: "1 minute" } as const;
+const agentStreamRateLimit = { max: +(env.AGENT_STREAM_RATE_LIMIT || 10),  timeWindow: "1 minute" } as const;
 const MAX_CONCURRENT_USAGE_STREAMS = 4;
 
 function safeEqual(left: string, right: string) {
