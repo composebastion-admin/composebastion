@@ -13,7 +13,6 @@ import { validateAgentFilePath } from "./paths.js";
 const require = createRequire(import.meta.url);
 const packageJson = require("../package.json") as { version?: string };
 const AGENT_VERSION = resolveAgentVersion(process.env.COMPOSEBASTION_AGENT_VERSION, packageJson.version);
-const env = parseAgentEnvironment(process.env);
 
 const runSchema = z.object({
   command: z.string().min(1).max(8000)
@@ -29,10 +28,6 @@ const containerLogQuerySchema = z.object({
   tail: z.coerce.number().int().min(1).max(5000).default(500)
 });
 
-const agentReadRateLimit = { max: 120, timeWindow: "1 minute" } as const;
-const agentRunRateLimit = { max: 30, timeWindow: "1 minute" } as const;
-const agentFileRateLimit = { max: 60, timeWindow: "1 minute" } as const;
-const agentStreamRateLimit = { max: 10, timeWindow: "1 minute" } as const;
 const MAX_CONCURRENT_USAGE_STREAMS = 4;
 
 function safeEqual(left: string, right: string) {
@@ -166,13 +161,28 @@ async function collectDiskStats(mountsText: string) {
   return disks;
 }
 
-export async function main() {
+export async function createAgentApp(source: NodeJS.ProcessEnv = process.env) {
+  const env = parseAgentEnvironment(source);
+  const agentReadRateLimit = { max: env.AGENT_READ_RATE_LIMIT, timeWindow: "1 minute" } as const;
+  const agentRunRateLimit = { max: env.AGENT_RUN_RATE_LIMIT, timeWindow: "1 minute" } as const;
+  const agentFileRateLimit = { max: env.AGENT_FILE_RATE_LIMIT, timeWindow: "1 minute" } as const;
+  const agentStreamRateLimit = { max: env.AGENT_STREAM_RATE_LIMIT, timeWindow: "1 minute" } as const;
   const app = Fastify({ logger: true, bodyLimit: 16 * 1024 });
   let activeUsageStreams = 0;
   await app.register(rateLimit, {
     max: 300,
     timeWindow: "1 minute"
   });
+
+  app.log.info({
+    rateLimits: {
+      read: env.AGENT_READ_RATE_LIMIT,
+      run: env.AGENT_RUN_RATE_LIMIT,
+      file: env.AGENT_FILE_RATE_LIMIT,
+      stream: env.AGENT_STREAM_RATE_LIMIT
+    },
+    maxConcurrentUsageStreams: MAX_CONCURRENT_USAGE_STREAMS
+  }, "Agent rate limits configured");
 
   app.addHook("preHandler", async (request, reply) => {
     const token = bearerToken(request.headers.authorization);
@@ -372,6 +382,11 @@ export async function main() {
     }
   });
 
+  return { app, env };
+}
+
+export async function main() {
+  const { app, env } = await createAgentApp();
   await app.listen({ host: env.AGENT_HOST, port: env.AGENT_PORT });
 }
 

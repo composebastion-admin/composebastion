@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { createAgentApp } from "../src/server.js";
 
 const source = readFileSync(new URL("../src/server.ts", import.meta.url), "utf8");
 
@@ -37,5 +38,22 @@ describe("agent route rate-limit coverage", () => {
   it("returns an unhealthy status unless Docker and Compose both work", () => {
     expect(source).toContain("docker.code === 0 && compose.code === 0");
     expect(source).toContain("if (!ok) reply.code(503)");
+  });
+
+  it("enforces a configured request boundary through Fastify", async () => {
+    const { app } = await createAgentApp({
+      AGENT_TOKEN: "agent-rate-limit-test-token-that-is-long-enough",
+      AGENT_RUN_RATE_LIMIT: "2"
+    });
+    try {
+      const request = { method: "POST" as const, url: "/api/run", payload: { command: "docker ps" } };
+      expect((await app.inject(request)).statusCode).toBe(401);
+      expect((await app.inject(request)).statusCode).toBe(401);
+      const limited = await app.inject(request);
+      expect(limited.statusCode).toBe(429);
+      expect(limited.json()).toMatchObject({ statusCode: 429 });
+    } finally {
+      await app.close();
+    }
   });
 });

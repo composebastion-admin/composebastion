@@ -35,9 +35,7 @@ Recommended SSH host settings:
 The ComposeBastion agent is a small Docker-only command proxy for hosts where you
 prefer not to give the manager direct SSH access. App and agent images are
 published together for each V1 release; keep them on the same release when
-possible. The most recent published manager and agent tags are `1.0.6`, but
-they are superseded for production readiness by the pending scanner
-remediation. Keep existing pairs pinned until verified `1.0.7` images exist.
+possible. The current manager and agent release is `1.1.2`.
 
 Use the published image on the target Docker host:
 
@@ -52,7 +50,7 @@ start. Both values are required and the examples refuse to render without
 them:
 
 ```bash
-export COMPOSEBASTION_AGENT_VERSION=1.0.6
+export COMPOSEBASTION_AGENT_VERSION=1.1.2
 export AGENT_TOKEN="$(openssl rand -hex 32)"
 export COMPOSEBASTION_AGENT_BIND_ADDRESS=192.0.2.10
 docker compose -f agent-compose.yml pull
@@ -63,7 +61,7 @@ Update the agent image with:
 
 ```bash
 cd ~/composebastion-agent
-export COMPOSEBASTION_AGENT_VERSION=1.0.6
+export COMPOSEBASTION_AGENT_VERSION=1.1.2
 export AGENT_TOKEN="$(openssl rand -hex 32)"
 export COMPOSEBASTION_AGENT_BIND_ADDRESS=192.0.2.10
 docker compose -f agent-compose.image.example.yml pull
@@ -85,6 +83,29 @@ capabilities are dropped.
 
 In ComposeBastion, add the host with connection mode `Host agent`, the agent URL,
 and the same token.
+
+### Agent Request Limits
+
+The agent applies separate request budgets per minute, per source IP, and per
+endpoint. Configure them in the agent's `.env` file when a large host needs more
+capacity:
+
+| Setting | Default | Routes |
+|---|---:|---|
+| `AGENT_READ_RATE_LIMIT` | 120 | health, host stats, and container usage |
+| `AGENT_RUN_RATE_LIMIT` | 30 | Docker commands and container log streams |
+| `AGENT_FILE_RATE_LIMIT` | 60 | agent file read, stat, and write |
+| `AGENT_STREAM_RATE_LIMIT` | 10 | container usage stream requests |
+
+Values must be positive safe integers. Unset, empty, or whitespace-only values
+use the defaults; zero, negative, fractional, non-numeric, and unsafe values
+prevent startup. Limits cannot be disabled. The separate cap of four concurrent
+container usage streams is unchanged.
+
+Both official agent Compose examples forward these settings. Recreate or
+restart the agent after changing them. Raising a limit weakens an availability
+safeguard: keep the agent on a trusted LAN, preserve the firewall restriction to
+the manager, and raise only the bucket that has measured demand.
 
 ## Security Notes
 

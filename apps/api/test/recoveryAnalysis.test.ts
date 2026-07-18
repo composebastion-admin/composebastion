@@ -97,4 +97,31 @@ describe("recovery analysis", () => {
     ]));
     expect(analysis.warnings.some((warning) => warning.includes("tmpfs"))).toBe(true);
   });
+
+  it("uses a preloaded inspection lookup without issuing a container request", async () => {
+    const cachedInspect = {
+      labels: { "com.docker.compose.service": "db" },
+      image: "postgres:16",
+      status: "running",
+      restartPolicy: "unless-stopped",
+      env: [],
+      mounts: [{
+        type: "volume",
+        name: "pgdata",
+        source: "/var/lib/docker/volumes/pgdata/_data",
+        destination: "/var/lib/postgresql/data",
+        readOnly: false
+      }],
+      networks: [],
+      ports: []
+    };
+    const containerInspects = new Map([["postgres-1", cachedInspect]]);
+
+    const { analyzeRecovery } = await import("../src/services/recoveryAnalysis.js");
+    const result = await analyzeRecovery({ hostId, appIdentity }, { containerInspects });
+
+    expect(result.volumes).toEqual(["pgdata"]);
+    expect(getContainerInspect).not.toHaveBeenCalled();
+    expect(resolveAppContext).toHaveBeenCalledWith(hostId, appIdentity, { containerInspects });
+  });
 });

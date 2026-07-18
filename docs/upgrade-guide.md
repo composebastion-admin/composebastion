@@ -8,7 +8,7 @@ every production update.
 - `/api/v1` is the public compatibility boundary for V1.
 - Use additive API changes whenever possible.
 - Keep app and agent images on the same release when possible. The most recent
-  published release is `v1.1.1`.
+  published release is `v1.1.2`.
 - New database migrations must use the next clean `NNN_snake_case.sql` filename.
   The existing duplicate `018_` migration prefix is a published legacy exception;
   do not create new duplicates.
@@ -39,7 +39,7 @@ Manual image install:
 
 ```bash
 cd ~/composebastion
-export COMPOSEBASTION_VERSION=1.1.1
+export COMPOSEBASTION_VERSION=1.1.2
 docker compose -f docker-compose.image.yml pull
 docker compose -f docker-compose.image.yml up -d
 ```
@@ -82,6 +82,15 @@ docker compose ps
 The Compose-managed database has a `composebastion` administrative role; it
 does not create a separate `postgres` role. Never run `docker compose down -v`
 to repair credentials because `-v` removes the persistent database volume.
+
+## Agent Configuration Changes
+
+Release `v1.1.2` adds four optional agent-only request limits. Existing agents
+retain the prior defaults when the variables are absent or blank. If you set
+custom values, update the agent `.env` file and recreate or restart the agent;
+manager `app` and `worker` services do not receive these settings. See
+[Connect Docker Hosts](connect-hosts.md#agent-request-limits) for defaults and
+security guidance.
 
 ## Rollback
 

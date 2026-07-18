@@ -212,6 +212,10 @@ const env = {
   HOST_CHECK_INTERVAL_MS: "10000",
   INVENTORY_SYNC_INTERVAL_MS: "60000",
   AGENT_TOKEN: secret(),
+  AGENT_READ_RATE_LIMIT: "221",
+  AGENT_RUN_RATE_LIMIT: "43",
+  AGENT_FILE_RATE_LIMIT: "79",
+  AGENT_STREAM_RATE_LIMIT: "17",
   COMPOSEBASTION_SSH_AUTHORIZED_KEYS: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAcceptanceConfigOnly composebastion"
 };
 
@@ -310,7 +314,17 @@ function assertAgentHardening(label, rendered) {
   if (!socket) throw new Error(`${label} lost the Docker socket mount`);
 }
 
+function assertAgentRateLimits(label, rendered, serviceName) {
+  const environment = rendered.services?.[serviceName]?.environment ?? {};
+  for (const key of ["AGENT_READ_RATE_LIMIT", "AGENT_RUN_RATE_LIMIT", "AGENT_FILE_RATE_LIMIT", "AGENT_STREAM_RATE_LIMIT"]) {
+    if (String(environment[key] ?? "") !== env[key]) {
+      throw new Error(`${label} ${key} did not propagate to ${serviceName}`);
+    }
+  }
+}
+
 const acceptance = validateRenderedCompose("Acceptance fixture", ["docker-compose.image.yml", "docker-compose.acceptance.yml"]);
+assertAgentRateLimits("Acceptance fixture", acceptance, "agent");
 for (const [service, port] of [["app", 18080], ["mailpit", 18025], ["minio", 19000], ["registry", 18050], ["agent", 18090]]) {
   const ports = acceptance.services?.[service]?.ports ?? [];
   if (!ports.some((item) => String(item.published) === String(port) && item.host_ip === "127.0.0.1")) {
@@ -352,6 +366,7 @@ const hardenedAcceptance = validateRenderedCompose("Hardened acceptance fixture"
 ], { profiles: ["hardening"] });
 assertManagerHardening("Hardened acceptance fixture", hardenedAcceptance);
 assertAgentHardening("Hardened acceptance fixture agent", hardenedAcceptance);
+assertAgentRateLimits("Hardened acceptance fixture", hardenedAcceptance, "composebastion-agent");
 assertLoopbackPort(hardenedAcceptance, "composebastion-agent", env.ACCEPTANCE_HARDENED_AGENT_PORT, 8090);
 
 const hardenedImage = validateRenderedCompose("Published-image hardening", [
@@ -372,9 +387,11 @@ const hardenedImageAgent = validateRenderedCompose("Published-agent hardening", 
   "agent-compose.hardened.yml"
 ], { enforcePinnedImages: false });
 assertAgentHardening("Published-agent hardening", hardenedImageAgent);
+assertAgentRateLimits("Published-agent hardening", hardenedImageAgent, "composebastion-agent");
 
 const hardenedSourceAgent = validateRenderedCompose("Source-agent hardening", [
   "agent-compose.example.yml",
   "agent-compose.hardened.yml"
 ], { enforcePinnedImages: false });
 assertAgentHardening("Source-agent hardening", hardenedSourceAgent);
+assertAgentRateLimits("Source-agent hardening", hardenedSourceAgent, "composebastion-agent");

@@ -27,5 +27,5 @@ Do not create or alter this rule from a local candidate implementation.
 For each stable release, rerun every gate, tag only the protected commit,
 publish both multi-architecture images, verify anonymous pulls, manifests, and
 scans, and then create the latest GitHub Release. Patch releases such as
-`v1.1.1` must follow the same image rescan and aggregate promotion gates as
+`v1.1.2` must follow the same image rescan and aggregate promotion gates as
 minor releases.

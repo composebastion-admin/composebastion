@@ -5,6 +5,8 @@ const analyzeRecovery = vi.fn();
 const listRecoveryPoints = vi.fn();
 const getRecoveryPoint = vi.fn();
 const getBackupTarget = vi.fn();
+const getContainerInspects = vi.fn();
+const syncDockerInventory = vi.fn();
 
 vi.mock("../src/services/apps.js", () => ({
   listApps: (...args: unknown[]) => listApps(...args)
@@ -12,6 +14,11 @@ vi.mock("../src/services/apps.js", () => ({
 
 vi.mock("../src/services/recoveryAnalysis.js", () => ({
   analyzeRecovery: (...args: unknown[]) => analyzeRecovery(...args)
+}));
+
+vi.mock("../src/services/docker.js", () => ({
+  getContainerInspects: (...args: unknown[]) => getContainerInspects(...args),
+  syncDockerInventory: (...args: unknown[]) => syncDockerInventory(...args)
 }));
 
 vi.mock("../src/services/recoveryCenter.js", () => ({
@@ -171,6 +178,8 @@ describe("recovery readiness", () => {
     listRecoveryPoints.mockResolvedValue([{ id: pointId, hostId, appIdentity }]);
     getRecoveryPoint.mockResolvedValue(point());
     getBackupTarget.mockResolvedValue(null);
+    getContainerInspects.mockResolvedValue(new Map());
+    syncDockerInventory.mockResolvedValue({});
   });
 
   it("scores a verified app with a passed drill as ready", async () => {
@@ -276,5 +285,120 @@ describe("recovery readiness", () => {
     expect(readiness.status).toBe("ready");
     expect(readiness.lastRecoveryPoint?.localUsable).toBe(false);
     expect(readiness.lastRecoveryPoint?.remoteUsable).toBe(true);
+  });
+
+  it("batches readiness inspection for 50 containers across 12 projects", async () => {
+    const containerIds = Array.from({ length: 50 }, (_, index) => `container-${index}`);
+    const apps = Array.from({ length: 12 }, (_, index) => app({
+      id: `stack:stack-${index}`,
+      name: `Project ${index}`,
+      stackId: `00000000-0000-4000-8000-${String(index + 10).padStart(12, "0")}`,
+      projectName: `project-${index}`,
+      containerIds: containerIds.filter((_, containerIndex) => containerIndex % 12 === index),
+      primaryContainerId: containerIds[index]
+    }));
+    listApps.mockResolvedValue(apps);
+    const inspections = new Map(containerIds.map((containerId) => [containerId, {
+      image: "nginx:alpine",
+      status: "running",
+      restartPolicy: "unless-stopped",
+      env: [], mounts: [], networks: [], ports: [], labels: {}
+    }]));
+    getContainerInspects.mockResolvedValue(inspections);
+
+    const { listRecoveryReadiness } = await import("../src/services/recoveryReadiness.js");
+    const readiness = await listRecoveryReadiness(hostId);
+
+    expect(getContainerInspects).toHaveBeenCalledTimes(1);
+    const inspectedIds = getContainerInspects.mock.calls[0]?.[1] as string[];
+    expect(inspectedIds).toHaveLength(50);
+    expect(new Set(inspectedIds)).toEqual(new Set(containerIds));
+    expect(analyzeRecovery).toHaveBeenCalledTimes(12);
+    expect(analyzeRecovery).toHaveBeenCalledWith(expect.any(Object), { containerInspects: inspections });
+    expect(readiness).toHaveLength(12);
+    expect(readiness.flatMap((item) => item.reasons).map((reason) => reason.code)).not.toContain("analysis_unavailable");
+  });
+
+  it("refreshes inventory and retries a failed host batch once", async () => {
+    const staleApp = app({
+      id: "standalone:old-container",
+      source: "standalone",
+      stackId: null,
+      projectName: null,
+      containerIds: ["old-container"],
+      primaryContainerId: "old-container"
+    });
+    const refreshedApp = app({
+      id: "standalone:new-container",
+      source: "standalone",
+      stackId: null,
+      projectName: null,
+      containerIds: ["new-container"],
+      primaryContainerId: "new-container"
+    });
+    listApps.mockResolvedValueOnce([staleApp]).mockResolvedValue([refreshedApp]);
+    const inspections = new Map([["new-container", {
+      image: "nginx:alpine",
+      status: "running",
+      restartPolicy: "unless-stopped",
+      env: [], mounts: [], networks: [], ports: [], labels: {}
+    }]]);
+    getContainerInspects
+      .mockRejectedValueOnce(new Error("container changed during inspect"))
+      .mockResolvedValueOnce(inspections);
+
+    const { listRecoveryReadiness } = await import("../src/services/recoveryReadiness.js");
+    const readiness = await listRecoveryReadiness(hostId);
+
+    expect(syncDockerInventory).toHaveBeenCalledOnce();
+    expect(listApps).toHaveBeenCalledWith(hostId);
+    expect(getContainerInspects).toHaveBeenCalledTimes(2);
+    expect(getContainerInspects).toHaveBeenNthCalledWith(1, hostId, ["old-container"]);
+    expect(getContainerInspects).toHaveBeenNthCalledWith(2, hostId, ["new-container"]);
+    expect(analyzeRecovery).toHaveBeenCalledWith({
+      hostId,
+      appIdentity: { kind: "standalone", containerIds: ["new-container"], label: "Open WebUI" }
+    }, { containerInspects: inspections });
+    expect(readiness[0]?.reasons.map((reason) => reason.code)).not.toContain("analysis_unavailable");
+  });
+
+  it("reports analysis unavailable when the bounded retry also fails", async () => {
+    getContainerInspects.mockRejectedValue(new Error("Docker inspect remained unavailable"));
+
+    const { listRecoveryReadiness } = await import("../src/services/recoveryReadiness.js");
+    const readiness = await listRecoveryReadiness(hostId);
+
+    expect(syncDockerInventory).toHaveBeenCalledOnce();
+    expect(getContainerInspects).toHaveBeenCalledTimes(2);
+    expect(analyzeRecovery).not.toHaveBeenCalled();
+    expect(readiness[0]?.reasons).toEqual([expect.objectContaining({
+      code: "analysis_unavailable",
+      message: expect.stringContaining("temporarily unavailable after refreshing container inventory")
+    })]);
+  });
+
+  it("processes no more than two hosts concurrently", async () => {
+    const apps = [0, 1, 2].map((index) => app({
+      id: `stack:host-${index}`,
+      hostId: `00000000-0000-4000-8000-${String(index + 20).padStart(12, "0")}`,
+      name: `Host project ${index}`,
+      containerIds: [`host-${index}-container`],
+      primaryContainerId: `host-${index}-container`
+    }));
+    listApps.mockResolvedValue(apps);
+    let active = 0;
+    let maximum = 0;
+    getContainerInspects.mockImplementation(async () => {
+      active += 1;
+      maximum = Math.max(maximum, active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active -= 1;
+      return new Map();
+    });
+
+    const { listRecoveryReadiness } = await import("../src/services/recoveryReadiness.js");
+    await listRecoveryReadiness();
+
+    expect(maximum).toBe(2);
   });
 });

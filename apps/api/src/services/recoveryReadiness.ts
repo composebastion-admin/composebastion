@@ -10,6 +10,7 @@ import type {
 import { recoveryReadinessSchema } from "@composebastion/shared";
 import { listApps } from "./apps.js";
 import { assertHostBackupPathAllowed } from "./backupHostPaths.js";
+import { getContainerInspects, syncDockerInventory, type ContainerInspectDetails } from "./docker.js";
 import { analyzeRecovery } from "./recoveryAnalysis.js";
 import { getBackupTarget, getRecoveryPoint, listRecoveryPoints } from "./recoveryCenter.js";
 import { isAllowedBindMountPath } from "./recoveryManifest.js";
@@ -18,6 +19,8 @@ type ReadinessInput = {
   hostId: string;
   appIdentity: RecoveryAppIdentity;
   label?: string;
+  containerInspects?: ReadonlyMap<string, ContainerInspectDetails>;
+  analysisUnavailableError?: string;
 };
 
 type PointUsability = {
@@ -383,10 +386,35 @@ function pointReasons(detail: RecoveryPointDetail | null, target: BackupTarget |
 
 export async function analyzeRecoveryReadiness(input: ReadinessInput): Promise<RecoveryReadiness> {
   const label = input.label ?? identityLabel(input.appIdentity);
+  if (input.analysisUnavailableError) {
+    const reasons: RecoveryReadinessReason[] = [{
+      code: "analysis_unavailable",
+      severity: "critical",
+      message: `Readiness analysis is temporarily unavailable after refreshing container inventory: ${input.analysisUnavailableError}`,
+      action: "Retry readiness after the host inventory and Docker connection are stable."
+    }];
+    return recoveryReadinessSchema.parse({
+      hostId: input.hostId,
+      appIdentity: input.appIdentity,
+      label,
+      status: "blocked",
+      score: scoreFor("blocked", reasons),
+      reasons,
+      recommendedCaptureMode: "hot",
+      lastRecoveryPoint: null,
+      lastDrill: null,
+      profile: null,
+      targetHealth: null,
+      dataMounts: []
+    });
+  }
   const matchingApp = await findMatchingApp(input.hostId, input.appIdentity);
   let analysis: RecoveryAnalysis;
   try {
-    analysis = await analyzeRecovery({ hostId: input.hostId, appIdentity: input.appIdentity });
+    analysis = await analyzeRecovery(
+      { hostId: input.hostId, appIdentity: input.appIdentity },
+      { containerInspects: input.containerInspects }
+    );
   } catch (error) {
     const reasons: RecoveryReadinessReason[] = [{
       code: "analysis_failed",
@@ -435,12 +463,73 @@ export async function analyzeRecoveryReadiness(input: ReadinessInput): Promise<R
   });
 }
 
+type HostInspectionResult = {
+  apps: DockerApp[];
+  containerInspects?: ReadonlyMap<string, ContainerInspectDetails>;
+  error?: string;
+};
+
+function uniqueContainerIds(apps: DockerApp[]) {
+  return Array.from(new Set(apps.flatMap((app) => app.containerIds).filter(Boolean)));
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function inspectHostForReadiness(hostId: string, apps: DockerApp[]): Promise<HostInspectionResult> {
+  try {
+    return { apps, containerInspects: await getContainerInspects(hostId, uniqueContainerIds(apps)) };
+  } catch {
+    try {
+      await syncDockerInventory(hostId);
+      const refreshedApps = await listApps(hostId);
+      try {
+        return {
+          apps: refreshedApps,
+          containerInspects: await getContainerInspects(hostId, uniqueContainerIds(refreshedApps))
+        };
+      } catch (error) {
+        return { apps: refreshedApps, error: errorMessage(error) };
+      }
+    } catch (error) {
+      return { apps, error: errorMessage(error) };
+    }
+  }
+}
+
+async function inspectHostsForReadiness(apps: DockerApp[]) {
+  const appsByHost = new Map<string, DockerApp[]>();
+  for (const app of apps) {
+    const current = appsByHost.get(app.hostId) ?? [];
+    current.push(app);
+    appsByHost.set(app.hostId, current);
+  }
+
+  const entries = Array.from(appsByHost.entries());
+  const results = new Map<string, HostInspectionResult>();
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < entries.length) {
+      const index = cursor++;
+      const [hostId, hostApps] = entries[index]!;
+      results.set(hostId, await inspectHostForReadiness(hostId, hostApps));
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(2, entries.length) }, () => worker()));
+  return results;
+}
+
 export async function listRecoveryReadiness(hostId?: string): Promise<RecoveryReadiness[]> {
   const apps = await listApps(hostId);
-  const results = await Promise.all(apps.map((app) => analyzeRecoveryReadiness({
+  const hostInspections = await inspectHostsForReadiness(apps);
+  const refreshedApps = Array.from(hostInspections.values()).flatMap((result) => result.apps);
+  const results = await Promise.all(refreshedApps.map((app) => analyzeRecoveryReadiness({
     hostId: app.hostId,
     appIdentity: dockerAppToRecoveryIdentity(app),
-    label: app.name
+    label: app.name,
+    containerInspects: hostInspections.get(app.hostId)?.containerInspects,
+    analysisUnavailableError: hostInspections.get(app.hostId)?.error
   })));
   return results.sort((a, b) => a.label.localeCompare(b.label));
 }

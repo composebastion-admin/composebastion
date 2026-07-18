@@ -1,6 +1,6 @@
 # ComposeBastion How-To Guide
 
-Version covered: `v1.0.6`.
+Version covered: `v1.1.2`.
 
 This guide covers the day-to-day workflows that are easiest to forget when you
 only use them occasionally. For installation-first docs, start with

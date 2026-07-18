@@ -89,6 +89,11 @@ claims for a release.
   connectivity from the manager network.
 - If restore or a restore drill fails, keep the failed recovery point and job
   record until the audit trail, artifacts, and clone project name are understood.
+- Recovery readiness inspects containers in host-scoped batches. If readiness
+  says analysis is temporarily unavailable after refreshing inventory, treat it
+  as a Docker connectivity or changing-inventory condition, not as an app
+  recovery defect; stabilize the host and retry rather than raising every agent
+  limiter.
 
 ## Tracing UI Failures
 
@@ -110,7 +115,4 @@ claims for a release.
   but live logs and host `/proc` stats require the newer agent endpoints.
 - V1 expects app and agent images from the same release for live logs, queued
   Docker work, and host `/proc` stats.
-- The most recent published app and agent tags are `1.0.6` and `v1.0.6`, but
-  that release is superseded for production readiness by the pending scanner
-  remediation. Keep existing installations pinned until verified `1.0.7`
-  images are available.
+- The current app and agent tags are `1.1.2` and `v1.1.2`.
