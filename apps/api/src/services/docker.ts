@@ -641,6 +641,17 @@ export type ContainerInspectDetails = {
   labels: Record<string, string>;
 };
 
+export const CONTAINER_INSPECT_BATCH_SIZE = 100;
+
+export function containerInspectBatches(containerIds: string[]) {
+  const uniqueIds = Array.from(new Set(containerIds.filter(Boolean)));
+  const batches: string[][] = [];
+  for (let offset = 0; offset < uniqueIds.length; offset += CONTAINER_INSPECT_BATCH_SIZE) {
+    batches.push(uniqueIds.slice(offset, offset + CONTAINER_INSPECT_BATCH_SIZE));
+  }
+  return batches;
+}
+
 function stringRecord(value: unknown): Record<string, string> {
   if (!value || typeof value !== "object") return {};
   return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, String(item)]));
@@ -669,8 +680,7 @@ function parseInspectPorts(source: any): ContainerInspectDetails["ports"] {
   return parsed;
 }
 
-export function parseContainerInspectJson(stdout: string): ContainerInspectDetails {
-  const [source] = JSON.parse(stdout) as any[];
+function parseContainerInspectSource(source: any): ContainerInspectDetails {
   if (!source) throw new Error("Container not found");
   const restartName = String(source.HostConfig?.RestartPolicy?.Name || "no");
   const retryCount = Number(source.HostConfig?.RestartPolicy?.MaximumRetryCount ?? 0);
@@ -697,6 +707,33 @@ export function parseContainerInspectJson(stdout: string): ContainerInspectDetai
     ports: parseInspectPorts(source),
     labels: stringRecord(source.Config?.Labels)
   };
+}
+
+export function parseContainerInspectJson(stdout: string): ContainerInspectDetails {
+  const [source] = JSON.parse(stdout) as any[];
+  return parseContainerInspectSource(source);
+}
+
+export function parseContainerInspectBatchJson(stdout: string, requestedIds: string[]) {
+  const sources = JSON.parse(stdout) as any[];
+  if (!Array.isArray(sources)) throw new Error("Docker returned malformed container inspection data");
+  const used = new Set<number>();
+  const result = new Map<string, ContainerInspectDetails>();
+  for (const requestedId of requestedIds) {
+    const normalizedId = requestedId.replace(/^\//, "");
+    let sourceIndex = sources.findIndex((source, index) => {
+      if (used.has(index)) return false;
+      const sourceId = String(source?.Id ?? "");
+      const sourceName = String(source?.Name ?? "").replace(/^\//, "");
+      return sourceId === normalizedId || sourceId.startsWith(normalizedId) || sourceName === normalizedId;
+    });
+    if (sourceIndex === -1) {
+      throw new Error(`Container ${requestedId} disappeared while Docker inventory was being inspected`);
+    }
+    used.add(sourceIndex);
+    result.set(requestedId, parseContainerInspectSource(sources[sourceIndex]));
+  }
+  return result;
 }
 
 export function redactInspectEnv(details: ContainerInspectDetails): ContainerInspectDetails {
@@ -746,6 +783,29 @@ export async function getContainerInspect(hostId: string, containerId: string) {
   if (isDemoHost(host.public)) return getDemoContainerInspect(hostId, containerId);
   const inspect = await runDocker(hostId, `docker inspect ${shQuote(containerId)}`, 60_000);
   return parseContainerInspectJson(inspect.stdout);
+}
+
+export async function getContainerInspects(hostId: string, containerIds: string[]) {
+  const batches = containerInspectBatches(containerIds);
+  const uniqueIds = batches.flat();
+  const result = new Map<string, ContainerInspectDetails>();
+  if (!uniqueIds.length) return result;
+
+  const host = await getHostForWorker(hostId);
+  if (isDemoHost(host.public)) {
+    for (const containerId of uniqueIds) {
+      result.set(containerId, await getDemoContainerInspect(hostId, containerId));
+    }
+    return result;
+  }
+
+  for (const batch of batches) {
+    const inspect = await runDocker(hostId, `docker inspect ${batch.map(shQuote).join(" ")}`, 60_000);
+    for (const [containerId, details] of parseContainerInspectBatchJson(inspect.stdout, batch)) {
+      result.set(containerId, details);
+    }
+  }
+  return result;
 }
 
 export async function streamContainerLogs(hostId: string, containerId: string, tail: number, onLine: (line: string) => void, onError: (error: Error) => void) {

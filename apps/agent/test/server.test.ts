@@ -7,12 +7,13 @@ type ExecResult = {
 };
 
 const state = vi.hoisted(() => ({
-  routes: new Map<string, (...args: any[]) => any>(),
+  routes: new Map<string, { options: any; handler: (...args: any[]) => any }>(),
   preHandler: undefined as ((request: any, reply: any) => Promise<void>) | undefined,
   execResults: new Map<string, ExecResult>(),
   listen: vi.fn(async () => undefined),
   register: vi.fn(async () => undefined),
-  stdinEnd: vi.fn()
+  stdinEnd: vi.fn(),
+  logInfo: vi.fn()
 }));
 
 vi.mock("@fastify/rate-limit", () => ({ default: Symbol("rate-limit-plugin") }));
@@ -23,11 +24,12 @@ vi.mock("fastify", () => ({
     addHook: vi.fn((name: string, hook: typeof state.preHandler) => {
       if (name === "preHandler") state.preHandler = hook;
     }),
-    get: vi.fn((path: string, _options: unknown, handler: (...args: any[]) => any) => {
-      state.routes.set(`GET ${path}`, handler);
+    log: { info: state.logInfo },
+    get: vi.fn((path: string, options: unknown, handler: (...args: any[]) => any) => {
+      state.routes.set(`GET ${path}`, { options, handler });
     }),
-    post: vi.fn((path: string, _options: unknown, handler: (...args: any[]) => any) => {
-      state.routes.set(`POST ${path}`, handler);
+    post: vi.fn((path: string, options: unknown, handler: (...args: any[]) => any) => {
+      state.routes.set(`POST ${path}`, { options, handler });
     }),
     listen: state.listen
   })
@@ -50,7 +52,11 @@ const token = "agent-server-test-token-that-is-long-enough";
 const originalEnvironment = {
   AGENT_HOST: process.env.AGENT_HOST,
   AGENT_PORT: process.env.AGENT_PORT,
-  AGENT_TOKEN: process.env.AGENT_TOKEN
+  AGENT_TOKEN: process.env.AGENT_TOKEN,
+  AGENT_READ_RATE_LIMIT: process.env.AGENT_READ_RATE_LIMIT,
+  AGENT_RUN_RATE_LIMIT: process.env.AGENT_RUN_RATE_LIMIT,
+  AGENT_FILE_RATE_LIMIT: process.env.AGENT_FILE_RATE_LIMIT,
+  AGENT_STREAM_RATE_LIMIT: process.env.AGENT_STREAM_RATE_LIMIT
 };
 
 function setExecResult(args: string[], result: ExecResult) {
@@ -58,9 +64,9 @@ function setExecResult(args: string[], result: ExecResult) {
 }
 
 function route(method: "GET" | "POST", path: string) {
-  const handler = state.routes.get(`${method} ${path}`);
-  if (!handler) throw new Error(`Route was not registered: ${method} ${path}`);
-  return handler;
+  const registration = state.routes.get(`${method} ${path}`);
+  if (!registration) throw new Error(`Route was not registered: ${method} ${path}`);
+  return registration.handler;
 }
 
 function createReply() {
@@ -85,6 +91,10 @@ beforeAll(async () => {
   process.env.AGENT_HOST = "127.0.0.1";
   process.env.AGENT_PORT = "19091";
   process.env.AGENT_TOKEN = token;
+  process.env.AGENT_READ_RATE_LIMIT = "240";
+  process.env.AGENT_RUN_RATE_LIMIT = "45";
+  process.env.AGENT_FILE_RATE_LIMIT = "90";
+  process.env.AGENT_STREAM_RATE_LIMIT = "20";
 
   const { main } = await import("../src/server.js");
   await main();
@@ -122,6 +132,27 @@ describe("agent server", () => {
     expect(authorizedReply.send).not.toHaveBeenCalled();
   });
 
+  it("applies and logs every configured route limiter", () => {
+    const expected = new Map([
+      ["GET /api/health", 240],
+      ["GET /api/host-stats", 240],
+      ["GET /api/containers/usage", 240],
+      ["GET /api/containers/usage-stream", 20],
+      ["POST /api/run", 45],
+      ["GET /api/containers/:id/logs-stream", 45],
+      ["POST /api/files/write", 90],
+      ["GET /api/files/stat", 90],
+      ["GET /api/files/read", 90]
+    ]);
+    for (const [key, max] of expected) {
+      expect(state.routes.get(key)?.options.config.rateLimit).toEqual({ max, timeWindow: "1 minute" });
+    }
+    expect(state.logInfo).toHaveBeenCalledWith({
+      rateLimits: { read: 240, run: 45, file: 90, stream: 20 },
+      maxConcurrentUsageStreams: 4
+    }, "Agent rate limits configured");
+  });
+
   it("reports healthy only when both Docker and Compose respond", async () => {
     setExecResult(["version", "--format", "{{.Server.Version}}"], { stdout: "29.6.1\n" });
     setExecResult(["compose", "version", "--short"], { stdout: "5.3.1\n" });
@@ -131,7 +162,7 @@ describe("agent server", () => {
     expect(healthyReply.statusCode).toBe(200);
     expect(healthy).toMatchObject({
       ok: true,
-      agentVersion: "1.1.1",
+      agentVersion: "1.1.2",
       dockerVersion: "29.6.1",
       composeVersion: "5.3.1",
       dockerError: null,

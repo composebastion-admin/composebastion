@@ -19,6 +19,10 @@ export const composeSentinels = Object.freeze({
   COMPOSEBASTION_AGENT_PORT: "18891",
   COMPOSEBASTION_AGENT_BIND_ADDRESS: "127.0.0.9",
   AGENT_TOKEN: "compose-contract-agent-token-0123456789abcdef",
+  AGENT_READ_RATE_LIMIT: "321",
+  AGENT_RUN_RATE_LIMIT: "87",
+  AGENT_FILE_RATE_LIMIT: "163",
+  AGENT_STREAM_RATE_LIMIT: "29",
   CORS_ORIGINS: "https://console.contract.example",
   // Exercise the documented explicit opt-out while the separate default
   // render gate below proves production still defaults to secure cookies.
@@ -89,6 +93,10 @@ export const sentinelEnvironmentServices = Object.freeze({
   COMPOSEBASTION_AGENT_PORT: Object.freeze([]),
   COMPOSEBASTION_AGENT_BIND_ADDRESS: Object.freeze([]),
   AGENT_TOKEN: Object.freeze(["composebastion-agent"]),
+  AGENT_READ_RATE_LIMIT: Object.freeze(["composebastion-agent"]),
+  AGENT_RUN_RATE_LIMIT: Object.freeze(["composebastion-agent"]),
+  AGENT_FILE_RATE_LIMIT: Object.freeze(["composebastion-agent"]),
+  AGENT_STREAM_RATE_LIMIT: Object.freeze(["composebastion-agent"]),
   CORS_ORIGINS: Object.freeze(["app"]),
   SECURE_COOKIES: Object.freeze(["app"]),
   TRUST_PROXY: Object.freeze(["app"]),

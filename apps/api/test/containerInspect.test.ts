@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { parseContainerInspectJson, redactInspectEnv, type ContainerInspectDetails } from "../src/services/docker.js";
+import {
+  containerInspectBatches,
+  parseContainerInspectBatchJson,
+  parseContainerInspectJson,
+  redactInspectEnv,
+  type ContainerInspectDetails
+} from "../src/services/docker.js";
 
 describe("container inspect parser", () => {
   it("extracts detail drawer fields from docker inspect JSON", () => {
@@ -87,6 +93,29 @@ describe("container inspect parser", () => {
       { containerPort: "80", protocol: "tcp", hostIp: "::", hostPort: "8080" },
       { containerPort: "443", protocol: "tcp" }
     ]);
+  });
+
+  it("maps batched results to short IDs and container names", () => {
+    const parsed = parseContainerInspectBatchJson(JSON.stringify([
+      { Id: "abc123456789ffff", Name: "/web", Config: { Image: "nginx" } },
+      { Id: "def987654321ffff", Name: "/db", Config: { Image: "postgres" } }
+    ]), ["abc123456789", "db"]);
+
+    expect(parsed.get("abc123456789")?.image).toBe("nginx");
+    expect(parsed.get("db")?.image).toBe("postgres");
+  });
+
+  it("rejects a batch when inventory changed before inspection completed", () => {
+    expect(() => parseContainerInspectBatchJson(JSON.stringify([
+      { Id: "different-container", Name: "/different", Config: { Image: "nginx" } }
+    ]), ["missing-container"])).toThrow(/disappeared while Docker inventory was being inspected/);
+  });
+
+  it("deduplicates container IDs into batches of at most 100", () => {
+    const ids = Array.from({ length: 205 }, (_, index) => `container-${index}`);
+    const batches = containerInspectBatches([...ids, ids[0]!]);
+    expect(batches.map((batch) => batch.length)).toEqual([100, 100, 5]);
+    expect(batches.flat()).toEqual(ids);
   });
 });
 

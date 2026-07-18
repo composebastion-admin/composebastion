@@ -1,6 +1,6 @@
 import type { RecoveryAppIdentity } from "@composebastion/shared";
 import { query } from "../db/pool.js";
-import { getContainerVolumeMounts } from "./docker.js";
+import { getContainerVolumeMounts, type ContainerInspectDetails } from "./docker.js";
 
 export type ResolvedAppContext = {
   label: string;
@@ -56,20 +56,36 @@ async function listContainersForProject(hostId: string, projectName: string) {
   return result.rows.filter((row: any) => readLabel(row.data ?? {}, "com.docker.compose.project") === projectName);
 }
 
-async function collectVolumeNames(hostId: string, containerIds: string[]) {
+type ResolveAppContextOptions = {
+  containerInspects?: ReadonlyMap<string, ContainerInspectDetails>;
+};
+
+async function collectVolumeNames(hostId: string, containerIds: string[], options: ResolveAppContextOptions) {
   const names = new Set<string>();
   for (const containerId of containerIds) {
     try {
-      const mounts = await getContainerVolumeMounts(hostId, containerId);
-      for (const mount of mounts) names.add(mount.name);
+      if (options.containerInspects) {
+        const inspect = options.containerInspects.get(containerId);
+        if (!inspect) throw new Error(`Container ${containerId} is missing from the batched inspection result`);
+        for (const mount of inspect.mounts) {
+          if (mount.type === "volume" && mount.name) names.add(mount.name);
+        }
+      } else {
+        const mounts = await getContainerVolumeMounts(hostId, containerId);
+        for (const mount of mounts) names.add(mount.name);
+      }
     } catch {
-      // Container may be gone from inventory; capture will inspect directly.
+      // Container inventory can change between discovery and analysis.
     }
   }
   return Array.from(names);
 }
 
-export async function resolveAppContext(hostId: string, appIdentity: RecoveryAppIdentity): Promise<ResolvedAppContext> {
+export async function resolveAppContext(
+  hostId: string,
+  appIdentity: RecoveryAppIdentity,
+  options: ResolveAppContextOptions = {}
+): Promise<ResolvedAppContext> {
   if (appIdentity.kind === "stack" || appIdentity.kind === "compose") {
     const stack = appIdentity.kind === "stack"
       ? await getStackRow(hostId, appIdentity.stackId)
@@ -83,7 +99,7 @@ export async function resolveAppContext(hostId: string, appIdentity: RecoveryApp
     if (!projectName) throw new Error("Compose project name is required");
     const containers = await listContainersForProject(hostId, projectName);
     const containerIds = containers.map((row: any) => String(row.external_id));
-    const volumeNames = await collectVolumeNames(hostId, containerIds);
+    const volumeNames = await collectVolumeNames(hostId, containerIds, options);
     return {
       label: appIdentity.label ?? stack?.name ?? projectName,
       projectName,
@@ -104,7 +120,7 @@ export async function resolveAppContext(hostId: string, appIdentity: RecoveryApp
     const stack = await getStackByProject(effectiveHostId, repo.project_name);
     const containers = stack ? await listContainersForProject(effectiveHostId, stack.project_name) : [];
     const containerIds = containers.map((row: any) => String(row.external_id));
-    const volumeNames = await collectVolumeNames(effectiveHostId, containerIds);
+    const volumeNames = await collectVolumeNames(effectiveHostId, containerIds, options);
     return {
       label: appIdentity.label ?? repo.name,
       projectName: repo.project_name,
@@ -118,7 +134,7 @@ export async function resolveAppContext(hostId: string, appIdentity: RecoveryApp
     };
   }
 
-  const volumeNames = await collectVolumeNames(hostId, appIdentity.containerIds);
+  const volumeNames = await collectVolumeNames(hostId, appIdentity.containerIds, options);
   return {
     label: appIdentity.label ?? appIdentity.containerIds[0] ?? "standalone",
     projectName: null,

@@ -1,5 +1,32 @@
 # Changelog
 
+## [v1.1.2] - 2026-07-18
+
+### Added
+- Added validated `AGENT_READ_RATE_LIMIT`, `AGENT_RUN_RATE_LIMIT`,
+  `AGENT_FILE_RATE_LIMIT`, and `AGENT_STREAM_RATE_LIMIT` settings to both
+  supported agent Compose install paths. Blank values retain the existing
+  defaults; invalid or unsafe values stop agent startup with an actionable
+  error.
+- Logged the effective non-secret agent rate-limit configuration at startup.
+
+### Fixed
+- Batched recovery-readiness container inspection by host in groups of at most
+  100 containers, with no more than two hosts inspected concurrently.
+- Added one bounded inventory refresh and retry for container inventory races.
+  A persistent batch failure is now reported as analysis unavailable instead
+  of being presented as a recovery defect caused by agent `429` responses.
+
+### Security
+- Preserved the existing per-minute, per-source-IP, per-endpoint limiter
+  semantics and the four-stream concurrency cap. Raising the new limits weakens
+  an availability safeguard and does not change the trusted-LAN and firewall
+  requirements for the Docker-socket-backed agent.
+
+### Configuration
+- Agent configuration changes require recreating or restarting the agent.
+- This patch adds no database migration, UI setting, or manager/OpenAPI change.
+
 ## [v1.1.1] - 2026-07-11
 
 ### Fixed

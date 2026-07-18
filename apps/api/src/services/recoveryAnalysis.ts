@@ -1,6 +1,6 @@
 import type { RecoveryAnalysis, RecoveryAnalysisRequest, RecoveryDataMount } from "@composebastion/shared";
 import { recoveryAnalysisSchema } from "@composebastion/shared";
-import { getContainerInspect } from "./docker.js";
+import { getContainerInspect, type ContainerInspectDetails } from "./docker.js";
 import { composeWorkingDirHostFolder } from "./recoveryManifest.js";
 import { resolveAppContext } from "./recoveryAppContext.js";
 import { getRecoveryProfile, getRecoveryProfileForApp } from "./recoveryProfiles.js";
@@ -50,8 +50,15 @@ function mountKey(mount: Pick<RecoveryDataMount, "type" | "source" | "name" | "d
   return `${mount.type}:${mount.source ?? mount.name ?? ""}:${mount.destination}`;
 }
 
-export async function analyzeRecovery(input: RecoveryAnalysisRequest): Promise<RecoveryAnalysis> {
-  const context = await resolveAppContext(input.hostId, input.appIdentity);
+type RecoveryAnalysisOptions = {
+  containerInspects?: ReadonlyMap<string, ContainerInspectDetails>;
+};
+
+export async function analyzeRecovery(
+  input: RecoveryAnalysisRequest,
+  options: RecoveryAnalysisOptions = {}
+): Promise<RecoveryAnalysis> {
+  const context = await resolveAppContext(input.hostId, input.appIdentity, options);
   const profile = input.profileId
     ? await getRecoveryProfile(input.profileId)
     : await getRecoveryProfileForApp(input.hostId, input.appIdentity);
@@ -73,7 +80,10 @@ export async function analyzeRecovery(input: RecoveryAnalysisRequest): Promise<R
   }
 
   for (const containerId of context.containerIds) {
-    const inspect = await getContainerInspect(input.hostId, containerId);
+    const inspect = options.containerInspects
+      ? options.containerInspects.get(containerId)
+      : await getContainerInspect(input.hostId, containerId);
+    if (!inspect) throw new Error(`Container ${containerId} is missing from the batched inspection result`);
     const labels = inspect.labels ?? {};
     const containerName = labels["com.docker.compose.service"] || labels["com.docker.compose.project"] || containerId;
     const containerMounts: RecoveryDataMount[] = [];

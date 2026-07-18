@@ -31,6 +31,11 @@ Use this checklist before exposing ComposeBastion outside a trusted private netw
 - Keep the focused route-rate-limit defaults enabled. They add stricter buckets
   around host mutations, host files, backups/downloads, config import/export,
   live streams, terminals, and other Docker-facing operations.
+- Keep agent request limits at their defaults unless measured host scale
+  requires a larger bucket. Agent limits are per minute, per source IP, and per
+  endpoint; raising them weakens an availability safeguard and never replaces
+  the trusted-LAN bind and firewall controls. Limits cannot be disabled, and
+  the four-stream concurrency cap remains fixed.
 - Configure `BACKUP_HOST_PATH_ALLOWED_ROOTS` when host-path backups/restores should
   be limited to approved directories.
 - Rotate backup encryption keys by adding new keys before removing old keys.

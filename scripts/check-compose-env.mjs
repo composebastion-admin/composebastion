@@ -238,6 +238,11 @@ function verifyAgent(label, file, expectedImage = null) {
   const port = publishedPort(agent, 8090);
   const failures = [];
   if (agent?.environment?.AGENT_TOKEN !== composeSentinels.AGENT_TOKEN) failures.push("AGENT_TOKEN is not routed to the agent");
+  for (const key of ["AGENT_READ_RATE_LIMIT", "AGENT_RUN_RATE_LIMIT", "AGENT_FILE_RATE_LIMIT", "AGENT_STREAM_RATE_LIMIT"]) {
+    if (String(agent?.environment?.[key] ?? "") !== composeSentinels[key]) {
+      failures.push(`${key} is not routed exclusively to the agent`);
+    }
+  }
   if (agent?.environment?.AGENT_HOST !== "0.0.0.0") failures.push("AGENT_HOST must listen inside the container");
   if (String(port?.published ?? "") !== composeSentinels.COMPOSEBASTION_AGENT_PORT) failures.push("agent published port is not routed correctly");
   if (String(port?.host_ip ?? "") !== composeSentinels.COMPOSEBASTION_AGENT_BIND_ADDRESS) failures.push("agent bind address is not routed correctly");

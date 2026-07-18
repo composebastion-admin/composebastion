@@ -538,6 +538,10 @@ function acceptanceEnv(image = candidateImage, overrides = {}) {
     ACCEPTANCE_HARDENED_AGENT_PORT: String(portBase + 590),
     ACCEPTANCE_BIND_DIR: acceptanceBindDir,
     AGENT_TOKEN: fixture.agentToken,
+    AGENT_READ_RATE_LIMIT: "221",
+    AGENT_RUN_RATE_LIMIT: "43",
+    AGENT_FILE_RATE_LIMIT: "79",
+    AGENT_STREAM_RATE_LIMIT: "17",
     ...overrides
   };
 }
@@ -1831,6 +1835,9 @@ async function hardenedContainersScenario() {
     const inspectedAgent = await inspectService("composebastion-agent");
     assert(inspectedAgent.environment.HOME === "/tmp/composebastion", "agent HOME is not on persistent storage");
     assert(inspectedAgent.environment.DOCKER_CONFIG === "/tmp/composebastion/.docker", "agent Docker config is not on persistent storage");
+    for (const key of ["AGENT_READ_RATE_LIMIT", "AGENT_RUN_RATE_LIMIT", "AGENT_FILE_RATE_LIMIT", "AGENT_STREAM_RATE_LIMIT"]) {
+      assert(inspectedAgent.environment[key] === env[key], `${key} did not propagate to the hardened agent`);
+    }
     const agentDataMount = inspectedAgent.detail.Mounts?.find((mount) => mount.Destination === "/tmp/composebastion");
     assert(agentDataMount?.Type === "volume", "agent persistent data is not a named volume");
     const agentIdentity = await hardenedCompose(["--profile", "hardening", "exec", "-T", "composebastion-agent", "id", "-u"]);

@@ -3,7 +3,7 @@
 #   docker compose -f agent-compose.yml up -d
 #
 # For production, pin COMPOSEBASTION_AGENT_VERSION to the same release as the
-# manager, for example 1.0.6.
+# manager, for example 1.1.2.
 services:
   composebastion-agent:
     image: ${COMPOSEBASTION_AGENT_IMAGE:-ghcr.io/composebastion-admin/composebastion-agent}:${COMPOSEBASTION_AGENT_VERSION:-latest}
@@ -12,6 +12,10 @@ services:
       AGENT_TOKEN: ${AGENT_TOKEN:?Set AGENT_TOKEN to a strong random token of at least 24 characters}
       AGENT_HOST: 0.0.0.0
       AGENT_PORT: 8090
+      AGENT_READ_RATE_LIMIT: "${AGENT_READ_RATE_LIMIT:-120}"
+      AGENT_RUN_RATE_LIMIT: "${AGENT_RUN_RATE_LIMIT:-30}"
+      AGENT_FILE_RATE_LIMIT: "${AGENT_FILE_RATE_LIMIT:-60}"
+      AGENT_STREAM_RATE_LIMIT: "${AGENT_STREAM_RATE_LIMIT:-10}"
     ports:
       - name: agent
         target: 8090

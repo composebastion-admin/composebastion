@@ -21,11 +21,35 @@ export const agentTokenSchema = z.string()
   .min(24, "AGENT_TOKEN must contain at least 24 characters")
   .refine((value) => !isKnownPlaceholderAgentToken(value), "AGENT_TOKEN must not use a documented placeholder value");
 
+export const AGENT_RATE_LIMIT_DEFAULTS = Object.freeze({
+  read: 120,
+  run: 30,
+  file: 60,
+  stream: 10
+});
+
+function agentRateLimitSchema(name: string, defaultValue: number) {
+  const message = `${name} must be a positive safe integer (requests per minute); leave it blank to use ${defaultValue}`;
+  return z.preprocess(
+    (value) => typeof value === "string" && value.trim() === "" ? undefined : value,
+    z.union([
+      z.string().trim().regex(/^\d+$/, message).transform(Number),
+      z.number()
+    ])
+      .pipe(z.number().int(message).min(1, message).max(Number.MAX_SAFE_INTEGER, message))
+      .default(defaultValue)
+  );
+}
+
 export function parseAgentEnvironment(source: NodeJS.ProcessEnv) {
   return z.object({
     AGENT_HOST: z.string().default("0.0.0.0"),
     AGENT_PORT: z.coerce.number().int().min(1).max(65535).default(8090),
-    AGENT_TOKEN: agentTokenSchema
+    AGENT_TOKEN: agentTokenSchema,
+    AGENT_READ_RATE_LIMIT: agentRateLimitSchema("AGENT_READ_RATE_LIMIT", AGENT_RATE_LIMIT_DEFAULTS.read),
+    AGENT_RUN_RATE_LIMIT: agentRateLimitSchema("AGENT_RUN_RATE_LIMIT", AGENT_RATE_LIMIT_DEFAULTS.run),
+    AGENT_FILE_RATE_LIMIT: agentRateLimitSchema("AGENT_FILE_RATE_LIMIT", AGENT_RATE_LIMIT_DEFAULTS.file),
+    AGENT_STREAM_RATE_LIMIT: agentRateLimitSchema("AGENT_STREAM_RATE_LIMIT", AGENT_RATE_LIMIT_DEFAULTS.stream)
   }).parse(source);
 }
 
