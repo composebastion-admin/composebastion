@@ -57,12 +57,16 @@ Use this checklist before exposing ComposeBastion outside a trusted private netw
 - `npm audit --audit-level=high`
 - `npm run check:actions-pinned`
 - `npm run check:release-version`
+- `npm run check:public-hygiene`
 - `npm run check:compose-env`
+- `npm run check:docker-context`
 - `npm run acceptance:config`
 
 For a local release candidate, also run the full live acceptance suite and
 scan the app and agent for both supported architectures. Do not tag it until
-the deferred governance and manual production-readiness gates are complete.
+repository controls, security clearance, and qualified Go-attribution approval
+are verified. Real NAS and cloud/S3 evidence is required for production approval,
+not for a homelab publication claim.
 
 ## Emergency Owner Recovery
 

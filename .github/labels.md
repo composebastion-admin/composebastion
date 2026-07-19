@@ -1,8 +1,8 @@
 # Recommended Labels
 
-ComposeBastion does not currently use label-sync automation. Create or update
-these labels manually in GitHub, or wire this list into a future label-sync
-workflow.
+These labels are provisioned in the canonical repository. Issue templates and
+Dependabot must use this taxonomy so missing or duplicate default labels are
+visible during repository verification.
 
 ## Type
 

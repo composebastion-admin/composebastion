@@ -26,7 +26,7 @@ if (report.releaseQualification?.manifestComplete !== true) failures.push("manif
 if ((report.releaseQualification?.nonqualifyingReasons ?? []).length !== 0) {
   failures.push("nonqualifyingReasons is not empty");
 }
-const expectedDeferredGates = ["real-nas", "real-cloud", "go-module-legal-review", "release-governance"];
+const expectedDeferredGates = ["real-nas", "real-cloud", "go-module-legal-review"];
 const actualDeferredGates = (report.releaseQualification?.deferredGates ?? []).map((gate) => gate.id);
 if (JSON.stringify(actualDeferredGates) !== JSON.stringify(expectedDeferredGates)) {
   failures.push(`deferred gate IDs are ${JSON.stringify(actualDeferredGates)}, expected ${JSON.stringify(expectedDeferredGates)}`);

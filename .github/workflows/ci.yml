@@ -31,6 +31,10 @@ jobs:
         run: npm run openapi:check
       - name: Release metadata alignment
         run: npm run check:release-version
+      - name: Public repository hygiene
+        run: npm run check:public-hygiene
+      - name: Go module attribution bundle
+        run: npm run check:go-attribution
       - name: Third-party notices
         run: npm run notices:check
       - name: Immutable workflow actions

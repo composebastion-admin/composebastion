@@ -4,13 +4,19 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
+  closeSync,
+  constants,
   existsSync,
+  fstatSync,
   lstatSync,
+  mkdtempSync,
   mkdirSync,
+  openSync,
   readFileSync,
   readdirSync,
   readlinkSync,
   realpathSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync
@@ -160,7 +166,67 @@ function assertSafeDestination(repositoryRoot, destination) {
   return resolved;
 }
 
-function contextEntries(root, current = root) {
+function sameNodeIdentity(left, right) {
+  return left.dev === right.dev && left.ino === right.ino && left.mode === right.mode;
+}
+
+function samePathIdentity(left, right) {
+  return sameNodeIdentity(left, right)
+    && left.size === right.size
+    && left.mtimeMs === right.mtimeMs
+    && left.ctimeMs === right.ctimeMs;
+}
+
+function pathIdentitySummary(stat) {
+  return {
+    dev: String(stat.dev),
+    ino: String(stat.ino),
+    mode: stat.mode,
+    size: stat.size,
+    mtimeMs: stat.mtimeMs,
+    ctimeMs: stat.ctimeMs
+  };
+}
+
+function assertStableDirectoryNode(absolute, expectedStat, label) {
+  const currentStat = lstatSync(absolute);
+  if (!currentStat.isDirectory() || currentStat.isSymbolicLink()
+      || !sameNodeIdentity(expectedStat, currentStat)
+      || realpathSync(absolute) !== absolute) {
+    throw new Error(`${label} changed or was redirected: ${absolute}`);
+  }
+}
+
+export function readStableRegularFile(absolute, expectedStat = lstatSync(absolute), { afterRead } = {}) {
+  if (!expectedStat.isFile()) throw new Error(`Expected a regular file while reading Git context: ${absolute}`);
+  if (typeof constants.O_NOFOLLOW !== "number") throw new Error("This platform cannot provide no-follow Git context reads");
+  const descriptor = openSync(absolute, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const openedStat = fstatSync(descriptor);
+    if (!openedStat.isFile() || !samePathIdentity(expectedStat, openedStat)) {
+      throw new Error(`Git context file changed before it could be read: ${absolute}`);
+    }
+    const contents = readFileSync(descriptor);
+    afterRead?.();
+    const finalDescriptorStat = fstatSync(descriptor);
+    const finalPathStat = lstatSync(absolute);
+    if (!samePathIdentity(openedStat, finalDescriptorStat)
+        || !samePathIdentity(openedStat, finalPathStat)
+        || finalDescriptorStat.size !== contents.length) {
+      throw new Error(`Git context file changed while it was being read: ${absolute}`);
+    }
+    return contents;
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function contextEntries(root, current = root, expectedDirectoryStat = lstatSync(current)) {
+  if (!expectedDirectoryStat.isDirectory()) throw new Error(`Expected a Git context directory: ${current}`);
+  const openedDirectoryStat = lstatSync(current);
+  if (!samePathIdentity(expectedDirectoryStat, openedDirectoryStat)) {
+    throw new Error(`Git context directory changed before traversal: ${current}`);
+  }
   const entries = [];
   for (const name of readdirSync(current).sort()) {
     const absolute = path.join(current, name);
@@ -168,14 +234,27 @@ function contextEntries(root, current = root) {
     const stat = lstatSync(absolute);
     if (stat.isDirectory()) {
       entries.push({ relative, type: "directory", mode: stat.mode & 0o777 });
-      entries.push(...contextEntries(root, absolute));
+      entries.push(...contextEntries(root, absolute, stat));
+      const finalStat = lstatSync(absolute);
+      if (!samePathIdentity(stat, finalStat)) {
+        throw new Error(`Git context directory changed during traversal: ${relative}`);
+      }
     } else if (stat.isSymbolicLink()) {
-      entries.push({ relative, type: "symlink", mode: stat.mode & 0o777, target: readlinkSync(absolute) });
+      const target = readlinkSync(absolute);
+      const finalStat = lstatSync(absolute);
+      if (!samePathIdentity(stat, finalStat)) {
+        throw new Error(`Git context symlink changed during traversal: ${relative}`);
+      }
+      entries.push({ relative, type: "symlink", mode: stat.mode & 0o777, target });
     } else if (stat.isFile()) {
-      entries.push({ relative, type: "file", mode: stat.mode & 0o777, contents: readFileSync(absolute) });
+      entries.push({ relative, type: "file", mode: stat.mode & 0o777, contents: readStableRegularFile(absolute, stat) });
     } else {
       throw new Error(`Unsupported entry in Git build context: ${relative}`);
     }
+  }
+  const finalDirectoryStat = lstatSync(current);
+  if (!samePathIdentity(openedDirectoryStat, finalDirectoryStat)) {
+    throw new Error(`Git context directory changed during traversal: ${current}; before=${JSON.stringify(pathIdentitySummary(openedDirectoryStat))}; after=${JSON.stringify(pathIdentitySummary(finalDirectoryStat))}`);
   }
   return entries;
 }
@@ -212,7 +291,7 @@ export function digestGitBuildContext(destination) {
   return { digest: `sha256:${hash.digest("hex")}`, fileCount };
 }
 
-export function materializeGitBuildContext({ repositoryRoot, revision, destination }) {
+export function materializeGitBuildContext({ repositoryRoot, revision, destination, testHooks = {} }) {
   const root = path.resolve(repositoryRoot);
   const resolvedDestination = assertSafeDestination(root, destination);
   const commitSha = run("git", ["rev-parse", "--verify", `${revision}^{commit}`], root, { capture: true });
@@ -220,15 +299,22 @@ export function materializeGitBuildContext({ repositoryRoot, revision, destinati
   const treeSha = run("git", ["rev-parse", "--verify", `${commitSha}^{tree}`], root, { capture: true });
   if (!/^[a-f0-9]{40}$/.test(treeSha)) throw new Error(`Git context revision did not resolve to a full tree SHA: ${treeSha}`);
 
-  rmSync(resolvedDestination, { recursive: true, force: true });
-  mkdirSync(path.dirname(resolvedDestination), { recursive: true });
+  const destinationParent = path.dirname(resolvedDestination);
+  const destinationParentStat = lstatSync(destinationParent);
+  assertStableDirectoryNode(destinationParent, destinationParentStat, "Git context destination parent");
+  const stagingDestination = mkdtempSync(path.join(destinationParent, `.${path.basename(resolvedDestination)}.staging-`));
+  chmodSync(stagingDestination, 0o700);
+  const retiredContainer = mkdtempSync(path.join(destinationParent, `.${path.basename(resolvedDestination)}.retired-`));
+  chmodSync(retiredContainer, 0o700);
+  const retiredDestination = path.join(retiredContainer, "previous");
   const sourceEntries = gitTreeEntries(root, commitSha);
   const materializedEntries = [];
+  let previousRetired = false;
+  let stagingPromoted = false;
   try {
-    mkdirSync(resolvedDestination, { recursive: true });
     for (const entry of sourceEntries) {
-      const destinationPath = path.join(resolvedDestination, ...entry.relative.split("/"));
-      const relativeCheck = path.relative(resolvedDestination, destinationPath);
+      const destinationPath = path.join(stagingDestination, ...entry.relative.split("/"));
+      const relativeCheck = path.relative(stagingDestination, destinationPath);
       if (relativeCheck.startsWith(`..${path.sep}`) || relativeCheck === ".." || path.isAbsolute(relativeCheck)) {
         throw new Error(`Git tree entry escaped the build context: ${entry.relative}`);
       }
@@ -243,12 +329,12 @@ export function materializeGitBuildContext({ repositoryRoot, revision, destinati
         symlinkSync(target, destinationPath);
       } else {
         const fileMode = entry.mode === "100755" ? 0o755 : 0o644;
-        writeFileSync(destinationPath, contents, { mode: fileMode });
+        writeFileSync(destinationPath, contents, { flag: "wx", mode: fileMode });
         chmodSync(destinationPath, fileMode);
       }
     }
 
-    const actualLeafPaths = contextEntries(resolvedDestination)
+    const actualLeafPaths = contextEntries(stagingDestination)
       .filter((entry) => entry.type !== "directory")
       .map((entry) => entry.relative)
       .sort();
@@ -257,7 +343,7 @@ export function materializeGitBuildContext({ repositoryRoot, revision, destinati
       throw new Error("Materialized Git context paths do not exactly match the commit tree");
     }
     for (const entry of materializedEntries) {
-      const destinationPath = path.join(resolvedDestination, ...entry.relative.split("/"));
+      const destinationPath = path.join(stagingDestination, ...entry.relative.split("/"));
       const stat = lstatSync(destinationPath);
       if (entry.mode === "120000") {
         if (!stat.isSymbolicLink() || Buffer.from(readlinkSync(destinationPath)).compare(entry.contents) !== 0) {
@@ -266,36 +352,71 @@ export function materializeGitBuildContext({ repositoryRoot, revision, destinati
       } else {
         const expectedExecutable = entry.mode === "100755";
         const actualExecutable = (stat.mode & 0o111) !== 0;
-        if (!stat.isFile() || actualExecutable !== expectedExecutable || readFileSync(destinationPath).compare(entry.contents) !== 0) {
+        if (!stat.isFile() || actualExecutable !== expectedExecutable || readStableRegularFile(destinationPath, stat).compare(entry.contents) !== 0) {
           throw new Error(`Materialized file does not match Git blob or mode ${entry.relative}`);
         }
       }
     }
-    chmodSync(resolvedDestination, 0o755);
-    for (const entry of contextEntries(resolvedDestination)) {
+    for (const entry of contextEntries(stagingDestination)) {
       if (entry.type === "directory") {
-        chmodSync(path.join(resolvedDestination, ...entry.relative.split("/")), 0o755);
+        chmodSync(path.join(stagingDestination, ...entry.relative.split("/")), 0o755);
       }
     }
+    chmodSync(stagingDestination, 0o755);
 
     for (const required of [".dockerignore", "Dockerfile", "Dockerfile.agent", "package.json", "package-lock.json"]) {
-      if (!existsSync(path.join(resolvedDestination, required))) {
+      if (!existsSync(path.join(stagingDestination, required))) {
         throw new Error(`Exact Git build context is missing tracked file ${required}`);
       }
     }
+
+    const stagedContext = digestGitBuildContext(stagingDestination);
+    testHooks.afterStagingVerified?.({ destinationParent, resolvedDestination, stagingDestination });
+    assertStableDirectoryNode(destinationParent, destinationParentStat, "Git context destination parent");
+    if (existsSync(resolvedDestination)) {
+      const existingStat = lstatSync(resolvedDestination);
+      if (!existingStat.isDirectory() || existingStat.isSymbolicLink() || realpathSync(resolvedDestination) !== resolvedDestination) {
+        throw new Error(`Refusing to replace non-directory or redirected Git context destination ${resolvedDestination}`);
+      }
+      renameSync(resolvedDestination, retiredDestination);
+      previousRetired = true;
+    }
+    assertStableDirectoryNode(destinationParent, destinationParentStat, "Git context destination parent");
+    renameSync(stagingDestination, resolvedDestination);
+    stagingPromoted = true;
+    assertStableDirectoryNode(destinationParent, destinationParentStat, "Git context destination parent");
+    testHooks.beforePromotedDigest?.({ resolvedDestination, retiredDestination });
+    const promotedContext = digestGitBuildContext(resolvedDestination);
+    if (promotedContext.digest !== stagedContext.digest || promotedContext.fileCount !== stagedContext.fileCount) {
+      throw new Error("Promoted Git build context does not match its verified staging context");
+    }
+    assertStableDirectoryNode(destinationParent, destinationParentStat, "Git context destination parent");
+    rmSync(retiredContainer, { recursive: true, force: true });
+    return {
+      strategy: "git-tree-objects",
+      commitSha,
+      treeSha,
+      contextDigest: promotedContext.digest,
+      fileCount: promotedContext.fileCount
+    };
   } catch (error) {
-    rmSync(resolvedDestination, { recursive: true, force: true });
+    let parentStable = false;
+    try {
+      assertStableDirectoryNode(destinationParent, destinationParentStat, "Git context destination parent");
+      parentStable = true;
+    } catch {
+      // Avoid path-based cleanup after a parent-directory replacement. The
+      // abandoned staging directories remain private (0700) at their original
+      // inode and cannot redirect cleanup into an attacker-controlled path.
+    }
+    if (parentStable) {
+      if (stagingPromoted) rmSync(resolvedDestination, { recursive: true, force: true });
+      if (previousRetired && !existsSync(resolvedDestination)) renameSync(retiredDestination, resolvedDestination);
+      rmSync(stagingDestination, { recursive: true, force: true });
+      rmSync(retiredContainer, { recursive: true, force: true });
+    }
     throw error;
   }
-
-  const context = digestGitBuildContext(resolvedDestination);
-  return {
-    strategy: "git-tree-objects",
-    commitSha,
-    treeSha,
-    contextDigest: context.digest,
-    fileCount: context.fileCount
-  };
 }
 
 const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : null;

@@ -27,6 +27,24 @@ if (openapi.info?.version !== version) failures.push(`docs/openapi.json: ${opena
 const notices = readFileSync("THIRD-PARTY-NOTICES.md", "utf8");
 if (!notices.includes(`for ComposeBastion ${version}.`)) failures.push(`THIRD-PARTY-NOTICES.md: generated version does not match ${version}`);
 
+const documentedReleaseMarkers = [
+  ["README.md", `Latest published stable release: \`v${version}\`.`],
+  ["README.md", `Package and OpenAPI version: \`${version}\`.`],
+  ["SECURITY.md", `public release (\`v${version}\`)`],
+  ["docs/installation.md", `published stable release is \`v${version}\`.`],
+  ["docs/upgrade-guide.md", `published release is \`v${version}\`.`],
+  ["docs/operations-runbook.md", `tags are \`${version}\` and \`v${version}\`.`],
+  ["docs/connect-hosts.md", `manager and agent release is \`${version}\`.`],
+  ["docs/how-to.md", `Version covered: \`v${version}\`.`],
+  ["docker-compose.image.yml", `# ${version}. For homelab/NAS auto-updates`],
+  ["agent-compose.image.example.yml", `manager, for example ${version}.`]
+];
+for (const [file, marker] of documentedReleaseMarkers) {
+  if (!readFileSync(file, "utf8").includes(marker)) {
+    failures.push(`${file}: supported-release or Compose example version is not aligned at ${version}`);
+  }
+}
+
 for (const dockerfile of ["Dockerfile", "Dockerfile.agent"]) {
   const contents = readFileSync(dockerfile, "utf8");
   if (!/^ARG APP_VERSION=source$/m.test(contents)) failures.push(`${dockerfile}: APP_VERSION must use the non-release source fallback`);

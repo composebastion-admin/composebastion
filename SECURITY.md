@@ -3,13 +3,9 @@
 Please do not publicly disclose security vulnerabilities before they have been
 reviewed.
 
-Preferred reporting path:
-
-- Use GitHub private vulnerability reporting if it is enabled for
-  `composebastion-admin/composebastion`.
-- If private reporting is not available, open a minimal public Security Report
-  issue and ask for a private contact path before sharing sensitive details:
-  https://github.com/composebastion-admin/composebastion/issues
+Report vulnerabilities through [GitHub private vulnerability reporting](https://github.com/composebastion-admin/composebastion/security/advisories/new).
+If that service is unavailable, open a minimal public Security Report issue and
+ask for a private contact path before sharing sensitive details.
 
 Do not include secrets, credentials, customer data, exploit details for active
 systems, or confidential commercial information in public issues. Ask for a
@@ -28,7 +24,7 @@ We will review reports as soon as practical.
 ## Supported Versions
 
 Security fixes are expected to target the current `main` branch and the latest
-public release (`v1.0.6`) unless a separate written support agreement applies.
+public release (`v1.1.3`) unless a separate written support agreement applies.
 
 ## Deployment
 
@@ -65,7 +61,7 @@ public release (`v1.0.6`) unless a separate written support agreement applies.
   ignore scanner findings.
 - Dependency and container updates from Dependabot should be reviewed as normal
   release-impact changes, not assumed to be release failures.
-- For `v1.0.6`, verify CI, CodeQL, Container Scan, Publish Images, and open
-  code-scanning alerts after the release scan refreshes.
-- Enable or verify Dependabot alerts, secret scanning, branch protection for
-  `main`, and required release-gating checks before each release.
+- Verify CI, CodeQL, container scanning, image publication, and open security
+  alerts after the protected branch and release scans refresh.
+- Verify Dependabot alerts, secret scanning, the `main-release-gate` ruleset,
+  release-tag protection, and required checks before each release.

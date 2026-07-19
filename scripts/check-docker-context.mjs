@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { assertSafeTestResultsPath, digestGitBuildContext, materializeGitBuildContext } from "./materialize-git-context.mjs";
+import { assertSafeTestResultsPath, digestGitBuildContext, materializeGitBuildContext, readStableRegularFile } from "./materialize-git-context.mjs";
 
 const root = mkdtempSync(path.join(os.tmpdir(), "composebastion-context-"));
 const context = path.join(root, "context");
@@ -210,6 +210,50 @@ try {
     failures.push("a symlinked test-results directory redirected destructive context cleanup outside the repository");
   }
 
+  const stableReadDirectory = path.join(root, "stable-read");
+  mkdirSync(stableReadDirectory);
+  const stableReadPath = path.join(stableReadDirectory, "payload.txt");
+  writeFileSync(stableReadPath, "original\n");
+  const expectedStableReadStat = lstatSync(stableReadPath);
+  const stableReadReplacement = path.join(stableReadDirectory, "replacement.txt");
+  writeFileSync(stableReadReplacement, "replacement\n");
+  renameSync(stableReadReplacement, stableReadPath);
+  let changedInodeRejected = false;
+  try {
+    readStableRegularFile(stableReadPath, expectedStableReadStat);
+  } catch {
+    changedInodeRejected = true;
+  }
+  if (!changedInodeRejected) failures.push("a file inode replacement was accepted as a stable context read");
+
+  const linkTarget = path.join(stableReadDirectory, "target.txt");
+  writeFileSync(linkTarget, "target\n");
+  const fileToLinkPath = path.join(stableReadDirectory, "file-to-link.txt");
+  writeFileSync(fileToLinkPath, "original\n");
+  const expectedFileToLinkStat = lstatSync(fileToLinkPath);
+  rmSync(fileToLinkPath);
+  symlinkSync("target.txt", fileToLinkPath);
+  let fileToLinkRejected = false;
+  try {
+    readStableRegularFile(fileToLinkPath, expectedFileToLinkStat);
+  } catch {
+    fileToLinkRejected = true;
+  }
+  if (!fileToLinkRejected) failures.push("a file-to-symlink replacement was accepted as a stable context read");
+
+  const inPlaceMutationPath = path.join(stableReadDirectory, "in-place-mutation.txt");
+  writeFileSync(inPlaceMutationPath, "before\n");
+  const inPlaceMutationStat = lstatSync(inPlaceMutationPath);
+  let inPlaceMutationRejected = false;
+  try {
+    readStableRegularFile(inPlaceMutationPath, inPlaceMutationStat, {
+      afterRead: () => writeFileSync(inPlaceMutationPath, "after!\n")
+    });
+  } catch {
+    inPlaceMutationRejected = true;
+  }
+  if (!inPlaceMutationRejected) failures.push("an in-place content mutation was accepted as a stable context read");
+
   rmSync(path.join(attributeRepository, "Dockerfile.agent"));
   execFileSync("git", ["-C", attributeRepository, "add", "Dockerfile.agent"], { stdio: "pipe" });
   execFileSync("git", [
@@ -219,6 +263,9 @@ try {
     "commit", "--quiet", "-m", "missing required file fixture"
   ], { stdio: "pipe" });
   const incompleteContext = path.join(root, "incomplete-context");
+  mkdirSync(incompleteContext);
+  const existingContextSentinel = path.join(incompleteContext, "preserved.txt");
+  writeFileSync(existingContextSentinel, "preserve existing context\n");
   let missingRequiredRejected = false;
   try {
     materializeGitBuildContext({
@@ -229,8 +276,62 @@ try {
   } catch (error) {
     missingRequiredRejected = String(error).includes("missing tracked file Dockerfile.agent");
   }
-  if (!missingRequiredRejected || existsSync(incompleteContext)) {
-    failures.push("a failed required-file check left a partial exact Git context behind");
+  if (!missingRequiredRejected || readFileSync(existingContextSentinel, "utf8") !== "preserve existing context\n") {
+    failures.push("a failed required-file check replaced or damaged the previous exact Git context");
+  }
+
+  execFileSync("git", ["-C", attributeRepository, "revert", "--no-edit", "HEAD"], { stdio: "pipe" });
+  const rollbackContext = path.join(root, "rollback-context");
+  mkdirSync(rollbackContext);
+  const rollbackSentinel = path.join(rollbackContext, "preserved.txt");
+  writeFileSync(rollbackSentinel, "preserve verified destination\n");
+  let promotedMutationRejected = false;
+  try {
+    materializeGitBuildContext({
+      repositoryRoot: attributeRepository,
+      revision: "HEAD",
+      destination: rollbackContext,
+      testHooks: {
+        beforePromotedDigest: ({ resolvedDestination }) => {
+          writeFileSync(path.join(resolvedDestination, "package.json"), "mutated after promotion\n");
+        }
+      }
+    });
+  } catch (error) {
+    promotedMutationRejected = String(error).includes("does not match its verified staging context");
+  }
+  if (!promotedMutationRejected
+      || !existsSync(rollbackSentinel)
+      || readFileSync(rollbackSentinel, "utf8") !== "preserve verified destination\n") {
+    failures.push("a post-promotion verification failure did not restore the previous exact Git context");
+  }
+
+  const parentRaceContainer = path.join(root, "parent-race");
+  const parentRaceOriginal = path.join(parentRaceContainer, "original-parent");
+  const parentRaceMoved = path.join(parentRaceContainer, "moved-parent");
+  mkdirSync(parentRaceOriginal, { recursive: true });
+  const parentRaceDestination = path.join(parentRaceOriginal, "context");
+  const redirectedParentSentinel = path.join(parentRaceContainer, "redirected-parent-sentinel.txt");
+  writeFileSync(redirectedParentSentinel, "preserve redirected parent\n");
+  let parentRaceRejected = false;
+  try {
+    materializeGitBuildContext({
+      repositoryRoot: attributeRepository,
+      revision: "HEAD",
+      destination: parentRaceDestination,
+      testHooks: {
+        afterStagingVerified: () => {
+          renameSync(parentRaceOriginal, parentRaceMoved);
+          mkdirSync(parentRaceOriginal);
+          symlinkSync(redirectedParentSentinel, path.join(parentRaceOriginal, "must-not-follow"));
+        }
+      }
+    });
+  } catch (error) {
+    parentRaceRejected = String(error).includes("changed or was redirected");
+  }
+  if (!parentRaceRejected || readFileSync(redirectedParentSentinel, "utf8") !== "preserve redirected parent\n") {
+    failures.push("a destination-parent replacement was not rejected without following redirected cleanup paths");
   }
 
   const collisionContextA = path.join(root, "digest-collision-a");

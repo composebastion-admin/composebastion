@@ -21,6 +21,7 @@ Run the same gates CI expects before release:
 - `npm run lint:migrations`
 - `npm run openapi:check`
 - `npm run check:release-version`
+- `npm run check:public-hygiene`
 - `npm run notices:check`
 - `npm run check:actions-pinned`
 - `npm run check:release-workflows`
@@ -67,8 +68,10 @@ Run the same gates CI expects before release:
 - Scan both images for high/critical vulnerabilities.
 - Publish container images for every public release and every merge to `main`
   through `.github/workflows/publish-images.yml`.
-- Main image publishes must include `main` and a full-commit
-  `sha-<40-character-sha>` index. Only a verified stable tag may move `latest`.
+- Main image publishes must include `main`, deterministic per-platform
+  `sha-<40-character-sha>-amd64` and `sha-<40-character-sha>-arm64` tags, and a
+  multi-platform `sha-<40-character-sha>` index. Only a verified stable tag may
+  move `latest`.
   Immutable version tags such as `${VERSION}` and `v${VERSION}` must only be published
   from `v*` git tags.
 - The workflow builds each app/agent architecture once as an OCI archive,
@@ -108,10 +111,12 @@ Run the same gates CI expects before release:
   aligned before publishing images.
 - Confirm app and agent runtime images contain those legal artifacts under
   `/licenses`.
-- Review each image's deterministic linked Go module inventories and artifact
-  checksums under `/licenses/third-party/go-buildinfo/`. Direct upstream tool
-  and Go license/notice texts are shipped, but transitive Go module attribution
-  review is pending and remains a manual release blocker.
+- Review each image's deterministic linked Go-module inventory against the
+  checked-in manifest and verify the runtime texts and checksums under
+  `/licenses/third-party/go-modules/`. Every consuming binary, source URL, SPDX
+  expression, version/replacement, required license/notice file, and checksum
+  must be covered. Qualified legal approval must be dated; a pending review is a
+  release blocker.
 - Keep `support@composebastion.com` as the private contact path for commercial
   licensing and written permission.
 
@@ -120,8 +125,9 @@ Run the same gates CI expects before release:
 - Treat V1 as feature-complete, documented, and release-gated.
 - `/api/v1` is the V1 compatibility boundary. Breaking changes require a new
   major version or documented compatibility plan.
-- Protect `main`, require release-gating checks before promotion, and enable or
-  verify Dependabot alerts and secret scanning before final V1.
+- Keep the sole-maintainer `main-release-gate` and `release-tags` rulesets active,
+  require release-gating checks before promotion, and verify private
+  vulnerability reporting, immutable releases, Dependabot, and secret scanning.
 - Use `docs/v1-readiness.md` as the release verification checklist.
 
 ## Release Verification
@@ -137,6 +143,7 @@ npm run lint:migrations
 npm run check:postgres-upgrade
 npm run openapi:check --workspace @composebastion/api
 npm run check:release-version
+npm run check:public-hygiene
 npm run notices:check
 npm run check:actions-pinned
 npm run check:release-workflows
@@ -206,7 +213,8 @@ remote platform/index digests with the scanned digests.
 
 The pinned MinIO and Samba fixtures prove reproducible protocol behavior only.
 A real NAS and a real cloud/S3 target must still be tested and recorded manually
-before production approval.
+before production approval. Those external tests are production evidence, not a
+blocker for a release whose stated scope is homelab publication.
 
 After publishing, verify unauthenticated pulls:
 

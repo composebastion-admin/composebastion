@@ -307,10 +307,10 @@ jobs:
               expected_digest="$(jq -er .manifestDigest "${metadata}")"
               test "$(sha256sum "${archive}" | cut -d' ' -f1)" = "${expected_archive_sha}"
 
-              platform_tag="run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${arch}"
+              platform_tag="sha-${GITHUB_SHA}-${arch}"
               if remote_digest="$(skopeo inspect --authfile "${authfile}" --format '{{.Digest}}' "docker://${image}:${platform_tag}" 2>/dev/null)"; then
                 if [ "${remote_digest}" != "${expected_digest}" ]; then
-                  echo "::error::Run-scoped tag ${image}:${platform_tag} already points to ${remote_digest}, expected ${expected_digest}."
+                  echo "::error::Commit platform tag ${image}:${platform_tag} already points to ${remote_digest}, expected ${expected_digest}."
                   exit 1
                 fi
               else
@@ -335,8 +335,8 @@ jobs:
             if ! docker buildx imagetools inspect "${index}" >/dev/null 2>&1; then
               docker buildx imagetools create \
                 --tag "${index}" \
-                "${image}:run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-amd64" \
-                "${image}:run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-arm64"
+                "${image}:sha-${GITHUB_SHA}-amd64" \
+                "${image}:sha-${GITHUB_SHA}-arm64"
             fi
             descriptor="$(docker buildx imagetools inspect "${index}" --format '{{json .Manifest}}')"
             index_digest="$(jq -er '.digest | select(test("^sha256:[a-f0-9]{64}$"))' <<<"${descriptor}")"

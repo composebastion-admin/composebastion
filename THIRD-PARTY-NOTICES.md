@@ -3,7 +3,7 @@
 ComposeBastion may include or depend on third-party software components.
 Third-party components are governed by their own license terms and are not relicensed by LICENSE.md.
 
-This inventory was generated from package-lock.json for ComposeBastion 1.1.2. It is a best-effort dependency notice for the npm workspace.
+This inventory was generated from package-lock.json for ComposeBastion 1.1.3. It is a best-effort dependency notice for the npm workspace.
 
 ## Bundled Runtime Tools
 
@@ -11,12 +11,14 @@ These non-npm tools are distributed in the app or agent image. Their applicable
 upstream license and notice files are copied into `/licenses/third-party/` in
 the corresponding image.
 
-Each image also records deterministic linked Go module inventories and SHA-256
-evidence for the shipped upstream license/notice artifacts under
-`/licenses/third-party/go-buildinfo/`. These inventories make the exact static
-dependency set reviewable, but they are not a complete transitive attribution
-bundle. **Legal review status: pending.** A manual review of the linked module
-inventories and any additional attribution obligations remains a release gate.
+Each image records deterministic linked Go module inventories under
+`/licenses/third-party/go-buildinfo/` and carries the checked-in manifest,
+upstream license/notice texts, SPDX classification candidates, and SHA-256
+checksums under `/licenses/third-party/go-modules/`. Image builds fail if the
+linked inventory differs from that bundle or a required text is missing.
+**Legal review status: pending.** Automated collection and classification are
+review evidence, not qualified legal approval; that dated approval remains a
+release gate.
 
 | Component | Reviewed version/source | License | Image |
 |-----------|-------------------------|---------|-------|

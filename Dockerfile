@@ -57,6 +57,7 @@ RUN set -eux; \
     go version -m /out/trivy \
       | awk -F '\t' '$2 == "mod" || $2 == "dep" || $2 == "=>" { print $2 "\t" $3 "\t" $4 "\t" $5 }' \
       | LC_ALL=C sort -u > /out/licenses/go-buildinfo/trivy.modules.tsv; \
+    sed -i "s#(devel)#v${TRIVY_VERSION}#" /out/licenses/go-buildinfo/trivy.modules.tsv; \
     test -s /out/licenses/go-buildinfo/trivy.modules.tsv; \
     cd /out/licenses; \
     sha256sum trivy-LICENSE.txt trivy-NOTICE.txt oras-go-LICENSE.txt go-LICENSE.txt go-PATENTS.txt go-buildinfo/trivy.modules.tsv \
@@ -88,6 +89,7 @@ RUN set -eux; \
 
 FROM --platform=$BUILDPLATFORM golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS rclone-evidence
 ENV GOTOOLCHAIN=local
+ARG RCLONE_VERSION
 COPY --from=tools /out/rclone /out/rclone
 COPY --from=tools /out/licenses/rclone-LICENSE.txt /out/licenses/rclone-LICENSE.txt
 RUN set -eux; \
@@ -95,6 +97,7 @@ RUN set -eux; \
     go version -m /out/rclone \
       | awk -F '\t' '$2 == "mod" || $2 == "dep" || $2 == "=>" { print $2 "\t" $3 "\t" $4 "\t" $5 }' \
       | LC_ALL=C sort -u > /out/licenses/go-buildinfo/rclone.modules.tsv; \
+    sed -i "s#v${RCLONE_VERSION}+dirty#v${RCLONE_VERSION}#" /out/licenses/go-buildinfo/rclone.modules.tsv; \
     grep -F 'github.com/rclone/rclone' /out/licenses/go-buildinfo/rclone.modules.tsv; \
     cd /out/licenses; \
     sha256sum rclone-LICENSE.txt go-buildinfo/rclone.modules.tsv \
@@ -128,6 +131,8 @@ COPY --from=trivy-builder /out/trivy /usr/local/bin/trivy
 COPY --from=tools /out/rclone /usr/local/bin/rclone
 COPY --from=trivy-builder /out/licenses/ /licenses/third-party/
 COPY --from=rclone-evidence /out/licenses/ /licenses/third-party/
+COPY LICENSES/go-modules/ /licenses/third-party/go-modules/
+COPY scripts/go-attribution.mjs /tmp/go-attribution.mjs
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/apps/api/package.json ./apps/api/package.json
@@ -156,6 +161,11 @@ RUN set -eux; \
     test -s /licenses/third-party/go-buildinfo/rclone.artifacts.sha256; \
     cd /licenses/third-party; \
     sha256sum -c go-buildinfo/trivy.artifacts.sha256; \
-    sha256sum -c go-buildinfo/rclone.artifacts.sha256
+    sha256sum -c go-buildinfo/rclone.artifacts.sha256; \
+    node /tmp/go-attribution.mjs verify \
+      --manifest /licenses/third-party/go-modules/manifest.json \
+      --inventory trivy=/licenses/third-party/go-buildinfo/trivy.modules.tsv \
+      --inventory rclone=/licenses/third-party/go-buildinfo/rclone.modules.tsv; \
+    rm /tmp/go-attribution.mjs
 EXPOSE 8080
 CMD ["node", "apps/api/dist/server.js"]
