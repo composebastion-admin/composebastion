@@ -280,7 +280,12 @@ try {
     failures.push("a failed required-file check replaced or damaged the previous exact Git context");
   }
 
-  execFileSync("git", ["-C", attributeRepository, "revert", "--no-edit", "HEAD"], { stdio: "pipe" });
+  execFileSync("git", [
+    "-C", attributeRepository,
+    "-c", "user.name=ComposeBastion Context Test",
+    "-c", "user.email=context-test@composebastion.invalid",
+    "revert", "--no-edit", "HEAD"
+  ], { stdio: "pipe" });
   const rollbackContext = path.join(root, "rollback-context");
   mkdirSync(rollbackContext);
   const rollbackSentinel = path.join(rollbackContext, "preserved.txt");
