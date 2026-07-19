@@ -1,99 +1,91 @@
 # V1 Release Verification
 
-ComposeBastion V1 is feature-complete, documented, release-gated, and published
-as matching app and agent images.
+Use this version-independent checklist for every V1 candidate. A candidate is
+publishable only from one clean, protected commit after every automated release
+gate and applicable manual gate has passed.
 
 ## V1 Stability Model
 
 - Core host management, Compose operations, GitHub deploys, alerts, RBAC, audit,
   config backup/restore, and the `/api/v1` compatibility boundary are V1-stable.
-- Backups, restores, restore drills, recovery points, and migration runs are
-  included in V1 release verification.
-- Local, S3-compatible, and SMB backup targets are the supported guided storage
-  targets for V1.
-- Drive, OneDrive, iCloud Drive, WebDAV, SFTP, and custom rclone targets remain
-  experimental imported-rclone workflows.
+- Backups, restores, restore drills, recovery points, and migration runs are part
+  of V1 verification.
+- Local, S3-compatible, and SMB targets are supported guided recovery storage.
+- Imported Drive, OneDrive, iCloud Drive, WebDAV, SFTP, and custom rclone
+  providers remain experimental.
 
-## Release Rules
+## Publication Rules
 
-1. Keep `1.0.7-rc.1` untagged until every automated and manual gate passes;
-   create stable `v1.0.7` only from the later protected release commit.
-2. Publish app and agent images together.
-3. Confirm GHCR packages are public and pullable.
-4. Confirm Docker images include legal artifacts under `/licenses`.
-5. Use `support@composebastion.com` for commercial licensing and written
-   permission requests.
+1. Authenticate as exactly `composebastion-admin` before pushing branches,
+   tags, images, releases, or version changes.
+2. Publish app and agent images together from the same protected commit.
+3. Confirm GHCR packages and all supported platform manifests are anonymously
+   pullable.
+4. Confirm both runtime images contain complete legal artifacts under
+   `/licenses`, including the approved Go-module attribution bundle.
+5. Never create the stable tag while a release blocker remains open.
 
-## Required Gates
+## Automated Gates
 
-- `npm run typecheck`
-- `npm run lint:migrations`
-- `npm run openapi:check --workspace @composebastion/api`
-- `npm test`
-- serial PostgreSQL integration/concurrency tests with the pinned Postgres and
-  Redis fixtures
-- `npm run smoke:web`
-- `npm run smoke:web:live` on candidates that provide the separate live browser
-  suite (required for v1.1 and later)
-- `npm audit --audit-level=high`
-- `npm run check:actions-pinned`
-- `npm run check:release-workflows`
-- `npm run check:release-version`
-- `npm run notices:check`
-- `npm run check:compose-env`
-- `npm run check:docker-context`
-- `npm run acceptance:config`
-- `npm run acceptance:local`
-- The acceptance report must say `automatedAcceptanceQualifying: true`, identify
-  one clean, stable HEAD/tree context, and show matching app/agent
-  version/revision/created labels. Dirty, changed, reused-build, and skipped
-  runs are diagnostic only.
-- ephemeral SSH Docker-host integration
-- `npm run release:verify-images` from the final clean candidate commit
-- Docker Compose config validation for source, image, production, and agent
-  examples.
-- Four exact OCI archive builds: app and agent for `linux/amd64` and
-  `linux/arm64`. Each archive must contain one matching platform manifest, the
-  exact version/full-revision/commit-date labels, valid manifest/config/layer
-  digests, and a passing Trivy 0.72.0 scan of a fresh OCI layout extracted from
-  that exact verified archive. Preserve the ignored JSON and Markdown report
-  under `test-results/release-images/`.
-- The agent build records the pinned Docker Compose command dependency set under
-  `/usr/share/composebastion/release-evidence/` and fails unless the only linked
-  `github.com/docker/docker` package is the client-side `pkg/namesgenerator`.
-  The exact-version Trivy exceptions for the Docker Engine daemon-only CVEs
-  `CVE-2026-34040`, `CVE-2026-41567`, and `CVE-2026-42306` depend on that
-  reachability proof. `CVE-2026-50151` is not suppressed.
-- GitHub CI, CodeQL, dependency review, container scanning, secret scanning, and
-  image publishing checks when configured.
+- formatting and type checking;
+- migration lint and PostgreSQL upgrade/integration/concurrency tests;
+- OpenAPI generation check and release-version alignment;
+- public-hygiene, notices, action-pinning, release-workflow, Compose environment,
+  and exact Docker-context checks;
+- unit tests and per-workspace coverage thresholds;
+- mocked web smoke and the separate live web smoke suite;
+- acceptance configuration and a qualifying full local acceptance run;
+- ephemeral SSH Docker-host integration;
+- `npm audit --audit-level=high`, Gitleaks, CodeQL, dependency review, secret
+  scanning, and container scanning;
+- source, published-image, production-overlay, and agent Compose validation;
+- exact app and agent OCI builds for `linux/amd64` and `linux/arm64` with matching
+  version, full-revision, created labels, and deterministic platform tags;
+- `npm run release:verify-images` from the final clean candidate commit.
 
-## Manual Acceptance
+The acceptance report must record one stable HEAD/tree/context digest and say
+`automatedAcceptanceQualifying: true`. Dirty, changed, skipped, or reused-build
+runs are diagnostic only.
 
-- Fresh image install from GHCR.
-- Source install update from `main`.
-- Unauthenticated GHCR pulls for app and agent image tags.
-- Local backup, verify, and restore drill.
-- S3 and SMB backup target connection tests.
-- A separately recorded restore/capture test against a real NAS and a real cloud
-  or S3 account. Local Samba and MinIO fixtures do not satisfy this production
-  gate.
-- Confirmation that experimental labels appear only for imported rclone
-  providers.
-- Confirmation that Admin -> About shows version, copyright, license summary,
+The four verified OCI archives must each contain one correct platform manifest,
+valid manifest/config/layer digests, the expected labels, matching Go-module
+attribution evidence, and a passing scan of the exact archive. Preserve ignored
+release evidence below `test-results/release-images/`.
+
+## Manual Release Gates
+
+- Verify private vulnerability reporting, repository rulesets, required checks,
+  immutable-release policy, Dependabot, and secret-scanning configuration.
+- Verify no high-or-critical CodeQL alert is open. A test-only network alert may
+  be dismissed only with recorded evidence that its destination is the isolated
+  loopback acceptance stack.
+- Review the linked Go-module manifest, license expressions, upstream sources,
+  required texts, and checksums. Record qualified legal approval and its date;
+  pending attribution is a release blocker.
+- Verify Admin -> About shows the intended version, copyright, license summary,
   and `support@composebastion.com`.
-- Review the deterministic linked Go module inventories and artifact checksums
-  under `/licenses/third-party/go-buildinfo/`. Direct upstream tool and Go
-  license/notice texts are shipped, but transitive Go module attribution review
-  is pending and remains a manual release blocker.
+- Verify unauthenticated pulls, image labels, multi-architecture indexes,
+  deterministic platform tags, and the GitHub Release attestation.
 
-## GitHub Release Plumbing
+Real NAS and cloud/S3 capture-and-restore tests are production-approval evidence.
+They do not block publication for homelab use. Local Samba and MinIO remain the
+automated protocol fixtures, and production claims must identify which real
+systems were separately tested.
 
-- Protect `main` before V1 promotion.
-- Require the release-gating checks before merges or release promotion.
-- Enable or verify Dependabot alerts and secret scanning.
-- Keep dependency review enabled for pull requests that change dependencies.
-- Treat the second trusted CODEOWNER and protected release-governance setup as
-  an externally approved gate; local automation cannot mark it complete.
-- After publication, compare all four remote platform digests and both
-  multi-architecture indexes with the locally scanned manifest digests before
-  applying or accepting public aliases.
+## Recovery And Agent Evidence
+
+- Complete a local backup, verification, and clone restore drill.
+- Test supported S3-compatible and SMB target connections.
+- Confirm experimental labels apply only to imported rclone providers.
+- Verify recovery readiness batches container inspection without converting
+  agent rate limiting or changing inventory into a false recovery defect.
+- Keep app and agent releases aligned and preserve the four-stream concurrency
+  cap and trusted-LAN/firewall guidance.
+
+## Post-Publication Verification
+
+- Verify `gh release verify vX.Y.Z` for the published immutable release.
+- Compare all remote platform and multi-architecture digests with the locally
+  scanned evidence before accepting public aliases.
+- Confirm version/revision labels and anonymous pulls for app and agent.
+- Confirm no release or security alert remains unexpectedly open.

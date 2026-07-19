@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/composebastion-admin/composebastion/releases"><img alt="Release" src="https://img.shields.io/badge/release-v1.1.2-e0a23f"></a>
+  <a href="https://github.com/composebastion-admin/composebastion/releases"><img alt="Release" src="https://img.shields.io/badge/release-v1.1.3-e0a23f"></a>
   <a href="https://github.com/composebastion-admin/composebastion/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/composebastion-admin/composebastion/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/composebastion-admin/composebastion/pkgs/container/composebastion-app"><img alt="Container image" src="https://img.shields.io/badge/ghcr.io-composebastion--app-2496ed"></a>
   <a href="LICENSE.md"><img alt="License" src="https://img.shields.io/badge/license-source--available-df7d27"></a>
@@ -30,10 +30,10 @@ devices, Proxmox Docker VMs/LXCs, Portainer stacks, and any native Docker host o
 
 ## Published Release
 
-Latest published stable release: `v1.1.2`.
+Latest published stable release: `v1.1.3`.
 
-- Package and OpenAPI version: `1.1.2`.
-- GitHub release images: `1.1.2` and `v1.1.2`.
+- Package and OpenAPI version: `1.1.3`.
+- GitHub release images: `1.1.3` and `v1.1.3`.
 - Published platforms: `linux/amd64` and `linux/arm64` for both app and agent.
 - Release gates include CI/OpenAPI, per-workspace coverage, separate
   mocked and live browser suites, the full dependency audit, Compose contracts,
@@ -120,13 +120,13 @@ Image tags:
 | Tag | Use |
 |-----|-----|
 | `latest` | Latest verified stable release for simple homelab/NAS updates. |
-| `1.1.2` or `v1.1.2` | Exact V1 release pin for controlled production upgrades. |
+| `1.1.3` or `v1.1.3` | Exact V1 release pin for controlled production upgrades. |
 | `main` | Latest fully scanned build from the protected main branch. |
 | `sha-*` | Immutable full-commit verification or rollback testing. |
 
 Main builds publish `main` and full-commit `sha-*` indexes from the already
 scanned platform archives. Stable release tags rescan those exact indexes and
-then promote them to version tags such as `1.1.2` and `v1.1.2`, the minor tag,
+then promote them to version tags such as `1.1.3` and `v1.1.3`, the minor tag,
 and `latest`; they do not rebuild.
 
 ### Option B: Build From Source
@@ -254,16 +254,6 @@ The full screenshot tour is in the [how-to guide](docs/how-to.md).
   Compose stacks, recovery schedules, storage targets, and operator settings.
 - Runtime image license and notice files are available under `/licenses`.
 - V1 release verification guidance is in [docs/v1-readiness.md](docs/v1-readiness.md).
-
-## Repository Rules
-
-- Canonical repository: `https://github.com/composebastion-admin/composebastion`.
-- Pushes, tags, releases, and version updates must use the
-  `composebastion-admin` GitHub account.
-- `v1.1.2` is the current V1 public release line for this repository.
-- Local filesystem, S3-compatible storage, and SMB are the supported guided
-  recovery storage targets; imported rclone providers remain experimental.
-- Do not reintroduce personal owner, repository, image, or user fixtures.
 
 ## License
 

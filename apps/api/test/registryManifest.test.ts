@@ -46,8 +46,8 @@ describe("parseImageReference", () => {
 
   it("uses complete digest references for manifest lookup", () => {
     const digest = `sha256:${"a".repeat(64)}`;
-    const parsed = parseImageReference(`ghcr.io/acme/app:1.0@${digest}`);
-    expect(parsed).toMatchObject({ registry: "ghcr.io", repository: "acme/app", tag: "1.0", digest, reference: digest });
+    const parsed = parseImageReference(`ghcr.io/example/app:1.0@${digest}`);
+    expect(parsed).toMatchObject({ registry: "ghcr.io", repository: "example/app", tag: "1.0", digest, reference: digest });
   });
 
   it("accepts Docker Distribution separator forms and enforces length after Docker Hub normalization", () => {

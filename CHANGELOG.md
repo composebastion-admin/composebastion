@@ -1,5 +1,35 @@
 # Changelog
 
+## [v1.1.3] - 2026-07-19
+
+### Security
+- Hardened exact Git-context materialization with private staging, no-follow
+  descriptor reads, inode and mutation checks, verified atomic promotion, and
+  rollback that preserves the prior destination on failure.
+- Added a CI public-hygiene gate for approved GHCR namespaces, developer paths,
+  and project contact domains, and removed the remaining personal fixtures.
+- Changed per-architecture publication tags to deterministic
+  `sha-<full-commit>-<architecture>` names.
+
+### Changed
+- Reworked public repository governance and release documentation for the
+  sole-maintainer ruleset, protected release tags, private vulnerability
+  reporting, and immutable future releases.
+- Made the V1 release checklist version independent and retained real NAS and
+  cloud/S3 tests as production-approval evidence instead of homelab publication
+  blockers.
+- Added release-version checks for supported-release documentation and the
+  published-image Compose example.
+
+### Legal
+- Added deterministic Go-module attribution evidence and runtime license-bundle
+  verification. Qualified legal approval of the reviewed manifest remains a
+  release blocker; `v1.1.3` must not be tagged while that approval is pending.
+
+### Compatibility
+- This patch adds no database migration, manager API/OpenAPI change, or UI
+  setting.
+
 ## [v1.1.2] - 2026-07-18
 
 ### Added

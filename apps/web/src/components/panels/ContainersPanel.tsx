@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import type { DockerHost, ResourceSnapshot } from "@composebastion/shared";
 import { publishedWebLinks } from "@composebastion/shared";
-import { api, postJson } from "../../api.js";
+import { postJson } from "../../api.js";
 import { useConfirm } from "../ConfirmProvider.js";
 import { useToast } from "../ToastProvider.js";
 import { useAsyncAction } from "../../hooks/useAsyncAction.js";

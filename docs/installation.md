@@ -29,11 +29,11 @@ the base images all support the device.
 
 ## Current Published Release
 
-The most recent published stable release is `v1.1.2`.
+The most recent published stable release is `v1.1.3`.
 
 - App image: `ghcr.io/composebastion-admin/composebastion-app`
 - Agent image: `ghcr.io/composebastion-admin/composebastion-agent`
-- Exact release tags: `1.1.2` and `v1.1.2`
+- Exact release tags: `1.1.3` and `v1.1.3`
 - Moving `main` alias, stable-only `latest`, and full-commit `sha-*` indexes
 
 Use `main` only when you intentionally test protected-branch candidates.
@@ -92,7 +92,7 @@ Open `http://<manager-ip>:8080`, create the first owner account, then add a
 Docker host. The `SECURE_COOKIES=false` setting is only for this trusted
 direct-HTTP evaluation path; do not expose it to an untrusted network, and set
 it back to `true` when HTTPS is configured. For production change control, pin
-`COMPOSEBASTION_VERSION` to a release tag such as `1.1.2` instead of `latest`.
+`COMPOSEBASTION_VERSION` to a release tag such as `1.1.3` instead of `latest`.
 
 ## Source Build Install
 

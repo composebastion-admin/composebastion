@@ -62,9 +62,11 @@
   image names:
   - `ghcr.io/composebastion-admin/composebastion-app`
   - `ghcr.io/composebastion-admin/composebastion-agent`
-- Image publishing must preserve `latest`, branch tags, and `sha-*` tags on
-  main. Immutable version tags such as `${VERSION}` and `v${VERSION}` must only be
-  published from `v*` git tags.
+- Main image publishing must use deterministic `sha-<full-commit>-amd64` and
+  `sha-<full-commit>-arm64` platform tags and a `sha-<full-commit>` index.
+  Immutable version tags such as `${VERSION}` and `v${VERSION}` must only be
+  published from `v*` git tags; preserve legacy `run-*` manifests but do not
+  create new ones.
 - The publish workflow must build both app and agent images before publishing
   either image so release tags are not created from a partial runtime build.
 - Treat NAS devices, Proxmox Docker guests, Portainer stacks, and native Docker
@@ -83,10 +85,10 @@
 - This repo is a Node 24/npm workspaces TypeScript monorepo: Fastify API,
   Postgres, Redis, React/Vite web UI, host agent, Docker Compose deployment, and
   shared Zod contracts.
-- Match CI before release work: `npm run typecheck`, `npm run lint:migrations`,
-  `npm run openapi:check`, `npm test`, `npm run smoke:web`,
-  `npm audit --audit-level=high`, and Docker compose/image smoke
-  checks when Docker files change.
+- Match CI before release work, including typecheck, migration/OpenAPI checks,
+  release-version and public-hygiene checks, Go attribution verification, full
+  tests and coverage, web smoke, dependency audit, acceptance, and exact
+  Compose/image checks.
 - Current GitHub Actions jobs include typecheck/tests/audit, Postgres/Redis
   integration tests, Playwright smoke and accessibility checks, production image
   smoke builds, Compose environment and acceptance fixture validation,

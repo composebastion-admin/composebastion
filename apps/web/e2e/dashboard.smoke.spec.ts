@@ -1285,10 +1285,10 @@ test("services rename the display name without changing the container", async ({
   await expect(page.getByText("Web").first()).toBeVisible();
   await page.getByTitle("Rename Web").click();
   await expect(page.getByRole("heading", { name: "Rename Web" })).toBeVisible();
-  await page.getByLabel("Display name").fill("Rackpad");
+  await page.getByLabel("Display name").fill("Example App");
   await page.getByRole("button", { name: "Save name" }).click();
   await expect.poll(() => mock.requests).toContain(`PUT /api/apps/${app.id}/name`);
-  await expect(page.getByText("Rackpad").first()).toBeVisible();
+  await expect(page.getByText("Example App").first()).toBeVisible();
 });
 
 test("services expose service-level image tag updates", async ({ page }) => {
@@ -1326,7 +1326,7 @@ test("services expose service-level image tag updates", async ({ page }) => {
 });
 
 test("services allow beta channel refresh when a newer prerelease exists", async ({ page }) => {
-  const image = "ghcr.io/kobii-git/rackpad:beta";
+  const image = "ghcr.io/composebastion-tests/example-app:beta";
   await mockApi(page, {
     containerImage: image,
     imageTags: ["latest", "main", "beta", "dev", "1.7.0-beta.4", "1.7.0-beta.3", "1.6.7", "1.2.2"],
@@ -1353,7 +1353,7 @@ test("services allow beta channel refresh when a newer prerelease exists", async
   await expect(dialog.locator(".serviceImageVersionSummary")).toContainText("Current beta channel");
   await expect(dialog.locator(".serviceImageVersionSummary")).toContainText("Latest prerelease 1.7.0-beta.4");
   await expect(dialog.locator(".serviceImageVersionSummary")).toContainText("Refresh channel 1.7.0-beta.4");
-  await expect(dialog.getByLabel("Target image for ghcr.io/kobii-git/rackpad")).toHaveValue(image);
+  await expect(dialog.getByLabel("Target image for ghcr.io/composebastion-tests/example-app")).toHaveValue(image);
   await expect(dialog.getByRole("button", { name: "Update 1 container" })).toBeEnabled();
 });
 
