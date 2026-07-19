@@ -197,25 +197,31 @@ function assertStableDirectoryNode(absolute, expectedStat, label) {
   }
 }
 
-export function readStableRegularFile(absolute, expectedStat = lstatSync(absolute), { afterRead } = {}) {
-  if (!expectedStat.isFile()) throw new Error(`Expected a regular file while reading Git context: ${absolute}`);
+function openNoFollow(absolute) {
   if (typeof constants.O_NOFOLLOW !== "number") throw new Error("This platform cannot provide no-follow Git context reads");
-  const descriptor = openSync(absolute, constants.O_RDONLY | constants.O_NOFOLLOW);
+  return openSync(absolute, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+}
+
+function readStableFileDescriptor(absolute, descriptor, openedStat, { afterOpen, afterRead } = {}) {
+  if (!openedStat.isFile()) throw new Error(`Expected a regular file while reading Git context: ${absolute}`);
+  afterOpen?.();
+  const contents = readFileSync(descriptor);
+  afterRead?.();
+  const finalDescriptorStat = fstatSync(descriptor);
+  const finalPathStat = lstatSync(absolute);
+  if (!samePathIdentity(openedStat, finalDescriptorStat)
+      || !samePathIdentity(openedStat, finalPathStat)
+      || finalDescriptorStat.size !== contents.length) {
+    throw new Error(`Git context file changed while it was being read: ${absolute}`);
+  }
+  return contents;
+}
+
+export function readStableRegularFile(absolute, testHooks = {}) {
+  const descriptor = openNoFollow(absolute);
   try {
     const openedStat = fstatSync(descriptor);
-    if (!openedStat.isFile() || !samePathIdentity(expectedStat, openedStat)) {
-      throw new Error(`Git context file changed before it could be read: ${absolute}`);
-    }
-    const contents = readFileSync(descriptor);
-    afterRead?.();
-    const finalDescriptorStat = fstatSync(descriptor);
-    const finalPathStat = lstatSync(absolute);
-    if (!samePathIdentity(openedStat, finalDescriptorStat)
-        || !samePathIdentity(openedStat, finalPathStat)
-        || finalDescriptorStat.size !== contents.length) {
-      throw new Error(`Git context file changed while it was being read: ${absolute}`);
-    }
-    return contents;
+    return readStableFileDescriptor(absolute, descriptor, openedStat, testHooks);
   } finally {
     closeSync(descriptor);
   }
@@ -231,25 +237,50 @@ function contextEntries(root, current = root, expectedDirectoryStat = lstatSync(
   for (const name of readdirSync(current).sort()) {
     const absolute = path.join(current, name);
     const relative = path.relative(root, absolute).split(path.sep).join("/");
-    const stat = lstatSync(absolute);
-    if (stat.isDirectory()) {
-      entries.push({ relative, type: "directory", mode: stat.mode & 0o777 });
-      entries.push(...contextEntries(root, absolute, stat));
-      const finalStat = lstatSync(absolute);
-      if (!samePathIdentity(stat, finalStat)) {
-        throw new Error(`Git context directory changed during traversal: ${relative}`);
+    let descriptor;
+    try {
+      descriptor = openNoFollow(absolute);
+    } catch (error) {
+      if (error?.code !== "ELOOP" && error?.code !== "EMLINK") throw error;
+      const stat = lstatSync(absolute);
+      if (!stat.isSymbolicLink()) {
+        throw new Error(`Git context entry changed while it was being opened: ${relative}`);
       }
-    } else if (stat.isSymbolicLink()) {
       const target = readlinkSync(absolute);
       const finalStat = lstatSync(absolute);
       if (!samePathIdentity(stat, finalStat)) {
         throw new Error(`Git context symlink changed during traversal: ${relative}`);
       }
       entries.push({ relative, type: "symlink", mode: stat.mode & 0o777, target });
-    } else if (stat.isFile()) {
-      entries.push({ relative, type: "file", mode: stat.mode & 0o777, contents: readStableRegularFile(absolute, stat) });
-    } else {
-      throw new Error(`Unsupported entry in Git build context: ${relative}`);
+      continue;
+    }
+    try {
+      const openedStat = fstatSync(descriptor);
+      if (openedStat.isDirectory()) {
+        const pathStat = lstatSync(absolute);
+        if (!samePathIdentity(openedStat, pathStat)) {
+          throw new Error(`Git context directory changed while it was being opened: ${relative}`);
+        }
+        closeSync(descriptor);
+        descriptor = undefined;
+        entries.push({ relative, type: "directory", mode: openedStat.mode & 0o777 });
+        entries.push(...contextEntries(root, absolute, openedStat));
+        const finalStat = lstatSync(absolute);
+        if (!samePathIdentity(openedStat, finalStat)) {
+          throw new Error(`Git context directory changed during traversal: ${relative}`);
+        }
+      } else if (openedStat.isFile()) {
+        entries.push({
+          relative,
+          type: "file",
+          mode: openedStat.mode & 0o777,
+          contents: readStableFileDescriptor(absolute, descriptor, openedStat)
+        });
+      } else {
+        throw new Error(`Unsupported entry in Git build context: ${relative}`);
+      }
+    } finally {
+      if (descriptor !== undefined) closeSync(descriptor);
     }
   }
   const finalDirectoryStat = lstatSync(current);
@@ -352,7 +383,7 @@ export function materializeGitBuildContext({ repositoryRoot, revision, destinati
       } else {
         const expectedExecutable = entry.mode === "100755";
         const actualExecutable = (stat.mode & 0o111) !== 0;
-        if (!stat.isFile() || actualExecutable !== expectedExecutable || readStableRegularFile(destinationPath, stat).compare(entry.contents) !== 0) {
+        if (!stat.isFile() || actualExecutable !== expectedExecutable || readStableRegularFile(destinationPath).compare(entry.contents) !== 0) {
           throw new Error(`Materialized file does not match Git blob or mode ${entry.relative}`);
         }
       }

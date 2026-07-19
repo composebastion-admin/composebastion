@@ -214,13 +214,13 @@ try {
   mkdirSync(stableReadDirectory);
   const stableReadPath = path.join(stableReadDirectory, "payload.txt");
   writeFileSync(stableReadPath, "original\n");
-  const expectedStableReadStat = lstatSync(stableReadPath);
   const stableReadReplacement = path.join(stableReadDirectory, "replacement.txt");
   writeFileSync(stableReadReplacement, "replacement\n");
-  renameSync(stableReadReplacement, stableReadPath);
   let changedInodeRejected = false;
   try {
-    readStableRegularFile(stableReadPath, expectedStableReadStat);
+    readStableRegularFile(stableReadPath, {
+      afterOpen: () => renameSync(stableReadReplacement, stableReadPath)
+    });
   } catch {
     changedInodeRejected = true;
   }
@@ -230,12 +230,14 @@ try {
   writeFileSync(linkTarget, "target\n");
   const fileToLinkPath = path.join(stableReadDirectory, "file-to-link.txt");
   writeFileSync(fileToLinkPath, "original\n");
-  const expectedFileToLinkStat = lstatSync(fileToLinkPath);
-  rmSync(fileToLinkPath);
-  symlinkSync("target.txt", fileToLinkPath);
   let fileToLinkRejected = false;
   try {
-    readStableRegularFile(fileToLinkPath, expectedFileToLinkStat);
+    readStableRegularFile(fileToLinkPath, {
+      afterOpen: () => {
+        rmSync(fileToLinkPath);
+        symlinkSync("target.txt", fileToLinkPath);
+      }
+    });
   } catch {
     fileToLinkRejected = true;
   }
@@ -243,10 +245,9 @@ try {
 
   const inPlaceMutationPath = path.join(stableReadDirectory, "in-place-mutation.txt");
   writeFileSync(inPlaceMutationPath, "before\n");
-  const inPlaceMutationStat = lstatSync(inPlaceMutationPath);
   let inPlaceMutationRejected = false;
   try {
-    readStableRegularFile(inPlaceMutationPath, inPlaceMutationStat, {
+    readStableRegularFile(inPlaceMutationPath, {
       afterRead: () => writeFileSync(inPlaceMutationPath, "after!\n")
     });
   } catch {
