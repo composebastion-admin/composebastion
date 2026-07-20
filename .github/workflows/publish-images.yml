@@ -55,6 +55,7 @@ jobs:
           echo "created=${created}" >> "${GITHUB_OUTPUT}"
 
       - name: Validate stable release tag
+        id: stable-tag
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
@@ -74,6 +75,11 @@ jobs:
             echo "::error::Release tag commit is not reachable from origin/main."
             exit 1
           fi
+          echo "stable=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Require approved Go attribution for stable release
+        if: steps.stable-tag.outputs.stable == 'true'
+        run: npm run check:go-attribution:release
 
   build-scan:
     name: Build and scan ${{ matrix.component }} ${{ matrix.arch }}

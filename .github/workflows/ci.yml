@@ -35,6 +35,8 @@ jobs:
         run: npm run check:public-hygiene
       - name: Go module attribution bundle
         run: npm run check:go-attribution
+      - name: Go attribution release policy
+        run: npm run test:go-attribution-policy
       - name: Third-party notices
         run: npm run notices:check
       - name: Immutable workflow actions

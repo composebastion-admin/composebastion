@@ -148,6 +148,16 @@ const publishFile = ".github/workflows/publish-images.yml";
 const publish = workflows[publishFile];
 const publishJobs = publish?.jobs ?? {};
 requireNode24Setup(publishFile, "metadata", publishJobs.metadata);
+const metadataSteps = publishJobs.metadata?.steps ?? [];
+const stableTagStep = metadataSteps.find((step) => step.id === "stable-tag");
+const strictAttributionStep = metadataSteps.find((step) => step.name === "Require approved Go attribution for stable release");
+if (!String(stableTagStep?.run ?? "").includes('echo "stable=true" >> "${GITHUB_OUTPUT}"')) {
+  fail(`${publishFile}:metadata: stable tag validation must expose a successful stable-tag output`);
+}
+if (String(strictAttributionStep?.if ?? "") !== "steps.stable-tag.outputs.stable == 'true'"
+    || String(strictAttributionStep?.run ?? "").trim() !== "npm run check:go-attribution:release") {
+  fail(`${publishFile}:metadata: stable vX.Y.Z tags must require approved Go attribution before publication`);
+}
 const buildScan = publishJobs["build-scan"];
 requireNode24Setup(publishFile, "build-scan", buildScan);
 requireExactMatrix(publishFile, "build-scan", buildScan);
@@ -454,13 +464,22 @@ for (const [invariant, message] of [
 if (agentDockerfile.includes("apk upgrade")) fail("Dockerfile.agent: broad mutable runtime apk upgrades are forbidden; pin required security packages exactly");
 
 const notices = readFileSync("THIRD-PARTY-NOTICES.md", "utf8");
+const goAttributionManifest = JSON.parse(readFileSync("LICENSES/go-modules/manifest.json", "utf8"));
 for (const component of ["Trivy", "ORAS Go v2", "rclone", "Docker CLI", "Docker Compose", "Go standard library"]) {
   if (!notices.includes(`| ${component} |`)) fail(`THIRD-PARTY-NOTICES.md: missing bundled runtime tool ${component}`);
 }
-if (!notices.includes("Legal review status: pending")
-    || !notices.includes("/licenses/third-party/go-buildinfo/")
+const legalReview = goAttributionManifest.review;
+if (!["pending", "approved"].includes(legalReview?.status)) {
+  fail("LICENSES/go-modules/manifest.json: legal-review status must be pending or approved");
+} else if (!notices.includes(`Legal review status: ${legalReview.status}.`)) {
+  fail("THIRD-PARTY-NOTICES.md: legal-review status must match the Go attribution manifest");
+} else if (legalReview.status === "approved"
+    && (!notices.includes(`recorded by ${legalReview.approvedBy} at ${legalReview.approvedAt}.`))) {
+  fail("THIRD-PARTY-NOTICES.md: approved legal-review evidence must match the Go attribution manifest");
+}
+if (!notices.includes("/licenses/third-party/go-buildinfo/")
     || !notices.includes("/licenses/third-party/go-modules/")) {
-  fail("THIRD-PARTY-NOTICES.md: linked Go module inventory, attribution bundle, and pending legal-review status must be explicit");
+  fail("THIRD-PARTY-NOTICES.md: linked Go module inventory and attribution bundle must be explicit");
 }
 
 if (failures.length > 0) {

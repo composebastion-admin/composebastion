@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { validateGoAttributionReview } from "./go-attribution-review.mjs";
 
 function fail(message) {
   throw new Error(`Go attribution: ${message}`);
@@ -31,6 +32,14 @@ function assignments(flag) {
 
 function sha256(contents) {
   return createHash("sha256").update(contents).digest("hex");
+}
+
+function validateReview(review) {
+  try {
+    validateGoAttributionReview(review);
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
 }
 
 function parseInventory(binary, file) {
@@ -166,10 +175,9 @@ rclone, Docker CLI, and Docker Compose binaries shipped by ComposeBastion. The
 manifest maps every entry to its consuming binary, upstream source record, SPDX
 classification candidate, required license/notice texts, and SHA-256 checksums.
 
-Legal review status is **pending**. Automated classification and checksum
-verification are release evidence, not qualified legal approval. Do not change
-the manifest review status to \`approved\` without recording the qualified
-reviewer and approval date, and do not publish a release while it is pending.
+The current legal-review status and any qualified approval evidence are recorded
+only in \`manifest.json\`, which is the source of truth. Automated classification
+and checksum verification are release evidence, not qualified legal approval.
 `, { mode: 0o644 });
   console.log(`Generated pending Go attribution manifest with ${entries.length} module/version entries.`);
 }
@@ -177,10 +185,8 @@ reviewer and approval date, and do not publish a release while it is pending.
 function validateBundle(manifestFile) {
   const root = path.dirname(manifestFile);
   const manifest = JSON.parse(readFileSync(manifestFile, "utf8"));
-  if (manifest.schemaVersion !== 1 || !["pending", "approved"].includes(manifest.review?.status)) fail("manifest schema or review status is invalid");
-  if (manifest.review.status === "approved" && (!manifest.review.approvedBy || !manifest.review.approvedAt)) {
-    fail("approved manifest must identify the qualified reviewer and approval date");
-  }
+  if (manifest.schemaVersion !== 1) fail("manifest schema version is invalid");
+  validateReview(manifest.review);
   const entries = new Map();
   for (const entry of manifest.modules ?? []) {
     const key = `${entry.module}@${entry.version}`;
@@ -214,7 +220,47 @@ function validateBundle(manifestFile) {
 function checkManifest() {
   const manifestFile = path.resolve(value("--manifest"));
   const { manifest, entries } = validateBundle(manifestFile);
+  if (process.argv.includes("--require-approved") && manifest.review.status !== "approved") {
+    fail("stable release requires qualified approval in the attribution manifest");
+  }
   console.log(`Verified ${entries.size} checked-in Go attribution entries (${manifest.review.status} legal review).`);
+}
+
+function csvCell(value) {
+  const rendered = String(value ?? "");
+  return /[",\r\n]/.test(rendered) ? `"${rendered.replaceAll('"', '""')}"` : rendered;
+}
+
+function writeReviewWorksheet() {
+  const manifestFile = path.resolve(value("--manifest"));
+  const outputFile = path.resolve(value("--output"));
+  const { entries } = validateBundle(manifestFile);
+  const pending = [...entries.values()].filter((entry) => entry.spdxExpression === "NOASSERTION");
+  const headers = [
+    "module",
+    "version",
+    "consumers",
+    "sourceUrl",
+    "bundledLicenseFiles",
+    "reviewedSpdxExpression",
+    "reviewerOrOrganization",
+    "reviewedAtUtc",
+    "notes"
+  ];
+  const rows = pending.map((entry) => [
+    entry.module,
+    entry.version,
+    entry.consumingBinaries.join(";"),
+    entry.sourceUrl,
+    entry.requiredFiles.map((file) => file.path).join(";"),
+    "",
+    "",
+    "",
+    ""
+  ]);
+  mkdirSync(path.dirname(outputFile), { recursive: true, mode: 0o755 });
+  writeFileSync(outputFile, `${[headers, ...rows].map((row) => row.map(csvCell).join(",")).join("\n")}\n`, { mode: 0o644 });
+  console.log(`Exported ${pending.length} NOASSERTION entries to ${outputFile}.`);
 }
 
 function verifyManifest() {
@@ -253,4 +299,5 @@ const command = process.argv[2];
 if (command === "generate") writeManifest();
 else if (command === "check") checkManifest();
 else if (command === "verify") verifyManifest();
-else fail("usage: node scripts/go-attribution.mjs <generate|check|verify> ...");
+else if (command === "review") writeReviewWorksheet();
+else fail("usage: node scripts/go-attribution.mjs <generate|check|verify|review> ...");

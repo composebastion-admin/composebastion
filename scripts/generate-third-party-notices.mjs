@@ -1,12 +1,36 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { validateGoAttributionReview } from "./go-attribution-review.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const target = path.join(root, "THIRD-PARTY-NOTICES.md");
+function optionalArgument(flag) {
+  const indexes = process.argv.flatMap((item, index) => item === flag ? [index] : []);
+  if (indexes.length > 1) throw new Error(`${flag} may be provided at most once`);
+  if (indexes.length === 0) return null;
+  const result = process.argv[indexes[0] + 1];
+  if (!result || result.startsWith("--")) throw new Error(`${flag} requires a value`);
+  return result;
+}
+
+const target = path.resolve(root, optionalArgument("--target") ?? "THIRD-PARTY-NOTICES.md");
+const goManifestFile = path.resolve(root, optionalArgument("--go-manifest") ?? "LICENSES/go-modules/manifest.json");
 const lock = JSON.parse(await readFile(path.join(root, "package-lock.json"), "utf8"));
 const packageJson = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
+const goManifest = JSON.parse(await readFile(goManifestFile, "utf8"));
 const check = process.argv.includes("--check");
+
+function legalReviewEvidence(review) {
+  const validated = validateGoAttributionReview(review);
+  if (validated.status === "pending") {
+    return `**Legal review status: pending.** Automated collection and classification are
+review evidence, not qualified legal approval; that dated approval remains a
+stable-release gate.`;
+  }
+  return `**Legal review status: approved.** Qualified review recorded by ${validated.approvedBy} at ${validated.approvedAt}.`;
+}
+
+const goLegalReviewEvidence = legalReviewEvidence(goManifest.review);
 
 const bundledRuntimeTools = [
   ["Trivy", "0.72.0 (8a32853686209a428179bb3a1688802b25691564)", "Apache-2.0", "app"],
@@ -72,9 +96,9 @@ Each image records deterministic linked Go module inventories under
 upstream license/notice texts, SPDX classification candidates, and SHA-256
 checksums under \`/licenses/third-party/go-modules/\`. Image builds fail if the
 linked inventory differs from that bundle or a required text is missing.
-**Legal review status: pending.** Automated collection and classification are
-review evidence, not qualified legal approval; that dated approval remains a
-release gate.
+${goLegalReviewEvidence}
+The checked-in Go attribution manifest is the source of
+truth for this status and its approval evidence.
 
 | Component | Reviewed version/source | License | Image |
 |-----------|-------------------------|---------|-------|

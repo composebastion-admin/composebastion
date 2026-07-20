@@ -32,6 +32,8 @@
     "check:release-version": "node scripts/check-release-version.mjs",
     "check:public-hygiene": "node scripts/check-public-hygiene.mjs",
     "check:go-attribution": "node scripts/go-attribution.mjs check --manifest LICENSES/go-modules/manifest.json",
+    "check:go-attribution:release": "node scripts/go-attribution.mjs check --manifest LICENSES/go-modules/manifest.json --require-approved",
+    "test:go-attribution-policy": "node --test scripts/go-attribution.test.mjs",
     "check:docker-context": "node scripts/check-docker-context.mjs",
     "release:set-version": "node scripts/set-release-version.mjs",
     "release:verify-images": "node scripts/verify-release-images.mjs",

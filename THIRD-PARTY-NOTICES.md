@@ -18,7 +18,9 @@ checksums under `/licenses/third-party/go-modules/`. Image builds fail if the
 linked inventory differs from that bundle or a required text is missing.
 **Legal review status: pending.** Automated collection and classification are
 review evidence, not qualified legal approval; that dated approval remains a
-release gate.
+stable-release gate.
+The checked-in Go attribution manifest is the source of
+truth for this status and its approval evidence.
 
 | Component | Reviewed version/source | License | Image |
 |-----------|-------------------------|---------|-------|
