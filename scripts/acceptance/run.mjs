@@ -140,11 +140,14 @@ if (!Number.isInteger(portBase) || portBase < 1024 || portBase > 64535) throw ne
 const runtimeDir = path.join(resultsDir, `runtime-${portBase}`);
 const candidateBuildContext = path.join(runtimeDir, "git-build-context");
 const acceptanceBindDir = `/tmp/composebastion-acceptance-${portBase}-bind`;
+const acceptanceExternalBindDir = `${acceptanceBindDir}/external`;
+const acceptanceComposeDir = `${acceptanceBindDir}/compose-workload`;
 const scenarioBackupDir = (scenario) => path.join(runtimeDir, `${scenario}-backups`);
 const workloadPrefix = `cbacceptance${portBase}`;
 const workloadProject = `${workloadPrefix}app`;
 const workloadVolumeMarker = `volume-${randomUUID()}`;
 const workloadBindMarker = `bind-${randomUUID()}`;
+const workloadRelativeBindMarker = `relative-bind-${randomUUID()}`;
 const projectName = (scenario) => `composebastion-acceptance-${portBase}-${scenario}`;
 const failureLogPath = path.join(resultsDir, "failure.log");
 const configuredSubnet = process.env.ACCEPTANCE_WORKLOAD_SUBNET
@@ -1222,6 +1225,7 @@ function disposableComposeYaml() {
     volumes:
       - workload-data:/data
       - \${WORKLOAD_BIND_DIR}:/allowed
+      - ./relative-data:/relative-allowed
     networks:
       acceptance-net:
         ipv4_address: ${workloadAddressPrefix}.20
@@ -1238,24 +1242,32 @@ networks:
 }
 
 async function deployDisposableStack(host) {
-  const response = await api(`/api/hosts/${host.id}/compose`, {
+  const response = await api(`/api/hosts/${host.id}/actions`, {
     method: "POST",
     body: {
-      name: "Acceptance disposable app",
-      projectName: workloadProject,
-      composeYaml: disposableComposeYaml(),
-      env: `WORKLOAD_DATABASE_PASSWORD=${fixture.workloadPassword}\nWORKLOAD_BIND_DIR=${acceptanceBindDir}\n`
+      type: "compose.writeDeployPath",
+      payload: {
+        projectName: workloadProject,
+        workingDir: acceptanceComposeDir,
+        composePath: "compose.yml",
+        composeYaml: disposableComposeYaml(),
+        env: `WORKLOAD_DATABASE_PASSWORD=${fixture.workloadPassword}\nWORKLOAD_BIND_DIR=${acceptanceExternalBindDir}\n`,
+        overwrite: true,
+        pullBeforeDeploy: false
+      }
     }
   });
-  const stack = response.data.stack;
-  const deployed = await api(`/api/compose/${stack.id}/deploy`, { method: "POST", body: {} });
-  await waitForJob(deployed.data.job.id, { timeoutMs: 10 * 60_000 });
+  const deployed = await waitForJob(response.data.job.id, { timeoutMs: 10 * 60_000 });
+  const stacks = await api(`/api/hosts/${host.id}/compose`);
+  const stack = stacks.data.stacks.find((item) => item.id === deployed.result?.stackId);
+  assert(stack, "path-deployed acceptance stack was not registered");
   const verifyStartup = `
 set -eu
 workload_id="$(docker ps -q --filter 'label=com.docker.compose.project=${workloadProject}' --filter 'label=com.docker.compose.service=workload')"
 database_id="$(docker ps -q --filter 'label=com.docker.compose.project=${workloadProject}' --filter 'label=com.docker.compose.service=database')"
 test -n "$workload_id" && test -n "$database_id"
-test ! -e '${acceptanceBindDir}/proof.txt'
+test ! -e '${acceptanceExternalBindDir}/proof.txt'
+test ! -e '${acceptanceComposeDir}/relative-data/proof.txt'
 docker exec "$workload_id" test ! -e /data/proof.txt
 docker exec "$database_id" pg_isready -U postgres >/dev/null
 test "$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$workload_id")" = '${workloadAddressPrefix}.20'
@@ -1273,19 +1285,28 @@ set -eu
 workload_id="$(docker ps -q --filter 'label=com.docker.compose.project=${workloadProject}' --filter 'label=com.docker.compose.service=workload')"
 database_id="$(docker ps -q --filter 'label=com.docker.compose.project=${workloadProject}' --filter 'label=com.docker.compose.service=database')"
 bind_source="$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/allowed"}}{{.Source}}{{end}}{{end}}' "$workload_id")"
-test -n "$bind_source"
-mkdir -p "$bind_source"
+relative_bind_source="$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/relative-allowed"}}{{.Source}}{{end}}{{end}}' "$workload_id")"
+test -n "$bind_source" && test -n "$relative_bind_source"
+mkdir -p "$bind_source" "$relative_bind_source"
 docker exec "$workload_id" sh -c "printf '%s' '${workloadVolumeMarker}' > /data/proof.txt"
 printf '%s' '${workloadBindMarker}' > "$bind_source/proof.txt"
+printf '%s' '${workloadRelativeBindMarker}' > "$relative_bind_source/proof.txt"
 docker exec "$database_id" psql -U postgres -v ON_ERROR_STOP=1 -c "CREATE TABLE IF NOT EXISTS acceptance_proof (id integer PRIMARY KEY, value text NOT NULL); INSERT INTO acceptance_proof (id, value) VALUES (1, 'database-ok') ON CONFLICT (id) DO UPDATE SET value = EXCLUDED.value;" >/dev/null
 printf 'ACCEPTANCE_BIND_SOURCE=%s\n' "$bind_source"
+printf 'ACCEPTANCE_RELATIVE_BIND_SOURCE=%s\n' "$relative_bind_source"
 `;
   const seeded = await compose(activeProject, activeEnv, ["exec", "-T", "sshhost", "sh", "-lc", seedRuntime]);
   const bindSourcePath = seeded.stdout
     .split(/\r?\n/)
     .find((line) => line.startsWith("ACCEPTANCE_BIND_SOURCE="))
     ?.slice("ACCEPTANCE_BIND_SOURCE=".length);
+  const relativeBindSourcePath = seeded.stdout
+    .split(/\r?\n/)
+    .find((line) => line.startsWith("ACCEPTANCE_RELATIVE_BIND_SOURCE="))
+    ?.slice("ACCEPTANCE_RELATIVE_BIND_SOURCE=".length);
   assert(/^\/[A-Za-z0-9._/-]+$/.test(bindSourcePath ?? ""), `Docker reported an unsafe acceptance bind source: ${JSON.stringify(bindSourcePath)}`);
+  assert(/^\/[A-Za-z0-9._/-]+$/.test(relativeBindSourcePath ?? ""), `Docker reported an unsafe relative bind source: ${JSON.stringify(relativeBindSourcePath)}`);
+  assert(relativeBindSourcePath.startsWith(`${acceptanceComposeDir}/`), "relative bind was not resolved beneath the Compose working directory");
 
   const verifyRuntime = `
 set -eu
@@ -1293,6 +1314,7 @@ workload_id="$(docker ps -q --filter 'label=com.docker.compose.project=${workloa
 database_id="$(docker ps -q --filter 'label=com.docker.compose.project=${workloadProject}' --filter 'label=com.docker.compose.service=database')"
 test "$(docker exec "$workload_id" cat /data/proof.txt)" = '${workloadVolumeMarker}'
 test "$(cat '${bindSourcePath}/proof.txt')" = '${workloadBindMarker}'
+test "$(cat '${relativeBindSourcePath}/proof.txt')" = '${workloadRelativeBindMarker}'
 test "$(docker exec "$database_id" psql -U postgres -Atc 'SELECT value FROM acceptance_proof WHERE id = 1')" = database-ok
 test "$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$workload_id")" = '${workloadAddressPrefix}.20'
 test "$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$database_id")" = '${workloadAddressPrefix}.10'
@@ -1316,7 +1338,10 @@ docker network inspect '${workloadProject}_acceptance-net' >/dev/null
       volumeMarker: workloadVolumeMarker,
       volumeMarkerSeededAfterDeploy: true,
       bindMarker: workloadBindMarker,
-      bindSourcePath
+      bindSourcePath,
+      relativeBindMarker: workloadRelativeBindMarker,
+      relativeBindSourcePath,
+      composeWorkingDir: acceptanceComposeDir
     }
   };
 }
@@ -1373,9 +1398,15 @@ async function exerciseRecovery(host, stack, targets) {
   const expectedVolumeMarker = stack.acceptanceEvidence?.volumeMarker;
   const expectedBindMarker = stack.acceptanceEvidence?.bindMarker;
   const expectedBindSourcePath = stack.acceptanceEvidence?.bindSourcePath;
+  const expectedRelativeBindMarker = stack.acceptanceEvidence?.relativeBindMarker;
+  const expectedRelativeBindSourcePath = stack.acceptanceEvidence?.relativeBindSourcePath;
+  const expectedComposeWorkingDir = stack.acceptanceEvidence?.composeWorkingDir;
   assert(/^volume-[0-9a-f-]{36}$/.test(expectedVolumeMarker ?? ""), "workload volume marker is missing or invalid");
   assert(/^bind-[0-9a-f-]{36}$/.test(expectedBindMarker ?? ""), "workload bind marker is missing or invalid");
   assert(/^\/[A-Za-z0-9._/-]+$/.test(expectedBindSourcePath ?? ""), "workload bind source path is missing or invalid");
+  assert(/^relative-bind-[0-9a-f-]{36}$/.test(expectedRelativeBindMarker ?? ""), "relative bind marker is missing or invalid");
+  assert(/^\/[A-Za-z0-9._/-]+$/.test(expectedRelativeBindSourcePath ?? ""), "relative bind source path is missing or invalid");
+  assert(/^\/[A-Za-z0-9._/-]+$/.test(expectedComposeWorkingDir ?? ""), "Compose working directory is missing or invalid");
   const created = await api("/api/recovery/points", {
     method: "POST",
     body: {
@@ -1459,19 +1490,28 @@ async function exerciseRecovery(host, stack, targets) {
   assert(restoredProject, "clone restore did not report its project name");
   assert(restoredProject.startsWith(workloadPrefix), "clone restore returned an unexpected project name");
   assert(Number(restoreJob.result.restoredVolumes) >= 2, "clone restore did not restore both named volumes");
-  assert(Number(restoreJob.result.restoredBindMounts) >= 1, "clone restore did not restore the allowed bind mount");
+  assert(Number(restoreJob.result.restoredBindMounts) >= 2, "clone restore did not restore both the working directory and external bind mount");
 
   const sourceWorkloadVolume = `${workloadProject}_workload-data`;
   const sourceDatabaseVolume = `${workloadProject}_database-data`;
   const restoredWorkloadVolume = restoreJob.result.volumeMap?.[sourceWorkloadVolume];
   const restoredDatabaseVolume = restoreJob.result.volumeMap?.[sourceDatabaseVolume];
   const restoredBindPath = restoreJob.result.bindMap?.[expectedBindSourcePath];
+  const restoredWorkingDir = restoreJob.result.bindMap?.[expectedComposeWorkingDir];
+  const relativeChildPath = path.posix.relative(expectedComposeWorkingDir, expectedRelativeBindSourcePath);
+  const restoredRelativeBindPath = restoredWorkingDir && relativeChildPath
+    ? path.posix.join(restoredWorkingDir, relativeChildPath)
+    : null;
   const sourceNetwork = `${workloadProject}_acceptance-net`;
   const restoredNetwork = restoreJob.result.networkMap?.[sourceNetwork]
     ?? restoreJob.result.networkMap?.["acceptance-net"];
   assert(restoredWorkloadVolume && restoredWorkloadVolume !== sourceWorkloadVolume, "workload volume was not remapped for clone restore");
   assert(restoredDatabaseVolume && restoredDatabaseVolume !== sourceDatabaseVolume, "database volume was not remapped for clone restore");
   assert(restoredBindPath?.startsWith(`/var/lib/composebastion/restores/${pointId}/`), "bind mount was not restored into managed clone storage");
+  assert(restoredWorkingDir?.startsWith(`/var/lib/composebastion/restores/${pointId}/`), "Compose working directory was not restored into managed clone storage");
+  assert(restoredRelativeBindPath?.startsWith(`${restoredWorkingDir}/`), "relative bind was not derived beneath the managed Compose working directory");
+  assert(restoredBindPath !== expectedBindSourcePath, "external bind reused the live source path");
+  assert(restoredRelativeBindPath !== expectedRelativeBindSourcePath, "relative bind reused the live source path");
   assert(restoredNetwork && restoredNetwork !== sourceNetwork, "custom network was not remapped for clone restore");
 
   // The SSH fixture is a container controlling its sibling Docker daemon via
@@ -1481,7 +1521,9 @@ async function exerciseRecovery(host, stack, targets) {
   const bridgeFixtureBind = `
 set -eu
 test "$(cat '${restoredBindPath}/proof.txt')" = '${expectedBindMarker}'
+test "$(cat '${restoredRelativeBindPath}/proof.txt')" = '${expectedRelativeBindMarker}'
 tar -C '${restoredBindPath}' -cf - . | docker run --rm -i -v '${restoredBindPath}:/target' alpine:3.20.8@sha256:765942a4039992336de8dd5db680586e1a206607dd06170ff0a37267a9e01958 sh -c 'cd /target && tar -xf -'
+tar -C '${restoredRelativeBindPath}' -cf - . | docker run --rm -i -v '${restoredRelativeBindPath}:/target' alpine:3.20.8@sha256:765942a4039992336de8dd5db680586e1a206607dd06170ff0a37267a9e01958 sh -c 'cd /target && tar -xf -'
 `;
   await compose(activeProject, activeEnv, ["exec", "-T", "sshhost", "sh", "-lc", bridgeFixtureBind]);
 
@@ -1492,10 +1534,12 @@ database_id="$(docker ps -q --filter 'label=com.docker.compose.project=${restore
 test -n "$workload_id" && test -n "$database_id"
 test "$(docker exec "$workload_id" cat /data/proof.txt)" = '${expectedVolumeMarker}'
 test "$(docker exec "$workload_id" cat /allowed/proof.txt)" = '${expectedBindMarker}'
+test "$(docker exec "$workload_id" cat /relative-allowed/proof.txt)" = '${expectedRelativeBindMarker}'
 test "$(docker exec "$database_id" psql -U postgres -Atc 'SELECT value FROM acceptance_proof WHERE id = 1')" = database-ok
 test "$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}' "$workload_id")" = '${restoredWorkloadVolume}'
 test "$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql/data"}}{{.Name}}{{end}}{{end}}' "$database_id")" = '${restoredDatabaseVolume}'
 test "$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/allowed"}}{{.Source}}{{end}}{{end}}' "$workload_id")" = '${restoredBindPath}'
+test "$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/relative-allowed"}}{{.Source}}{{end}}{{end}}' "$workload_id")" = '${restoredRelativeBindPath}'
 docker network inspect '${restoredNetwork}' >/dev/null
 workload_ip="$(docker inspect --format '{{(index .NetworkSettings.Networks "${restoredNetwork}").IPAddress}}' "$workload_id")"
 database_ip="$(docker inspect --format '{{(index .NetworkSettings.Networks "${restoredNetwork}").IPAddress}}' "$database_id")"
@@ -1509,12 +1553,16 @@ test "$database_ip" != '${workloadAddressPrefix}.10'
 
   await compose(activeProject, activeEnv, [
     "exec", "-T", "sshhost", "sh", "-lc",
-    `docker compose --env-file /dev/null -p '${restoredProject}' -f '/tmp/composebastion/${pointId}/compose.yml' down -v --remove-orphans`
+    `docker compose --env-file '${restoredWorkingDir}/.env' -p '${restoredProject}' -f '${restoredWorkingDir}/compose.yml' down -v --remove-orphans`
   ]);
   const cleanupRestoredBind = `
 set -eu
 docker run --rm -v '${restoredBindPath}:/target' alpine:3.20.8@sha256:765942a4039992336de8dd5db680586e1a206607dd06170ff0a37267a9e01958 sh -c 'find /target -mindepth 1 -delete'
+docker run --rm -v '${restoredRelativeBindPath}:/target' alpine:3.20.8@sha256:765942a4039992336de8dd5db680586e1a206607dd06170ff0a37267a9e01958 sh -c 'find /target -mindepth 1 -delete'
 rm -rf '${restoredBindPath}'
+rm -rf '${restoredWorkingDir}'
+test "$(cat '${expectedBindSourcePath}/proof.txt')" = '${expectedBindMarker}'
+test "$(cat '${expectedRelativeBindSourcePath}/proof.txt')" = '${expectedRelativeBindMarker}'
 `;
   await compose(activeProject, activeEnv, ["exec", "-T", "sshhost", "sh", "-lc", cleanupRestoredBind]);
   await api(`/api/recovery/points/${pointId}`, { method: "DELETE" });

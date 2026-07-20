@@ -77,8 +77,9 @@ export function resolveHostFolderRestorePath(input: {
   recoveryPointId: string;
   sourcePath: string;
   restorePath?: unknown;
+  forceManaged?: boolean;
 }) {
-  if (typeof input.restorePath === "string" && input.restorePath.trim()) {
+  if (!input.forceManaged && typeof input.restorePath === "string" && input.restorePath.trim()) {
     return assertAllowedHostFolderTargetPath(input.restorePath);
   }
   return buildManagedRestoreBindPath(input.restoreRoot, input.recoveryPointId, input.sourcePath);
@@ -282,19 +283,82 @@ function getMapValue(map: YAMLMap, key: string) {
   return map.get(key, true);
 }
 
-function bindMountReplacement(source: string, bindMounts: Record<string, string>) {
+function bindMountPathAliases(source: string) {
+  const normalized = normalizeBindMountPath(source);
+  const aliases = new Set([normalized]);
+  if (normalized.startsWith("/host_mnt/")) {
+    aliases.add(normalized.slice("/host_mnt".length));
+  }
+  for (const alias of [...aliases]) {
+    if (alias.startsWith("/private/")) aliases.add(alias.slice("/private".length));
+  }
+  return [...aliases];
+}
+
+function containedRelativePath(parent: string, child: string) {
+  const normalizedParent = path.posix.normalize(parent);
+  const normalizedChild = path.posix.normalize(child);
+  if (normalizedChild === normalizedParent) return "";
+  if (!normalizedChild.startsWith(`${normalizedParent.replace(/\/+$/, "")}/`)) return null;
+  const relative = path.posix.relative(normalizedParent, normalizedChild);
+  if (!relative || relative === ".." || relative.startsWith("../") || path.posix.isAbsolute(relative)) return null;
+  return relative;
+}
+
+function uniqueBestBindMountMatch(matches: Array<{
+  artifactSource: string;
+  replacement: string;
+  specificity: number;
+}>, source: string) {
+  if (!matches.length) return undefined;
+  const bestSpecificity = Math.max(...matches.map((match) => match.specificity));
+  const best = matches.filter((match) => match.specificity === bestSpecificity);
+  const replacements = new Set(best.map((match) => match.replacement));
+  if (replacements.size > 1) {
+    throw new Error(
+      `Cannot safely resolve restored bind mount ${source}: matching recovery artifacts ${best.map((match) => match.artifactSource).join(", ")} are ambiguous.`
+    );
+  }
+  return best[0]?.replacement;
+}
+
+function bindMountSpecificity(source: string) {
+  return Math.min(...bindMountPathAliases(source).map((alias) => alias.length));
+}
+
+export function resolveRestoredBindMountPath(source: string, bindMounts: Record<string, string>) {
   const exact = bindMounts[source];
   if (exact) return exact;
 
+  const sourceAliases = bindMountPathAliases(source);
+  const aliasMatches: Array<{ artifactSource: string; replacement: string; specificity: number }> = [];
   for (const [inspectedSource, replacement] of Object.entries(bindMounts)) {
-    if (!inspectedSource.startsWith("/host_mnt/")) continue;
-    const hostPath = inspectedSource.slice("/host_mnt".length);
-    if (source === hostPath) return replacement;
-    if (hostPath.startsWith("/private/") && source === hostPath.slice("/private".length)) {
-      return replacement;
+    const artifactAliases = bindMountPathAliases(inspectedSource);
+    if (artifactAliases.some((artifactAlias) => sourceAliases.includes(artifactAlias))) {
+      aliasMatches.push({ artifactSource: inspectedSource, replacement, specificity: bindMountSpecificity(inspectedSource) });
     }
   }
-  return undefined;
+  const aliasMatch = uniqueBestBindMountMatch(aliasMatches, source);
+  if (aliasMatch) return aliasMatch;
+
+  const parentMatches: Array<{ artifactSource: string; replacement: string; specificity: number }> = [];
+  for (const [artifactSource, artifactTarget] of Object.entries(bindMounts)) {
+    const artifactAliases = bindMountPathAliases(artifactSource);
+    for (const artifactAlias of artifactAliases) {
+      for (const sourceAlias of sourceAliases) {
+        const relative = containedRelativePath(artifactAlias, sourceAlias);
+        if (relative === null || relative === "") continue;
+        const replacement = path.posix.join(artifactTarget, relative);
+        if (containedRelativePath(artifactTarget, replacement) !== relative) continue;
+        parentMatches.push({
+          artifactSource,
+          replacement,
+          specificity: bindMountSpecificity(artifactSource)
+        });
+      }
+    }
+  }
+  return uniqueBestBindMountMatch(parentMatches, source);
 }
 
 export function buildComposeServiceBindMounts(
@@ -306,7 +370,7 @@ export function buildComposeServiceBindMounts(
     const serviceName = container.labels["com.docker.compose.service"]?.trim();
     if (!serviceName) continue;
     for (const bind of container.bindMounts) {
-      const replacement = bindMountReplacement(bind.source, bindMounts);
+      const replacement = resolveRestoredBindMountPath(bind.source, bindMounts);
       if (!replacement) continue;
       if (!bind.destination) {
         throw new Error(`Cannot safely remap restored bind mount for Compose service ${serviceName}: the inspected destination is empty.`);
@@ -328,7 +392,7 @@ function remapVolumeString(value: string, mappings: { volumes: Record<string, st
   const parts = value.split(":");
   if (parts.length < 2) return value;
   const source = parts[0] ?? "";
-  const replacement = bindMountReplacement(source, mappings.bindMounts) ?? mappings.volumes[source];
+  const replacement = resolveRestoredBindMountPath(source, mappings.bindMounts) ?? mappings.volumes[source];
   return replacement ? [replacement, ...parts.slice(1)].join(":") : value;
 }
 
@@ -463,7 +527,7 @@ export function remapComposeYaml(
             const targetValue = scalarString(getMapValue(item, "target"));
             const destinationReplacement = targetValue ? destinationBindMounts[targetValue] : undefined;
             const replacement = destinationReplacement
-              ?? (sourceValue ? bindMountReplacement(sourceValue, bindMounts) : null);
+              ?? (sourceValue ? resolveRestoredBindMountPath(sourceValue, bindMounts) : null);
             if (replacement && isScalar(source)) setScalarString(source, replacement);
             if (destinationReplacement && targetValue && isScalar(source)) {
               remappedServiceBindMounts.add(`${serviceName}\u0000${targetValue}`);

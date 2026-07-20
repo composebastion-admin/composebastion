@@ -27,6 +27,7 @@ import {
   extractPublishedPorts,
   remapComposeYaml,
   assertAllowedHostFolderTargetPath,
+  resolveRestoredBindMountPath,
   resolveHostFolderRestorePath,
   standaloneContainerExtraNetworks
 } from "./recoveryRestoreUtils.js";
@@ -133,9 +134,15 @@ function isPathInside(parent: string, child: string) {
   return child === parent || child.startsWith(`${parent.replace(/\/+$/, "")}/`);
 }
 
-function composeRestoreFilePaths(manifest: RecoveryManifest | null, recoveryPointId: string) {
+function composeRestoreFilePaths(
+  manifest: RecoveryManifest | null,
+  recoveryPointId: string,
+  options: { restoredWorkingDir?: string | null; useManifestWorkingDir?: boolean } = {}
+) {
   let remoteDir = stackRemoteDirectory(recoveryPointId);
-  if (manifest?.compose.workingDir) {
+  if (options.restoredWorkingDir) {
+    remoteDir = assertAllowedHostFolderTargetPath(options.restoredWorkingDir);
+  } else if (options.useManifestWorkingDir !== false && manifest?.compose.workingDir) {
     try {
       remoteDir = assertAllowedHostFolderTargetPath(manifest.compose.workingDir);
     } catch {
@@ -373,6 +380,10 @@ export async function runRecoveryRestore(hostId: string, input: RecoveryRestoreR
 
   const restoreRoot = assertAllowedRestoreRoot(input.options.restoreRoot);
   const manifest = await loadManifest(point);
+  const composeArtifact = point.artifacts.find((artifact) => artifact.kind === "compose_yaml" && artifact.status === "completed");
+  const sameHostComposeClone = mode === "clone"
+    && point.hostId === hostId
+    && Boolean(composeArtifact && manifest?.compose.projectName);
   const originalProjectName = input.options.projectNameOverride
     ?? manifest?.compose.projectName
     ?? (typeof point.metadata.projectName === "string" ? point.metadata.projectName : null)
@@ -408,7 +419,8 @@ export async function runRecoveryRestore(hostId: string, input: RecoveryRestoreR
       restoreRoot,
       recoveryPointId: point.id,
       sourcePath,
-      restorePath: artifact.metadata.restorePath
+      restorePath: artifact.metadata.restorePath,
+      forceManaged: sameHostComposeClone
     });
     bindMap[sourcePath] = targetPath;
     await executionFence?.assertActive();
@@ -429,7 +441,6 @@ export async function runRecoveryRestore(hostId: string, input: RecoveryRestoreR
   await executionFence?.assertActive();
   await ensureStandaloneNetworks(hostId, networkMap, manifest);
 
-  const composeArtifact = point.artifacts.find((artifact) => artifact.kind === "compose_yaml" && artifact.status === "completed");
   if (!composeArtifact || !projectName) {
     if (!manifest?.containers.length) {
       return {
@@ -491,7 +502,19 @@ export async function runRecoveryRestore(hostId: string, input: RecoveryRestoreR
     resetNetworkAddressing: networkMode === "clone"
   });
 
-  const restoreFiles = composeRestoreFilePaths(manifest, point.id);
+  let restoredWorkingDir: string | null = null;
+  if (sameHostComposeClone && manifest?.compose.workingDir) {
+    restoredWorkingDir = resolveRestoredBindMountPath(manifest.compose.workingDir, bindMap) ?? null;
+    if (!restoredWorkingDir) {
+      throw new Error(
+        `Cannot safely restore Compose project ${manifest.compose.projectName ?? projectName}: the captured working directory ${manifest.compose.workingDir} was not restored.`
+      );
+    }
+  }
+  const restoreFiles = composeRestoreFilePaths(manifest, point.id, {
+    restoredWorkingDir,
+    useManifestWorkingDir: !sameHostComposeClone
+  });
   const host = await getHostForWorker(hostId);
   if (isDemoHost(host.public)) {
     return {

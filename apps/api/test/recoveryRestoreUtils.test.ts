@@ -10,6 +10,7 @@ import {
   detectPortConflicts,
   extractPublishedPorts,
   remapComposeYaml,
+  resolveRestoredBindMountPath,
   resolveHostFolderRestorePath,
   shouldRestartSourceAfterFailure
 } from "../src/services/recoveryRestoreUtils.js";
@@ -79,6 +80,16 @@ describe("recovery restore naming", () => {
       recoveryPointId: "rp-1",
       sourcePath: "/srv/app/data"
     })).toBe("/var/lib/composebastion/restores/rp-1/srv_app_data");
+  });
+
+  it("forces same-host Compose artifacts beneath the managed restore root", () => {
+    expect(resolveHostFolderRestorePath({
+      restoreRoot: "/var/lib/composebastion/restores",
+      recoveryPointId: "rp-1",
+      sourcePath: "/home/docker/DemoApp",
+      restorePath: "/home/docker/DemoApp",
+      forceManaged: true
+    })).toBe("/var/lib/composebastion/restores/rp-1/home_docker_DemoApp");
   });
 
   it("rejects unsafe same-path host folder restore targets", () => {
@@ -280,6 +291,48 @@ describe("port conflict behavior", () => {
 });
 
 describe("destination-aware Compose bind remapping", () => {
+  it("derives nested bind targets from the longest restored parent artifact", () => {
+    const bindMounts = {
+      "/srv/project": "/var/lib/composebastion/restores/rp-1/project",
+      "/srv/project/data": "/var/lib/composebastion/restores/rp-1/project-data",
+      "/srv/projected": "/var/lib/composebastion/restores/rp-1/projected"
+    };
+
+    expect(resolveRestoredBindMountPath("/srv/project/data/cache", bindMounts))
+      .toBe("/var/lib/composebastion/restores/rp-1/project-data/cache");
+    expect(resolveRestoredBindMountPath("/srv/project/config", bindMounts))
+      .toBe("/var/lib/composebastion/restores/rp-1/project/config");
+    expect(resolveRestoredBindMountPath("/srv/project-other/data", bindMounts)).toBeUndefined();
+  });
+
+  it("derives nested targets through Docker Desktop aliases", () => {
+    expect(resolveRestoredBindMountPath("/tmp/project/data", {
+      "/host_mnt/private/tmp/project": "/var/lib/composebastion/restores/rp-1/project"
+    })).toBe("/var/lib/composebastion/restores/rp-1/project/data");
+  });
+
+  it("rewrites a relative Compose bind from its captured working-directory artifact", () => {
+    const containers = [manifestContainer({
+      id: "one",
+      service: "workload",
+      source: "/srv/project/data",
+      destination: "/data"
+    })];
+    const serviceBindMounts = buildComposeServiceBindMounts(containers, {
+      "/srv/project": "/var/lib/composebastion/restores/rp-1/project"
+    });
+    const result = remapComposeYaml([
+      "services:",
+      "  workload:",
+      "    image: alpine",
+      "    volumes:",
+      "      - './data:/data:ro'"
+    ].join("\n"), { serviceBindMounts });
+
+    expect(result).toContain("/var/lib/composebastion/restores/rp-1/project/data:/data:ro");
+    expect(result).not.toContain("./data:/data");
+  });
+
   it("rewrites interpolated, defaulted, relative, and structured bind sources", () => {
     const yaml = [
       "services:",
