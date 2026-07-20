@@ -148,6 +148,16 @@ const publishFile = ".github/workflows/publish-images.yml";
 const publish = workflows[publishFile];
 const publishJobs = publish?.jobs ?? {};
 requireNode24Setup(publishFile, "metadata", publishJobs.metadata);
+const metadataSteps = publishJobs.metadata?.steps ?? [];
+const stableTagStep = metadataSteps.find((step) => step.id === "stable-tag");
+const strictAttributionStep = metadataSteps.find((step) => step.name === "Require approved Go attribution for stable release");
+if (!String(stableTagStep?.run ?? "").includes('echo "stable=true" >> "${GITHUB_OUTPUT}"')) {
+  fail(`${publishFile}:metadata: stable tag validation must expose a successful stable-tag output`);
+}
+if (String(strictAttributionStep?.if ?? "") !== "steps.stable-tag.outputs.stable == 'true'"
+    || String(strictAttributionStep?.run ?? "").trim() !== "npm run check:go-attribution:release") {
+  fail(`${publishFile}:metadata: stable vX.Y.Z tags must require approved Go attribution before publication`);
+}
 const buildScan = publishJobs["build-scan"];
 requireNode24Setup(publishFile, "build-scan", buildScan);
 requireExactMatrix(publishFile, "build-scan", buildScan);
@@ -257,16 +267,16 @@ if (!String(publish?.concurrency?.group ?? "").includes("publish-images-publicat
   fail(`${publishFile}: main and tag registry mutations must share one concurrency group`);
 }
 const copyRun = (publishJobs["publish-main"]?.steps ?? []).find((step) => step.name === "Copy the scanned platform manifests")?.run ?? "";
-if (!copyRun.includes('platform_tag="run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${arch}"')) {
-  fail(`${publishFile}:publish-main: platform images must use immutable run-scoped tags`);
+if (!copyRun.includes('platform_tag="sha-${GITHUB_SHA}-${arch}"')) {
+  fail(`${publishFile}:publish-main: platform images must use deterministic full-commit tags`);
 }
 const assembleRun = (publishJobs["publish-main"]?.steps ?? []).find((step) => step.name === "Assemble and verify both immutable indexes")?.run ?? "";
 if (!assembleRun.includes('index="${image}:sha-${GITHUB_SHA}"')) {
   fail(`${publishFile}:publish-main: multi-architecture indexes must use the protected commit SHA tag`);
 }
 for (const arch of ["amd64", "arm64"]) {
-  if (!assembleRun.includes(`\${image}:run-\${GITHUB_RUN_ID}-\${GITHUB_RUN_ATTEMPT}-${arch}`)) {
-    fail(`${publishFile}:publish-main: ${arch} index source must be the current run-scoped tag`);
+  if (!assembleRun.includes(`\${image}:sha-\${GITHUB_SHA}-${arch}`)) {
+    fail(`${publishFile}:publish-main: ${arch} index source must be the deterministic full-commit platform tag`);
   }
 }
 for (const invariant of [
@@ -405,6 +415,8 @@ for (const [invariant, message] of [
   ["go-buildinfo/rclone.modules.tsv", "rclone linked-module inventory"],
   ["go-buildinfo/trivy.artifacts.sha256", "Trivy legal-artifact checksums"],
   ["go-buildinfo/rclone.artifacts.sha256", "rclone legal-artifact checksums"],
+  ["COPY LICENSES/go-modules/ /licenses/third-party/go-modules/", "checked-in Go attribution bundle"],
+  ["node /tmp/go-attribution.mjs verify", "linked Go attribution verification"],
   ['trivy --version | grep -F "Version: ${TRIVY_VERSION}"', "runtime Trivy version check"],
   ['rclone version | grep -F "rclone v${RCLONE_VERSION}"', "runtime rclone version check"]
 ]) {
@@ -442,6 +454,8 @@ for (const [invariant, message] of [
   ["go-buildinfo/docker-compose.modules.tsv", "Compose linked-module inventory"],
   ["go-buildinfo/agent.artifacts.sha256", "agent tool legal-artifact checksums"],
   ["COPY --from=docker-tools-builder /out/licenses/ /licenses/third-party/", "Docker/Compose/Go licenses"],
+  ["COPY LICENSES/go-modules/ /licenses/third-party/go-modules/", "checked-in Go attribution bundle"],
+  ["node /tmp/go-attribution.mjs verify", "linked Go attribution verification"],
   ['docker --version | grep -F "Docker version ${DOCKER_CLI_VERSION},"', "runtime Docker CLI version check"],
   ['test "$(docker compose version --short)" = "${COMPOSE_VERSION}"', "runtime Compose version check"]
 ]) {
@@ -450,11 +464,22 @@ for (const [invariant, message] of [
 if (agentDockerfile.includes("apk upgrade")) fail("Dockerfile.agent: broad mutable runtime apk upgrades are forbidden; pin required security packages exactly");
 
 const notices = readFileSync("THIRD-PARTY-NOTICES.md", "utf8");
+const goAttributionManifest = JSON.parse(readFileSync("LICENSES/go-modules/manifest.json", "utf8"));
 for (const component of ["Trivy", "ORAS Go v2", "rclone", "Docker CLI", "Docker Compose", "Go standard library"]) {
   if (!notices.includes(`| ${component} |`)) fail(`THIRD-PARTY-NOTICES.md: missing bundled runtime tool ${component}`);
 }
-if (!notices.includes("Legal review status: pending") || !notices.includes("/licenses/third-party/go-buildinfo/")) {
-  fail("THIRD-PARTY-NOTICES.md: linked Go module evidence and pending manual legal-review status must be explicit");
+const legalReview = goAttributionManifest.review;
+if (!["pending", "approved"].includes(legalReview?.status)) {
+  fail("LICENSES/go-modules/manifest.json: legal-review status must be pending or approved");
+} else if (!notices.includes(`Legal review status: ${legalReview.status}.`)) {
+  fail("THIRD-PARTY-NOTICES.md: legal-review status must match the Go attribution manifest");
+} else if (legalReview.status === "approved"
+    && (!notices.includes(`recorded by ${legalReview.approvedBy} at ${legalReview.approvedAt}.`))) {
+  fail("THIRD-PARTY-NOTICES.md: approved legal-review evidence must match the Go attribution manifest");
+}
+if (!notices.includes("/licenses/third-party/go-buildinfo/")
+    || !notices.includes("/licenses/third-party/go-modules/")) {
+  fail("THIRD-PARTY-NOTICES.md: linked Go module inventory and attribution bundle must be explicit");
 }
 
 if (failures.length > 0) {

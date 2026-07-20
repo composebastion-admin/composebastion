@@ -64,6 +64,7 @@ RUN set -eux; \
     go version -m /out/docker-compose \
       | awk -F '\t' '$2 == "mod" || $2 == "dep" || $2 == "=>" { print $2 "\t" $3 "\t" $4 "\t" $5 }' \
       | LC_ALL=C sort -u > /out/licenses/go-buildinfo/docker-compose.modules.tsv; \
+    sed -i "s#(devel)#v${COMPOSE_VERSION}#" /out/licenses/go-buildinfo/docker-compose.modules.tsv; \
     cd /go/src/github.com/docker/cli; \
     GO111MODULE=off CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" \
       go list -tags "grpcnotrace osusergo netgo" -deps github.com/docker/cli/cmd/docker \
@@ -115,6 +116,8 @@ COPY --from=docker-tools-builder /out/docker /usr/local/bin/docker
 COPY --from=docker-tools-builder /out/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose
 COPY --from=docker-tools-builder /out/licenses/ /licenses/third-party/
 COPY --from=docker-tools-builder /out/evidence/ /usr/share/composebastion/release-evidence/
+COPY LICENSES/go-modules/ /licenses/third-party/go-modules/
+COPY scripts/go-attribution.mjs /tmp/go-attribution.mjs
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/apps/agent/package.json ./apps/agent/package.json
 COPY --from=build /app/apps/agent/dist ./apps/agent/dist
@@ -135,6 +138,11 @@ RUN set -eux; \
     test -s /licenses/third-party/go-buildinfo/agent.artifacts.sha256; \
     cd /licenses/third-party; \
     sha256sum -c go-buildinfo/agent.artifacts.sha256; \
-    test "$(grep '^github.com/docker/docker/' /usr/share/composebastion/release-evidence/docker-compose-go-dependencies.txt)" = "github.com/docker/docker/pkg/namesgenerator"
+    test "$(grep '^github.com/docker/docker/' /usr/share/composebastion/release-evidence/docker-compose-go-dependencies.txt)" = "github.com/docker/docker/pkg/namesgenerator"; \
+    node /tmp/go-attribution.mjs verify \
+      --manifest /licenses/third-party/go-modules/manifest.json \
+      --inventory docker-cli=/licenses/third-party/go-buildinfo/docker-cli.modules.tsv \
+      --inventory docker-compose=/licenses/third-party/go-buildinfo/docker-compose.modules.tsv; \
+    rm /tmp/go-attribution.mjs
 EXPOSE 8090
 CMD ["node", "apps/agent/dist/server.js"]

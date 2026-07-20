@@ -302,7 +302,7 @@ describe("shared schemas", () => {
       composePath: "docker-compose.yml"
     });
     expect(link.sourceType).toBe("git");
-    expect(appRenameInputSchema.parse({ name: " Rackpad " }).name).toBe("Rackpad");
+    expect(appRenameInputSchema.parse({ name: " Example App " }).name).toBe("Example App");
     expect(() => appRenameInputSchema.parse({ name: "" })).toThrow();
     expect(() => appSourceLinkInputSchema.parse({ sourceType: "git", workingDir: "/srv/app" })).toThrow();
   });

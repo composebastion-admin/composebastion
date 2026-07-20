@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { acceptanceScenarioManifest } from "./scenario-manifest.mjs";
 import { assertSafeTestResultsPath, digestGitBuildContext, materializeGitBuildContext } from "../materialize-git-context.mjs";
+import { validateGoAttributionReview } from "../go-attribution-review.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const resultsDir = assertSafeTestResultsPath({
@@ -41,6 +42,23 @@ const requiredSourceComposeControls = await composeControlNames([
 ]);
 const candidateImage = `composebastion-app:${candidateVersion}`;
 const candidateAgentImage = `composebastion-agent:${candidateVersion}`;
+const goAttributionManifest = JSON.parse(await readFile(path.join(root, "LICENSES/go-modules/manifest.json"), "utf8"));
+function goModuleLegalReviewGate(review) {
+  const validated = validateGoAttributionReview(review);
+  if (validated.status === "pending") {
+    return {
+      id: "go-module-legal-review",
+      status: "manual-required",
+      detail: "Review linked Go module inventories and any additional attribution obligations"
+    };
+  }
+  return {
+    id: "go-module-legal-review",
+    status: "approved",
+    detail: `Approved by ${validated.approvedBy} at ${validated.approvedAt}`
+  };
+}
+const goLegalReviewGate = goModuleLegalReviewGate(goAttributionManifest.review);
 const publicImage = "ghcr.io/composebastion-admin/composebastion-app:1.0.6";
 const keep = process.argv.includes("--keep");
 const skipBuild = process.argv.includes("--skip-build");
@@ -172,8 +190,7 @@ const report = {
     deferredGates: [
       { id: "real-nas", status: "manual-required", detail: "Validate capture, verification, and restore against a real NAS" },
       { id: "real-cloud", status: "manual-required", detail: "Validate capture, verification, and restore against a real cloud/S3 target" },
-      { id: "go-module-legal-review", status: "manual-required", detail: "Review linked Go module inventories and any additional attribution obligations" },
-      { id: "release-governance", status: "external-approval-required", detail: "Verify the second trusted CODEOWNER and protected release governance before rollout" }
+      goLegalReviewGate
     ]
   },
   startedAt: new Date().toISOString(),
@@ -547,6 +564,10 @@ function acceptanceEnv(image = candidateImage, overrides = {}) {
 }
 
 async function api(pathname, { method = "GET", body, cookie = sessionCookie, baseUrl = activeBaseUrl() } = {}) {
+  // The acceptance client only sends fixture data to its isolated loopback
+  // Compose stack. It is never a general-purpose file-to-network transport.
+  const parsedBaseUrl = new URL(baseUrl);
+  assert(["127.0.0.1", "localhost", "[::1]"].includes(parsedBaseUrl.hostname), `acceptance API base URL must be loopback, received ${parsedBaseUrl.hostname}`);
   const headers = { accept: "application/json", origin: baseUrl };
   if (cookie) headers.cookie = cookie;
   if (body !== undefined) headers["content-type"] = "application/json";

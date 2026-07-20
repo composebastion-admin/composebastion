@@ -1,6 +1,6 @@
-# CODEOWNERS keeps review ownership clear if GitHub branch protection enables
-# required code-owner reviews. Keep this single-owner until the project has
-# separate maintainers for API, web, agent, release, or security areas.
+# CODEOWNERS records the sole maintainer for routing and ownership visibility.
+# The main-release-gate does not require an approval or CODEOWNER review because
+# a pull-request author cannot approve their own change.
 
 * @composebastion-admin
 

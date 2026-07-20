@@ -85,8 +85,7 @@ for (const fragment of [
   'repoDigest',
   'real-nas',
   'real-cloud',
-  'go-module-legal-review',
-  'release-governance'
+  'go-module-legal-review'
 ]) {
   if (!runnerSource.includes(fragment)) throw new Error(`Acceptance runner is missing release evidence invariant: ${fragment}`);
 }

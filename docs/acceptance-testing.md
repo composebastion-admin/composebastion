@@ -94,11 +94,11 @@ socket, the runner explicitly bridges restored bind data from the fixture
 container filesystem into the daemon-host bind path before runtime validation;
 real SSH hosts naturally share those filesystems.
 It does not contact a real NAS or cloud account; those remain separately
-recorded manual production-readiness gates. The report also records the pending
-linked-Go-module attribution review and release governance as deferred. The
-legal inventory review, adding/verifying the second trusted CODEOWNER, and
-activating protected release rules are manual or approval-bound work and are
-not implied by a passing automated acceptance result.
+recorded production-approval evidence and do not block homelab publication.
+The report also records the pending linked-Go-module attribution review and
+release governance as deferred. Qualified legal inventory approval and remote
+repository-control verification are approval-bound work and are not implied by
+a passing automated acceptance result.
 
 Fixture secrets are never written to tracked files or reports. Without
 `--keep`, generated keys, registry credentials, and bind data are removed.
