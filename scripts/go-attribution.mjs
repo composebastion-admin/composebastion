@@ -1,8 +1,12 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { validateGoAttributionReview } from "./go-attribution-review.mjs";
+
+const require = createRequire(import.meta.url);
+let parseSpdxExpression;
 
 function fail(message) {
   throw new Error(`Go attribution: ${message}`);
@@ -39,6 +43,16 @@ function validateReview(review) {
     validateGoAttributionReview(review);
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
+  }
+}
+
+function validateSpdxExpression(key, expression) {
+  if (expression === "NOASSERTION") return;
+  try {
+    parseSpdxExpression ??= require("spdx-expression-parse");
+    parseSpdxExpression(expression);
+  } catch (error) {
+    fail(`${key} has invalid SPDX expression ${JSON.stringify(expression)}: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
@@ -182,7 +196,7 @@ and checksum verification are release evidence, not qualified legal approval.
   console.log(`Generated pending Go attribution manifest with ${entries.length} module/version entries.`);
 }
 
-function validateBundle(manifestFile) {
+function validateBundle(manifestFile, { validateSpdxExpressions = false } = {}) {
   const root = path.dirname(manifestFile);
   const manifest = JSON.parse(readFileSync(manifestFile, "utf8"));
   if (manifest.schemaVersion !== 1) fail("manifest schema version is invalid");
@@ -197,6 +211,7 @@ function validateBundle(manifestFile) {
     if (manifest.review.status === "approved" && entry.spdxExpression === "NOASSERTION") {
       fail(`${key} still has NOASSERTION in an approved manifest`);
     }
+    if (validateSpdxExpressions) validateSpdxExpression(key, entry.spdxExpression);
     for (const file of entry.requiredFiles) {
       const resolved = path.resolve(root, file.path);
       if (!resolved.startsWith(`${root}${path.sep}`)) fail(`${key} contains an unsafe attribution path`);
@@ -219,7 +234,7 @@ function validateBundle(manifestFile) {
 
 function checkManifest() {
   const manifestFile = path.resolve(value("--manifest"));
-  const { manifest, entries } = validateBundle(manifestFile);
+  const { manifest, entries } = validateBundle(manifestFile, { validateSpdxExpressions: true });
   if (process.argv.includes("--require-approved") && manifest.review.status !== "approved") {
     fail("stable release requires qualified approval in the attribution manifest");
   }

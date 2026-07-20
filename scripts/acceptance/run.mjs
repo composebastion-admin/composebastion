@@ -1221,7 +1221,7 @@ function disposableComposeYaml() {
     command: ["sh", "-c", "sleep infinity"]
     volumes:
       - workload-data:/data
-      - ${acceptanceBindDir}:/allowed
+      - \${WORKLOAD_BIND_DIR}:/allowed
     networks:
       acceptance-net:
         ipv4_address: ${workloadAddressPrefix}.20
@@ -1244,7 +1244,7 @@ async function deployDisposableStack(host) {
       name: "Acceptance disposable app",
       projectName: workloadProject,
       composeYaml: disposableComposeYaml(),
-      env: `WORKLOAD_DATABASE_PASSWORD=${fixture.workloadPassword}\n`
+      env: `WORKLOAD_DATABASE_PASSWORD=${fixture.workloadPassword}\nWORKLOAD_BIND_DIR=${acceptanceBindDir}\n`
     }
   });
   const stack = response.data.stack;

@@ -77,6 +77,10 @@ jobs:
           fi
           echo "stable=true" >> "${GITHUB_OUTPUT}"
 
+      - name: Install attribution policy dependencies
+        if: steps.stable-tag.outputs.stable == 'true'
+        run: npm ci --ignore-scripts
+
       - name: Require approved Go attribution for stable release
         if: steps.stable-tag.outputs.stable == 'true'
         run: npm run check:go-attribution:release

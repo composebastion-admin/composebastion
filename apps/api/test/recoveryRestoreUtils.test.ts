@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildComposeServiceBindMounts,
   buildCloneRestoreProjectName,
   buildCloneVolumeName,
   buildComposeProjectVolumeName,
@@ -12,6 +13,33 @@ import {
   resolveHostFolderRestorePath,
   shouldRestartSourceAfterFailure
 } from "../src/services/recoveryRestoreUtils.js";
+import type { ContainerManifest } from "../src/services/recoveryManifest.js";
+
+function manifestContainer(input: {
+  id: string;
+  service: string;
+  source: string;
+  destination: string;
+}): ContainerManifest {
+  return {
+    id: input.id,
+    name: input.id,
+    image: "alpine",
+    state: "running",
+    running: true,
+    ports: [],
+    networks: ["bridge"],
+    labels: { "com.docker.compose.service": input.service },
+    restartPolicy: "no",
+    env: [],
+    volumes: [],
+    bindMounts: [{ source: input.source, destination: input.destination, readOnly: false }],
+    entrypoint: [],
+    command: [],
+    user: null,
+    workingDir: null
+  };
+}
 
 describe("recovery restore naming", () => {
   it("builds clone restore project names with short recovery id suffix", () => {
@@ -248,6 +276,77 @@ describe("port conflict behavior", () => {
     expect(result).toContain("name: clone-restore-abc12345_data");
     expect(result).not.toContain("shared-source-data");
     expect(result).not.toContain("external: true");
+  });
+});
+
+describe("destination-aware Compose bind remapping", () => {
+  it("rewrites interpolated, defaulted, relative, and structured bind sources", () => {
+    const yaml = [
+      "services:",
+      "  workload:",
+      "    image: alpine",
+      "    volumes:",
+      "      - '${DATA_DIR}:/data:ro,z'",
+      "      - './cache:/cache'",
+      "      - type: bind",
+      "        source: ${CONFIG_DIR:-/srv/config}",
+      "        target: /config",
+      "        read_only: true",
+      "        bind:",
+      "          create_host_path: false"
+    ].join("\n");
+
+    const result = remapComposeYaml(yaml, {
+      serviceBindMounts: {
+        workload: {
+          "/data": "/var/lib/composebastion/restores/rp-1/data",
+          "/cache": "/var/lib/composebastion/restores/rp-1/cache",
+          "/config": "/var/lib/composebastion/restores/rp-1/config"
+        }
+      }
+    });
+
+    expect(result).toContain("/var/lib/composebastion/restores/rp-1/data:/data:ro,z");
+    expect(result).toContain("/var/lib/composebastion/restores/rp-1/cache:/cache");
+    expect(result).toContain("source: /var/lib/composebastion/restores/rp-1/config");
+    expect(result).toContain("target: /config");
+    expect(result).toContain("read_only: true");
+    expect(result).toContain("create_host_path: false");
+    expect(result).not.toContain("${DATA_DIR}");
+    expect(result).not.toContain("${CONFIG_DIR:-/srv/config}");
+  });
+
+  it("coalesces matching replicas and rejects conflicting restored paths", () => {
+    const replicas = [
+      manifestContainer({ id: "one", service: "workload", source: "/srv/data", destination: "/data" }),
+      manifestContainer({ id: "two", service: "workload", source: "/srv/data", destination: "/data" })
+    ];
+    expect(buildComposeServiceBindMounts(replicas, {
+      "/srv/data": "/var/lib/composebastion/restores/rp-1/data"
+    })).toEqual({
+      workload: { "/data": "/var/lib/composebastion/restores/rp-1/data" }
+    });
+
+    const conflicting = [
+      replicas[0],
+      manifestContainer({ id: "two", service: "workload", source: "/srv/other", destination: "/data" })
+    ];
+    expect(() => buildComposeServiceBindMounts(conflicting, {
+      "/srv/data": "/var/lib/composebastion/restores/rp-1/data",
+      "/srv/other": "/var/lib/composebastion/restores/rp-1/other"
+    })).toThrow("conflicting restored paths");
+  });
+
+  it("fails closed when a required service destination is missing or YAML is invalid", () => {
+    const serviceBindMounts = {
+      workload: { "/data": "/var/lib/composebastion/restores/rp-1/data" }
+    };
+    expect(() => remapComposeYaml("services:\n  workload:\n    image: alpine", {
+      serviceBindMounts
+    })).toThrow("workload:/data");
+    expect(() => remapComposeYaml("services:\n  workload: [", {
+      serviceBindMounts
+    })).toThrow("could not be parsed");
   });
 });
 
