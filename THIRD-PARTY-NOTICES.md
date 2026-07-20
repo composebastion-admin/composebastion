@@ -35,13 +35,15 @@ truth for this status and its approval evidence.
 
 | License | Package entries |
 |---------|-----------------|
-| MIT | 299 |
+| MIT | 300 |
 | Apache-2.0 | 33 |
 | ISC | 21 |
 | BSD-3-Clause | 10 |
 | BlueOak-1.0.0 | 5 |
 | 0BSD | 1 |
+| CC-BY-3.0 | 1 |
 | CC-BY-4.0 | 1 |
+| CC0-1.0 | 1 |
 | MIT-0 | 1 |
 | Unlicense | 1 |
 
@@ -383,6 +385,9 @@ No missing, GPL, AGPL, SSPL, UNKNOWN, or UNLICENSED package entries were found i
 | siginfo | 2.0.0 | ISC | node_modules/siginfo |
 | sonic-boom | 4.2.1 | MIT | node_modules/sonic-boom |
 | source-map-js | 1.2.1 | BSD-3-Clause | node_modules/source-map-js |
+| spdx-exceptions | 2.5.0 | CC-BY-3.0 | node_modules/spdx-exceptions |
+| spdx-expression-parse | 5.0.0 | MIT | node_modules/spdx-expression-parse |
+| spdx-license-ids | 3.0.23 | CC0-1.0 | node_modules/spdx-license-ids |
 | split2 | 4.2.0 | ISC | node_modules/split2 |
 | ssh2 | 1.17.0 | MIT | node_modules/ssh2 |
 | stackback | 0.0.2 | MIT | node_modules/stackback |

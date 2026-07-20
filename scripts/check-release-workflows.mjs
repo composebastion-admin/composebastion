@@ -150,6 +150,7 @@ const publishJobs = publish?.jobs ?? {};
 requireNode24Setup(publishFile, "metadata", publishJobs.metadata);
 const metadataSteps = publishJobs.metadata?.steps ?? [];
 const stableTagStep = metadataSteps.find((step) => step.id === "stable-tag");
+const attributionInstallStep = metadataSteps.find((step) => step.name === "Install attribution policy dependencies");
 const strictAttributionStep = metadataSteps.find((step) => step.name === "Require approved Go attribution for stable release");
 if (!String(stableTagStep?.run ?? "").includes('echo "stable=true" >> "${GITHUB_OUTPUT}"')) {
   fail(`${publishFile}:metadata: stable tag validation must expose a successful stable-tag output`);
@@ -157,6 +158,16 @@ if (!String(stableTagStep?.run ?? "").includes('echo "stable=true" >> "${GITHUB_
 if (String(strictAttributionStep?.if ?? "") !== "steps.stable-tag.outputs.stable == 'true'"
     || String(strictAttributionStep?.run ?? "").trim() !== "npm run check:go-attribution:release") {
   fail(`${publishFile}:metadata: stable vX.Y.Z tags must require approved Go attribution before publication`);
+}
+if (String(attributionInstallStep?.if ?? "") !== "steps.stable-tag.outputs.stable == 'true'"
+    || String(attributionInstallStep?.run ?? "").trim() !== "npm ci --ignore-scripts") {
+  fail(`${publishFile}:metadata: stable tags must install locked attribution policy dependencies`);
+}
+const stableTagIndex = metadataSteps.indexOf(stableTagStep);
+const attributionInstallIndex = metadataSteps.indexOf(attributionInstallStep);
+const strictAttributionIndex = metadataSteps.indexOf(strictAttributionStep);
+if (stableTagIndex < 0 || attributionInstallIndex <= stableTagIndex || strictAttributionIndex <= attributionInstallIndex) {
+  fail(`${publishFile}:metadata: attribution dependencies must be installed after stable-tag validation and before the strict check`);
 }
 const buildScan = publishJobs["build-scan"];
 requireNode24Setup(publishFile, "build-scan", buildScan);
