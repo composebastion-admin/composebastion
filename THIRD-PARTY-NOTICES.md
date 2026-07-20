@@ -49,23 +49,23 @@ No missing, GPL, AGPL, SSPL, UNKNOWN, or UNLICENSED package entries were found i
 
 | Package | Version | License | Lockfile path |
 |---------|---------|---------|---------------|
-| @aws-sdk/checksums | 3.1000.16 | Apache-2.0 | node_modules/@aws-sdk/checksums |
-| @aws-sdk/client-s3 | 3.1085.0 | Apache-2.0 | node_modules/@aws-sdk/client-s3 |
-| @aws-sdk/core | 3.975.1 | Apache-2.0 | node_modules/@aws-sdk/core |
-| @aws-sdk/credential-provider-env | 3.972.57 | Apache-2.0 | node_modules/@aws-sdk/credential-provider-env |
-| @aws-sdk/credential-provider-http | 3.972.59 | Apache-2.0 | node_modules/@aws-sdk/credential-provider-http |
-| @aws-sdk/credential-provider-ini | 3.973.1 | Apache-2.0 | node_modules/@aws-sdk/credential-provider-ini |
-| @aws-sdk/credential-provider-login | 3.972.63 | Apache-2.0 | node_modules/@aws-sdk/credential-provider-login |
-| @aws-sdk/credential-provider-node | 3.972.66 | Apache-2.0 | node_modules/@aws-sdk/credential-provider-node |
-| @aws-sdk/credential-provider-process | 3.972.57 | Apache-2.0 | node_modules/@aws-sdk/credential-provider-process |
-| @aws-sdk/credential-provider-sso | 3.973.1 | Apache-2.0 | node_modules/@aws-sdk/credential-provider-sso |
-| @aws-sdk/credential-provider-web-identity | 3.972.63 | Apache-2.0 | node_modules/@aws-sdk/credential-provider-web-identity |
-| @aws-sdk/middleware-sdk-s3 | 3.972.62 | Apache-2.0 | node_modules/@aws-sdk/middleware-sdk-s3 |
-| @aws-sdk/nested-clients | 3.997.31 | Apache-2.0 | node_modules/@aws-sdk/nested-clients |
-| @aws-sdk/signature-v4-multi-region | 3.996.39 | Apache-2.0 | node_modules/@aws-sdk/signature-v4-multi-region |
-| @aws-sdk/token-providers | 3.1083.0 | Apache-2.0 | node_modules/@aws-sdk/token-providers |
-| @aws-sdk/types | 3.974.0 | Apache-2.0 | node_modules/@aws-sdk/types |
-| @aws-sdk/xml-builder | 3.972.34 | Apache-2.0 | node_modules/@aws-sdk/xml-builder |
+| @aws-sdk/checksums | 3.1000.18 | Apache-2.0 | node_modules/@aws-sdk/checksums |
+| @aws-sdk/client-s3 | 3.1090.0 | Apache-2.0 | node_modules/@aws-sdk/client-s3 |
+| @aws-sdk/core | 3.975.3 | Apache-2.0 | node_modules/@aws-sdk/core |
+| @aws-sdk/credential-provider-env | 3.972.59 | Apache-2.0 | node_modules/@aws-sdk/credential-provider-env |
+| @aws-sdk/credential-provider-http | 3.972.61 | Apache-2.0 | node_modules/@aws-sdk/credential-provider-http |
+| @aws-sdk/credential-provider-ini | 3.973.4 | Apache-2.0 | node_modules/@aws-sdk/credential-provider-ini |
+| @aws-sdk/credential-provider-login | 3.972.66 | Apache-2.0 | node_modules/@aws-sdk/credential-provider-login |
+| @aws-sdk/credential-provider-node | 3.972.70 | Apache-2.0 | node_modules/@aws-sdk/credential-provider-node |
+| @aws-sdk/credential-provider-process | 3.972.59 | Apache-2.0 | node_modules/@aws-sdk/credential-provider-process |
+| @aws-sdk/credential-provider-sso | 3.973.3 | Apache-2.0 | node_modules/@aws-sdk/credential-provider-sso |
+| @aws-sdk/credential-provider-web-identity | 3.972.65 | Apache-2.0 | node_modules/@aws-sdk/credential-provider-web-identity |
+| @aws-sdk/middleware-sdk-s3 | 3.972.64 | Apache-2.0 | node_modules/@aws-sdk/middleware-sdk-s3 |
+| @aws-sdk/nested-clients | 3.997.33 | Apache-2.0 | node_modules/@aws-sdk/nested-clients |
+| @aws-sdk/signature-v4-multi-region | 3.996.41 | Apache-2.0 | node_modules/@aws-sdk/signature-v4-multi-region |
+| @aws-sdk/token-providers | 3.1088.0 | Apache-2.0 | node_modules/@aws-sdk/token-providers |
+| @aws-sdk/types | 3.974.2 | Apache-2.0 | node_modules/@aws-sdk/types |
+| @aws-sdk/xml-builder | 3.972.36 | Apache-2.0 | node_modules/@aws-sdk/xml-builder |
 | @aws/lambda-invoke-store | 0.3.0 | Apache-2.0 | node_modules/@aws/lambda-invoke-store |
 | @babel/code-frame | 7.29.7 | MIT | node_modules/@babel/code-frame |
 | @babel/compat-data | 7.29.7 | MIT | node_modules/@babel/compat-data |
@@ -141,7 +141,7 @@ No missing, GPL, AGPL, SSPL, UNKNOWN, or UNLICENSED package entries were found i
 | @esbuild/win32-x64 | 0.28.1 | MIT | node_modules/tsx/node_modules/@esbuild/win32-x64 |
 | @fastify/accept-negotiator | 2.0.1 | MIT | node_modules/@fastify/accept-negotiator |
 | @fastify/ajv-compiler | 4.0.5 | MIT | node_modules/@fastify/ajv-compiler |
-| @fastify/cookie | 11.1.1 | MIT | node_modules/@fastify/cookie |
+| @fastify/cookie | 11.1.2 | MIT | node_modules/@fastify/cookie |
 | @fastify/cors | 10.1.0 | MIT | node_modules/@fastify/cors |
 | @fastify/error | 4.2.0 | MIT | node_modules/@fastify/error |
 | @fastify/fast-json-stringify-compiler | 5.1.0 | MIT | node_modules/@fastify/fast-json-stringify-compiler |
@@ -188,11 +188,11 @@ No missing, GPL, AGPL, SSPL, UNKNOWN, or UNLICENSED package entries were found i
 | @rollup/rollup-win32-ia32-msvc | 4.62.2 | MIT | node_modules/@rollup/rollup-win32-ia32-msvc |
 | @rollup/rollup-win32-x64-gnu | 4.62.2 | MIT | node_modules/@rollup/rollup-win32-x64-gnu |
 | @rollup/rollup-win32-x64-msvc | 4.62.2 | MIT | node_modules/@rollup/rollup-win32-x64-msvc |
-| @smithy/core | 3.29.3 | Apache-2.0 | node_modules/@smithy/core |
-| @smithy/credential-provider-imds | 4.4.8 | Apache-2.0 | node_modules/@smithy/credential-provider-imds |
-| @smithy/fetch-http-handler | 5.6.5 | Apache-2.0 | node_modules/@smithy/fetch-http-handler |
-| @smithy/node-http-handler | 4.9.5 | Apache-2.0 | node_modules/@smithy/node-http-handler |
-| @smithy/signature-v4 | 5.6.4 | Apache-2.0 | node_modules/@smithy/signature-v4 |
+| @smithy/core | 3.29.5 | Apache-2.0 | node_modules/@smithy/core |
+| @smithy/credential-provider-imds | 4.4.10 | Apache-2.0 | node_modules/@smithy/credential-provider-imds |
+| @smithy/fetch-http-handler | 5.6.7 | Apache-2.0 | node_modules/@smithy/fetch-http-handler |
+| @smithy/node-http-handler | 4.9.7 | Apache-2.0 | node_modules/@smithy/node-http-handler |
+| @smithy/signature-v4 | 5.6.6 | Apache-2.0 | node_modules/@smithy/signature-v4 |
 | @smithy/types | 4.16.1 | Apache-2.0 | node_modules/@smithy/types |
 | @standard-schema/spec | 1.1.0 | MIT | node_modules/@standard-schema/spec |
 | @types/babel__core | 7.20.5 | MIT | node_modules/@types/babel__core |
@@ -306,7 +306,7 @@ No missing, GPL, AGPL, SSPL, UNKNOWN, or UNLICENSED package entries were found i
 | light-my-request | 6.6.0 | BSD-3-Clause | node_modules/light-my-request |
 | lru-cache | 11.5.2 | BlueOak-1.0.0 | node_modules/path-scurry/node_modules/lru-cache |
 | lru-cache | 5.1.1 | ISC | node_modules/lru-cache |
-| lucide-react | 1.24.0 | ISC | node_modules/lucide-react |
+| lucide-react | 1.25.0 | ISC | node_modules/lucide-react |
 | magic-string | 0.30.21 | MIT | node_modules/magic-string |
 | magicast | 0.5.3 | MIT | node_modules/magicast |
 | make-dir | 4.0.0 | MIT | node_modules/make-dir |
@@ -400,7 +400,7 @@ No missing, GPL, AGPL, SSPL, UNKNOWN, or UNLICENSED package entries were found i
 | toidentifier | 1.0.1 | MIT | node_modules/toidentifier |
 | tree-kill | 1.2.2 | MIT | node_modules/tree-kill |
 | tslib | 2.8.1 | 0BSD | node_modules/tslib |
-| tsx | 4.23.0 | MIT | node_modules/tsx |
+| tsx | 4.23.1 | MIT | node_modules/tsx |
 | tweetnacl | 0.14.5 | Unlicense | node_modules/tweetnacl |
 | typescript | 5.9.3 | Apache-2.0 | node_modules/typescript |
 | undici-types | 5.26.5 | MIT | node_modules/@types/ssh2/node_modules/undici-types |

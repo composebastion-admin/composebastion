@@ -20,6 +20,9 @@ updates:
       - dependency-name: "@types/node"
         versions:
           - ">=25"
+      - dependency-name: "@xterm/addon-fit"
+        versions:
+          - ">=0.11"
 
   - package-ecosystem: "github-actions"
     directory: "/"
