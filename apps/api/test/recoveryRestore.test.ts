@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildCloneContainerName,
-  buildCloneRestoreProjectName
+  buildCloneRestoreProjectName,
+  buildManagedRestoreBindPath
 } from "../src/services/recoveryRestoreUtils.js";
 
 const query = vi.fn();
@@ -97,6 +98,36 @@ const composeArtifactRow = {
   status: "completed",
   error: null,
   metadata: { projectName: "demoapp" },
+  created_at: now,
+  completed_at: now
+};
+
+const hostFolderArtifactRow = {
+  id: "00000000-0000-4000-8000-000000000008",
+  recovery_point_id: recoveryPointId,
+  kind: "host_folder",
+  backup_target_id: null,
+  storage_key: "host-folders/config.tar.gz",
+  size_bytes: 24,
+  checksum: "sha256:host-folder",
+  status: "completed",
+  error: null,
+  metadata: { sourcePath: "/srv/app/config" },
+  created_at: now,
+  completed_at: now
+};
+
+const envArtifactRow = {
+  id: "00000000-0000-4000-8000-000000000009",
+  recovery_point_id: recoveryPointId,
+  kind: "env_file",
+  backup_target_id: null,
+  storage_key: ".env",
+  size_bytes: 64,
+  checksum: "sha256:env",
+  status: "completed",
+  error: null,
+  metadata: {},
   created_at: now,
   completed_at: now
 };
@@ -299,25 +330,33 @@ describe("recovery standalone restore cleanup", () => {
     const composeManifest = {
       ...manifest,
       appIdentity: { kind: "compose" as const, projectName: "demoapp" },
+      containers: [{
+        ...manifest.containers[0],
+        labels: { "com.docker.compose.service": "demoapp" },
+        bindMounts: [{ source: "/srv/app/config", destination: "/app/config", readOnly: true }]
+      }],
       compose: {
         projectName: "demoapp",
         stackId: null,
         workingDir: "/home/docker/DemoApp",
         composePath: "docker-compose.release.yml",
-        yaml: "services:\n  demoapp:\n    image: ghcr.io/composebastion-admin/demo-app:beta\n    volumes:\n      - data:/app/data\nvolumes:\n  data:\n",
-        env: ""
+        yaml: "services:\n  demoapp:\n    image: ghcr.io/composebastion-admin/demo-app:beta\n    volumes:\n      - data:/app/data\n      - ${DATA_DIR}:/app/config:ro\nvolumes:\n  data:\n",
+        env: "DATA_DIR=/srv/app/config\nUNRELATED_SETTING=retained\n"
       }
     };
     query.mockImplementation(async (sql: string) => {
       if (sql.includes("SELECT * FROM recovery_points")) {
         return { rows: [{ ...recoveryPointRow, metadata: { projectName: "demoapp" } }] };
       }
-      if (sql.includes("SELECT * FROM recovery_artifacts")) return { rows: [metadataArtifactRow, composeArtifactRow, demoappVolumeArtifactRow] };
+      if (sql.includes("SELECT * FROM recovery_artifacts")) {
+        return { rows: [metadataArtifactRow, composeArtifactRow, envArtifactRow, demoappVolumeArtifactRow, hostFolderArtifactRow] };
+      }
       return { rows: [] };
     });
     readRecoveryArtifact.mockImplementation(async (_point: unknown, artifact: { kind: string }) => {
       if (artifact.kind === "metadata") return Buffer.from(JSON.stringify(composeManifest));
       if (artifact.kind === "compose_yaml") return Buffer.from(String(composeManifest.compose.yaml));
+      if (artifact.kind === "env_file") return Buffer.from(String(composeManifest.compose.env));
       return Buffer.from("");
     });
     runSshCommand.mockImplementation(async (_ssh: unknown, command: string) => {
@@ -339,6 +378,7 @@ describe("recovery standalone restore cleanup", () => {
     });
 
     expect(result.composeRestored).toBe(true);
+    expect(result.restoredBindMounts).toBe(1);
     expect(result.volumeMap.demoapp_data).toBe(restoredDemoAppData);
     expect(pipeFileToSshCommand).toHaveBeenCalledWith(
       expect.anything(),
@@ -354,6 +394,26 @@ describe("recovery standalone restore cleanup", () => {
       expect.anything(),
       "/home/docker/DemoApp/docker-compose.release.yml",
       expect.stringContaining(`name: ${restoredDemoAppData}`)
+    );
+    const restoredBindPath = buildManagedRestoreBindPath(
+      "/var/lib/composebastion/restores",
+      recoveryPointId,
+      "/srv/app/config"
+    );
+    expect(writeRemoteFile).toHaveBeenCalledWith(
+      expect.anything(),
+      "/home/docker/DemoApp/docker-compose.release.yml",
+      expect.stringContaining(`${restoredBindPath}:/app/config:ro`)
+    );
+    expect(writeRemoteFile).not.toHaveBeenCalledWith(
+      expect.anything(),
+      "/home/docker/DemoApp/docker-compose.release.yml",
+      expect.stringContaining("${DATA_DIR}:/app/config")
+    );
+    expect(writeRemoteFile).toHaveBeenCalledWith(
+      expect.anything(),
+      "/home/docker/DemoApp/.env",
+      "DATA_DIR=/srv/app/config\nUNRELATED_SETTING=retained\n"
     );
     const commands = runSshCommand.mock.calls.map((call) => String(call[1]));
     expect(commands.some((command) => command.includes("cd '/home/docker/DemoApp'"))).toBe(true);
