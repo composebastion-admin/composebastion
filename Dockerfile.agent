@@ -118,6 +118,7 @@ COPY --from=docker-tools-builder /out/licenses/ /licenses/third-party/
 COPY --from=docker-tools-builder /out/evidence/ /usr/share/composebastion/release-evidence/
 COPY LICENSES/go-modules/ /licenses/third-party/go-modules/
 COPY scripts/go-attribution.mjs /tmp/go-attribution.mjs
+COPY scripts/go-attribution-review.mjs /tmp/go-attribution-review.mjs
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/apps/agent/package.json ./apps/agent/package.json
 COPY --from=build /app/apps/agent/dist ./apps/agent/dist
@@ -143,6 +144,6 @@ RUN set -eux; \
       --manifest /licenses/third-party/go-modules/manifest.json \
       --inventory docker-cli=/licenses/third-party/go-buildinfo/docker-cli.modules.tsv \
       --inventory docker-compose=/licenses/third-party/go-buildinfo/docker-compose.modules.tsv; \
-    rm /tmp/go-attribution.mjs
+    rm /tmp/go-attribution.mjs /tmp/go-attribution-review.mjs
 EXPOSE 8090
 CMD ["node", "apps/agent/dist/server.js"]
