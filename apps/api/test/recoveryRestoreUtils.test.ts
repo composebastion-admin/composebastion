@@ -150,6 +150,33 @@ describe("port conflict behavior", () => {
     expect(result).toContain("ipv4_address: 172.28.0.10");
   });
 
+  it("remaps Docker Desktop bind aliases back to their managed restore paths", () => {
+    const yaml = [
+      "services:",
+      "  short:",
+      "    image: alpine",
+      "    volumes:",
+      "      - /tmp/composebastion-data:/data",
+      "  structured:",
+      "    image: alpine",
+      "    volumes:",
+      "      - type: bind",
+      "        source: /private/tmp/composebastion-data",
+      "        target: /data"
+    ].join("\n");
+    const restoredPath = "/var/lib/composebastion/restores/rp-1/host_mnt_private_tmp_composebastion-data";
+
+    const result = remapComposeYaml(yaml, {
+      bindMounts: {
+        "/host_mnt/private/tmp/composebastion-data": restoredPath
+      }
+    });
+
+    expect(result.match(new RegExp(restoredPath, "g"))).toHaveLength(2);
+    expect(result).not.toContain("/tmp/composebastion-data:/data");
+    expect(result).not.toContain("source: /private/tmp/composebastion-data");
+  });
+
   it("drops overlapping IPAM and static addresses for same-host clone networks", () => {
     const yaml = [
       "services:",

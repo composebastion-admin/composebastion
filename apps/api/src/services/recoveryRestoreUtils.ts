@@ -280,11 +280,26 @@ function getMapValue(map: YAMLMap, key: string) {
   return map.get(key, true);
 }
 
+function bindMountReplacement(source: string, bindMounts: Record<string, string>) {
+  const exact = bindMounts[source];
+  if (exact) return exact;
+
+  for (const [inspectedSource, replacement] of Object.entries(bindMounts)) {
+    if (!inspectedSource.startsWith("/host_mnt/")) continue;
+    const hostPath = inspectedSource.slice("/host_mnt".length);
+    if (source === hostPath) return replacement;
+    if (hostPath.startsWith("/private/") && source === hostPath.slice("/private".length)) {
+      return replacement;
+    }
+  }
+  return undefined;
+}
+
 function remapVolumeString(value: string, mappings: { volumes: Record<string, string>; bindMounts: Record<string, string> }) {
   const parts = value.split(":");
   if (parts.length < 2) return value;
   const source = parts[0] ?? "";
-  const replacement = mappings.bindMounts[source] ?? mappings.volumes[source];
+  const replacement = bindMountReplacement(source, mappings.bindMounts) ?? mappings.volumes[source];
   return replacement ? [replacement, ...parts.slice(1)].join(":") : value;
 }
 
@@ -347,7 +362,7 @@ export function remapComposeYaml(
             if (!isMap(item)) continue;
             const source = getMapValue(item, "source");
             const sourceValue = scalarString(source);
-            const replacement = sourceValue ? bindMounts[sourceValue] : null;
+            const replacement = sourceValue ? bindMountReplacement(sourceValue, bindMounts) : null;
             if (replacement) setScalarString(source, replacement);
           }
         }
