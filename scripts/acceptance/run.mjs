@@ -1272,18 +1272,27 @@ docker network inspect '${workloadProject}_acceptance-net' >/dev/null
 set -eu
 workload_id="$(docker ps -q --filter 'label=com.docker.compose.project=${workloadProject}' --filter 'label=com.docker.compose.service=workload')"
 database_id="$(docker ps -q --filter 'label=com.docker.compose.project=${workloadProject}' --filter 'label=com.docker.compose.service=database')"
+bind_source="$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/allowed"}}{{.Source}}{{end}}{{end}}' "$workload_id")"
+test -n "$bind_source"
+mkdir -p "$bind_source"
 docker exec "$workload_id" sh -c "printf '%s' '${workloadVolumeMarker}' > /data/proof.txt"
-printf '%s' '${workloadBindMarker}' > '${acceptanceBindDir}/proof.txt'
+printf '%s' '${workloadBindMarker}' > "$bind_source/proof.txt"
 docker exec "$database_id" psql -U postgres -v ON_ERROR_STOP=1 -c "CREATE TABLE IF NOT EXISTS acceptance_proof (id integer PRIMARY KEY, value text NOT NULL); INSERT INTO acceptance_proof (id, value) VALUES (1, 'database-ok') ON CONFLICT (id) DO UPDATE SET value = EXCLUDED.value;" >/dev/null
+printf 'ACCEPTANCE_BIND_SOURCE=%s\n' "$bind_source"
 `;
-  await compose(activeProject, activeEnv, ["exec", "-T", "sshhost", "sh", "-lc", seedRuntime]);
+  const seeded = await compose(activeProject, activeEnv, ["exec", "-T", "sshhost", "sh", "-lc", seedRuntime]);
+  const bindSourcePath = seeded.stdout
+    .split(/\r?\n/)
+    .find((line) => line.startsWith("ACCEPTANCE_BIND_SOURCE="))
+    ?.slice("ACCEPTANCE_BIND_SOURCE=".length);
+  assert(/^\/[A-Za-z0-9._/-]+$/.test(bindSourcePath ?? ""), `Docker reported an unsafe acceptance bind source: ${JSON.stringify(bindSourcePath)}`);
 
   const verifyRuntime = `
 set -eu
 workload_id="$(docker ps -q --filter 'label=com.docker.compose.project=${workloadProject}' --filter 'label=com.docker.compose.service=workload')"
 database_id="$(docker ps -q --filter 'label=com.docker.compose.project=${workloadProject}' --filter 'label=com.docker.compose.service=database')"
 test "$(docker exec "$workload_id" cat /data/proof.txt)" = '${workloadVolumeMarker}'
-test "$(cat '${acceptanceBindDir}/proof.txt')" = '${workloadBindMarker}'
+test "$(cat '${bindSourcePath}/proof.txt')" = '${workloadBindMarker}'
 test "$(docker exec "$database_id" psql -U postgres -Atc 'SELECT value FROM acceptance_proof WHERE id = 1')" = database-ok
 test "$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$workload_id")" = '${workloadAddressPrefix}.20'
 test "$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$database_id")" = '${workloadAddressPrefix}.10'
@@ -1306,7 +1315,8 @@ docker network inspect '${workloadProject}_acceptance-net' >/dev/null
       staticAddresses: true,
       volumeMarker: workloadVolumeMarker,
       volumeMarkerSeededAfterDeploy: true,
-      bindMarker: workloadBindMarker
+      bindMarker: workloadBindMarker,
+      bindSourcePath
     }
   };
 }
@@ -1362,8 +1372,10 @@ async function createAndTestTargets() {
 async function exerciseRecovery(host, stack, targets) {
   const expectedVolumeMarker = stack.acceptanceEvidence?.volumeMarker;
   const expectedBindMarker = stack.acceptanceEvidence?.bindMarker;
+  const expectedBindSourcePath = stack.acceptanceEvidence?.bindSourcePath;
   assert(/^volume-[0-9a-f-]{36}$/.test(expectedVolumeMarker ?? ""), "workload volume marker is missing or invalid");
   assert(/^bind-[0-9a-f-]{36}$/.test(expectedBindMarker ?? ""), "workload bind marker is missing or invalid");
+  assert(/^\/[A-Za-z0-9._/-]+$/.test(expectedBindSourcePath ?? ""), "workload bind source path is missing or invalid");
   const created = await api("/api/recovery/points", {
     method: "POST",
     body: {
@@ -1453,7 +1465,7 @@ async function exerciseRecovery(host, stack, targets) {
   const sourceDatabaseVolume = `${workloadProject}_database-data`;
   const restoredWorkloadVolume = restoreJob.result.volumeMap?.[sourceWorkloadVolume];
   const restoredDatabaseVolume = restoreJob.result.volumeMap?.[sourceDatabaseVolume];
-  const restoredBindPath = restoreJob.result.bindMap?.[acceptanceBindDir];
+  const restoredBindPath = restoreJob.result.bindMap?.[expectedBindSourcePath];
   const sourceNetwork = `${workloadProject}_acceptance-net`;
   const restoredNetwork = restoreJob.result.networkMap?.[sourceNetwork]
     ?? restoreJob.result.networkMap?.["acceptance-net"];
