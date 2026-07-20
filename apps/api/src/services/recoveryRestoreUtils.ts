@@ -19,7 +19,7 @@ export type PortConflict = {
   reason: string;
 };
 
-export type ComposeServiceBindMounts = Record<string, Record<string, string>>;
+export type ComposeServiceBindMounts = Map<string, Map<string, string>>;
 
 export function shortRestoreId(recoveryPointId: string) {
   return recoveryPointId.replace(/-/g, "").slice(0, 8);
@@ -365,24 +365,39 @@ export function buildComposeServiceBindMounts(
   containers: ContainerManifest[],
   bindMounts: Record<string, string>
 ): ComposeServiceBindMounts {
-  const result: ComposeServiceBindMounts = {};
+  const result: ComposeServiceBindMounts = new Map();
   for (const container of containers) {
     const serviceName = container.labels["com.docker.compose.service"]?.trim();
-    if (!serviceName) continue;
     for (const bind of container.bindMounts) {
-      const replacement = resolveRestoredBindMountPath(bind.source, bindMounts);
-      if (!replacement) continue;
-      if (!bind.destination) {
-        throw new Error(`Cannot safely remap restored bind mount for Compose service ${serviceName}: the inspected destination is empty.`);
+      const containerIdentity = container.name || container.id || "<unknown>";
+      if (!serviceName) {
+        throw new Error(
+          `Cannot safely remap restored bind mount for container ${containerIdentity} from ${bind.source}: the com.docker.compose.service label is missing or blank.`
+        );
       }
-      const serviceMounts = result[serviceName] ??= {};
-      const existing = serviceMounts[bind.destination];
+      if (!bind.destination) {
+        throw new Error(
+          `Cannot safely remap restored bind mount for container ${containerIdentity} from ${bind.source}: the inspected destination is empty.`
+        );
+      }
+      const replacement = resolveRestoredBindMountPath(bind.source, bindMounts);
+      if (!replacement) {
+        throw new Error(
+          `Cannot safely remap restored bind mount for container ${containerIdentity} from ${bind.source} to ${bind.destination}: no completed restored host-folder artifact covers the inspected source.`
+        );
+      }
+      let serviceMounts = result.get(serviceName);
+      if (!serviceMounts) {
+        serviceMounts = new Map();
+        result.set(serviceName, serviceMounts);
+      }
+      const existing = serviceMounts.get(bind.destination);
       if (existing && existing !== replacement) {
         throw new Error(
           `Cannot safely remap restored bind mount for Compose service ${serviceName} at ${bind.destination}: replicas resolved to conflicting restored paths.`
         );
       }
-      serviceMounts[bind.destination] = replacement;
+      serviceMounts.set(bind.destination, replacement);
     }
   }
   return result;
@@ -396,19 +411,19 @@ function remapVolumeString(value: string, mappings: { volumes: Record<string, st
   return replacement ? [replacement, ...parts.slice(1)].join(":") : value;
 }
 
-function remapServiceBindVolumeString(value: string, bindMounts: Record<string, string>) {
-  const destinations = Object.keys(bindMounts).sort((left, right) => right.length - left.length);
+function remapServiceBindVolumeString(value: string, bindMounts: Map<string, string>) {
+  const destinations = [...bindMounts.keys()].sort((left, right) => right.length - left.length);
   for (const destination of destinations) {
     const marker = `:${destination}`;
     if (value.endsWith(marker)) {
-      return { value: `${bindMounts[destination]}${marker}`, destination };
+      return { value: `${bindMounts.get(destination)}${marker}`, destination };
     }
     const markerWithMode = `${marker}:`;
     const markerIndex = value.lastIndexOf(markerWithMode);
     if (markerIndex > 0) {
       const mode = value.slice(markerIndex + markerWithMode.length);
       if (mode && !mode.includes(":")) {
-        return { value: `${bindMounts[destination]}${value.slice(markerIndex)}`, destination };
+        return { value: `${bindMounts.get(destination)}${value.slice(markerIndex)}`, destination };
       }
     }
   }
@@ -460,14 +475,14 @@ export function remapComposeYaml(
 ) {
   const volumes = mappings.volumes ?? {};
   const bindMounts = mappings.bindMounts ?? {};
-  const serviceBindMounts = mappings.serviceBindMounts ?? {};
+  const serviceBindMounts = mappings.serviceBindMounts ?? new Map();
   const portRemap = mappings.portRemap ?? {};
   const networks = mappings.networks ?? {};
   const resetNetworkAddressing = mappings.resetNetworkAddressing ?? false;
   if (
     !Object.keys(volumes).length &&
     !Object.keys(bindMounts).length &&
-    !Object.keys(serviceBindMounts).length &&
+    !serviceBindMounts.size &&
     !Object.keys(portRemap).length &&
     !Object.keys(networks).length &&
     !resetNetworkAddressing
@@ -480,7 +495,7 @@ export function remapComposeYaml(
     document = parseDocument(yaml, { keepSourceTokens: true });
     if (document.errors.length) throw document.errors[0];
   } catch (error) {
-    if (Object.keys(serviceBindMounts).length) {
+    if (serviceBindMounts.size) {
       throw new Error(
         `Cannot safely remap restored Compose bind mounts because the Compose YAML could not be parsed: ${error instanceof Error ? error.message : String(error)}`
       );
@@ -489,8 +504,8 @@ export function remapComposeYaml(
   }
 
   const requiredServiceBindMounts = new Set(
-    Object.entries(serviceBindMounts).flatMap(([serviceName, destinations]) =>
-      Object.keys(destinations).map((destination) => `${serviceName}\u0000${destination}`)
+    [...serviceBindMounts.entries()].flatMap(([serviceName, destinations]) =>
+      [...destinations.keys()].map((destination) => `${serviceName}\u0000${destination}`)
     )
   );
   const remappedServiceBindMounts = new Set<string>();
@@ -503,7 +518,7 @@ export function remapComposeYaml(
       for (const service of services.items) {
         if (!isMap(service.value)) continue;
         const serviceName = isScalar(service.key) ? String(service.key.value ?? "") : "";
-        const destinationBindMounts = serviceBindMounts[serviceName] ?? {};
+        const destinationBindMounts = serviceBindMounts.get(serviceName) ?? new Map();
         const serviceVolumes = getMapValue(service.value, "volumes");
         if (isSeq(serviceVolumes)) {
           for (const item of serviceVolumes.items) {
@@ -525,9 +540,15 @@ export function remapComposeYaml(
             const source = getMapValue(item, "source");
             const sourceValue = scalarString(source);
             const targetValue = scalarString(getMapValue(item, "target"));
-            const destinationReplacement = targetValue ? destinationBindMounts[targetValue] : undefined;
-            const replacement = destinationReplacement
-              ?? (sourceValue ? resolveRestoredBindMountPath(sourceValue, bindMounts) : null);
+            const mountTypeNode = getMapValue(item, "type");
+            const mountType = scalarString(mountTypeNode);
+            const explicitNonBind = mountTypeNode !== undefined && mountType !== "bind";
+            const destinationReplacement = !explicitNonBind && targetValue
+              ? destinationBindMounts.get(targetValue)
+              : undefined;
+            const replacement = explicitNonBind
+              ? null
+              : destinationReplacement ?? (sourceValue ? resolveRestoredBindMountPath(sourceValue, bindMounts) : null);
             if (replacement && isScalar(source)) setScalarString(source, replacement);
             if (destinationReplacement && targetValue && isScalar(source)) {
               remappedServiceBindMounts.add(`${serviceName}\u0000${targetValue}`);

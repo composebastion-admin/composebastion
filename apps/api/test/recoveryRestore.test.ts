@@ -450,4 +450,55 @@ describe("recovery standalone restore cleanup", () => {
     expect(commands.some((command) => command.includes(`cd '${restoredWorkingDirectory}'`))).toBe(true);
     expect(commands.some((command) => command.includes("cd '/home/docker/DemoApp'"))).toBe(false);
   });
+
+  it("fails a Compose restore when an inspected bind has no completed host-folder artifact", async () => {
+    const composeManifest = {
+      ...manifest,
+      appIdentity: { kind: "compose" as const, projectName: "demoapp" },
+      containers: [{
+        ...manifest.containers[0],
+        labels: { "com.docker.compose.service": "demoapp" },
+        bindMounts: [{ source: "/srv/app/config", destination: "/app/config", readOnly: true }]
+      }],
+      compose: {
+        projectName: "demoapp",
+        stackId: null,
+        workingDir: null,
+        composePath: "compose.yml",
+        yaml: "services:\n  demoapp:\n    image: alpine\n    volumes:\n      - ${DATA_DIR}:/app/config:ro\n",
+        env: "DATA_DIR=/srv/app/config\n"
+      }
+    };
+    query.mockImplementation(async (sql: string) => {
+      if (sql.includes("SELECT * FROM recovery_points")) {
+        return { rows: [{ ...recoveryPointRow, metadata: { projectName: "demoapp" } }] };
+      }
+      if (sql.includes("SELECT * FROM recovery_artifacts")) {
+        return { rows: [
+          metadataArtifactRow,
+          composeArtifactRow,
+          { ...hostFolderArtifactRow, status: "failed", error: "capture failed", completed_at: null }
+        ] };
+      }
+      return { rows: [] };
+    });
+    readRecoveryArtifact.mockImplementation(async (_point: unknown, artifact: { kind: string }) => {
+      if (artifact.kind === "metadata") return Buffer.from(JSON.stringify(composeManifest));
+      if (artifact.kind === "compose_yaml") return Buffer.from(String(composeManifest.compose.yaml));
+      return Buffer.from("");
+    });
+    runSshCommand.mockImplementation(async (_ssh: unknown, command: string) => {
+      if (command.includes("docker ps --format")) return { code: 0, stdout: "", stderr: "" };
+      return { code: 1, stdout: "", stderr: `unexpected command: ${command}` };
+    });
+
+    const { runRecoveryRestore } = await import("../src/services/recoveryRestore.js");
+    await expect(runRecoveryRestore(hostId, {
+      recoveryPointId,
+      targetHostId: hostId,
+      options: { mode: "clone", remapPorts: true }
+    })).rejects.toThrow("no completed restored host-folder artifact covers the inspected source");
+    expect(pipeFileToSshCommand).not.toHaveBeenCalled();
+    expect(writeRemoteFile).not.toHaveBeenCalled();
+  });
 });

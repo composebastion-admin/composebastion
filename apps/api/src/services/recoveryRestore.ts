@@ -496,7 +496,7 @@ export async function runRecoveryRestore(hostId: string, input: RecoveryRestoreR
   composeYaml = remapComposeYaml(composeYaml, {
     volumes: volumeMap,
     bindMounts: bindMap,
-    serviceBindMounts: manifest ? buildComposeServiceBindMounts(manifest.containers, bindMap) : {},
+    serviceBindMounts: manifest ? buildComposeServiceBindMounts(manifest.containers, bindMap) : new Map(),
     portRemap,
     networks: networkMap,
     resetNetworkAddressing: networkMode === "clone"
