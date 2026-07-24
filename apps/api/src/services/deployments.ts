@@ -420,7 +420,7 @@ function referencedImages(services: ServiceSummary[]) {
 }
 
 function normalizedGitUrl(value: string) {
-  return value.trim().replace(/\.git$/i, "").replace(/\/$/, "").toLowerCase();
+  return value.trim().replace(/\/$/, "").replace(/\.git$/i, "").toLowerCase();
 }
 
 async function gitCredentialEnvironment(
@@ -827,6 +827,7 @@ async function analyzeCompose(row: any, sourceType: "compose_url" | "compose_upl
 }
 
 function imageAuthority(image: string) {
+  if (!image.includes("/")) return null;
   const first = image.split("/")[0] ?? "";
   return first.includes(".") || first.includes(":") || first === "localhost" ? first : null;
 }
@@ -1819,6 +1820,35 @@ export function mergeDockerDaemonRegistryTrust(
     "insecure-registries": Array.from(new Set([...existing, registry])).sort()
   };
 }
+
+export const deploymentAnalysisInternals = {
+  iso,
+  jsonValue,
+  mapSource,
+  mapAnalysis,
+  projectName,
+  displayName,
+  sourceBasename,
+  isYamlText,
+  isGitLikeUrl,
+  homeDeploymentRoot,
+  scalar,
+  summarizedPort,
+  summarizeCompose,
+  parseEnvText,
+  rawEnvValues,
+  serializeEnv,
+  sanitizeEnvForResponse,
+  mergeStoredAnalysisEnv,
+  mergeRequestedEnv,
+  variablesToEnv,
+  referencedImages,
+  normalizedGitUrl,
+  imageAuthority,
+  parseImageInspect,
+  declaredHostPort,
+  dockerRegistryTrust
+};
 
 export async function configureRegistryTrust(hostId: string, registry: string) {
   const before = await checkRegistryTrust(hostId, registry, true);
