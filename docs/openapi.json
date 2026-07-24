@@ -3292,6 +3292,585 @@
           }
         }
       },
+      "DeploymentSource": {
+        "type": "object",
+        "required": [
+          "id",
+          "sourceType",
+          "name",
+          "sourceLocator",
+          "branch",
+          "composePath",
+          "workingDir",
+          "projectName",
+          "defaultHostId",
+          "targetHostIds",
+          "safeEnvironment",
+          "hasCredential",
+          "metadata",
+          "lastDeployedAt",
+          "createdAt",
+          "updatedAt"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sourceType": {
+            "type": "string",
+            "enum": [
+              "git",
+              "compose_url",
+              "compose_upload",
+              "image"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "sourceLocator": {
+            "type": "string"
+          },
+          "branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "composePath": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workingDir": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "projectName": {
+            "type": "string"
+          },
+          "defaultHostId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "targetHostIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "safeEnvironment": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "hasCredential": {
+            "type": "boolean"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "lastDeployedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "DeploymentSourceResponse": {
+        "type": "object",
+        "required": [
+          "source"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/DeploymentSource"
+          }
+        }
+      },
+      "DeploymentSourcesResponse": {
+        "type": "object",
+        "required": [
+          "sources"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeploymentSource"
+            }
+          }
+        }
+      },
+      "DeploymentAnalysis": {
+        "type": "object",
+        "required": [
+          "id",
+          "hostId",
+          "sourceId",
+          "sourceType",
+          "sourceInput",
+          "status",
+          "env",
+          "summary",
+          "variables",
+          "warnings",
+          "blockers",
+          "registryIssues",
+          "expiresAt",
+          "createdAt",
+          "updatedAt"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "hostId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sourceId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sourceType": {
+            "type": "string",
+            "enum": [
+              "git",
+              "compose_url",
+              "compose_upload",
+              "image"
+            ]
+          },
+          "sourceInput": {
+            "type": "string"
+          },
+          "sourceLocator": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "analyzing",
+              "ready",
+              "deploying",
+              "deployed",
+              "failed",
+              "expired"
+            ]
+          },
+          "displayName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "projectName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "composePath": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workingDir": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "composeYaml": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "env": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "variables": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "blockers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "registryIssues": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "deployedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "DeploymentAnalysisResponse": {
+        "type": "object",
+        "required": [
+          "analysis"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "analysis": {
+            "$ref": "#/components/schemas/DeploymentAnalysis"
+          }
+        }
+      },
+      "DeploymentAnalysisJobResponse": {
+        "type": "object",
+        "required": [
+          "analysis",
+          "job"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "analysis": {
+            "$ref": "#/components/schemas/DeploymentAnalysis"
+          },
+          "job": {
+            "$ref": "#/components/schemas/OperationJob"
+          }
+        }
+      },
+      "DeploymentAnalysisCreateRequest": {
+        "type": "object",
+        "required": [
+          "hostId",
+          "source"
+        ],
+        "additionalProperties": true,
+        "properties": {
+          "hostId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "source": {
+            "type": "string"
+          },
+          "sourceType": {
+            "type": "string",
+            "enum": [
+              "git",
+              "compose_url",
+              "compose_upload",
+              "image"
+            ]
+          },
+          "composeYaml": {
+            "type": "string"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "composePath": {
+            "type": "string"
+          },
+          "credentialUsername": {
+            "type": "string",
+            "writeOnly": true
+          },
+          "credentialSecret": {
+            "type": "string",
+            "writeOnly": true
+          },
+          "sourceId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "DeploymentExecuteRequest": {
+        "type": "object",
+        "required": [],
+        "additionalProperties": true,
+        "properties": {
+          "displayName": {
+            "type": "string"
+          },
+          "projectName": {
+            "type": "string"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "composePath": {
+            "type": "string"
+          },
+          "workingDir": {
+            "type": "string"
+          },
+          "composeYaml": {
+            "type": "string"
+          },
+          "env": {
+            "type": "string",
+            "writeOnly": true
+          }
+        }
+      },
+      "DeploymentSourceUpdateRequest": {
+        "type": "object",
+        "required": [],
+        "additionalProperties": true,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "composePath": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workingDir": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "projectName": {
+            "type": "string"
+          },
+          "defaultHostId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "safeEnvironment": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "credentialUsername": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "credentialSecret": {
+            "type": "string",
+            "writeOnly": true
+          },
+          "clearCredential": {
+            "type": "boolean"
+          }
+        }
+      },
+      "DeploymentSourceCreateRequest": {
+        "type": "object",
+        "required": [
+          "sourceType",
+          "name",
+          "sourceLocator",
+          "projectName"
+        ],
+        "additionalProperties": true,
+        "properties": {
+          "sourceType": {
+            "type": "string",
+            "enum": [
+              "git",
+              "compose_url",
+              "compose_upload",
+              "image"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "sourceLocator": {
+            "type": "string"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "composePath": {
+            "type": "string"
+          },
+          "workingDir": {
+            "type": "string"
+          },
+          "projectName": {
+            "type": "string"
+          },
+          "composeYaml": {
+            "type": "string"
+          },
+          "env": {
+            "type": "string",
+            "writeOnly": true
+          },
+          "defaultHostId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "credentialUsername": {
+            "type": "string",
+            "writeOnly": true
+          },
+          "credentialSecret": {
+            "type": "string",
+            "writeOnly": true
+          }
+        }
+      },
+      "RegistryTrustRequest": {
+        "type": "object",
+        "required": [
+          "registry"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "registry": {
+            "type": "string"
+          },
+          "insecure": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      },
+      "RegistryTrustResponse": {
+        "type": "object",
+        "required": [
+          "registryTrust"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "registryTrust": {
+            "type": "object",
+            "required": [
+              "registry",
+              "insecure",
+              "trusted",
+              "canApply",
+              "requiresRestart",
+              "message"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "registry": {
+                "type": "string"
+              },
+              "insecure": {
+                "type": "boolean"
+              },
+              "trusted": {
+                "type": "boolean"
+              },
+              "canApply": {
+                "type": "boolean"
+              },
+              "requiresRestart": {
+                "type": "boolean"
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
       "GithubBranchesResponse": {
         "type": "object",
         "required": [
@@ -8343,6 +8922,712 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/GithubDeployResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/deploy/analyses": {
+      "post": {
+        "summary": "Analyze a Git, Compose, or image deployment source",
+        "tags": [
+          "Deploy"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeploymentAnalysisCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentAnalysisJobResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/deploy/analyses/{id}": {
+      "get": {
+        "summary": "Read a durable deployment analysis",
+        "tags": [
+          "Deploy"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentAnalysisResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/deploy/analyses/{id}/deploy": {
+      "post": {
+        "summary": "Deploy an analyzed source and save it to My Library",
+        "tags": [
+          "Deploy"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeploymentExecuteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentAnalysisJobResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/deployment-sources": {
+      "get": {
+        "summary": "List reusable My Library deployment sources",
+        "tags": [
+          "Deploy"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentSourcesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Add a reusable source to My Library",
+        "tags": [
+          "Deploy"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeploymentSourceCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentSourceResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/deployment-sources/{id}": {
+      "get": {
+        "summary": "Read one reusable deployment source",
+        "tags": [
+          "Deploy"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentSourceResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Update safe defaults or credentials for a deployment source",
+        "tags": [
+          "Deploy"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeploymentSourceUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentSourceResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Remove a source from My Library without removing services",
+        "tags": [
+          "Deploy"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hosts/{hostId}/registry-trust/check": {
+      "post": {
+        "summary": "Check Docker daemon trust for an HTTP registry",
+        "tags": [
+          "Deploy",
+          "Hosts"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegistryTrustRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistryTrustResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/hosts/{hostId}/registry-trust/apply": {
+      "post": {
+        "summary": "Safely configure Docker daemon trust for an HTTP registry",
+        "tags": [
+          "Deploy",
+          "Hosts"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegistryTrustRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResponse"
                 }
               }
             }

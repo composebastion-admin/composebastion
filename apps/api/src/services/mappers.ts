@@ -81,6 +81,7 @@ export function mapStack(row: any): ComposeStack {
     sourceComposePath: row.source_compose_path ?? null,
     sourceCurrentCommitSha: row.source_current_commit_sha ?? null,
     sourceLatestCommitSha: row.source_latest_commit_sha ?? null,
+    deploymentSourceId: row.deployment_source_id ?? null,
     sourceCheckedAt: iso(row.source_checked_at),
     sourceCheckError: row.source_check_error ?? null,
     lastDeployError: row.last_deploy_error ?? null,

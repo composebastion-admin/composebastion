@@ -71,6 +71,16 @@ Stable JSON endpoints are documented under `/api/v1/*`. Existing `/api/*` endpoi
 | PUT | `/api/v1/github/repos/{id}` | operator | Update a tracked GitHub repository |
 | DELETE | `/api/v1/github/repos/{id}` | operator | Delete a tracked GitHub repository |
 | POST | `/api/v1/github/repos/{id}/deploy` | operator | Deploy a saved GitHub repository Compose file |
+| POST | `/api/v1/deploy/analyses` | operator | Analyze a Git, Compose, or image deployment source |
+| GET | `/api/v1/deploy/analyses/{id}` | viewer | Read a durable deployment analysis |
+| POST | `/api/v1/deploy/analyses/{id}/deploy` | operator | Deploy an analyzed source and save it to My Library |
+| GET | `/api/v1/deployment-sources` | viewer | List reusable My Library deployment sources |
+| POST | `/api/v1/deployment-sources` | operator | Add a reusable source to My Library |
+| GET | `/api/v1/deployment-sources/{id}` | viewer | Read one reusable deployment source |
+| PUT | `/api/v1/deployment-sources/{id}` | operator | Update safe defaults or credentials for a deployment source |
+| DELETE | `/api/v1/deployment-sources/{id}` | operator | Remove a source from My Library without removing services |
+| POST | `/api/v1/hosts/{hostId}/registry-trust/check` | operator | Check Docker daemon trust for an HTTP registry |
+| POST | `/api/v1/hosts/{hostId}/registry-trust/apply` | admin | Safely configure Docker daemon trust for an HTTP registry |
 | GET | `/api/v1/image-updates` | viewer | List image update intelligence |
 | GET | `/api/v1/image-updates/preview` | viewer | Preview an image update action |
 | GET | `/api/v1/image-scanner/status` | viewer | Read vulnerability scanner availability |

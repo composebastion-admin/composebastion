@@ -15,7 +15,23 @@ describe("extractImagesFromCompose", () => {
   it("ignores variable placeholders", () => {
     const yaml = `services:
   app:
-    image: \${APP_IMAGE:-nginx:alpine}
+    image: \${APP_IMAGE}
+`;
+    expect(extractImagesFromCompose(yaml)).toEqual([]);
+  });
+
+  it("uses Compose variable defaults when finding registry image references", () => {
+    const yaml = `services:
+  dashboard:
+    image: 10.0.21.40:3000/kobuslabs/homelabdashboard:\${IMAGE_TAG:-latest}
+`;
+    expect(extractImagesFromCompose(yaml)).toEqual(["10.0.21.40:3000/kobuslabs/homelabdashboard:latest"]);
+  });
+
+  it("ignores image references that still require host environment interpolation", () => {
+    const yaml = `services:
+  dashboard:
+    image: registry.example.com/dashboard:\${IMAGE_TAG}
 `;
     expect(extractImagesFromCompose(yaml)).toEqual([]);
   });

@@ -7,10 +7,12 @@ export function isTab(value: string | undefined): value is Tab {
 }
 
 export function tabFromPath(segment: string | undefined, fallback: Tab = "overview"): Tab {
+  if (segment === "compose") return "services";
   return isTab(segment) ? segment : fallback;
 }
 
 export function tabPath(tab: Tab) {
+  if (tab === "compose") return "/services";
   return `/${tab}`;
 }
 

@@ -1,392 +1,75 @@
-import { useEffect, useState } from "react";
-import { FileText, FolderOpen, GitBranch, Hammer, KeyRound, Pencil, Play, RefreshCw, Save, ShieldCheck, Trash2, Wand2, X } from "lucide-react";
-import type { ComposeStack, DockerHost, GithubRepository, OperationJob } from "@composebastion/shared";
+import { useEffect, useRef, useState } from "react";
+import {
+  AlertTriangle,
+  Box,
+  CheckCircle2,
+  FileUp,
+  GitBranch,
+  Library,
+  LoaderCircle,
+  Pencil,
+  Play,
+  RefreshCw,
+  ShieldCheck,
+  Trash2
+} from "lucide-react";
+import type {
+  DeploymentAnalysis,
+  DeploymentSource,
+  DeploymentSourceType,
+  DockerHost,
+  GithubRepository,
+  OperationJob
+} from "@composebastion/shared";
 import { api, deleteJson, postJson, putJson } from "../../api.js";
-import { useConfirm } from "../ConfirmProvider.js";
 import { useAsyncAction } from "../../hooks/useAsyncAction.js";
-import { composeVariableOverrides, upsertEnvValue } from "../../lib/composeVariables.js";
-import { generateSingleImageCompose, imageBaseName, imageWithDefaultLatest, normalizeComposeServiceName } from "../../lib/deployCompose.js";
-import { formatDate } from "../../lib/format.js";
-import type { Jobish, JobResult } from "../../lib/dashboardTypes.js";
-import { normalizeComposeProjectName } from "../../lib/hostScope.js";
-import { defaultHostDirectory, remoteJoin } from "../../lib/remotePaths.js";
+import type { Jobish } from "../../lib/dashboardTypes.js";
+import { useConfirm } from "../ConfirmProvider.js";
 import { HostSelect } from "../dashboard/HostSelect.js";
-import { ButtonRow, DataTable, Panel } from "../ui/primitives.js";
+import { ButtonRow, EmptyState, InlineStatus, Panel } from "../ui/primitives.js";
 
-function repoNameFromUrl(url: string) {
-  const cleaned = url.trim().replace(/\.git$/i, "").replace(/\/+$/, "");
-  const lastSegment = cleaned.split(/[/:]/).filter(Boolean).at(-1) ?? "";
-  return normalizeComposeProjectName(lastSegment);
-}
-
-function defaultDeployRoot(host: DockerHost) {
-  return host.connectionMode === "agent" ? "/tmp/composebastion/apps" : remoteJoin(defaultHostDirectory(host), "apps");
-}
-
-function defaultDeployDirectory(host: DockerHost, projectName: string) {
-  return remoteJoin(defaultDeployRoot(host), normalizeComposeProjectName(projectName) || "app");
-}
-
-function composeFilePath(workingDir: string, composePath: string) {
-  const file = composePath.trim() || "docker-compose.yml";
-  return file.startsWith("/") ? file : remoteJoin(workingDir, file);
-}
-
-type GeneratedComposeDraft = {
-  projectName: string;
-  composeYaml: string;
-  pullBeforeDeploy: boolean;
+type AnalysisJobResponse = {
+  analysis: DeploymentAnalysis;
+  job: OperationJob;
 };
 
-type GithubAccessCheck = {
-  ok: boolean;
-  checkedAt: string;
-  repositoryPrivate: boolean | null;
-  error: string | null;
-};
-
-function githubCredentialLabel(repo: GithubRepository) {
-  if (repo.githubTokenStatus === "valid") return "token verified";
-  if (repo.githubTokenStatus === "error") return "token check failed";
-  if (repo.githubTokenStatus === "unchecked") return "token saved";
-  return "public or host auth";
+function sourceTypeLabel(sourceType: DeploymentSource["sourceType"]) {
+  if (sourceType === "git") return "Git repository";
+  if (sourceType === "compose_url") return "Compose URL";
+  if (sourceType === "compose_upload") return "Compose file";
+  return "Container image";
 }
 
-function githubCredentialClass(repo: GithubRepository) {
-  if (repo.githubTokenStatus === "valid") return "completed";
-  if (repo.githubTokenStatus === "error") return "failed";
-  if (repo.githubTokenStatus === "unchecked") return "running";
-  return "created";
+function envFromAnalysis(analysis: DeploymentAnalysis, values: Record<string, string>) {
+  return analysis.variables
+    .filter((variable) => (values[variable.key] ?? variable.value) !== "" || !variable.required)
+    .map((variable) => `${variable.key}=${values[variable.key] ?? variable.value}`)
+    .join("\n");
 }
 
-function ImageComposeGenerator({ onGenerate }: { onGenerate: (draft: GeneratedComposeDraft) => void }) {
-  const [form, setForm] = useState({
-    image: "",
-    serviceName: "",
-    projectName: "",
-    restartPolicy: "unless-stopped",
-    ports: "",
-    env: "",
-    volumes: "",
-    command: "",
-    alwaysPullLatest: true
-  });
-
-  function applyImage(value: string) {
-    const base = imageBaseName(value);
-    setForm((current) => ({
-      ...current,
-      image: value,
-      serviceName: current.serviceName || normalizeComposeServiceName(base),
-      projectName: current.projectName || normalizeComposeProjectName(base)
-    }));
-  }
-
-  function generate(event: React.FormEvent) {
-    event.preventDefault();
-    const image = imageWithDefaultLatest(form.image);
-    const serviceName = normalizeComposeServiceName(form.serviceName || imageBaseName(image));
-    const projectName = normalizeComposeProjectName(form.projectName || serviceName) || "app";
-    onGenerate({
-      projectName,
-      pullBeforeDeploy: form.alwaysPullLatest,
-      composeYaml: generateSingleImageCompose({
-        ...form,
-        image,
-        serviceName
-      })
-    });
-  }
-
-  return (
-    <form className="subPanel composeForm" onSubmit={generate}>
-      <h3><Wand2 size={16} /> Image to Compose</h3>
-      <div className="formHint">Generate a single-service Compose file, then review or edit it before deploying to a folder.</div>
-      <div className="two">
-        <input placeholder="Image, e.g. ghcr.io/example/app" value={form.image} onChange={(event) => applyImage(event.target.value)} required />
-        <input placeholder="Service name" value={form.serviceName} onChange={(event) => setForm({ ...form, serviceName: normalizeComposeServiceName(event.target.value) })} />
-      </div>
-      <div className="two">
-        <input placeholder="Project name" value={form.projectName} onChange={(event) => setForm({ ...form, projectName: normalizeComposeProjectName(event.target.value) })} />
-        <select value={form.restartPolicy} onChange={(event) => setForm({ ...form, restartPolicy: event.target.value })}>
-          <option value="unless-stopped">unless-stopped</option>
-          <option value="always">always</option>
-          <option value="on-failure">on-failure</option>
-          <option value="no">no restart</option>
-        </select>
-      </div>
-      <textarea placeholder={"Ports, one per line: 8080:80"} value={form.ports} onChange={(event) => setForm({ ...form, ports: event.target.value })} />
-      <textarea placeholder={"Environment, one per line: KEY=value"} value={form.env} onChange={(event) => setForm({ ...form, env: event.target.value })} />
-      <textarea placeholder={"Volumes, one per line: volume:/path[:ro]"} value={form.volumes} onChange={(event) => setForm({ ...form, volumes: event.target.value })} />
-      <input placeholder="Optional command" value={form.command} onChange={(event) => setForm({ ...form, command: event.target.value })} />
-      <label className="checkLine">
-        <input type="checkbox" checked={form.alwaysPullLatest} onChange={(event) => setForm({ ...form, alwaysPullLatest: event.target.checked })} />
-        <span>Always pull latest image before deploy</span>
-      </label>
-      <ButtonRow>
-        <button className="primary"><Wand2 size={18} />Generate Compose</button>
-      </ButtonRow>
-    </form>
-  );
+function initialVariableValues(analysis: DeploymentAnalysis) {
+  return Object.fromEntries(analysis.variables.map((variable) => [variable.key, variable.value]));
 }
 
-function FolderComposeDeployForm({
-  hosts,
-  refresh,
-  runJob
-}: {
-  hosts: DockerHost[];
-  refresh: () => Promise<void>;
-  runJob: <T extends Jobish>(request: () => Promise<T>) => Promise<T>;
-}) {
-  const { confirm } = useConfirm();
-  const action = useAsyncAction();
-  const [hostId, setHostId] = useState(hosts[0]?.id ?? "");
-  const [form, setForm] = useState({
-    projectName: "app",
-    workingDir: "",
-    composePath: "docker-compose.yml",
-    composeYaml: "services:\n  app:\n    image: nginx:alpine\n",
-    env: "",
-    pullBeforeDeploy: false
-  });
-  const [workingDirTouched, setWorkingDirTouched] = useState(false);
-  const host = hosts.find((entry) => entry.id === hostId) ?? hosts[0] ?? null;
-
-  useEffect(() => {
-    if (!hostId && hosts[0]?.id) setHostId(hosts[0].id);
-  }, [hosts, hostId]);
-
-  useEffect(() => {
-    if (!host || workingDirTouched) return;
-    setForm((current) => ({ ...current, workingDir: defaultDeployDirectory(host, current.projectName) }));
-  }, [host, form.projectName, workingDirTouched]);
-
-  function patchProjectName(value: string) {
-    const projectName = normalizeComposeProjectName(value);
-    setForm((current) => ({
-      ...current,
-      projectName,
-      workingDir: host && !workingDirTouched ? defaultDeployDirectory(host, projectName) : current.workingDir
-    }));
-  }
-
-  function applyGenerated(draft: GeneratedComposeDraft) {
-    setForm((current) => ({
-      ...current,
-      projectName: draft.projectName,
-      workingDir: host && !workingDirTouched ? defaultDeployDirectory(host, draft.projectName) : current.workingDir,
-      composeYaml: draft.composeYaml,
-      pullBeforeDeploy: draft.pullBeforeDeploy
-    }));
-  }
-
-  async function pathExists(path: string) {
-    if (!hostId) return false;
-    const result = await api<{ file: { exists: boolean } }>(`/api/hosts/${hostId}/files/exists?path=${encodeURIComponent(path)}`);
-    return result.file.exists;
-  }
-
-  async function deploy(event: React.FormEvent) {
-    event.preventDefault();
-    if (!hostId || !form.projectName) return;
-    await action.run(async () => {
-      const composePath = composeFilePath(form.workingDir, form.composePath);
-      const conflicts: string[] = [];
-      if (await pathExists(composePath)) conflicts.push(composePath);
-      if (form.env.trim()) {
-        const envPath = remoteJoin(form.workingDir, ".env");
-        if (await pathExists(envPath)) conflicts.push(envPath);
-      }
-      if (conflicts.length > 0) {
-        const ok = await confirm({
-          title: "Replace existing files",
-          tone: "danger",
-          confirmLabel: "Overwrite",
-          message: `Replace ${conflicts.join(", ")} on ${host?.name ?? "the selected host"}?`
-        });
-        if (!ok) return;
-      }
-      await runJob(() => postJson<JobResult>(`/api/hosts/${hostId}/actions`, {
-        type: "compose.writeDeployPath",
-        payload: {
-          projectName: form.projectName,
-          workingDir: form.workingDir,
-          composePath: form.composePath.trim() || "docker-compose.yml",
-          composeYaml: form.composeYaml,
-          env: form.env.trim() ? form.env : undefined,
-          overwrite: conflicts.length > 0,
-          pullBeforeDeploy: form.pullBeforeDeploy
-        }
-      }));
-      await refresh();
-    });
-  }
-
-  return (
-    <>
-      <ImageComposeGenerator onGenerate={applyGenerated} />
-      <form className="subPanel composeForm" onSubmit={deploy}>
-        <h3><FolderOpen size={16} /> Compose YAML to Folder</h3>
-        <div className="formHint">Writes Compose YAML to the selected host folder, then runs docker compose from that folder. Agent hosts deploy under /tmp/composebastion.</div>
-        <div className="two">
-          <HostSelect hosts={hosts} value={hostId} onChange={(nextHostId) => {
-            setHostId(nextHostId);
-            const nextHost = hosts.find((entry) => entry.id === nextHostId);
-            if (nextHost && !workingDirTouched) {
-              setForm((current) => ({ ...current, workingDir: defaultDeployDirectory(nextHost, current.projectName) }));
-            }
-          }} />
-          <input placeholder="Project name" value={form.projectName} onChange={(event) => patchProjectName(event.target.value)} required />
-        </div>
-        <div className="two">
-          <input
-            className="monoText"
-            placeholder={host?.connectionMode === "agent" ? "/tmp/composebastion/apps/app" : "/home/user/apps/app"}
-            value={form.workingDir}
-            onChange={(event) => { setForm({ ...form, workingDir: event.target.value }); setWorkingDirTouched(true); }}
-            required
-          />
-          <input placeholder="docker-compose.yml" value={form.composePath} onChange={(event) => setForm({ ...form, composePath: event.target.value })} required />
-        </div>
-        <textarea className="monoTextarea composeEditor" value={form.composeYaml} onChange={(event) => setForm({ ...form, composeYaml: event.target.value })} required />
-        <textarea className="monoTextarea envEditor" placeholder="Optional .env content" value={form.env} onChange={(event) => setForm({ ...form, env: event.target.value })} />
-        <label className="checkLine">
-          <input type="checkbox" checked={form.pullBeforeDeploy} onChange={(event) => setForm({ ...form, pullBeforeDeploy: event.target.checked })} />
-          <span>Pull images before deploy</span>
-        </label>
-        {action.error && <div className="notice error">{action.error}</div>}
-        <ButtonRow>
-          <button className="primary" disabled={action.busy || !hostId || !form.projectName}><Play size={18} />Write &amp; Deploy</button>
-        </ButtonRow>
-      </form>
-    </>
-  );
+function environmentDefaultsText(values: Record<string, string>) {
+  return Object.entries(values).map(([key, value]) => `${key}=${value}`).join("\n");
 }
 
-function GitCloneDeployForm({
-  hosts,
-  refresh,
-  runJob
-}: {
-  hosts: DockerHost[];
-  refresh: () => Promise<void>;
-  runJob: <T extends Jobish>(request: () => Promise<T>) => Promise<T>;
-}) {
-  const action = useAsyncAction();
-  const [hostId, setHostId] = useState(hosts[0]?.id ?? "");
-  const [repositoryUrl, setRepositoryUrl] = useState("");
-  const [branch, setBranch] = useState("");
-  const [directory, setDirectory] = useState("");
-  const [composePath, setComposePath] = useState("docker-compose.yml");
-  const [projectName, setProjectName] = useState("");
-  const [directoryTouched, setDirectoryTouched] = useState(false);
-  const [projectTouched, setProjectTouched] = useState(false);
-  const [accessMessage, setAccessMessage] = useState<string | null>(null);
-
-  const host = hosts.find((entry) => entry.id === hostId) ?? hosts[0] ?? null;
-
-  useEffect(() => {
-    if (!hostId && hosts[0]?.id) setHostId(hosts[0].id);
-  }, [hosts, hostId]);
-
-  function onUrlChange(url: string) {
-    setRepositoryUrl(url);
-    const repoName = repoNameFromUrl(url);
-    if (repoName && !projectTouched) setProjectName(repoName);
-    if (repoName && !directoryTouched && host) {
-      setDirectory(remoteJoin(remoteJoin(defaultHostDirectory(host), "apps"), repoName));
-    }
+function parseEnvironmentDefaults(value: string) {
+  const defaults: Record<string, string> = {};
+  for (const line of value.split(/\r?\n/)) {
+    if (!line.trim() || line.trimStart().startsWith("#")) continue;
+    const match = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$/.exec(line);
+    if (!match) throw new Error(`Invalid environment default: ${line}`);
+    defaults[match[1]!] = match[2] ?? "";
   }
-
-  async function submit(event: React.FormEvent) {
-    event.preventDefault();
-    if (!hostId) return;
-    await action.run(async () => {
-      await runJob(() => postJson<JobResult>(`/api/hosts/${hostId}/actions`, {
-        type: "git.cloneDeploy",
-        payload: {
-          repositoryUrl: repositoryUrl.trim(),
-          directory: directory.trim(),
-          branch: branch.trim() || undefined,
-          composePath: composePath.trim() || "docker-compose.yml",
-          projectName
-        }
-      }));
-      await refresh();
-    });
-  }
-
-  async function testRemoteAccess() {
-    if (!hostId || !repositoryUrl.trim()) return;
-    setAccessMessage(null);
-    await action.run(async () => {
-      await runJob(() => postJson<JobResult>(`/api/hosts/${hostId}/actions`, {
-        type: "git.testRemote",
-        payload: {
-          repositoryUrl: repositoryUrl.trim(),
-          branch: branch.trim() || undefined
-        }
-      }));
-      setAccessMessage("Host git access verified.");
-    });
-  }
-
-  return (
-    <form className="subPanel composeForm" onSubmit={submit}>
-      <h3><GitBranch size={16} /> Clone &amp; Deploy any Git repository</h3>
-      <div className="formHint">
-        Clones the repository onto the Docker host (or pulls if the folder already exists), then runs
-        <code> docker compose up -d</code> from that folder. The folder stays on the host, so future updates are a
-        pull + redeploy with the Update button on the Services page. Works with any Git URL the host can reach,
-        including private GitHub repos when the host has a read-only deploy key for each repository.
-      </div>
-      <div className="formHint">
-        For private GitHub clones, create one deploy key on the host, add only its public key to the repository
-        with write access disabled, then use the SSH URL or a host SSH alias for that repo.
-      </div>
-      <div className="two">
-        <HostSelect hosts={hosts} value={hostId} onChange={setHostId} />
-        <input
-          placeholder="https://github.com/owner/repo.git or git@host:owner/repo.git"
-          value={repositoryUrl}
-          onChange={(event) => onUrlChange(event.target.value)}
-          required
-        />
-      </div>
-      <div className="two">
-        <input placeholder="Branch, optional" value={branch} onChange={(event) => setBranch(event.target.value)} />
-        <input
-          className="monoText"
-          placeholder="/home/user/apps/repo"
-          value={directory}
-          onChange={(event) => { setDirectory(event.target.value); setDirectoryTouched(true); }}
-          required
-        />
-      </div>
-      <div className="two">
-        <input placeholder="docker-compose.yml" value={composePath} onChange={(event) => setComposePath(event.target.value)} required />
-        <input
-          placeholder="project name"
-          value={projectName}
-          onChange={(event) => { setProjectName(normalizeComposeProjectName(event.target.value)); setProjectTouched(true); }}
-          required
-        />
-      </div>
-      {accessMessage && <div className="notice success">{accessMessage}</div>}
-      {action.error && <div className="notice error">{action.error}</div>}
-      <ButtonRow>
-        <button type="button" disabled={action.busy || !hostId || !repositoryUrl.trim()} onClick={() => void testRemoteAccess()}><ShieldCheck size={18} />Test Host Access</button>
-        <button className="primary" disabled={action.busy || !hostId || !projectName}><Play size={18} />Clone &amp; Deploy</button>
-      </ButtonRow>
-    </form>
-  );
+  return defaults;
 }
 
 export function GithubDeployPanel({
   hosts,
-  scopeHosts,
-  repositories,
+  repositories: _repositories,
+  scopeHosts: _scopeHosts,
   refresh,
   runJob
 }: {
@@ -397,495 +80,481 @@ export function GithubDeployPanel({
   runJob: <T extends Jobish>(request: () => Promise<T>) => Promise<T>;
 }) {
   const { confirm } = useConfirm();
-  type RepoForm = {
-    name: string;
-    repositoryUrl: string;
-    branch: string;
-    composePath: string;
-    projectName: string;
-    defaultHostId: string;
-    hostCloneUrl: string;
-    hostCloneDirectory: string;
-    githubToken: string;
-    clearGithubToken: boolean;
-    env: string;
-  };
-  type ComposePreview = {
-    repoId: string;
-    repoName: string;
-    hostId: string;
-    deployToScope: boolean;
-    branch: string;
-    projectName: string;
-    composeYaml: string;
-    env: string;
-  };
-  type CloneBuildDeploy = {
-    repoId: string;
-    repoName: string;
-    hostId: string;
-    branch: string;
-    projectName: string;
-    composePath: string;
-    hostCloneUrl: string;
-    hostCloneDirectory: string;
-  };
-  type ComposePreviewResponse = {
-    repository: GithubRepository;
-    branch: string;
-    composeYaml: string;
-    projectName: string;
-    env: string;
-  };
-
-  const emptyForm = (defaultHostId = ""): RepoForm => ({
-    name: "",
-    repositoryUrl: "",
-    branch: "main",
-    composePath: "docker-compose.yml",
-    projectName: "",
-    defaultHostId,
-    hostCloneUrl: "",
-    hostCloneDirectory: "",
-    githubToken: "",
-    clearGithubToken: false,
-    env: ""
-  });
-
   const action = useAsyncAction();
-  const [form, setForm] = useState<RepoForm>(() => emptyForm(hosts[0]?.id ?? ""));
-  const [editingRepoId, setEditingRepoId] = useState<string | null>(null);
-  const [deployHost, setDeployHost] = useState<Record<string, string>>({});
-  const [deployBranch, setDeployBranch] = useState<Record<string, string>>({});
-  const [deployPreview, setDeployPreview] = useState<ComposePreview | null>(null);
-  const [cloneDeploy, setCloneDeploy] = useState<CloneBuildDeploy | null>(null);
-  const [formBranches, setFormBranches] = useState<string[]>([]);
-  const [repoBranches, setRepoBranches] = useState<Record<string, string[]>>({});
-  const [branchError, setBranchError] = useState<string | null>(null);
-  const [accessMessage, setAccessMessage] = useState<{ tone: "success" | "error"; text: string } | null>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [hostId, setHostId] = useState(hosts[0]?.id ?? "");
+  const [source, setSource] = useState("");
+  const [sourceType, setSourceType] = useState<DeploymentSourceType | "auto">("auto");
+  const [composeYaml, setComposeYaml] = useState("");
+  const [credentialUsername, setCredentialUsername] = useState("");
+  const [credentialSecret, setCredentialSecret] = useState("");
+  const [analysis, setAnalysis] = useState<DeploymentAnalysis | null>(null);
+  const [variables, setVariables] = useState<Record<string, string>>({});
+  const [sources, setSources] = useState<DeploymentSource[]>([]);
+  const [sourceTargets, setSourceTargets] = useState<Record<string, string>>({});
+  const [editingSource, setEditingSource] = useState<DeploymentSource | null>(null);
+  const [sourceEdit, setSourceEdit] = useState({
+    name: "",
+    projectName: "",
+    branch: "",
+    composePath: "",
+    workingDir: "",
+    defaultHostId: "",
+    safeEnvironment: ""
+  });
+  const [success, setSuccess] = useState<string | null>(null);
 
   useEffect(() => {
-    const firstHostId = hosts[0]?.id;
-    if (!form.defaultHostId && firstHostId) setForm((value) => ({ ...value, defaultHostId: firstHostId }));
-  }, [hosts, form.defaultHostId]);
+    if (!hostId && hosts[0]?.id) setHostId(hosts[0].id);
+  }, [hostId, hosts]);
 
-  async function save(event: React.FormEvent) {
-    event.preventDefault();
+  async function loadSources() {
+    const result = await api<{ sources: DeploymentSource[] }>("/api/deployment-sources");
+    setSources(result.sources);
+    setSourceTargets((current) => Object.fromEntries(result.sources.map((sourceCard) => [
+      sourceCard.id,
+      current[sourceCard.id] ?? sourceCard.defaultHostId ?? hostId
+    ])));
+  }
+
+  useEffect(() => {
+    void loadSources().catch(() => undefined);
+  }, []);
+
+  async function loadFinishedAnalysis(id: string) {
+    const result = await api<{ analysis: DeploymentAnalysis }>(`/api/deploy/analyses/${id}`);
+    setAnalysis(result.analysis);
+    setVariables(initialVariableValues(result.analysis));
+    return result.analysis;
+  }
+
+  async function analyze(options: { sourceId?: string; composePath?: string; sourceValue?: string } = {}) {
+    const sourceValue = options.sourceValue ?? source;
+    if (!hostId || !sourceValue.trim()) return;
+    setSuccess(null);
     await action.run(async () => {
-      const payload = {
-        ...form,
-        projectName: form.projectName ? normalizeComposeProjectName(form.projectName) : undefined,
-        defaultHostId: form.defaultHostId || undefined,
-        hostCloneUrl: form.hostCloneUrl || undefined,
-        hostCloneDirectory: form.hostCloneDirectory || undefined,
-        githubToken: form.clearGithubToken ? undefined : form.githubToken || undefined,
-        clearGithubToken: form.clearGithubToken || undefined
-      };
-      if (editingRepoId) {
-        await putJson(`/api/github/repos/${editingRepoId}`, payload);
-      } else {
-        await postJson("/api/github/repos", payload);
-      }
-      resetForm();
-      await refresh();
-    });
-  }
-
-  function resetForm() {
-    setEditingRepoId(null);
-    setForm(emptyForm(hosts[0]?.id ?? ""));
-    setFormBranches([]);
-    setBranchError(null);
-    setAccessMessage(null);
-  }
-
-  function startEdit(repo: GithubRepository) {
-    setEditingRepoId(repo.id);
-    setForm({
-      name: repo.name,
-      repositoryUrl: repo.repositoryUrl,
-      branch: repo.branch,
-      composePath: repo.composePath,
-      projectName: normalizeComposeProjectName(repo.projectName),
-      defaultHostId: repo.defaultHostId ?? hosts[0]?.id ?? "",
-      hostCloneUrl: repo.hostCloneUrl ?? `git@github.com:${repo.owner}/${repo.repo}.git`,
-      hostCloneDirectory: repo.hostCloneDirectory ?? "",
-      githubToken: "",
-      clearGithubToken: false,
-      env: repo.env ?? ""
-    });
-    setFormBranches(repoBranches[repo.id] ?? []);
-    setBranchError(null);
-    setAccessMessage(null);
-  }
-
-  async function loadFormBranches() {
-    setBranchError(null);
-    setAccessMessage(null);
-    try {
-      const result = editingRepoId && !form.githubToken && !form.clearGithubToken
-        ? await api<{ branches: string[] }>(`/api/github/repos/${editingRepoId}/branches`)
-        : await postJson<{ branches: string[] }>("/api/github/branches", {
-            repositoryUrl: form.repositoryUrl,
-            githubToken: form.clearGithubToken ? undefined : form.githubToken || undefined
-          });
-      setFormBranches(result.branches);
-      if (result.branches.length > 0 && !result.branches.includes(form.branch)) {
-        setForm({ ...form, branch: result.branches[0] ?? form.branch });
-      }
-    } catch (caught) {
-      setBranchError(caught instanceof Error ? caught.message : String(caught));
-    }
-  }
-
-  async function testFormAccess() {
-    setBranchError(null);
-    setAccessMessage(null);
-    try {
-      const result = editingRepoId && !form.githubToken && !form.clearGithubToken
-        ? await postJson<{ repository: GithubRepository; access: GithubAccessCheck }>(`/api/github/repos/${editingRepoId}/access-check`, {})
-        : await postJson<{ access: GithubAccessCheck }>("/api/github/access-check", {
-            repositoryUrl: form.repositoryUrl,
-            branch: form.branch,
-            composePath: form.composePath,
-            githubToken: form.clearGithubToken ? undefined : form.githubToken || undefined
-          });
-      setAccessMessage(result.access.ok
-        ? { tone: "success", text: result.access.repositoryPrivate ? "Private repository access verified." : "Repository access verified." }
-        : { tone: "error", text: result.access.error ?? "GitHub access check failed." });
-    } catch (caught) {
-      setAccessMessage({ tone: "error", text: caught instanceof Error ? caught.message : String(caught) });
-    }
-  }
-
-  async function loadRepoBranches(repo: GithubRepository) {
-    setBranchError(null);
-    try {
-      const result = await api<{ branches: string[] }>(`/api/github/repos/${repo.id}/branches`);
-      setRepoBranches((current) => ({ ...current, [repo.id]: result.branches }));
-      setDeployBranch((current) => current[repo.id] ? current : { ...current, [repo.id]: repo.branch });
-    } catch (caught) {
-      setBranchError(caught instanceof Error ? caught.message : String(caught));
-    }
-  }
-
-  async function testSavedAccess(repo: GithubRepository) {
-    setBranchError(null);
-    setAccessMessage(null);
-    await action.run(async () => {
-      const result = await postJson<{ repository: GithubRepository; access: GithubAccessCheck }>(`/api/github/repos/${repo.id}/access-check`, {});
-      setAccessMessage(result.access.ok
-        ? { tone: "success", text: `${repo.name} access verified.` }
-        : { tone: "error", text: result.access.error ?? `${repo.name} access check failed.` });
-      await refresh();
-    });
-  }
-
-  async function deleteRepo(repo: GithubRepository) {
-    if (!await confirm({
-      title: "Delete tracked repository",
-      tone: "danger",
-      confirmLabel: "Delete",
-      message: `Delete tracked repo "${repo.name}"? This does not remove containers from Docker.`
-    })) return;
-    await action.run(async () => {
-      await deleteJson<{ ok: boolean }>(`/api/github/repos/${repo.id}`);
-      if (editingRepoId === repo.id) resetForm();
-      if (deployPreview?.repoId === repo.id) setDeployPreview(null);
-      if (cloneDeploy?.repoId === repo.id) setCloneDeploy(null);
-      await refresh();
-    });
-  }
-
-  function openCloneBuildDeploy(repo: GithubRepository) {
-    const branch = deployBranch[repo.id] ?? repo.branch;
-    const hostId = deployHost[repo.id] ?? repo.defaultHostId ?? hosts[0]?.id ?? "";
-    const host = hosts.find((entry) => entry.id === hostId) ?? hosts[0] ?? null;
-    const projectName = normalizeComposeProjectName(repo.projectName || repo.repo) || "github-stack";
-    setCloneDeploy({
-      repoId: repo.id,
-      repoName: repo.name,
-      hostId,
-      branch,
-      projectName,
-      composePath: repo.composePath,
-      hostCloneUrl: repo.hostCloneUrl ?? `git@github.com:${repo.owner}/${repo.repo}.git`,
-      hostCloneDirectory: repo.hostCloneDirectory ?? (host ? defaultDeployDirectory(host, projectName) : "")
-    });
-    setAccessMessage(null);
-    setBranchError(null);
-  }
-
-  async function testCloneBuildAccess() {
-    if (!cloneDeploy?.hostId || !cloneDeploy.hostCloneUrl.trim()) return;
-    setAccessMessage(null);
-    await action.run(async () => {
-      await runJob(() => postJson<JobResult>(`/api/hosts/${cloneDeploy.hostId}/actions`, {
-        type: "git.testRemote",
-        payload: {
-          repositoryUrl: cloneDeploy.hostCloneUrl.trim(),
-          branch: cloneDeploy.branch.trim() || undefined
-        }
-      }));
-      setAccessMessage({ tone: "success", text: `${cloneDeploy.repoName} host git access verified.` });
-    });
-  }
-
-  async function deployCloneBuild() {
-    if (!cloneDeploy) return;
-    await action.run(async () => {
-      await runJob(() => postJson<JobResult>(`/api/github/repos/${cloneDeploy.repoId}/deploy`, {
-        mode: "host_clone",
-        hostId: cloneDeploy.hostId,
-        branch: cloneDeploy.branch,
-        projectName: cloneDeploy.projectName,
-        hostCloneUrl: cloneDeploy.hostCloneUrl.trim(),
-        hostCloneDirectory: cloneDeploy.hostCloneDirectory.trim()
-      }));
-      setCloneDeploy(null);
-      await refresh();
-    });
-  }
-
-  async function openDeployPreview(repo: GithubRepository) {
-    const branch = deployBranch[repo.id] ?? repo.branch;
-    const hostId = deployHost[repo.id] ?? repo.defaultHostId ?? hosts[0]?.id ?? "";
-    await action.run(async () => {
-      const result = await api<ComposePreviewResponse>(`/api/github/repos/${repo.id}/compose?branch=${encodeURIComponent(branch)}`);
-      setDeployPreview({
-        repoId: repo.id,
-        repoName: repo.name,
+      const result = await runJob(() => postJson<AnalysisJobResponse>("/api/deploy/analyses", {
         hostId,
-        deployToScope: false,
-        branch: result.branch,
-        projectName: normalizeComposeProjectName(result.projectName || repo.projectName || repo.repo) || "github-stack",
-        composeYaml: result.composeYaml,
-        env: result.env ?? ""
-      });
+        source: sourceValue,
+        sourceType: sourceType === "auto" ? undefined : sourceType,
+        sourceId: options.sourceId ?? analysis?.sourceId ?? undefined,
+        composeYaml: composeYaml || undefined,
+        composePath: options.composePath,
+        credentialUsername: credentialUsername || undefined,
+        credentialSecret: credentialSecret || undefined
+      }));
+      await loadFinishedAnalysis(result.analysis.id);
+      setCredentialSecret("");
     });
   }
 
-  async function deployCustomizedCompose() {
-    if (!deployPreview) return;
-    const targetHostIds = deployPreview.deployToScope ? scopeHosts.map((host) => host.id) : [deployPreview.hostId];
+  async function uploadCompose(file: File) {
+    const text = await file.text();
+    setSource(file.name);
+    setSourceType("compose_upload");
+    setComposeYaml(text);
+    setAnalysis(null);
+    setSuccess(null);
+  }
+
+  async function deploy() {
+    if (!analysis) return;
     await action.run(async () => {
-      await runJob(async () => {
-        const results = await Promise.all(targetHostIds.map((hostId) => postJson<{ stack: ComposeStack; job: OperationJob }>(`/api/github/repos/${deployPreview.repoId}/deploy`, {
-          hostId,
-          branch: deployPreview.branch,
-          projectName: deployPreview.projectName,
-          composeYaml: deployPreview.composeYaml,
-          env: deployPreview.env
-        })));
-        return { jobs: results.map((result) => result.job) };
-      });
-      setDeployPreview(null);
+      const result = await runJob(() => postJson<AnalysisJobResponse>(`/api/deploy/analyses/${analysis.id}/deploy`, {
+        displayName: analysis.displayName ?? undefined,
+        projectName: analysis.projectName ?? undefined,
+        branch: analysis.branch ?? undefined,
+        composePath: analysis.composePath ?? undefined,
+        workingDir: analysis.workingDir ?? undefined,
+        composeYaml: analysis.composeYaml ?? undefined,
+        env: envFromAnalysis(analysis, variables)
+      }));
+      const finished = await loadFinishedAnalysis(result.analysis.id);
+      setSuccess(`${finished.displayName ?? "App"} deployed and saved to My Library.`);
+      await Promise.all([loadSources(), refresh()]);
     });
   }
 
-  const deployVariableOverrides = deployPreview ? composeVariableOverrides(deployPreview.composeYaml, deployPreview.env) : [];
-  const SubmitIcon = editingRepoId ? Save : GitBranch;
+  async function repairRegistry(registry: string) {
+    if (!analysis) return;
+    const host = hosts.find((candidate) => candidate.id === analysis.hostId);
+    const approved = await confirm({
+      title: "Trust HTTP registry",
+      confirmLabel: "Back up, apply & restart",
+      tone: "danger",
+      message: `ComposeBastion will safely merge '${registry}' into Docker's insecure registries on ${host?.name ?? "this host"}, validate and back up the daemon config, then restart Docker. Continue?`
+    });
+    if (!approved) return;
+    await action.run(async () => {
+      await runJob(() => postJson<{ job: OperationJob }>(`/api/hosts/${analysis.hostId}/registry-trust/apply`, {
+        registry,
+        insecure: true
+      }));
+      await analyze({
+        sourceId: analysis.sourceId ?? undefined,
+        composePath: analysis.composePath ?? undefined,
+        sourceValue: analysis.sourceInput
+      });
+    });
+  }
+
+  async function deploySource(sourceCard: DeploymentSource) {
+    const requestedHostId = sourceTargets[sourceCard.id] ?? sourceCard.defaultHostId ?? hostId;
+    const selectedHostId = hosts.some((host) => host.id === requestedHostId) ? requestedHostId : hostId;
+    if (selectedHostId !== hostId) setHostId(selectedHostId);
+    setSource(sourceCard.sourceLocator);
+    setSourceType(sourceCard.sourceType);
+    setComposeYaml("");
+    await action.run(async () => {
+      const result = await runJob(() => postJson<AnalysisJobResponse>("/api/deploy/analyses", {
+        hostId: selectedHostId,
+        source: sourceCard.sourceLocator,
+        sourceId: sourceCard.id
+      }));
+      await loadFinishedAnalysis(result.analysis.id);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    });
+  }
+
+  async function removeSource(sourceCard: DeploymentSource) {
+    const approved = await confirm({
+      title: "Remove from My Library",
+      confirmLabel: "Remove source",
+      tone: "danger",
+      message: `Remove '${sourceCard.name}' from My Library? Running containers and Services entries are not removed.`
+    });
+    if (!approved) return;
+    await action.run(async () => {
+      await deleteJson<{ ok: boolean }>(`/api/deployment-sources/${sourceCard.id}`);
+      await loadSources();
+    });
+  }
+
+  function beginSourceEdit(sourceCard: DeploymentSource) {
+    setEditingSource(sourceCard);
+    setSourceEdit({
+      name: sourceCard.name,
+      projectName: sourceCard.projectName,
+      branch: sourceCard.branch ?? "",
+      composePath: sourceCard.composePath ?? "",
+      workingDir: sourceCard.workingDir ?? "",
+      defaultHostId: sourceCard.defaultHostId ?? "",
+      safeEnvironment: environmentDefaultsText(sourceCard.safeEnvironment)
+    });
+  }
+
+  async function saveSourceEdit() {
+    if (!editingSource) return;
+    await action.run(async () => {
+      await putJson(`/api/deployment-sources/${editingSource.id}`, {
+        ...sourceEdit,
+        branch: sourceEdit.branch || null,
+        composePath: sourceEdit.composePath || null,
+        workingDir: sourceEdit.workingDir || null,
+        defaultHostId: sourceEdit.defaultHostId || null,
+        safeEnvironment: parseEnvironmentDefaults(sourceEdit.safeEnvironment)
+      });
+      setEditingSource(null);
+      await loadSources();
+    });
+  }
+
+  const selectedHost = hosts.find((host) => host.id === hostId) ?? null;
+  const requiredMissing = analysis?.variables.filter((variable) =>
+    variable.required && !(variables[variable.key] ?? variable.value).trim()
+  ) ?? [];
+  const deployBlocked = Boolean(
+    !analysis
+    || analysis.status !== "ready"
+    || analysis.blockers.length
+    || requiredMissing.length
+  );
 
   return (
-    <Panel title="Deploy" count={repositories.length}>
-      <FolderComposeDeployForm hosts={hosts} refresh={refresh} runJob={runJob} />
-      <GitCloneDeployForm hosts={hosts} refresh={refresh} runJob={runJob} />
-      <h3 className="panelSectionTitle"><GitBranch size={16} /> Tracked GitHub repositories</h3>
-      <div className="formHint">
-        Track a GitHub repository to deploy its compose file straight from the GitHub API (no clone on the host),
-        preview and customize the YAML before deploying, and get commit-based update checks. Private repositories work
-        with one fine-grained GitHub token per repository with read-only Contents access; ComposeBastion encrypts the token
-        and never shows it again. Use Clone/Build Deploy when the Compose file depends on repo-local Dockerfiles or build contexts.
-        When editing a repo, leave the token blank to keep the saved token.
-      </div>
-      <form className="composeForm" onSubmit={save}>
-        <div className="two">
-          <input placeholder="Name" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required />
-          <input placeholder="https://github.com/owner/repo" value={form.repositoryUrl} onChange={(event) => { setForm({ ...form, repositoryUrl: event.target.value }); setFormBranches([]); }} required />
-        </div>
-        <div className="two">
-          <div className="branchPicker">
-            {formBranches.length > 0 ? (
-              <select value={form.branch} onChange={(event) => setForm({ ...form, branch: event.target.value })}>
-                {formBranches.map((branch) => <option key={branch} value={branch}>{branch}</option>)}
-              </select>
-            ) : (
-              <input placeholder="Branch" value={form.branch} onChange={(event) => setForm({ ...form, branch: event.target.value })} required />
-            )}
-            <button type="button" onClick={() => void loadFormBranches()}><RefreshCw size={16} />Branches</button>
+    <div className="universalDeploy">
+      <Panel title="Deploy an app">
+        <div className="deployHero">
+          <div>
+            <h2>Paste it. We&apos;ll work out the rest.</h2>
+            <p>Git repository, Compose URL, Compose YAML, or container image. ComposeBastion analyzes it on the selected host and asks only for what is missing.</p>
           </div>
-          <input placeholder="Compose path" value={form.composePath} onChange={(event) => setForm({ ...form, composePath: event.target.value })} required />
+          <div className="deployHost">
+            <span>Deploy to</span>
+            <HostSelect hosts={hosts} value={hostId} onChange={(value) => {
+              setHostId(value);
+              setAnalysis(null);
+            }} />
+          </div>
         </div>
-        <div className="two">
-          <input placeholder="Project name, lowercase" value={form.projectName} onChange={(event) => setForm({ ...form, projectName: normalizeComposeProjectName(event.target.value) })} />
-          <HostSelect hosts={hosts} value={form.defaultHostId} onChange={(defaultHostId) => setForm({ ...form, defaultHostId })} />
-        </div>
-        <div className="two">
-          <input
-            className="monoText"
-            placeholder="git@github.com:owner/repo.git or host SSH alias"
-            value={form.hostCloneUrl}
-            onChange={(event) => setForm({ ...form, hostCloneUrl: event.target.value })}
+
+        <form className="deploySourceForm" onSubmit={(event) => {
+          event.preventDefault();
+          void analyze();
+        }}>
+          <textarea
+            aria-label="Deployment source"
+            placeholder={"Paste a Git URL, Compose URL, image reference, or Compose YAML…\nExample: http://10.0.21.40:3000/kobuslabs/linuxclitogui"}
+            value={source}
+            onChange={(event) => {
+              setSource(event.target.value);
+              setComposeYaml("");
+              setSourceType("auto");
+              setAnalysis(null);
+              setSuccess(null);
+            }}
+            required
           />
-          <input
-            className="monoText"
-            placeholder="/home/user/apps/repo"
-            value={form.hostCloneDirectory}
-            onChange={(event) => setForm({ ...form, hostCloneDirectory: event.target.value })}
-          />
-        </div>
-        <div className="formHint">Clone/Build Deploy uses these host-side SSH settings for Compose files with build contexts, Dockerfiles, or other repo-local files.</div>
-        <input
-          placeholder={editingRepoId ? "New fine-grained token, blank keeps saved token" : "Fine-grained token for private repos, Contents: Read-only"}
-          type="password"
-          autoComplete="off"
-          value={form.githubToken}
-          disabled={form.clearGithubToken}
-          onChange={(event) => { setForm({ ...form, githubToken: event.target.value, clearGithubToken: false }); setFormBranches([]); }}
-        />
-        {editingRepoId && (
-          <label className="checkLine">
+          <div className="deploySourceActions">
             <input
-              type="checkbox"
-              checked={form.clearGithubToken}
-              onChange={(event) => setForm({ ...form, clearGithubToken: event.target.checked, githubToken: event.target.checked ? "" : form.githubToken })}
+              ref={fileInput}
+              type="file"
+              accept=".yml,.yaml,application/yaml,text/yaml,text/plain"
+              hidden
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) void uploadCompose(file);
+              }}
             />
-            <span>Clear saved GitHub token</span>
+            <button type="button" onClick={() => fileInput.current?.click()}><FileUp size={17} />Upload Compose</button>
+            <button className="primary" disabled={action.busy || !hostId || !source.trim()}>
+              {action.busy ? <LoaderCircle className="spin" size={18} /> : <RefreshCw size={18} />}
+              {action.busy ? "Working…" : "Analyze"}
+            </button>
+          </div>
+        </form>
+
+        <details className="deployAdvancedCredentials">
+          <summary>Source type &amp; private Git credentials</summary>
+          <label className="deploySourceType">
+            <span>Source type</span>
+            <select value={sourceType} onChange={(event) => setSourceType(event.target.value as DeploymentSourceType | "auto")}>
+              <option value="auto">Detect automatically</option>
+              <option value="git">Git repository</option>
+              <option value="compose_url">Compose URL</option>
+              <option value="compose_upload">Pasted Compose YAML</option>
+              <option value="image">Container image</option>
+            </select>
           </label>
-        )}
-        <textarea placeholder="Optional .env content" value={form.env} onChange={(event) => setForm({ ...form, env: event.target.value })} />
-        {accessMessage && <div className={`notice ${accessMessage.tone}`}>{accessMessage.text}</div>}
-        {(branchError || action.error) && <div className="notice error">{branchError ?? action.error}</div>}
-        <ButtonRow>
-          <button className="primary" disabled={action.busy}><SubmitIcon size={18} />{editingRepoId ? "Save Repo" : "Track Repo"}</button>
-          <button type="button" disabled={action.busy || !form.repositoryUrl || !form.branch || !form.composePath} onClick={() => void testFormAccess()}><ShieldCheck size={16} />Test Access</button>
-          {editingRepoId && <button type="button" onClick={resetForm}><X size={16} />Cancel</button>}
-        </ButtonRow>
-      </form>
-      {deployPreview && (
-        <div className="subPanel deployPreview">
-          <div className="previewHeader">
-            <div>
-              <strong>Customize Deployment</strong>
-              <small>{deployPreview.repoName} - {deployPreview.branch}</small>
-            </div>
-            <button type="button" title="Close preview" onClick={() => setDeployPreview(null)}><X size={16} /></button>
-          </div>
           <div className="two">
-            <HostSelect hosts={hosts} value={deployPreview.hostId} onChange={(hostId) => setDeployPreview({ ...deployPreview, hostId })} />
-            <input value={deployPreview.projectName} onChange={(event) => setDeployPreview({ ...deployPreview, projectName: normalizeComposeProjectName(event.target.value) })} required />
+            <input
+              autoComplete="off"
+              placeholder="Username"
+              value={credentialUsername}
+              onChange={(event) => setCredentialUsername(event.target.value)}
+            />
+            <input
+              autoComplete="new-password"
+              type="password"
+              placeholder="Token / password"
+              value={credentialSecret}
+              onChange={(event) => setCredentialSecret(event.target.value)}
+            />
           </div>
-          {scopeHosts.length > 1 && (
-            <label className="checkLine deployScopeToggle">
-              <input
-                type="checkbox"
-                checked={deployPreview.deployToScope}
-                onChange={(event) => setDeployPreview({ ...deployPreview, deployToScope: event.target.checked })}
-              />
-              <span>Deploy to current scope ({scopeHosts.length} hosts)</span>
-            </label>
-          )}
-          <textarea className="monoTextarea composeEditor" value={deployPreview.composeYaml} onChange={(event) => setDeployPreview({ ...deployPreview, composeYaml: event.target.value })} />
-          <div className="formHint">This edited Compose YAML is deployed from a managed copy, so repo-local Dockerfiles and relative build contexts are not available here. Use Clone/Build Deploy for those projects.</div>
-          {deployVariableOverrides.length > 0 && (
-            <div className="variableOverridePanel">
-              <div>
-                <strong>Compose variable overrides</strong>
-                <small>Values are written to .env before Compose deploys and work for any variable in this file, including ports, image tags, secrets, and service environment.</small>
+          <small>Host deploy keys are tried first. Credentials are encrypted, materialized only in a temporary mode-0600 file used by a protected askpass helper, and never written to the Git remote.</small>
+        </details>
+
+        {selectedHost?.connectionMode === "agent" && (
+          <div className="notice warning">This is an agent host. Compose and image inputs work; Git analysis currently requires an SSH-connected host.</div>
+        )}
+        {action.error && <div className="notice error">{action.error}</div>}
+        {success && <div className="notice success"><CheckCircle2 size={17} />{success}</div>}
+      </Panel>
+
+      {analysis && (
+        <Panel title="Review deployment">
+          <div className="deployReviewHeader">
+            <div>
+              <InlineStatus tone={analysis.blockers.length ? "danger" : "success"}>
+                {analysis.blockers.length ? `${analysis.blockers.length} blocker${analysis.blockers.length === 1 ? "" : "s"}` : "Ready to deploy"}
+              </InlineStatus>
+              <h3>{analysis.displayName}</h3>
+              <p>{sourceTypeLabel(analysis.sourceType)} → {hosts.find((host) => host.id === analysis.hostId)?.name}</p>
+            </div>
+            <ButtonRow>
+              <button
+                className="primary"
+                disabled={action.busy || deployBlocked}
+                onClick={() => void deploy()}
+              ><Play size={18} />Deploy &amp; save</button>
+            </ButtonRow>
+          </div>
+
+          <div className="deploySummaryGrid">
+            <div><span>App</span><strong>{analysis.projectName}</strong></div>
+            <div><span>Services</span><strong>{analysis.summary.services.length}</strong></div>
+            <div><span>Ports</span><strong>{analysis.summary.services.flatMap((service) => service.ports).join(", ") || "None detected"}</strong></div>
+            <div><span>Storage</span><strong>{analysis.summary.services.flatMap((service) => service.volumes).length || "None detected"}</strong></div>
+          </div>
+
+          <div className="deployServiceList">
+            {analysis.summary.services.map((service) => (
+              <div key={service.name}>
+                <Box size={18} />
+                <span><strong>{service.name}</strong><small>{service.image ?? `Build ${service.build ?? "."}`}</small></span>
+                <span className="monoText">{service.ports.join(", ") || "no published ports"}</span>
               </div>
-              <div className="variableOverrideGrid">
-                {deployVariableOverrides.map((variable) => (
+            ))}
+          </div>
+
+          {analysis.registryIssues.map((issue) => (
+            <div className={`registryReadiness ${issue.trusted ? "ready" : "blocked"}`} key={issue.registry}>
+              <ShieldCheck size={20} />
+              <div>
+                <strong>{issue.trusted ? "Registry ready" : "Registry trust required"}</strong>
+                <span>{issue.message}</span>
+              </div>
+              {!issue.trusted && issue.canApply && (
+                <button type="button" onClick={() => void repairRegistry(issue.registry)} disabled={action.busy}>
+                  Repair safely
+                </button>
+              )}
+              {!issue.trusted && !issue.canApply && (
+                <small>Add <code>{issue.registry}</code> to <code>insecure-registries</code> in <code>/etc/docker/daemon.json</code>, then restart Docker.</small>
+              )}
+            </div>
+          ))}
+
+          {analysis.blockers.map((blocker) => (
+            <div className="notice error deployNotice" key={blocker.code}><AlertTriangle size={17} />{blocker.message}</div>
+          ))}
+          {analysis.warnings.map((warning) => (
+            <div className="notice warning deployNotice" key={warning.code}><AlertTriangle size={17} />{warning.message}</div>
+          ))}
+
+          {analysis.summary.composeCandidates.length > 1 && (
+            <div className="composeCandidatePicker">
+              <label>
+                <span>Compose file</span>
+                <select
+                  value={analysis.composePath ?? ""}
+                  onChange={(event) => void analyze({ composePath: event.target.value, sourceValue: analysis.sourceInput })}
+                  disabled={action.busy}
+                >
+                  {analysis.summary.composeCandidates.map((candidate) => <option key={candidate}>{candidate}</option>)}
+                </select>
+              </label>
+              <small>Selecting a file runs analysis again.</small>
+            </div>
+          )}
+
+          {analysis.variables.length > 0 && (
+            <section className="deployVariables">
+              <h4>Configuration</h4>
+              <div className="deployVariableGrid">
+                {analysis.variables.map((variable) => (
                   <label key={variable.key}>
-                    <span>{variable.containerPort ? `${variable.key} -> container ${variable.containerPort}` : variable.key}</span>
+                    <span>{variable.key}{variable.required ? " *" : ""}</span>
                     <input
-                      inputMode={variable.containerPort ? "numeric" : undefined}
-                      placeholder={variable.defaultValue || "value"}
-                      value={variable.value}
-                      onChange={(event) => setDeployPreview({
-                        ...deployPreview,
-                        env: upsertEnvValue(deployPreview.env, variable.key, event.target.value)
-                      })}
+                      type={variable.secret ? "password" : "text"}
+                      autoComplete={variable.secret ? "new-password" : "off"}
+                      placeholder={variable.secret ? "Required secret" : variable.defaultValue ?? "Optional"}
+                      value={variables[variable.key] ?? ""}
+                      onChange={(event) => setVariables({ ...variables, [variable.key]: event.target.value })}
                     />
+                    <small>{variable.secret ? "Encrypted at rest" : variable.defaultValue ? "Default detected" : variable.source.replace("_", " ")}</small>
                   </label>
                 ))}
               </div>
-            </div>
+              {requiredMissing.length > 0 && (
+                <div className="notice warning">Enter {requiredMissing.map((variable) => variable.key).join(", ")} before deploying.</div>
+              )}
+            </section>
           )}
-          <textarea className="monoTextarea envEditor" placeholder="Optional .env content" value={deployPreview.env} onChange={(event) => setDeployPreview({ ...deployPreview, env: event.target.value })} />
-          <ButtonRow>
-            <button type="button" className="primary" disabled={action.busy || !deployPreview.projectName || !deployPreview.composeYaml} onClick={() => void deployCustomizedCompose()}><Play size={18} />Deploy Customized</button>
-            <button type="button" onClick={() => setDeployPreview(null)}><X size={16} />Close</button>
-          </ButtonRow>
-        </div>
-      )}
-      {cloneDeploy && (
-        <div className="subPanel deployPreview">
-          <div className="previewHeader">
-            <div>
-              <strong>Clone/Build Deploy</strong>
-              <small>{cloneDeploy.repoName} - {cloneDeploy.branch}</small>
+
+          <details className="deployAdvancedReview">
+            <summary>Advanced deployment settings</summary>
+            <div className="two">
+              <label><span>Project name</span><input value={analysis.projectName ?? ""} onChange={(event) => setAnalysis({ ...analysis, projectName: event.target.value })} /></label>
+              <label><span>Branch</span><input value={analysis.branch ?? ""} onChange={(event) => setAnalysis({ ...analysis, branch: event.target.value || null })} /></label>
             </div>
-            <button type="button" title="Close clone/build deploy" onClick={() => setCloneDeploy(null)}><X size={16} /></button>
-          </div>
-          <div className="formHint">
-            Use this path when the Compose file has <code>build:</code>, Dockerfiles, env files, or other repo-local assets.
-            The Docker host clones or pulls over SSH with a read-only deploy key, then runs Compose from that repository folder.
-          </div>
-          <div className="two">
-            <HostSelect hosts={hosts} value={cloneDeploy.hostId} onChange={(hostId) => setCloneDeploy({ ...cloneDeploy, hostId })} />
-            <input value={cloneDeploy.projectName} onChange={(event) => setCloneDeploy({ ...cloneDeploy, projectName: normalizeComposeProjectName(event.target.value) })} required />
-          </div>
-          <div className="two">
-            <input className="monoText" value={cloneDeploy.hostCloneUrl} onChange={(event) => setCloneDeploy({ ...cloneDeploy, hostCloneUrl: event.target.value })} required />
-            <input className="monoText" value={cloneDeploy.hostCloneDirectory} onChange={(event) => setCloneDeploy({ ...cloneDeploy, hostCloneDirectory: event.target.value })} required />
-          </div>
-          <div className="two">
-            <input value={cloneDeploy.branch} onChange={(event) => setCloneDeploy({ ...cloneDeploy, branch: event.target.value })} required />
-            <input value={cloneDeploy.composePath} disabled />
-          </div>
-          {accessMessage && <div className={`notice ${accessMessage.tone}`}>{accessMessage.text}</div>}
-          {action.error && <div className="notice error">{action.error}</div>}
-          <ButtonRow>
-            <button type="button" disabled={action.busy || !cloneDeploy.hostId || !cloneDeploy.hostCloneUrl.trim()} onClick={() => void testCloneBuildAccess()}><ShieldCheck size={16} />Test Host Access</button>
-            <button
-              type="button"
-              className="primary"
-              disabled={action.busy || !cloneDeploy.hostId || !cloneDeploy.projectName || !cloneDeploy.hostCloneUrl.trim() || !cloneDeploy.hostCloneDirectory.trim()}
-              onClick={() => void deployCloneBuild()}
-            >
-              <Hammer size={18} />Clone/Build Deploy
-            </button>
-            <button type="button" onClick={() => setCloneDeploy(null)}><X size={16} />Close</button>
-          </ButtonRow>
-        </div>
+            <div className="two">
+              <label><span>Working directory</span><input className="monoText" value={analysis.workingDir ?? ""} onChange={(event) => setAnalysis({ ...analysis, workingDir: event.target.value })} /></label>
+              <label><span>Compose path</span><input className="monoText" value={analysis.composePath ?? ""} onChange={(event) => setAnalysis({ ...analysis, composePath: event.target.value })} /></label>
+            </div>
+            <label>
+              <span>Compose YAML</span>
+              <textarea
+                className="monoTextarea composeEditor"
+                value={analysis.composeYaml ?? ""}
+                readOnly={analysis.sourceType === "git" && !analysis.summary.dockerfileGenerated}
+                onChange={(event) => setAnalysis({ ...analysis, composeYaml: event.target.value })}
+              />
+              {analysis.sourceType === "git" && !analysis.summary.dockerfileGenerated && (
+                <small>This Compose file is managed by Git. Change it in the repository, then analyze again.</small>
+              )}
+            </label>
+          </details>
+        </Panel>
       )}
-      <DataTable
-        rows={repositories}
-        columns={["Name", "Repository", "Branch", "Compose", "Project", "Access", "Last Deploy", "Actions"]}
-        render={(repo) => [
-          repo.name,
-          `${repo.owner}/${repo.repo}`,
-          repo.branch,
-          repo.composePath,
-          repo.projectName,
-          <span key="access" className={`pill ${githubCredentialClass(repo)}`} title={repo.githubTokenCheckError ?? undefined}>
-            {githubCredentialLabel(repo)}
-          </span>,
-          repo.lastDeployedAt ? formatDate(repo.lastDeployedAt) : repo.lastError ?? "",
-          <div className="deployActions" key="actions">
-            <select value={deployBranch[repo.id] ?? repo.branch} onChange={(event) => setDeployBranch({ ...deployBranch, [repo.id]: event.target.value })}>
-              {(repoBranches[repo.id] ?? [repo.branch]).map((branch) => <option key={branch} value={branch}>{branch}</option>)}
-            </select>
-            <HostSelect hosts={hosts} value={deployHost[repo.id] ?? repo.defaultHostId ?? hosts[0]?.id ?? ""} onChange={(hostId) => setDeployHost({ ...deployHost, [repo.id]: hostId })} />
-            <button type="button" title="Test GitHub access" onClick={() => void testSavedAccess(repo)}><KeyRound size={16} /></button>
-            <button type="button" title="Load branches" onClick={() => void loadRepoBranches(repo)}><RefreshCw size={16} /></button>
-            <button type="button" title="Clone/Build deploy with host deploy key" onClick={() => openCloneBuildDeploy(repo)}><Hammer size={16} /></button>
-            <button type="button" title="Preview and customize compose" onClick={() => void openDeployPreview(repo)}><FileText size={16} /></button>
-            <button type="button" title="Edit repo" onClick={() => startEdit(repo)}><Pencil size={16} /></button>
-            <button type="button" title="Delete repo" className="danger" onClick={() => void deleteRepo(repo)}><Trash2 size={16} /></button>
+
+      <Panel title={<><Library size={18} /> My Library</>} count={sources.length}>
+        <div className="formHint">Every successful deployment is saved here. Re-analyze it, deploy to another host, or change safe defaults without touching running containers.</div>
+        {sources.length === 0 ? (
+          <EmptyState headline="Your app library is empty" hint="Deploy your first source and it will appear here automatically." />
+        ) : (
+          <div className="deploymentLibraryGrid">
+            {sources.map((sourceCard) => (
+              <article key={sourceCard.id} className="deploymentSourceCard">
+                {editingSource?.id === sourceCard.id ? (
+                  <>
+                    <label><span>Name</span><input value={sourceEdit.name} onChange={(event) => setSourceEdit({ ...sourceEdit, name: event.target.value })} /></label>
+                    <label><span>Project</span><input value={sourceEdit.projectName} onChange={(event) => setSourceEdit({ ...sourceEdit, projectName: event.target.value })} /></label>
+                    {sourceCard.sourceType === "git" && <label><span>Branch</span><input value={sourceEdit.branch} onChange={(event) => setSourceEdit({ ...sourceEdit, branch: event.target.value })} /></label>}
+                    {(sourceCard.sourceType === "git" || sourceCard.sourceType.startsWith("compose")) && <label><span>Compose path</span><input value={sourceEdit.composePath} onChange={(event) => setSourceEdit({ ...sourceEdit, composePath: event.target.value })} /></label>}
+                    <label><span>Working directory</span><input className="monoText" value={sourceEdit.workingDir} onChange={(event) => setSourceEdit({ ...sourceEdit, workingDir: event.target.value })} /></label>
+                    <label>
+                      <span>Safe environment defaults</span>
+                      <textarea
+                        className="monoTextarea"
+                        placeholder="SETTING=value"
+                        value={sourceEdit.safeEnvironment}
+                        onChange={(event) => setSourceEdit({ ...sourceEdit, safeEnvironment: event.target.value })}
+                      />
+                    </label>
+                    <label>
+                      <span>Default host</span>
+                      <HostSelect hosts={hosts} value={sourceEdit.defaultHostId} onChange={(defaultHostId) => setSourceEdit({ ...sourceEdit, defaultHostId })} />
+                    </label>
+                    <ButtonRow>
+                      <button className="primary" onClick={() => void saveSourceEdit()}>Save defaults</button>
+                      <button onClick={() => setEditingSource(null)}>Cancel</button>
+                    </ButtonRow>
+                  </>
+                ) : (
+                  <>
+                    <header>
+                      <span className="deploymentSourceIcon">{sourceCard.sourceType === "git" ? <GitBranch size={19} /> : <Box size={19} />}</span>
+                      <div><strong>{sourceCard.name}</strong><small>{sourceTypeLabel(sourceCard.sourceType)}</small></div>
+                    </header>
+                    <code title={sourceCard.sourceLocator}>{sourceCard.sourceLocator}</code>
+                    <dl>
+                      <div><dt>Project</dt><dd>{sourceCard.projectName}</dd></div>
+                      <div><dt>Last deployed</dt><dd>{sourceCard.lastDeployedAt ? new Date(sourceCard.lastDeployedAt).toLocaleString() : "Not yet"}</dd></div>
+                      <div>
+                        <dt>Used on</dt>
+                        <dd>{sourceCard.targetHostIds.map((targetHostId) => hosts.find((host) => host.id === targetHostId)?.name).filter(Boolean).join(", ") || "No hosts yet"}</dd>
+                      </div>
+                    </dl>
+                    <label>
+                      <span>Deploy to</span>
+                      <HostSelect
+                        hosts={hosts}
+                        value={sourceTargets[sourceCard.id] ?? sourceCard.defaultHostId ?? hostId}
+                        onChange={(targetHostId) => setSourceTargets({ ...sourceTargets, [sourceCard.id]: targetHostId })}
+                      />
+                    </label>
+                    <ButtonRow>
+                      <button className="primary" onClick={() => void deploySource(sourceCard)} disabled={action.busy}><Play size={16} />Analyze / Deploy</button>
+                      <button title="Edit safe defaults" onClick={() => beginSourceEdit(sourceCard)}><Pencil size={16} /></button>
+                      <button className="danger" title="Remove from library" onClick={() => void removeSource(sourceCard)}><Trash2 size={16} /></button>
+                    </ButtonRow>
+                  </>
+                )}
+              </article>
+            ))}
           </div>
-        ]}
-      />
-    </Panel>
+        )}
+      </Panel>
+    </div>
   );
 }

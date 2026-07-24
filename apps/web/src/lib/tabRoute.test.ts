@@ -22,6 +22,12 @@ describe("tabRoute", () => {
     expect(navigationGroups.flatMap((group) => group.items)).not.toContain("apps");
   });
 
+  it("retires the standalone Compose page in favor of Services", () => {
+    expect(tabFromPath("compose")).toBe("services");
+    expect(tabPath("compose")).toBe("/services");
+    expect(navigationGroups.flatMap((group) => group.items)).not.toContain("compose");
+  });
+
   it("keeps updates routable but out of primary navigation", () => {
     const deploy = navigationGroups.find((group) => group.title === "Deploy");
     expect(isTab("updates")).toBe(true);

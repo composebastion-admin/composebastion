@@ -69,7 +69,6 @@ const recoverySectionTabs: Record<RecoverySection, keyof typeof recoveryTabDefau
 
 const AdminPanel = lazy(async () => ({ default: (await import("./panels/AdminPanel.js")).AdminPanel }));
 const CatalogPanel = lazy(async () => ({ default: (await import("./panels/CatalogPanel.js")).CatalogPanel }));
-const ComposePanel = lazy(async () => ({ default: (await import("./panels/ComposePanel.js")).ComposePanel }));
 const ContainersPanel = lazy(async () => ({ default: (await import("./panels/ContainersPanel.js")).ContainersPanel }));
 const GithubDeployPanel = lazy(async () => ({ default: (await import("./panels/GithubDeployPanel.js")).GithubDeployPanel }));
 const HostFilesPanel = lazy(async () => ({ default: (await import("./panels/HostFilesPanel.js")).HostFilesPanel }));
@@ -532,7 +531,6 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
                       if (query) setResourceListQuery((current) => ({ query, key: current.key + 1 }));
                       setTab("containers");
                     }}
-                    onOpenCompose={() => setTab("compose")}
                     optimisticContainerStates={optimisticContainerStates}
                     transitioningContainerIds={transitioningContainerIds}
                     onSetOptimisticStates={setOptimisticStates}
@@ -631,7 +629,6 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
                     refresh={refresh}
                   />
                 )}
-                {tab === "compose" && selectedHost && <ComposePanel host={selectedHost} hosts={hosts} stacks={stacks} refresh={refresh} runJob={runJob} />}
                 {tab === "learn" && <LearnPanel />}
                 {recoverySection && (
                   <RecoveryCenterPanel

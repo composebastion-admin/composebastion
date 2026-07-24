@@ -24,6 +24,7 @@ import { registerImageIntelligenceRoutes } from "./routes/imageIntelligence.js";
 import { registerConfigRoutes } from "./routes/config.js";
 import { registerContainerRoutes } from "./routes/containers.js";
 import { registerDemoRoutes } from "./routes/demo.js";
+import { registerDeploymentRoutes } from "./routes/deployments.js";
 import { registerFavoriteRoutes } from "./routes/favorites.js";
 import { registerFileRoutes } from "./routes/files.js";
 import { registerGithubRoutes } from "./routes/github.js";
@@ -199,6 +200,7 @@ export async function buildServer() {
   await registerAppRoutes(app);
   await registerContainerRoutes(app);
   await registerDemoRoutes(app);
+  await registerDeploymentRoutes(app);
   await registerComposeRoutes(app);
   await registerCatalogRoutes(app);
   await registerImageIntelligenceRoutes(app);

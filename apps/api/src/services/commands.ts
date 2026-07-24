@@ -16,6 +16,12 @@ export function withDockerEnv(command: string, socketPath?: string) {
 
 export function dockerCommandFailureMessage(output: string, fallback: string) {
   const message = output.trim();
+  if (/server gave HTTP response to HTTPS client/i.test(message)) {
+    const registry = /https:\/\/([^/"'\s]+)\/v2\//i.exec(message)?.[1];
+    return registry
+      ? `Docker does not trust HTTP registry '${registry}'. Configure it as an insecure registry on this host, then retry the deployment.`
+      : "Docker tried HTTPS for a registry that only serves HTTP. Configure that registry as insecure on this host, then retry the deployment.";
+  }
   if (/(\bdocker:\s+command not found\b|\bdocker:\s+not found\b|\bcommand not found:\s+docker\b)/i.test(message)) {
     return "Docker CLI was not found on the remote host. Install Docker, or make sure the docker command is available to non-interactive SSH sessions.";
   }

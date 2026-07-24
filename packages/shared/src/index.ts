@@ -262,6 +262,7 @@ export const composeStackSchema = z.object({
   sourceComposePath: z.string().nullable().optional(),
   sourceCurrentCommitSha: z.string().nullable().optional(),
   sourceLatestCommitSha: z.string().nullable().optional(),
+  deploymentSourceId: idSchema.nullable().optional(),
   sourceCheckedAt: z.string().nullable().optional(),
   sourceCheckError: z.string().nullable().optional(),
   lastDeployError: z.string().nullable().optional(),
@@ -547,6 +548,15 @@ export const dockerActionSchema = z.discriminatedUnion("type", [
     projectName: z.string().regex(/^[a-z0-9][a-z0-9_-]*$/, "Project name must be lowercase and contain only letters, numbers, hyphens, and underscores"),
     repositoryId: idSchema.optional()
   }),
+  withHost("deploy.analyze", {
+    analysisId: idSchema
+  }),
+  withHost("deploy.execute", {
+    analysisId: idSchema
+  }),
+  withHost("host.configureRegistryTrust", {
+    registry: z.string().min(1).max(255)
+  }),
   withHost("container.run", {
     image: z.string().min(1),
     name: z.string().min(1).optional(),
@@ -788,6 +798,178 @@ export const githubRepositoryDeploySchema = z.object({
   hostCloneDirectory: z.string().min(1).max(1024).optional()
 });
 
+export const deploymentSourceTypeSchema = z.enum(["git", "compose_url", "compose_upload", "image"]);
+const deploymentComposePathSchema = z.string()
+  .trim()
+  .min(1)
+  .max(1024)
+  .refine(
+    (value) => !value.startsWith("/") && !value.split(/[\\/]+/).includes(".."),
+    "Compose path must stay inside the deployment directory"
+  );
+
+export const deploymentWarningSchema = z.object({
+  code: z.string(),
+  message: z.string()
+});
+
+export const deploymentVariableSchema = z.object({
+  key: z.string(),
+  value: z.string().default(""),
+  defaultValue: z.string().nullable().default(null),
+  required: z.boolean().default(false),
+  secret: z.boolean().default(false),
+  source: z.enum(["compose", "example_env", "image", "user"]).default("compose")
+});
+
+export const deploymentServiceSummarySchema = z.object({
+  name: z.string(),
+  image: z.string().nullable().default(null),
+  build: z.string().nullable().default(null),
+  ports: z.array(z.string()).default([]),
+  volumes: z.array(z.string()).default([])
+});
+
+export const deploymentRegistryIssueSchema = z.object({
+  registry: z.string(),
+  insecure: z.boolean(),
+  trusted: z.boolean(),
+  canApply: z.boolean(),
+  message: z.string()
+});
+
+export const deploymentAnalysisCreateSchema = z.object({
+  hostId: idSchema,
+  source: z.string().trim().min(1).max(512 * 1024),
+  sourceType: deploymentSourceTypeSchema.optional(),
+  composeYaml: z.string().max(512 * 1024).optional(),
+  branch: z.string().trim().min(1).max(255).optional(),
+  composePath: deploymentComposePathSchema.optional(),
+  credentialUsername: z.string().max(255).optional(),
+  credentialSecret: z.string().max(4096).optional(),
+  sourceId: idSchema.optional()
+}).superRefine((value, ctx) => {
+  if (Boolean(value.credentialUsername) !== Boolean(value.credentialSecret)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: value.credentialUsername ? ["credentialSecret"] : ["credentialUsername"],
+      message: "Enter both the HTTPS username and token/password"
+    });
+  }
+});
+
+export const deploymentAnalysisDeploySchema = z.object({
+  displayName: z.string().trim().min(1).max(120).optional(),
+  projectName: composeProjectNameSchema.optional(),
+  branch: z.string().trim().min(1).max(255).optional(),
+  composePath: deploymentComposePathSchema.optional(),
+  workingDir: hostPathSchema.optional(),
+  composeYaml: z.string().min(1).max(512 * 1024).optional(),
+  env: z.string().max(512 * 1024).optional()
+});
+
+export const deploymentSourceCreateSchema = z.object({
+  sourceType: deploymentSourceTypeSchema,
+  name: z.string().trim().min(1).max(120),
+  sourceLocator: z.string().trim().min(1).max(512 * 1024),
+  branch: z.string().trim().min(1).max(255).optional(),
+  composePath: deploymentComposePathSchema.optional(),
+  workingDir: hostPathSchema.optional(),
+  projectName: composeProjectNameSchema,
+  composeYaml: z.string().max(512 * 1024).optional(),
+  env: z.string().max(512 * 1024).optional(),
+  defaultHostId: idSchema.optional(),
+  credentialUsername: z.string().max(255).optional(),
+  credentialSecret: z.string().max(4096).optional()
+}).superRefine((value, ctx) => {
+  if (Boolean(value.credentialUsername) !== Boolean(value.credentialSecret)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: value.credentialUsername ? ["credentialSecret"] : ["credentialUsername"],
+      message: "Enter both the HTTPS username and token/password"
+    });
+  }
+});
+
+export const deploymentSourceUpdateSchema = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
+  branch: z.string().trim().min(1).max(255).nullable().optional(),
+  composePath: deploymentComposePathSchema.nullable().optional(),
+  workingDir: hostPathSchema.nullable().optional(),
+  projectName: composeProjectNameSchema.optional(),
+  defaultHostId: idSchema.nullable().optional(),
+  safeEnvironment: z.record(z.string().max(4096))
+    .refine((value) => Object.keys(value).length <= 256, "Too many environment defaults")
+    .refine(
+      (value) => Object.values(value).every((entry) => !/[\0\r\n]/.test(entry)),
+      "Environment defaults must be single-line values"
+    )
+    .optional(),
+  credentialUsername: z.string().max(255).nullable().optional(),
+  credentialSecret: z.string().max(4096).optional(),
+  clearCredential: z.boolean().default(false).optional()
+});
+
+export const deploymentSourceSchema = z.object({
+  id: idSchema,
+  sourceType: deploymentSourceTypeSchema,
+  name: z.string(),
+  sourceLocator: z.string(),
+  branch: z.string().nullable(),
+  composePath: z.string().nullable(),
+  workingDir: z.string().nullable(),
+  projectName: z.string(),
+  defaultHostId: idSchema.nullable(),
+  targetHostIds: z.array(idSchema).default([]),
+  safeEnvironment: z.record(z.string()).default({}),
+  hasCredential: z.boolean(),
+  metadata: z.record(z.unknown()),
+  lastDeployedAt: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string()
+});
+
+export const deploymentAnalysisSchema = z.object({
+  id: idSchema,
+  hostId: idSchema,
+  sourceId: idSchema.nullable(),
+  sourceType: deploymentSourceTypeSchema,
+  sourceInput: z.string(),
+  sourceLocator: z.string().nullable(),
+  status: z.enum(["queued", "analyzing", "ready", "deploying", "deployed", "failed", "expired"]),
+  displayName: z.string().nullable(),
+  projectName: z.string().nullable(),
+  branch: z.string().nullable(),
+  composePath: z.string().nullable(),
+  workingDir: z.string().nullable(),
+  composeYaml: z.string().nullable(),
+  env: z.string(),
+  summary: z.object({
+    services: z.array(deploymentServiceSummarySchema).default([]),
+    composeCandidates: z.array(z.string()).default([]),
+    dockerfileGenerated: z.boolean().default(false),
+    trackedEnvFile: z.boolean().default(false)
+  }),
+  variables: z.array(deploymentVariableSchema),
+  warnings: z.array(deploymentWarningSchema),
+  blockers: z.array(deploymentWarningSchema),
+  registryIssues: z.array(deploymentRegistryIssueSchema),
+  error: z.string().nullable(),
+  expiresAt: z.string(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  deployedAt: z.string().nullable()
+});
+
+export const registryTrustSchema = z.object({
+  registry: z.string(),
+  insecure: z.boolean(),
+  trusted: z.boolean(),
+  canApply: z.boolean(),
+  requiresRestart: z.boolean(),
+  message: z.string()
+});
+
 export const githubRepositoryBranchesRequestSchema = z.object({
   repositoryUrl: z.string().url(),
   githubToken: z.string().max(4096).optional()
@@ -804,6 +986,9 @@ export const configImportSchema = z.object({
 
 export type FavoriteImage = z.infer<typeof favoriteImageSchema>;
 export type GithubRepository = z.infer<typeof githubRepositorySchema>;
+export type DeploymentSource = z.infer<typeof deploymentSourceSchema>;
+export type DeploymentAnalysis = z.infer<typeof deploymentAnalysisSchema>;
+export type DeploymentSourceType = z.infer<typeof deploymentSourceTypeSchema>;
 
 export const userCreateSchema = z.object({
   name: z.string().max(80).optional(),

@@ -1,20 +1,21 @@
 import { useCallback, useEffect } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import type { Tab } from "../lib/navigation.js";
 import { resolveAuthorizedTab } from "../lib/authorization.js";
 import { tabFromPath, tabPath, tabRequiresHost } from "../lib/tabRoute.js";
 
 export function useDashboardTab(hasHost: boolean, hostsLoaded = true, allowedTabs?: ReadonlySet<Tab>) {
   const navigate = useNavigate();
+  const location = useLocation();
   const { tab: tabParam } = useParams<{ tab?: string }>();
   const requestedTab = tabFromPath(tabParam);
   const tab = allowedTabs ? resolveAuthorizedTab(requestedTab, allowedTabs) : requestedTab;
 
   useEffect(() => {
     if (!tabParam || tabParam !== tab) {
-      navigate(tabPath(tab), { replace: true });
+      navigate(`${tabPath(tab)}${location.search}`, { replace: true });
     }
-  }, [navigate, tab, tabParam]);
+  }, [location.search, navigate, tab, tabParam]);
 
   useEffect(() => {
     // Only redirect to settings once hosts have actually loaded — otherwise the

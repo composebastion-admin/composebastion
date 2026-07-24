@@ -6,7 +6,6 @@ import {
   Box,
   Boxes,
   Copy,
-  Database,
   Eye,
   FileText,
   GitBranch,
@@ -72,7 +71,6 @@ export const tabs: Array<{ id: Tab; label: string; icon: typeof Box }> = [
   { id: "catalog", label: "Catalog", icon: Grid3x3 },
   { id: "deploy", label: "Deploy", icon: GitBranch },
   { id: "files", label: "Files", icon: FileText },
-  { id: "compose", label: "Compose", icon: Database },
   { id: "updates", label: "Updates", icon: RefreshCw },
   { id: "backups", label: "Backups", icon: ShieldCheck },
   { id: "recovery", label: "Recovery Points", icon: ArchiveRestore },
@@ -114,7 +112,7 @@ export const hostlessTabs = new Set<Tab>([
 
 export const navigationGroups: Array<{ title: string; items: Tab[] }> = [
   { title: "Docker", items: ["overview", "services", "containers", "images", "networks", "volumes", "hosts", "ssh", "host-metrics"] },
-  { title: "Deploy", items: ["compose", "catalog", "deploy", "files"] },
+  { title: "Deploy", items: ["deploy", "catalog", "files"] },
   { title: "Recovery", items: ["recovery", "recovery-move", "recovery-schedules", "recovery-runs", "recovery-backups"] },
   { title: "System", items: ["admin"] },
   { title: "Guide", items: ["learn"] }

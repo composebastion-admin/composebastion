@@ -8,6 +8,13 @@ import { deleteExpiredSessions } from "./services/auth.js";
 import { runAlertChecks } from "./services/alerts.js";
 import { runBackupDrill, runBackupVerify, runHostPathBackup, runHostPathRestore, runVolumeBackup, runVolumeClone, runVolumeRestore } from "./services/backups.js";
 import { executeDockerAction } from "./services/docker.js";
+import {
+  analyzeDeployment,
+  backfillDeploymentSourceEncryptedEnvironment,
+  cleanupExpiredDeploymentAnalyses,
+  configureRegistryTrust,
+  executeDeployment
+} from "./services/deployments.js";
 import { listHostIds } from "./services/hosts.js";
 import {
   buildJobProgress,
@@ -111,7 +118,13 @@ async function processAvailableJobs() {
         await markJobProgressStep(job.id, action.type, activeStepForFailure, undefined, lease);
 
         let result: Record<string, unknown>;
-        if (action.type === "volume.backup") {
+        if (action.type === "deploy.analyze") {
+          result = await analyzeDeployment(action.payload.analysisId);
+        } else if (action.type === "deploy.execute") {
+          result = await executeDeployment(action.payload.analysisId);
+        } else if (action.type === "host.configureRegistryTrust") {
+          result = await configureRegistryTrust(action.hostId, action.payload.registry);
+        } else if (action.type === "volume.backup") {
           result = await runVolumeBackup(action.hostId, action.payload.backupId, action.payload.volumeName, executionFence);
         } else if (action.type === "volume.restore") {
           result = await runVolumeRestore(action.hostId, action.payload.backupId, action.payload.targetVolumeName, action.payload.overwrite, executionFence);
@@ -316,8 +329,11 @@ async function main() {
   schedule("recovery-schedules", 60_000, runDueRecoverySchedules);
   schedule("stack-update-policies", 30 * 60_000, runStackUpdatePolicies);
   schedule("session-cleanup", 60 * 60_000, deleteExpiredSessions);
+  schedule("deployment-analysis-cleanup", 30 * 60_000, cleanupExpiredDeploymentAnalyses);
   schedule("worker-cleanup", 60 * 60_000, cleanupWorkerInstances);
   await runScheduled("session-cleanup-initial", deleteExpiredSessions);
+  await runScheduled("deployment-analysis-cleanup-initial", cleanupExpiredDeploymentAnalyses);
+  await runScheduled("deployment-source-secret-backfill", backfillDeploymentSourceEncryptedEnvironment);
   await runScheduled("job-poll", processAvailableJobs);
 
   console.info(`ComposeBastion worker started for ${env.DATABASE_URL.replace(/:\/\/.*@/, "://***@")}`);

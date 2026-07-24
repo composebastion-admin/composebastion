@@ -46,6 +46,8 @@ import { countGithubVersionUpdates, groupGithubVersionOptions, shortVersionSha }
 import { isImageChannelTag, summarizeImageVersionTags } from "../../lib/imageTagOptions.js";
 import { ServiceImageUpdateDrawer, type ServiceImageUpdateTarget } from "../services/ServiceImageUpdateDrawer.js";
 import { useAuthorization } from "../AuthorizationContext.js";
+import { ProxyPanel } from "../stacks/ProxyPanel.js";
+import { StackVersionsPanel } from "../stacks/StackVersionsPanel.js";
 
 type GroupActionVerb = "start" | "stop" | "restart" | "deploy" | "remove";
 type SourceLinkForm = {
@@ -227,7 +229,6 @@ export function ServicesPanel({
   refresh,
   runJob,
   onOpenContainers,
-  onOpenCompose,
   optimisticContainerStates = {},
   transitioningContainerIds = new Set<string>(),
   onSetOptimisticStates
@@ -241,7 +242,6 @@ export function ServicesPanel({
   refresh: () => Promise<void>;
   runJob: <T extends Jobish>(request: () => Promise<T>) => Promise<T>;
   onOpenContainers: (query?: string) => void;
-  onOpenCompose?: () => void;
   optimisticContainerStates?: Record<string, { state: string; timestamp: number }>;
   transitioningContainerIds?: Set<string>;
   onSetOptimisticStates?: (updates: Record<string, string>) => void;
@@ -258,6 +258,8 @@ export function ServicesPanel({
   const [renameTarget, setRenameTarget] = useState<DockerApp | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [imageUpdateTarget, setImageUpdateTarget] = useState<ServiceGroup | null>(null);
+  const [advancedStack, setAdvancedStack] = useState<ComposeStack | null>(null);
+  const [stackDraft, setStackDraft] = useState({ name: "", projectName: "", composeYaml: "", env: "" });
   const [sourceForm, setSourceForm] = useState<SourceLinkForm | null>(null);
   const [savingSource, setSavingSource] = useState(false);
   const [versionLookup, setVersionLookup] = useState<VersionLookupState>(emptyVersionLookup);
@@ -268,7 +270,83 @@ export function ServicesPanel({
   const [tagLookups, setTagLookups] = useState<Record<string, TagLookupState>>({});
   const tagLookupsRef = useRef<Record<string, TagLookupState>>({});
 
+  function replaceStackQuery(stackId: string | null) {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    if (stackId) url.searchParams.set("stack", stackId);
+    else url.searchParams.delete("stack");
+    window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+  }
+
+  function openAdvancedStack(stack: ComposeStack) {
+    setAdvancedStack(stack);
+    setStackDraft({
+      name: stack.name,
+      projectName: stack.projectName,
+      composeYaml: stack.composeYaml,
+      env: stack.env
+    });
+    replaceStackQuery(stack.id);
+  }
+
+  function closeAdvancedStack() {
+    setAdvancedStack(null);
+    replaceStackQuery(null);
+  }
+
+  async function saveAdvancedStack() {
+    if (!advancedStack) return;
+    setSavingSource(true);
+    try {
+      const result = await putJson<{ stack: ComposeStack }>(`/api/compose/${advancedStack.id}`, stackDraft);
+      setAdvancedStack(result.stack);
+      await refresh();
+      pushToast(`${result.stack.name} deployment settings saved`, "success");
+    } catch (caught) {
+      pushToast(caught instanceof Error ? caught.message : String(caught), "error");
+    } finally {
+      setSavingSource(false);
+    }
+  }
+
+  async function forgetAdvancedStack() {
+    if (!advancedStack) return;
+    if (!await confirm({
+      title: "Forget service record",
+      tone: "danger",
+      confirmLabel: "Forget only",
+      message: `Forget '${advancedStack.name}' in ComposeBastion? Running containers and host files are not removed.`
+    })) return;
+    await deleteJson(`/api/compose/${advancedStack.id}`);
+    closeAdvancedStack();
+    await refresh();
+  }
+
+  async function advancedStackAction(verb: "deploy" | "stop" | "remove") {
+    if (!advancedStack) return;
+    if (verb === "remove" && !await confirm({
+      title: "Remove service from Docker",
+      tone: "danger",
+      confirmLabel: "Compose down",
+      message: `Run docker compose down for '${advancedStack.name}'? Named volumes are preserved.`
+    })) return;
+    await runJob(() => postJson<JobResult>(
+      `/api/compose/${advancedStack.id}/${verb}`,
+      verb === "remove" ? { removeVolumes: false } : {}
+    ));
+    await refresh();
+    if (verb === "remove") closeAdvancedStack();
+  }
+
   const groups = useMemo(() => groupServices(containers, stacks, hosts), [containers, stacks, hosts]);
+  useEffect(() => {
+    const stackId = typeof window === "undefined"
+      ? null
+      : new URLSearchParams(window.location.search).get("stack");
+    if (!stackId || advancedStack?.id === stackId) return;
+    const stack = stacks.find((candidate) => candidate.id === stackId);
+    if (stack) openAdvancedStack(stack);
+  }, [advancedStack?.id, stacks]);
   const appByGroupKey = useMemo(() => {
     const map = new Map<string, DockerApp>();
     for (const group of groups) {
@@ -687,12 +765,6 @@ export function ServicesPanel({
           <option value="stopped">Stopped</option>
         </select>
         <ButtonRow>
-          {onOpenCompose && (
-            <button type="button" onClick={onOpenCompose} title={canOperate ? "Create or edit compose stacks" : "View compose stacks"}>
-              <Layers size={16} />
-              Compose
-            </button>
-          )}
           <button type="button" onClick={toggleExpandAll} disabled={visibleGroups.length === 0}>
             <ListTree size={16} />
             {allExpanded ? "Collapse all" : "Expand all"}
@@ -947,14 +1019,24 @@ export function ServicesPanel({
                       </>
                     )}
                     {canOperate && group.stack && (
-                      <button
-                        type="button"
-                        title={selfManaged ? selfManagedTitle : "Redeploy (compose up -d)"}
-                        disabled={busy || selfManaged}
-                        onClick={() => void groupAction(group, "deploy")}
-                      >
-                        <UploadCloud size={15} />
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          title={selfManaged ? selfManagedTitle : "Redeploy (compose up -d)"}
+                          disabled={busy || selfManaged}
+                          onClick={() => void groupAction(group, "deploy")}
+                        >
+                          <UploadCloud size={15} />
+                        </button>
+                        <button
+                          type="button"
+                          title="Advanced deployment settings"
+                          disabled={busy}
+                          onClick={() => openAdvancedStack(group.stack!)}
+                        >
+                          <Layers size={15} />
+                        </button>
+                      </>
                     )}
                     {canOperate && canOpenSource && app && (
                       <button
@@ -1063,6 +1145,56 @@ export function ServicesPanel({
             );
           })}
         </div>
+      )}
+      {canOperate && advancedStack && (
+        <section className="drawer serviceDeploymentDrawer" aria-label={`Advanced deployment settings for ${advancedStack.name}`}>
+          <div className="panelHeader">
+            <div>
+              <h3>Deployment · {advancedStack.name}</h3>
+              <small>Compose, source, versions, proxy, and lifecycle</small>
+            </div>
+            <button type="button" onClick={closeAdvancedStack}>Close</button>
+          </div>
+
+          <div className="serviceDeploymentSource">
+            <div><span>Source</span><strong>{advancedStack.sourceType ?? "ComposeBastion"}</strong></div>
+            {advancedStack.sourceRepositoryUrl && <div><span>Repository</span><code>{advancedStack.sourceRepositoryUrl}</code></div>}
+            {advancedStack.sourceBranch && <div><span>Branch</span><code>{advancedStack.sourceBranch}</code></div>}
+            {advancedStack.sourceWorkingDir && <div><span>Directory</span><code>{advancedStack.sourceWorkingDir}</code></div>}
+            {advancedStack.sourceComposePath && <div><span>Compose file</span><code>{advancedStack.sourceComposePath}</code></div>}
+          </div>
+
+          <form className="composeForm" onSubmit={(event) => {
+            event.preventDefault();
+            void saveAdvancedStack();
+          }}>
+            <div className="two">
+              <label><span>Display name</span><input value={stackDraft.name} onChange={(event) => setStackDraft({ ...stackDraft, name: event.target.value })} required /></label>
+              <label><span>Project name</span><input value={stackDraft.projectName} onChange={(event) => setStackDraft({ ...stackDraft, projectName: event.target.value })} required /></label>
+            </div>
+            <label>
+              <span>Compose YAML</span>
+              <textarea className="monoTextarea composeEditor" value={stackDraft.composeYaml} onChange={(event) => setStackDraft({ ...stackDraft, composeYaml: event.target.value })} required />
+            </label>
+            <label>
+              <span>Environment</span>
+              <textarea className="monoTextarea envEditor" value={stackDraft.env} onChange={(event) => setStackDraft({ ...stackDraft, env: event.target.value })} placeholder="Optional .env content" />
+              {advancedStack.deploymentSourceId && (
+                <small>Secret values are redacted here. Update them through Analyze / Deploy in My Library so they remain encrypted.</small>
+              )}
+            </label>
+            <ButtonRow>
+              <button className="primary" disabled={savingSource}>Save deployment settings</button>
+              <button type="button" onClick={() => void advancedStackAction("deploy")}><UploadCloud size={16} />Redeploy</button>
+              <button type="button" onClick={() => void advancedStackAction("stop")}><Square size={16} />Stop</button>
+              <button type="button" className="danger" onClick={() => void advancedStackAction("remove")}><Trash2 size={16} />Remove</button>
+              <button type="button" onClick={() => void forgetAdvancedStack()}>Forget only</button>
+            </ButtonRow>
+          </form>
+
+          <StackVersionsPanel stack={advancedStack} runJob={runJob} refresh={refresh} />
+          <ProxyPanel stack={advancedStack} onChanged={refresh} />
+        </section>
       )}
       {canOperate && sourceTarget && sourceForm && (
         <form

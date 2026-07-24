@@ -18,6 +18,7 @@ type ConfigBackupPayload = {
   alertRules: Array<Record<string, any>>;
   favoriteImages: Array<Record<string, any>>;
   githubRepositories: Array<Record<string, any>>;
+  deploymentSources?: Array<Record<string, any>>;
   appSourceLinks?: Array<Record<string, any>>;
   backupTargets?: Array<Record<string, any>>;
 };
@@ -67,6 +68,9 @@ function validateConfigBackupPayload(payload: ConfigBackupPayload) {
   if (payload.appSourceLinks !== undefined && !Array.isArray(payload.appSourceLinks)) {
     throw configImportError("Config backup appSourceLinks must be a list");
   }
+  if (payload.deploymentSources !== undefined && !Array.isArray(payload.deploymentSources)) {
+    throw configImportError("Config backup deploymentSources must be a list");
+  }
   if (payload.backupTargets !== undefined && !Array.isArray(payload.backupTargets)) {
     throw configImportError("Config backup backupTargets must be a list");
   }
@@ -93,7 +97,7 @@ function normalizeImportedRegistries(registries: Array<Record<string, any>>) {
 }
 
 export async function exportConfigBackup(passphrase: string) {
-  const [hosts, composeStacks, registries, notificationChannels, alertRules, favoriteImages, githubRepositories, appSourceLinks, backupTargets] = await Promise.all([
+  const [hosts, composeStacks, registries, notificationChannels, alertRules, favoriteImages, githubRepositories, appSourceLinks, backupTargets, deploymentSources] = await Promise.all([
     query("SELECT * FROM docker_hosts ORDER BY name ASC"),
     query("SELECT * FROM compose_stacks ORDER BY name ASC"),
     query("SELECT * FROM registries ORDER BY name ASC"),
@@ -102,7 +106,8 @@ export async function exportConfigBackup(passphrase: string) {
     query("SELECT * FROM favorite_images ORDER BY image ASC"),
     query("SELECT * FROM github_repositories ORDER BY name ASC"),
     query("SELECT * FROM app_source_links ORDER BY host_id, name ASC"),
-    query("SELECT * FROM backup_targets ORDER BY name ASC")
+    query("SELECT * FROM backup_targets ORDER BY name ASC"),
+    query("SELECT * FROM deployment_sources ORDER BY name ASC")
   ]);
 
   const payload: ConfigBackupPayload = {
@@ -142,7 +147,8 @@ export async function exportConfigBackup(passphrase: string) {
       sourceWorkingDir: row.source_working_dir,
       sourceComposePath: row.source_compose_path,
       sourceCurrentCommitSha: row.source_current_commit_sha,
-      sourceLatestCommitSha: row.source_latest_commit_sha
+      sourceLatestCommitSha: row.source_latest_commit_sha,
+      deploymentSourceId: row.deployment_source_id
     })),
     registries: registries.rows.map((row: any) => ({
       id: row.id,
@@ -190,6 +196,23 @@ export async function exportConfigBackup(passphrase: string) {
       hostCloneUrl: row.host_clone_url,
       hostCloneDirectory: row.host_clone_directory,
       githubToken: decryptNullable(row.github_token_encrypted)
+    })),
+    deploymentSources: (deploymentSources?.rows ?? []).map((row: any) => ({
+      id: row.id,
+      sourceType: row.source_type,
+      name: row.name,
+      sourceLocator: row.source_locator,
+      branch: row.branch,
+      composePath: row.compose_path,
+      workingDir: row.working_dir,
+      projectName: row.project_name,
+      composeYaml: row.compose_yaml,
+      env: decryptNullable(row.env_encrypted),
+      credentialUsername: row.credential_username,
+      credentialSecret: decryptNullable(row.credential_secret_encrypted),
+      defaultHostId: row.default_host_id,
+      metadata: row.metadata ?? {},
+      lastDeployedAt: row.last_deployed_at
     })),
     appSourceLinks: appSourceLinks.rows.map((row: any) => ({
       id: row.id,
@@ -241,6 +264,7 @@ export async function importConfigBackup(backup: Record<string, unknown>, passph
       alertRules: 0,
       favoriteImages: 0,
       githubRepositories: 0,
+      deploymentSources: 0,
       appSourceLinks: 0,
       backupTargets: 0
     };
@@ -365,14 +389,59 @@ export async function importConfigBackup(backup: Record<string, unknown>, passph
       counts.githubRepositories += 1;
     }
 
+    for (const source of payload.deploymentSources ?? []) {
+      await client.query(
+        `INSERT INTO deployment_sources (
+           id, source_type, name, source_locator, branch, compose_path, project_name,
+           working_dir, compose_yaml, env_encrypted, credential_username, credential_secret_encrypted,
+           default_host_id, metadata, last_deployed_at
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+         ON CONFLICT (id)
+         DO UPDATE SET source_type = EXCLUDED.source_type,
+                       name = EXCLUDED.name,
+                       source_locator = EXCLUDED.source_locator,
+                       branch = EXCLUDED.branch,
+                       compose_path = EXCLUDED.compose_path,
+                       working_dir = EXCLUDED.working_dir,
+                       project_name = EXCLUDED.project_name,
+                       compose_yaml = EXCLUDED.compose_yaml,
+                       env_encrypted = EXCLUDED.env_encrypted,
+                       credential_username = EXCLUDED.credential_username,
+                       credential_secret_encrypted = EXCLUDED.credential_secret_encrypted,
+                       default_host_id = EXCLUDED.default_host_id,
+                       metadata = EXCLUDED.metadata,
+                       last_deployed_at = EXCLUDED.last_deployed_at,
+                       updated_at = now()`,
+        [
+          source.id,
+          source.sourceType,
+          source.name,
+          source.sourceLocator,
+          source.branch ?? null,
+          source.composePath ?? null,
+          source.projectName,
+          source.workingDir ?? null,
+          source.composeYaml ?? null,
+          encryptNullable(source.env),
+          source.credentialUsername ?? null,
+          encryptNullable(source.credentialSecret),
+          source.defaultHostId ?? null,
+          source.metadata ?? {},
+          source.lastDeployedAt ?? null
+        ]
+      );
+      counts.deploymentSources += 1;
+    }
+
     for (const stack of payload.composeStacks ?? []) {
       await client.query(
         `INSERT INTO compose_stacks (
            id, host_id, name, project_name, compose_yaml, env, status,
            source_type, source_repository_url, source_branch, source_working_dir, source_compose_path,
-           source_current_commit_sha, source_latest_commit_sha
+           source_current_commit_sha, source_latest_commit_sha, deployment_source_id
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
          ON CONFLICT (host_id, project_name)
          DO UPDATE SET name = EXCLUDED.name,
                        compose_yaml = EXCLUDED.compose_yaml,
@@ -385,6 +454,7 @@ export async function importConfigBackup(backup: Record<string, unknown>, passph
                        source_compose_path = EXCLUDED.source_compose_path,
                        source_current_commit_sha = EXCLUDED.source_current_commit_sha,
                        source_latest_commit_sha = EXCLUDED.source_latest_commit_sha,
+                       deployment_source_id = EXCLUDED.deployment_source_id,
                        updated_at = now()`,
         [
           stack.id,
@@ -400,7 +470,8 @@ export async function importConfigBackup(backup: Record<string, unknown>, passph
           stack.sourceWorkingDir ?? null,
           stack.sourceComposePath ?? null,
           stack.sourceCurrentCommitSha ?? null,
-          stack.sourceLatestCommitSha ?? null
+          stack.sourceLatestCommitSha ?? null,
+          stack.deploymentSourceId ?? null
         ]
       );
       counts.composeStacks += 1;

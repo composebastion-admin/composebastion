@@ -15,6 +15,9 @@ export const MAX_AUTO_ATTEMPTS = 3;
 export const AUTO_RETRY_JOB_TYPES = new Set([
   "host.check",
   "host.sync",
+  "host.configureRegistryTrust",
+  "deploy.analyze",
+  "deploy.execute",
   "git.testRemote",
   "backup.verify",
   "recovery.verify"
@@ -147,6 +150,9 @@ function progressLabels(type: string) {
   if (type === "volume.backup" || type === "hostPath.backup" || type === "recovery.create" || type === "recovery.capture") return ["Prepare", "Capture", "Store", "Finish"];
   if (type === "volume.restore" || type === "hostPath.restore" || type === "recovery.restore") return ["Prepare", "Restore", "Verify", "Finish"];
   if (type.startsWith("migration.")) return ["Plan", "Capture", "Transfer", "Deploy", "Verify"];
+  if (type === "deploy.analyze") return ["Detect", "Inspect", "Preflight", "Review"];
+  if (type === "deploy.execute") return ["Prepare", "Deploy", "Save", "Verify"];
+  if (type === "host.configureRegistryTrust") return ["Backup", "Validate", "Restart", "Verify"];
   if (type.startsWith("compose.") || type === "git.cloneDeploy") return ["Prepare", "Deploy", "Verify"];
   if (type === "system.self_update") return ["Prepare", "Handoff", "Reconnect"];
   if (type === "host.sync") return ["Connect", "Inventory", "Store"];
@@ -455,6 +461,14 @@ export async function completeJob(id: string, resultValue: Record<string, unknow
 
 async function finalizeLinkedOperationFailure(client: PoolClient, row: any, message: string) {
   const payload = row.payload && typeof row.payload === "object" ? row.payload as Record<string, unknown> : {};
+  if ((row.type === "deploy.analyze" || row.type === "deploy.execute") && typeof payload.analysisId === "string") {
+    await client.query(
+      `UPDATE deployment_analyses
+       SET status = 'failed', error = $2, updated_at = now()
+       WHERE id = $1 AND status IN ('queued', 'analyzing', 'ready', 'deploying')`,
+      [payload.analysisId, message]
+    );
+  }
   if ((row.type === "volume.backup" || row.type === "hostPath.backup" || row.type === "volume.clone") && typeof payload.backupId === "string") {
     await client.query(
       `UPDATE backups SET status = 'failed', error = $2, completed_at = now()
