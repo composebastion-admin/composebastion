@@ -51,6 +51,10 @@
 - Updated Fastify static serving and its routing/URL dependencies, PostCSS,
   shell parsing, and brace expansion to patched releases. Migrated the browser
   app to React Router 8.3.0 so the beta dependency audit has no known findings.
+- Rebuilt the agent's bundled Docker Compose v5.3.1 binary with gRPC-Go 1.82.1
+  and updated the exact linked-module attribution evidence, removing the
+  upstream v1.81.1 high-severity finding without changing the Compose CLI
+  feature version.
 
 ### Migration and compatibility
 - Adds the additive `031_universal_deployments.sql` migration.

@@ -13,7 +13,7 @@
     },
     {
       "binary": "docker-compose",
-      "sha256": "a1fc666ba72f2f3cff26949134840bc3cbe05efe9fc807fb943a8122096ef629"
+      "sha256": "e125a0736726218b33abacbc43ce5d4e22bea48446271a29fdaf8d8a727533f6"
     },
     {
       "binary": "rclone",
@@ -11127,12 +11127,32 @@
       "version": "v1.81.1",
       "replacement": null,
       "consumingBinaries": [
-        "docker-cli",
-        "docker-compose"
+        "docker-cli"
       ],
       "sourceUrl": "https://pkg.go.dev/google.golang.org/grpc@v1.81.1",
       "spdxExpression": "Apache-2.0",
       "goChecksum": "h1:VnnIIZ88UzOOKLukQi+ImGz8O1Wdp8nAGGnvOfEIWQQ=",
+      "requiredFiles": [
+        {
+          "path": "texts/ebaf2612104bd207aa794dc0/LICENSE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "path": "texts/ebaf2612104bd207aa794dc0/NOTICE.txt",
+          "sha256": "693ff28ec216d5112ac1bbfe64ef539005867d1c7bd427b57d579683293b947f"
+        }
+      ]
+    },
+    {
+      "module": "google.golang.org/grpc",
+      "version": "v1.82.1",
+      "replacement": null,
+      "consumingBinaries": [
+        "docker-compose"
+      ],
+      "sourceUrl": "https://pkg.go.dev/google.golang.org/grpc@v1.82.1",
+      "spdxExpression": "Apache-2.0",
+      "goChecksum": "h1:NnAxzGRA0677vCa4BUkOAnO5+FfQqVl9iUXeD0IqcGE=",
       "requiredFiles": [
         {
           "path": "texts/ebaf2612104bd207aa794dc0/LICENSE",

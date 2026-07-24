@@ -10,6 +10,11 @@ The app and agent images are available for `linux/amd64` and `linux/arm64`:
 
 The beta channel never moves `latest`, `main`, or stable version tags.
 
+The agent image retains Docker Compose v5.3.1 compatibility while rebuilding
+its bundled CLI with gRPC-Go 1.82.1 to remediate the upstream v1.81.1 security
+finding. The linked-module inventory and third-party notices cover this patched
+source build.
+
 ## Install or update the beta
 
 Use the Compose files from the same beta branch:
