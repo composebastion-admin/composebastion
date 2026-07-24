@@ -1,5 +1,37 @@
 import { describe, expect, it } from "vitest";
-import { appGithubVersionSelectSchema, appGithubVersionsSchema, appRenameInputSchema, appSourceLinkInputSchema, backupCreateSchema, backupListQuerySchema, backupRestoreSchema, backupScheduleCreateSchema, catalogTemplates, configExportSchema, customCatalogTemplateInputSchema, dockerActionSchema, dockerAppSchema, externalCatalogQuerySchema, githubRepositoryBranchesRequestSchema, githubRepositoryCreateSchema, githubRepositoryDeploySchema, hostPathBackupRestoreSchema, loginRequestSchema, networkDriverExplanations, selfUpdateConfigSchema, setupRequestSchema, validatePasswordStrength, volumeCloneSchema } from "./index.js";
+import {
+  appGithubVersionSelectSchema,
+  appGithubVersionsSchema,
+  appRenameInputSchema,
+  appSourceLinkInputSchema,
+  backupCreateSchema,
+  backupListQuerySchema,
+  backupRestoreSchema,
+  backupScheduleCreateSchema,
+  catalogTemplates,
+  configExportSchema,
+  customCatalogTemplateInputSchema,
+  deploymentAnalysisCreateSchema,
+  deploymentAnalysisDeploySchema,
+  deploymentAnalysisSchema,
+  deploymentSourceCreateSchema,
+  deploymentSourceSchema,
+  deploymentSourceUpdateSchema,
+  dockerActionSchema,
+  dockerAppSchema,
+  externalCatalogQuerySchema,
+  githubRepositoryBranchesRequestSchema,
+  githubRepositoryCreateSchema,
+  githubRepositoryDeploySchema,
+  hostPathBackupRestoreSchema,
+  loginRequestSchema,
+  networkDriverExplanations,
+  registryTrustSchema,
+  selfUpdateConfigSchema,
+  setupRequestSchema,
+  validatePasswordStrength,
+  volumeCloneSchema
+} from "./index.js";
 
 const sampleHostId = "00000000-0000-4000-8000-000000000001";
 
@@ -137,6 +169,146 @@ describe("shared schemas", () => {
       hostCloneUrl: "git@github.com:composebastion-admin/composebastion.git",
       hostCloneDirectory: "/srv/apps/composebastion"
     }).mode).toBe("host_clone");
+  });
+
+  it("validates universal deployment requests and protected defaults", () => {
+    const analysis = deploymentAnalysisCreateSchema.parse({
+      hostId: sampleHostId,
+      source: " https://github.com/example/app.git ",
+      composePath: "deploy/compose.yaml",
+      credentialUsername: "deploy-user",
+      credentialSecret: "token"
+    });
+    expect(analysis.source).toBe("https://github.com/example/app.git");
+    expect(analysis.composePath).toBe("deploy/compose.yaml");
+
+    for (const composePath of ["/etc/compose.yaml", "../compose.yaml", "deploy/../../compose.yaml"]) {
+      expect(() => deploymentAnalysisCreateSchema.parse({
+        hostId: sampleHostId,
+        source: "nginx:alpine",
+        composePath
+      })).toThrow("Compose path must stay inside the deployment directory");
+    }
+
+    expect(() => deploymentAnalysisCreateSchema.parse({
+      hostId: sampleHostId,
+      source: "https://github.com/example/private.git",
+      credentialUsername: "deploy-user"
+    })).toThrow("Enter both the HTTPS username and token/password");
+    expect(() => deploymentAnalysisCreateSchema.parse({
+      hostId: sampleHostId,
+      source: "https://github.com/example/private.git",
+      credentialSecret: "token"
+    })).toThrow("Enter both the HTTPS username and token/password");
+
+    const source = deploymentSourceCreateSchema.parse({
+      sourceType: "git",
+      name: " Example App ",
+      sourceLocator: "https://github.com/example/app.git",
+      projectName: "example-app",
+      workingDir: "/srv/example-app",
+      credentialUsername: "deploy-user",
+      credentialSecret: "token"
+    });
+    expect(source.name).toBe("Example App");
+    expect(() => deploymentSourceCreateSchema.parse({
+      ...source,
+      credentialSecret: undefined
+    })).toThrow("Enter both the HTTPS username and token/password");
+
+    expect(deploymentSourceUpdateSchema.parse({
+      safeEnvironment: {
+        APP_MODE: "production",
+        PUBLIC_URL: "https://app.example.com"
+      }
+    }).safeEnvironment).toMatchObject({ APP_MODE: "production" });
+    expect(() => deploymentSourceUpdateSchema.parse({
+      safeEnvironment: Object.fromEntries(
+        Array.from({ length: 257 }, (_, index) => [`KEY_${index}`, "value"])
+      )
+    })).toThrow("Too many environment defaults");
+    expect(() => deploymentSourceUpdateSchema.parse({
+      safeEnvironment: { APP_MODE: "production\nSECRET=exposed" }
+    })).toThrow("Environment defaults must be single-line values");
+
+    expect(deploymentAnalysisDeploySchema.parse({
+      displayName: " Example App ",
+      projectName: "example-app",
+      workingDir: "/srv/example-app"
+    }).displayName).toBe("Example App");
+  });
+
+  it("parses universal deployment source, analysis, and registry summaries", () => {
+    const now = new Date(0).toISOString();
+    expect(deploymentSourceSchema.parse({
+      id: sampleHostId,
+      sourceType: "image",
+      name: "nginx",
+      sourceLocator: "nginx:alpine",
+      branch: null,
+      composePath: null,
+      workingDir: null,
+      projectName: "nginx",
+      defaultHostId: sampleHostId,
+      hasCredential: false,
+      metadata: {},
+      lastDeployedAt: null,
+      createdAt: now,
+      updatedAt: now
+    })).toMatchObject({
+      targetHostIds: [],
+      safeEnvironment: {}
+    });
+
+    const parsedAnalysis = deploymentAnalysisSchema.parse({
+      id: sampleHostId,
+      hostId: sampleHostId,
+      sourceId: null,
+      sourceType: "image",
+      sourceInput: "nginx:alpine",
+      sourceLocator: "nginx:alpine",
+      status: "ready",
+      displayName: "nginx",
+      projectName: "nginx",
+      branch: null,
+      composePath: "compose.yaml",
+      workingDir: "/srv/nginx",
+      composeYaml: "services:\n  nginx:\n    image: nginx:alpine\n",
+      env: "",
+      summary: {
+        services: [{ name: "nginx" }]
+      },
+      variables: [{ key: "APP_MODE" }],
+      warnings: [],
+      blockers: [],
+      registryIssues: [],
+      error: null,
+      expiresAt: now,
+      createdAt: now,
+      updatedAt: now,
+      deployedAt: null
+    });
+    expect(parsedAnalysis.summary.services[0]).toMatchObject({
+      image: null,
+      build: null,
+      ports: [],
+      volumes: []
+    });
+    expect(parsedAnalysis.variables[0]).toMatchObject({
+      value: "",
+      defaultValue: null,
+      required: false,
+      secret: false,
+      source: "compose"
+    });
+    expect(registryTrustSchema.parse({
+      registry: "registry.internal:5000",
+      insecure: true,
+      trusted: false,
+      canApply: true,
+      requiresRestart: true,
+      message: "Docker does not trust this HTTP registry"
+    }).requiresRestart).toBe(true);
   });
 
   it("rejects path-like volume names that would become host bind mounts", () => {
