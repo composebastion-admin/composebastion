@@ -147,6 +147,10 @@ function requireTrivy(file, jobName, job) {
 const publishFile = ".github/workflows/publish-images.yml";
 const publish = workflows[publishFile];
 const publishJobs = publish?.jobs ?? {};
+const publicationBranches = [...(publish?.on?.push?.branches ?? [])].sort();
+if (JSON.stringify(publicationBranches) !== JSON.stringify(["beta", "main"])) {
+  fail(`${publishFile}: push publication must be limited to the main and beta branches`);
+}
 requireNode24Setup(publishFile, "metadata", publishJobs.metadata);
 const metadataSteps = publishJobs.metadata?.steps ?? [];
 const stableTagStep = metadataSteps.find((step) => step.id === "stable-tag");
@@ -270,24 +274,31 @@ if (!String(releaseGate?.if ?? "").includes("always()")) fail(`${publishFile}: r
 for (const dependency of ["metadata", "build-scan", "rescan-tag-images"]) {
   if (!(releaseGate?.needs ?? []).includes(dependency)) fail(`${publishFile}: release aggregate gate must require ${dependency}`);
 }
-for (const [jobName, dependency] of [["publish-main", "release-image-gate"], ["promote-tag", "release-image-gate"]]) {
+for (const [jobName, dependency] of [["publish-branch", "release-image-gate"], ["promote-tag", "release-image-gate"]]) {
   if (!(publishJobs[jobName]?.needs ?? []).includes(dependency)) fail(`${publishFile}:${jobName}: must depend on ${dependency}`);
 }
 
 if (!String(publish?.concurrency?.group ?? "").includes("publish-images-publication")) {
-  fail(`${publishFile}: main and tag registry mutations must share one concurrency group`);
+  fail(`${publishFile}: branch and tag registry mutations must share one concurrency group`);
 }
-const copyRun = (publishJobs["publish-main"]?.steps ?? []).find((step) => step.name === "Copy the scanned platform manifests")?.run ?? "";
+const publishBranch = publishJobs["publish-branch"];
+const publishBranchCondition = String(publishBranch?.if ?? "");
+for (const branchRef of ["refs/heads/main", "refs/heads/beta"]) {
+  if (!publishBranchCondition.includes(branchRef)) {
+    fail(`${publishFile}:publish-branch: condition must explicitly allow ${branchRef}`);
+  }
+}
+const copyRun = (publishBranch?.steps ?? []).find((step) => step.name === "Copy the scanned platform manifests")?.run ?? "";
 if (!copyRun.includes('platform_tag="sha-${GITHUB_SHA}-${arch}"')) {
-  fail(`${publishFile}:publish-main: platform images must use deterministic full-commit tags`);
+  fail(`${publishFile}:publish-branch: platform images must use deterministic full-commit tags`);
 }
-const assembleRun = (publishJobs["publish-main"]?.steps ?? []).find((step) => step.name === "Assemble and verify both immutable indexes")?.run ?? "";
+const assembleRun = (publishBranch?.steps ?? []).find((step) => step.name === "Assemble and verify both immutable indexes")?.run ?? "";
 if (!assembleRun.includes('index="${image}:sha-${GITHUB_SHA}"')) {
-  fail(`${publishFile}:publish-main: multi-architecture indexes must use the protected commit SHA tag`);
+  fail(`${publishFile}:publish-branch: multi-architecture indexes must use the protected commit SHA tag`);
 }
 for (const arch of ["amd64", "arm64"]) {
   if (!assembleRun.includes(`\${image}:sha-\${GITHUB_SHA}-${arch}`)) {
-    fail(`${publishFile}:publish-main: ${arch} index source must be the deterministic full-commit platform tag`);
+    fail(`${publishFile}:publish-branch: ${arch} index source must be the deterministic full-commit platform tag`);
   }
 }
 for (const invariant of [
@@ -295,16 +306,17 @@ for (const invariant of [
   'docker buildx imagetools inspect --raw "${image}@${index_digest}"',
   'echo "${component}_digest=${index_digest}"'
 ]) {
-  if (!assembleRun.includes(invariant)) fail(`${publishFile}:publish-main: verified index binding is missing ${invariant}`);
+  if (!assembleRun.includes(invariant)) fail(`${publishFile}:publish-branch: verified index binding is missing ${invariant}`);
 }
-const mainAliasStep = (publishJobs["publish-main"]?.steps ?? []).find((step) => step.name === "Apply main aliases after both immutable indexes exist");
-const mainAliasRun = mainAliasStep?.run ?? "";
-if (mainAliasRun.includes(":latest")) fail(`${publishFile}:publish-main: an untagged main commit must not move latest`);
-if (!mainAliasRun.includes('"${image}@${digest}"')
-    || mainAliasRun.includes('"${image}:sha-${GITHUB_SHA}"')
-    || mainAliasStep?.env?.APP_INDEX_DIGEST !== "${{ steps.indexes.outputs.app_digest }}"
-    || mainAliasStep?.env?.AGENT_INDEX_DIGEST !== "${{ steps.indexes.outputs.agent_digest }}") {
-  fail(`${publishFile}:publish-main: main aliases must use the just-verified digest-qualified index sources`);
+const branchAliasStep = (publishBranch?.steps ?? []).find((step) => step.name === "Apply branch aliases after both immutable indexes exist");
+const branchAliasRun = branchAliasStep?.run ?? "";
+if (branchAliasRun.includes(":latest")) fail(`${publishFile}:publish-branch: an untagged branch commit must not move latest`);
+if (!branchAliasRun.includes('"${image}:${GITHUB_REF_NAME}"')
+    || !branchAliasRun.includes('"${image}@${digest}"')
+    || branchAliasRun.includes('"${image}:sha-${GITHUB_SHA}"')
+    || branchAliasStep?.env?.APP_INDEX_DIGEST !== "${{ steps.indexes.outputs.app_digest }}"
+    || branchAliasStep?.env?.AGENT_INDEX_DIGEST !== "${{ steps.indexes.outputs.agent_digest }}") {
+  fail(`${publishFile}:publish-branch: main/beta aliases must use the just-verified digest-qualified index sources`);
 }
 const promoteTag = publishJobs["promote-tag"];
 const promoteDownload = actionStep(promoteTag, "actions/download-artifact");

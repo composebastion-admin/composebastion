@@ -6,12 +6,13 @@ deployment, and runtime Docker images.
 
 ## Branches
 
-- `main` is the current stable/public branch and the branch targeted by push CI.
+- `main` is the current stable/public branch.
 - Short-lived feature or `codex/` branches should branch from `main`.
 - Use `dev` for active integration work only if the maintainer establishes that
   branch for a release cycle.
-- Use `beta` for staging/beta test releases only if the maintainer establishes
-  that branch. Promote to `main` only after smoke testing passes.
+- `beta` is the established staging/test branch. It receives push CI, CodeQL,
+  container scans, and isolated app/agent image publication. Promote to `main`
+  only after beta verification passes.
 
 ## Required Checks
 
@@ -68,6 +69,9 @@ Run the same gates CI expects before release:
 - Scan both images for high/critical vulnerabilities.
 - Publish container images for every public release and every merge to `main`
   through `.github/workflows/publish-images.yml`.
+- Every push to `beta` publishes both scanned multi-architecture images to the
+  moving `beta` alias and immutable full-commit tags. Beta publication must
+  never move `main`, `latest`, or stable version aliases.
 - Main image publishes must include `main`, deterministic per-platform
   `sha-<40-character-sha>-amd64` and `sha-<40-character-sha>-arm64` tags, and a
   multi-platform `sha-<40-character-sha>` index. Only a verified stable tag may

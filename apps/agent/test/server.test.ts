@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import packageJson from "../package.json";
 
 type ExecResult = {
   stdout?: string;
@@ -162,7 +163,7 @@ describe("agent server", () => {
     expect(healthyReply.statusCode).toBe(200);
     expect(healthy).toMatchObject({
       ok: true,
-      agentVersion: "1.1.3",
+      agentVersion: packageJson.version,
       dockerVersion: "29.6.1",
       composeVersion: "5.3.1",
       dockerError: null,

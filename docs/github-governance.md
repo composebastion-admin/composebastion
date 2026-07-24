@@ -34,8 +34,9 @@ historical records and must not be rewritten or deleted.
 
 For each stable release, run every gate from one clean protected commit, publish
 both multi-architecture images, verify anonymous pulls and manifests, and create
-the immutable GitHub Release. `v1.1.3` follows the same rescan and promotion
-gates as other V1 patch releases.
+the immutable GitHub Release. The `beta` branch publishes only moving beta
+aliases and immutable commit indexes; it cannot promote `latest` or stable
+version tags.
 
 ## Labels And Public Intake
 

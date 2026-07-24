@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes } from "react-router";
 import type { AdminUser } from "@composebastion/shared";
 import { api } from "./api.js";
 import { AuthPanel } from "./components/AuthPanel.js";

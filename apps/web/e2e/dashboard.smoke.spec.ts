@@ -124,6 +124,63 @@ const composeStack = {
   updatedAt: new Date(0).toISOString()
 };
 
+const deploymentAnalysis = {
+  id: "19191919-1919-4919-8919-191919191919",
+  hostId: host.id,
+  sourceId: null,
+  sourceType: "git",
+  sourceInput: "http://10.0.21.40:3000/kobuslabs/linuxclitogui",
+  sourceLocator: "http://10.0.21.40:3000/kobuslabs/linuxclitogui",
+  status: "ready",
+  displayName: "linuxclitogui",
+  projectName: "linuxclitogui",
+  branch: "main",
+  composePath: "docker-compose.yml",
+  workingDir: "/srv/composebastion/deployments/linuxclitogui",
+  composeYaml: "services:\n  app:\n    image: 10.0.21.40:3000/kobuslabs/linuxclitogui:latest\n    ports:\n      - 8080:8080\n",
+  env: "",
+  summary: {
+    services: [{
+      name: "app",
+      image: "10.0.21.40:3000/kobuslabs/linuxclitogui:latest",
+      build: null,
+      ports: ["8080:8080"],
+      volumes: []
+    }],
+    composeCandidates: ["docker-compose.yml"],
+    dockerfileGenerated: false,
+    trackedEnvFile: false
+  },
+  variables: [],
+  warnings: [],
+  blockers: [],
+  registryIssues: [],
+  error: null,
+  expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
+  createdAt: new Date(0).toISOString(),
+  updatedAt: new Date(0).toISOString(),
+  deployedAt: null
+};
+
+const deploymentSource = {
+  id: "20202020-2020-4020-8020-202020202020",
+  sourceType: "git",
+  name: "linuxclitogui",
+  sourceLocator: "http://10.0.21.40:3000/kobuslabs/linuxclitogui",
+  branch: "main",
+  composePath: "docker-compose.yml",
+  workingDir: "/srv/composebastion/deployments/linuxclitogui",
+  projectName: "linuxclitogui",
+  defaultHostId: host.id,
+  targetHostIds: [host.id],
+  safeEnvironment: {},
+  hasCredential: false,
+  metadata: {},
+  lastDeployedAt: new Date(0).toISOString(),
+  createdAt: new Date(0).toISOString(),
+  updatedAt: new Date(0).toISOString()
+};
+
 const managedUser = {
   id: "16161616-1616-4616-8616-161616161616",
   name: "Managed Operator",
@@ -263,6 +320,8 @@ type MockApiOptions = {
   githubRepositories?: unknown[];
   resources?: unknown[];
   composeStacks?: unknown[];
+  deploymentSources?: unknown[];
+  deploymentAnalysis?: Record<string, unknown>;
   users?: unknown[];
   registries?: unknown[];
   selfUpdateAvailable?: boolean;
@@ -285,6 +344,8 @@ function allowedMockMethods(path: string): ReadonlySet<string> {
     [/^\/api\/apps\/[^/]+\/(?:name|version)$/, ["PUT"]],
     [/^\/api\/alerts\/channels\/[^/]+\/test$/, ["POST"]],
     [/^\/api\/github\/repos\/[^/]+\/(?:deploy|test-host-access)$/, ["POST"]],
+    [/^\/api\/deploy\/analyses$/, ["POST"]],
+    [/^\/api\/deploy\/analyses\/[^/]+\/deploy$/, ["POST"]],
     [/^\/api\/hosts\/[^/]+\/actions$/, ["POST"]],
     [/^\/api\/jobs\/[^/]+\/(?:cancel|retry)$/, ["POST"]],
     [/^\/api\/recovery\/points\/[^/]+\/drill$/, ["POST"]],
@@ -308,6 +369,8 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
   };
   let channelTestFailed = false;
   let selectedGitRef = appData.branch;
+  let deploymentFinished = false;
+  const analyzedDeployment = options.deploymentAnalysis ?? deploymentAnalysis;
 
   await page.route("**/api/**", async (route) => {
     const request = route.request();
@@ -402,6 +465,7 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
     } });
     if (path === `/api/hosts/${host.id}/compose`) return json({ stacks: options.composeStacks ?? [] });
     if (path === `/api/hosts/${fileHost.id}/compose`) return json({ stacks: [] });
+    if (path === `/api/compose/${composeStack.id}/versions`) return json({ versions: [] });
     if (path === "/api/hosts/metrics") return json([{
         hostId: host.id,
         name: host.name,
@@ -573,6 +637,37 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
       }]
     });
     if (path === "/api/github/repos") return json({ repositories: options.githubRepositories ?? [] });
+    if (path === "/api/deployment-sources") {
+      return json({ sources: deploymentFinished ? [deploymentSource] : (options.deploymentSources ?? []) });
+    }
+    if (path === "/api/deploy/analyses" && request.method() === "POST") {
+      return json({
+        analysis: analyzedDeployment,
+        job: {
+          id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+          type: "deploy.analyze",
+          status: "queued"
+        }
+      });
+    }
+    if (path === `/api/deploy/analyses/${analyzedDeployment.id}`) {
+      return json({
+        analysis: deploymentFinished
+          ? { ...analyzedDeployment, status: "deployed", sourceId: deploymentSource.id, deployedAt: new Date(0).toISOString() }
+          : analyzedDeployment
+      });
+    }
+    if (path === `/api/deploy/analyses/${analyzedDeployment.id}/deploy` && request.method() === "POST") {
+      deploymentFinished = true;
+      return json({
+        analysis: { ...analyzedDeployment, status: "deployed", sourceId: deploymentSource.id, deployedAt: new Date(0).toISOString() },
+        job: {
+          id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+          type: "deploy.execute",
+          status: "queued"
+        }
+      });
+    }
     if (path === "/api/apps") return json({ apps: [{ ...appData, branch: selectedGitRef }] });
     if (path === `/api/apps/${appData.id}/name` && request.method() === "PUT") {
       appData = { ...appData, name: (request.postDataJSON() as { name?: string }).name ?? appData.name };
@@ -948,11 +1043,10 @@ test("high-impact deletion flows require exact typed confirmation", async ({ pag
   await page.keyboard.press("Escape");
 
   await gotoApp(page, "/compose");
-  await page.getByTitle("Remove from Docker and delete named volumes").click();
-  dialog = page.getByRole("alertdialog", { name: "Remove compose stack and volumes" });
-  await expect(dialog.getByRole("button", { name: "Remove stack and volumes" })).toBeDisabled();
-  await dialog.getByRole("textbox").fill(composeStack.name);
-  await expect(dialog.getByRole("button", { name: "Remove stack and volumes" })).toBeEnabled();
+  await page.getByTitle("Advanced deployment settings").click();
+  await page.getByRole("button", { name: "Remove", exact: true }).click();
+  dialog = page.getByRole("alertdialog", { name: "Remove service from Docker" });
+  await expect(dialog.getByRole("button", { name: "Compose down" })).toBeEnabled();
   await page.keyboard.press("Escape");
 
   await gotoApp(page, "/admin");
@@ -1208,46 +1302,23 @@ test("dedicated SSH route manages SSH connections", async ({ page }) => {
   await expect(page.getByRole("dialog", { name: "Host SSH terminal for prod-01" })).toBeVisible();
 });
 
-test("tracked GitHub repos expose Clone/Build Deploy for build contexts", async ({ page }) => {
-  const repo = {
-    id: app.repositoryId,
-    name: "Private Web",
-    repositoryUrl: "https://github.com/example/web",
-    owner: "example",
-    repo: "web",
-    branch: "main",
-    composePath: "docker-compose.yml",
-    projectName: "web",
-    env: "",
-    defaultHostId: host.id,
-    hostCloneUrl: "git@github-web:example/web.git",
-    hostCloneDirectory: "/srv/apps/web",
-    lastDeployedAt: null,
-    lastDeployedCommitSha: null,
-    latestCommitSha: null,
-    updateCheckedAt: null,
-    updateCheckError: null,
-    hasGithubToken: true,
-    githubTokenStatus: "valid",
-    githubTokenCheckedAt: new Date(0).toISOString(),
-    githubTokenCheckError: null,
-    lastError: null,
-    createdAt: new Date(0).toISOString(),
-    updatedAt: new Date(0).toISOString()
-  };
-  const mock = await mockApi(page, { githubRepositories: [repo] });
+test("universal deploy analyzes Git, deploys, and saves the source to My Library", async ({ page }) => {
+  const mock = await mockApi(page);
   await gotoApp(page, "/deploy");
-  await page.getByTitle("Clone/Build deploy with host deploy key").click();
-  const panel = page.locator(".deployPreview", { hasText: "Clone/Build Deploy" });
-  await expect(panel).toBeVisible();
-  await expect(panel).toContainText("build:");
-  await expect(panel.locator("input.monoText").first()).toHaveValue("git@github-web:example/web.git");
-  await expect(panel.locator("input.monoText").nth(1)).toHaveValue("/srv/apps/web");
+  await page.getByLabel("Deployment source").fill("http://10.0.21.40:3000/kobuslabs/linuxclitogui");
+  await page.getByRole("button", { name: "Analyze" }).click();
 
-  await panel.getByRole("button", { name: "Test Host Access" }).click();
-  await expect(panel).toContainText("host git access verified");
-  await panel.getByRole("button", { name: "Clone/Build Deploy", exact: true }).click();
-  await expect.poll(() => mock.requests).toContain(`POST /api/github/repos/${app.repositoryId}/deploy`);
+  const review = page.locator(".universalDeploy", { hasText: "Review deployment" });
+  await expect(review.getByText("Ready to deploy")).toBeVisible();
+  await expect(review.getByRole("heading", { name: "linuxclitogui" })).toBeVisible();
+  await expect(review).toContainText("10.0.21.40:3000/kobuslabs/linuxclitogui:latest");
+  await expect(review).toContainText("8080:8080");
+  await expect.poll(() => mock.requests).toContain("POST /api/deploy/analyses");
+
+  await review.getByRole("button", { name: "Deploy & save" }).click();
+  await expect(page.getByText("linuxclitogui deployed and saved to My Library.")).toBeVisible();
+  await expect(page.locator(".deploymentSourceCard", { hasText: "linuxclitogui" })).toBeVisible();
+  await expect.poll(() => mock.requests).toContain(`POST /api/deploy/analyses/${deploymentAnalysis.id}/deploy`);
 });
 
 test("apps compatibility route renders the services experience", async ({ page }) => {

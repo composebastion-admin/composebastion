@@ -2,18 +2,18 @@ name: Publish Images
 
 on:
   push:
-    branches: [main]
+    branches: [main, beta]
     tags:
       - "v*"
   pull_request:
-    branches: [main]
+    branches: [main, beta]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  # Main and tag workflows mutate the same registry aliases, so serialize every
+  # Public branch and tag workflows mutate registry aliases, so serialize every
   # publication. PR-only scans retain independent, cancelable groups.
   group: ${{ github.event_name == 'pull_request' && format('publish-images-pr-{0}', github.ref) || 'publish-images-publication' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -256,9 +256,9 @@ jobs:
             test "${RESCAN_RESULT}" = skipped
           fi
 
-  publish-main:
-    name: Publish scanned main images
-    if: ${{ always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' }}
+  publish-branch:
+    name: Publish scanned branch images
+    if: ${{ always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/beta') }}
     needs: [metadata, build-scan, release-image-gate]
     permissions:
       contents: read
@@ -362,7 +362,7 @@ jobs:
             echo "${component}_digest=${index_digest}" >> "${GITHUB_OUTPUT}"
           done
 
-      - name: Apply main aliases after both immutable indexes exist
+      - name: Apply branch aliases after both immutable indexes exist
         shell: bash
         env:
           APP_INDEX_DIGEST: ${{ steps.indexes.outputs.app_digest }}
@@ -371,7 +371,7 @@ jobs:
           set -euo pipefail
           for image in "${APP_IMAGE}" "${AGENT_IMAGE}"; do
             if [ "${image}" = "${APP_IMAGE}" ]; then digest="${APP_INDEX_DIGEST}"; else digest="${AGENT_INDEX_DIGEST}"; fi
-            docker buildx imagetools create --tag "${image}:main" "${image}@${digest}"
+            docker buildx imagetools create --tag "${image}:${GITHUB_REF_NAME}" "${image}@${digest}"
           done
 
   rescan-tag-images:

@@ -1,5 +1,84 @@
 # Changelog
 
+## [v1.2.0-beta.1] - 2026-07-25
+
+> Beta channel only. This candidate is published from the GitHub `beta` branch
+> as the `beta` app and agent image tags; it does not move `latest`.
+
+### Added
+- Replaced the separate manual Deploy forms with a guided analyze, review, and
+  deploy workflow for Git repositories, Compose URLs or YAML, uploaded Compose
+  files, and OCI image references.
+- Added host-side Git discovery for GitHub, Gitea, GitLab, SSH, and generic Git
+  sources, including Compose-file priority, Dockerfile fallback generation,
+  example environment discovery, protected credential handling, and safe reuse
+  checks for existing deployment directories.
+- Added automatic image-to-Compose generation, port selection, unresolved
+  variable classification, registry preflight, and friendly insecure-registry
+  diagnostics before Compose starts.
+- Added reusable My Library source cards and an advanced Services deployment
+  drawer for source details, Compose editing, history, proxy settings, and
+  lifecycle actions.
+- Added durable expiring deployment analyses, the `deployment_sources` data
+  model, source-linked Compose stacks, deployment and registry-trust APIs, new
+  job types, OpenAPI schemas, audit coverage, and encrypted backup/restore
+  support for source credentials and entered secrets.
+- Added confirmed owner/admin registry-trust remediation for supported SSH
+  hosts with passwordless sudo, daemon configuration backup, validation,
+  restart verification, rollback, and self-host reconnection handling.
+
+### Changed
+- Deploy is now the single place to create apps, Services remains the deployed
+  inventory, and Catalog remains the curated template marketplace.
+- Retired duplicate Compose creation navigation. Legacy Compose routes redirect
+  to Services while preserving access to existing stacks.
+- Successful deployments save their reusable source automatically. Existing
+  tracked repositories and host-file stacks are backfilled without duplicating
+  running services.
+- Established the GitHub `beta` branch as a scanned app-and-agent publication
+  channel. Both images publish `beta` plus immutable per-commit multi-platform
+  tags without changing stable aliases.
+
+### Security
+- Git credentials are encrypted per source and materialized only through
+  protected temporary askpass files; credentials are excluded from remotes,
+  job payloads, responses, and logs.
+- Direct Compose downloads validate every DNS answer and redirect, reject
+  credential-bearing and unsafe network targets, cap response size, and require
+  valid Compose YAML.
+- Registry remediation preserves existing daemon settings and automatically
+  restores the prior configuration if Docker health verification fails.
+- Updated Fastify static serving and its routing/URL dependencies, PostCSS,
+  shell parsing, and brace expansion to patched releases. Migrated the browser
+  app to React Router 8.3.0 so the beta dependency audit has no known findings.
+
+### Migration and compatibility
+- Adds the additive `031_universal_deployments.sql` migration.
+- Existing GitHub deployment endpoints remain available as compatibility
+  adapters for this beta cycle.
+- Configuration exports now include the source library and encrypted deployment
+  data. Existing services and running containers are not removed by deleting a
+  library source.
+
+### Beta verification
+- Verify paste → analyze → review → deploy for Git, Compose, upload, and image
+  sources; then verify redeploy from My Library and management from Services.
+- For the supplied Gitea repository, confirm root Compose discovery for
+  `linuxclitogui`, the explicit HTTP registry diagnosis for
+  `10.0.21.40:3000`, confirmed trust repair, and successful deployment.
+- Capture the analysis ID, job ID, Jobs progress, Audit event, compact review,
+  and Services deployment drawer when reporting beta feedback.
+
+### Known limitations and rollback
+- Git analysis is SSH-host first. Agent hosts support Compose and image inputs
+  but intentionally return a clear Git capability blocker.
+- One-click registry trust repair requires an owner/admin, Linux/systemd Docker,
+  and passwordless sudo. Unsupported hosts retain the review and receive manual
+  instructions.
+- To roll back, pin both app and agent to `1.1.2`, pull, and recreate the
+  services without deleting volumes. Migration 031 is additive; retain the
+  database and configuration backup for a later beta retry.
+
 ## [v1.1.3] - 2026-07-19
 
 ### Security

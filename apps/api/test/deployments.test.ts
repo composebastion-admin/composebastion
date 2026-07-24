@@ -17,7 +17,7 @@ describe("universal deployment source detection", () => {
     ["http://10.0.21.40:3000/kobuslabs/linuxclitogui", "git"],
     ["git@gitlab.example:team/app.git", "git"],
     ["https://example.test/compose.yaml", "compose_url"],
-    ["ghcr.io/acme/app:latest", "image"],
+    ["ghcr.io/example/app:latest", "image"],
     ["http://10.0.21.40:3000/acme/app:latest", "image"],
     ["services:\n  app:\n    image: nginx", "compose_upload"]
   ])("detects %s as %s", (source, expected) => {
