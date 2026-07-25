@@ -17,11 +17,11 @@
     },
     {
       "binary": "rclone",
-      "sha256": "5984b837e023cb91d267b5608b6935d12c589c535f1b90d35bc21a14dec6e27d"
+      "sha256": "b3a9e84bd1996cb5fe775d844d90d12b7718ac3c88a38420e3c1a13644dd759f"
     },
     {
       "binary": "trivy",
-      "sha256": "1aa25ee392f665360029e39eb8d55ed40653f0d7fe3a481ee4903332954568ea"
+      "sha256": "0c35b7c78c1ad23112ad7d00dab1b26d6e910aa7102270d88da721f284608c2f"
     }
   ],
   "modules": [
@@ -4753,14 +4753,14 @@
     },
     {
       "module": "github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp",
-      "version": "v1.31.0",
+      "version": "v1.32.0",
       "replacement": null,
       "consumingBinaries": [
         "trivy"
       ],
-      "sourceUrl": "https://pkg.go.dev/github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp@v1.31.0",
+      "sourceUrl": "https://pkg.go.dev/github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp@v1.32.0",
       "spdxExpression": "Apache-2.0",
-      "goChecksum": "h1:DHa2U07rk8syqvCge0QIGMCE1WxGj9njT44GH7zNJLQ=",
+      "goChecksum": "h1:rIkQfkCOVKc1OiRCNcSDD8ml5RJlZbH/Xsq7lbpynwc=",
       "requiredFiles": [
         {
           "path": "texts/1ef082c2fa6493a151895cd0/LICENSE",
@@ -9881,14 +9881,14 @@
     },
     {
       "module": "go.opentelemetry.io/contrib/detectors/gcp",
-      "version": "v1.42.0",
+      "version": "v1.43.0",
       "replacement": null,
       "consumingBinaries": [
         "trivy"
       ],
-      "sourceUrl": "https://pkg.go.dev/go.opentelemetry.io/contrib/detectors/gcp@v1.42.0",
+      "sourceUrl": "https://pkg.go.dev/go.opentelemetry.io/contrib/detectors/gcp@v1.43.0",
       "spdxExpression": "NOASSERTION",
-      "goChecksum": "h1:kpt2PEJuOuqYkPcktfJqWWDjTEd/FNgrxcniL7kQrXQ=",
+      "goChecksum": "h1:62yY3dT7/ShwOxzA0RsKRgshBmfElKI4d/Myu2OxDFU=",
       "requiredFiles": [
         {
           "path": "texts/9d5a5570a79d246e33005b43/LICENSE",
@@ -11030,14 +11030,14 @@
     },
     {
       "module": "google.golang.org/genproto/googleapis/rpc",
-      "version": "v0.0.0-20260401024825-9d38bb4040a9",
+      "version": "v0.0.0-20260414002931-afd174a4e478",
       "replacement": null,
       "consumingBinaries": [
         "rclone"
       ],
-      "sourceUrl": "https://pkg.go.dev/google.golang.org/genproto/googleapis/rpc@v0.0.0-20260401024825-9d38bb4040a9",
+      "sourceUrl": "https://pkg.go.dev/google.golang.org/genproto/googleapis/rpc@v0.0.0-20260414002931-afd174a4e478",
       "spdxExpression": "Apache-2.0",
-      "goChecksum": "h1:m8qni9SQFH0tJc1X0vmnpw/0t+AImlSvp30sEupozUg=",
+      "goChecksum": "h1:RmoJA1ujG+/lRGNfUnOMfhCy5EipVMyvUE+KNbPbTlw=",
       "requiredFiles": [
         {
           "path": "texts/b1e8ecaa27dd782e1465a7ad/LICENSE",
@@ -11082,48 +11082,6 @@
     },
     {
       "module": "google.golang.org/grpc",
-      "version": "v1.80.0",
-      "replacement": null,
-      "consumingBinaries": [
-        "rclone"
-      ],
-      "sourceUrl": "https://pkg.go.dev/google.golang.org/grpc@v1.80.0",
-      "spdxExpression": "Apache-2.0",
-      "goChecksum": "h1:Xr6m2WmWZLETvUNvIUmeD5OAagMw3FiKmMlTdViWsHM=",
-      "requiredFiles": [
-        {
-          "path": "texts/ab3f437112ac645e9c1e9f50/LICENSE",
-          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
-        },
-        {
-          "path": "texts/ab3f437112ac645e9c1e9f50/NOTICE.txt",
-          "sha256": "693ff28ec216d5112ac1bbfe64ef539005867d1c7bd427b57d579683293b947f"
-        }
-      ]
-    },
-    {
-      "module": "google.golang.org/grpc",
-      "version": "v1.81.0",
-      "replacement": null,
-      "consumingBinaries": [
-        "trivy"
-      ],
-      "sourceUrl": "https://pkg.go.dev/google.golang.org/grpc@v1.81.0",
-      "spdxExpression": "Apache-2.0",
-      "goChecksum": "h1:W3G9N3KQf3BU+YuCtGKJk0CmxQNbAISICD/9AORxLIw=",
-      "requiredFiles": [
-        {
-          "path": "texts/5bafaaae754dccf3087879c2/LICENSE",
-          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
-        },
-        {
-          "path": "texts/5bafaaae754dccf3087879c2/NOTICE.txt",
-          "sha256": "693ff28ec216d5112ac1bbfe64ef539005867d1c7bd427b57d579683293b947f"
-        }
-      ]
-    },
-    {
-      "module": "google.golang.org/grpc",
       "version": "v1.81.1",
       "replacement": null,
       "consumingBinaries": [
@@ -11148,7 +11106,9 @@
       "version": "v1.82.1",
       "replacement": null,
       "consumingBinaries": [
-        "docker-compose"
+        "docker-compose",
+        "rclone",
+        "trivy"
       ],
       "sourceUrl": "https://pkg.go.dev/google.golang.org/grpc@v1.82.1",
       "spdxExpression": "Apache-2.0",

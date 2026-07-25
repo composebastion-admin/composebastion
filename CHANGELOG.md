@@ -55,6 +55,10 @@
   and updated the exact linked-module attribution evidence, removing the
   upstream v1.81.1 high-severity finding without changing the Compose CLI
   feature version.
+- Rebuilt the manager's bundled Trivy 0.72.0 and rclone 1.74.4 binaries from
+  their pinned source commits with gRPC-Go 1.82.1, and refreshed their exact
+  linked-module attribution evidence. This removes the upstream vulnerable
+  gRPC versions without changing either tool's user-facing feature version.
 
 ### Migration and compatibility
 - Adds the additive `031_universal_deployments.sql` migration.
