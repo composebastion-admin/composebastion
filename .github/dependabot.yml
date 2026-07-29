@@ -20,6 +20,9 @@ updates:
       - dependency-name: "@types/node"
         versions:
           - ">=25"
+      - dependency-name: "@xterm/addon-fit"
+        versions:
+          - ">=0.11"
 
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -54,6 +57,10 @@ updates:
     labels:
       - "type: dependencies"
       - "area: docker"
+    ignore:
+      - dependency-name: "node"
+        versions:
+          - ">=26, <27"
 
   - package-ecosystem: "docker"
     directory: "/infra/dev"
