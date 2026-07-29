@@ -6,6 +6,7 @@ ARG COMPOSE_VERSION=5.3.1
 ARG COMPOSE_SOURCE_COMMIT=f32009d4a2c687dd405398cc7975d12dccaf8dff
 ARG COMPOSE_SOURCE_SHA256=34387f32377bffac7ee0a70d78435af3b59a075b6f29409172c6d6346ca0340d
 ARG COMPOSE_GRPC_VERSION=1.82.1
+ARG GO_TEXT_VERSION=0.39.0
 
 FROM node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a AS deps
 WORKDIR /app
@@ -31,6 +32,7 @@ ARG COMPOSE_VERSION
 ARG COMPOSE_SOURCE_COMMIT
 ARG COMPOSE_SOURCE_SHA256
 ARG COMPOSE_GRPC_VERSION
+ARG GO_TEXT_VERSION
 RUN set -eux; \
     apk add --no-cache ca-certificates curl; \
     curl -fsSLo /tmp/docker-cli.tar.gz "https://github.com/docker/cli/archive/${DOCKER_CLI_SOURCE_COMMIT}.tar.gz"; \
@@ -47,7 +49,9 @@ RUN set -eux; \
         -o /out/docker github.com/docker/cli/cmd/docker; \
     cd /src/compose; \
     go mod edit -require="google.golang.org/grpc@v${COMPOSE_GRPC_VERSION}"; \
+    go mod edit -require="golang.org/x/text@v${GO_TEXT_VERSION}"; \
     go mod download "google.golang.org/grpc@v${COMPOSE_GRPC_VERSION}"; \
+    go mod download "golang.org/x/text@v${GO_TEXT_VERSION}"; \
     CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" \
       go list -mod=readonly -tags "e2e" -deps ./cmd | LC_ALL=C sort -u > /out/evidence/docker-compose-go-dependencies.txt; \
     test "$(grep '^github.com/docker/docker/' /out/evidence/docker-compose-go-dependencies.txt)" = "github.com/docker/docker/pkg/namesgenerator"; \
