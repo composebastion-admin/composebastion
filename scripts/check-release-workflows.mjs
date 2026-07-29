@@ -393,13 +393,16 @@ for (const [invariant, message] of [
   ['go version -m /out/trivy | grep -F "oras.land/oras-go/v2"', "embedded ORAS version verification"],
   ["ARG RCLONE_VERSION=1.74.4", "reviewed rclone version"],
   ["ARG RCLONE_SOURCE_COMMIT=5bc93a2a7ab0ebd0a11352bc4968eabeffb18027", "reviewed rclone source commit"],
-  ["ARG RCLONE_SHA256_AMD64=fe435e0c36228e7c2f116a8701f01127bb1f694005fc11d1f27186c8bca4115d", "rclone amd64 checksum"],
-  ["ARG RCLONE_SHA256_ARM64=97685285c9ad6a0cf17d5844115d2a67245af6444db672187074bd9c358de419", "rclone arm64 checksum"],
+  ["ARG RCLONE_SOURCE_SHA256=1d604c49673ddbb8829563c6768d3d69cd0a8ddc4a0beec3b42a9dae3ea34a63", "rclone source checksum"],
   ["ARG RCLONE_LICENSE_SHA256=8cd2e9e750b90a04b7d82dbbca3930c696ae0309d7c10464f90a44f45754cd04", "rclone license checksum"],
-  ['echo "${rclone_sha256}  /tmp/rclone.zip" | sha256sum -c -', "architecture-specific rclone archive verification"],
-  ['echo "${RCLONE_LICENSE_SHA256}  /tmp/rclone-LICENSE" | sha256sum -c -', "rclone license verification"],
+  ["ARG GO_GRPC_VERSION=1.82.1", "reviewed patched gRPC version"],
+  ["ARG GO_TEXT_VERSION=0.39.0", "reviewed patched Go text version"],
+  ['echo "${RCLONE_SOURCE_SHA256}  /tmp/rclone-source.tar.gz" | sha256sum -c -', "rclone source verification"],
+  ['echo "${RCLONE_LICENSE_SHA256}  /src/COPYING" | sha256sum -c -', "rclone license verification"],
+  ['go get "google.golang.org/grpc@v${GO_GRPC_VERSION}"', "patched manager-tool gRPC dependency"],
+  ['go get "golang.org/x/text@v${GO_TEXT_VERSION}"', "patched manager-tool text dependency"],
   ["COPY --from=trivy-builder /out/licenses/ /licenses/third-party/", "Trivy/ORAS/Go licenses"],
-  ["COPY --from=rclone-evidence /out/licenses/ /licenses/third-party/", "rclone license and linked-module evidence"],
+  ["COPY --from=rclone-builder /out/licenses/ /licenses/third-party/", "rclone license and linked-module evidence"],
   ["node -e \"Promise.all([import('@composebastion/shared'), import('semver')])\"", "runtime workspace dependency resolution check"],
   ["go-buildinfo/trivy.modules.tsv", "Trivy linked-module inventory"],
   ["go-buildinfo/rclone.modules.tsv", "rclone linked-module inventory"],
@@ -418,7 +421,9 @@ for (const [pattern, message] of [
   [/^ARG DOCKER_CLI_SOURCE_SHA256=41540b35a1157e76eb1a3c3e87dd196896a8e76b27c4bfcafb826dbc15b0acd9$/m, "Docker CLI source checksum"],
   [/^ARG COMPOSE_VERSION=5\.3\.1$/m, "Docker Compose version"],
   [/^ARG COMPOSE_SOURCE_COMMIT=f32009d4a2c687dd405398cc7975d12dccaf8dff$/m, "Docker Compose source commit"],
-  [/^ARG COMPOSE_SOURCE_SHA256=34387f32377bffac7ee0a70d78435af3b59a075b6f29409172c6d6346ca0340d$/m, "Docker Compose source checksum"]
+  [/^ARG COMPOSE_SOURCE_SHA256=34387f32377bffac7ee0a70d78435af3b59a075b6f29409172c6d6346ca0340d$/m, "Docker Compose source checksum"],
+  [/^ARG COMPOSE_GRPC_VERSION=1\.82\.1$/m, "patched Docker Compose gRPC version"],
+  [/^ARG GO_TEXT_VERSION=0\.39\.0$/m, "patched Docker Compose text version"]
 ]) {
   if (!pattern.test(agentDockerfile)) fail(`Dockerfile.agent: missing reviewed ${message}`);
 }
@@ -429,6 +434,8 @@ for (const [invariant, message] of [
   ["apk add --no-cache 'libcrypto3=3.5.7-r0' 'libssl3=3.5.7-r0'", "exact fixed Alpine OpenSSL packages"],
   ['echo "${DOCKER_CLI_SOURCE_SHA256}  /tmp/docker-cli.tar.gz" | sha256sum -c -', "Docker CLI source checksum verification"],
   ['echo "${COMPOSE_SOURCE_SHA256}  /tmp/compose.tar.gz" | sha256sum -c -', "Docker Compose source checksum verification"],
+  ['go mod edit -require="google.golang.org/grpc@v${COMPOSE_GRPC_VERSION}"', "patched Docker Compose gRPC dependency"],
+  ['go mod edit -require="golang.org/x/text@v${GO_TEXT_VERSION}"', "patched Docker Compose text dependency"],
   ["mkdir -p /go/src/github.com/docker/cli", "Docker CLI GOPATH source layout"],
   ["GO111MODULE=off CGO_ENABLED=0", "vendored GOPATH-mode Docker CLI build"],
   ["go build -buildvcs=false -trimpath", "deterministic Docker CLI build"],
