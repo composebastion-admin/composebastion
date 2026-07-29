@@ -10,7 +10,7 @@ ARG GO_GRPC_VERSION=1.82.1
 ARG GO_TEXT_VERSION=0.39.0
 ARG APP_VERSION=source
 
-FROM node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a AS deps
+FROM node:25-alpine3.22@sha256:d4f742bdaee57b81d8b1a1c78e210e5c3c2b3892b335a30575956819028c804e AS deps
 WORKDIR /app
 RUN apk add --no-cache python3 make g++
 COPY package.json package-lock.json ./
@@ -109,7 +109,7 @@ RUN set -eux; \
     sha256sum rclone-LICENSE.txt go-buildinfo/rclone.modules.tsv \
       | LC_ALL=C sort > go-buildinfo/rclone.artifacts.sha256
 
-FROM node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a AS runtime
+FROM node:25-alpine3.22@sha256:d4f742bdaee57b81d8b1a1c78e210e5c3c2b3892b335a30575956819028c804e AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 ARG APP_VERSION
