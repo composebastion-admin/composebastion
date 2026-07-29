@@ -13,15 +13,15 @@
     },
     {
       "binary": "docker-compose",
-      "sha256": "e125a0736726218b33abacbc43ce5d4e22bea48446271a29fdaf8d8a727533f6"
+      "sha256": "2d78503b71b251a2226f00bc579ff4059b5c9e0578168736c5e24dfa25514f3b"
     },
     {
       "binary": "rclone",
-      "sha256": "b3a9e84bd1996cb5fe775d844d90d12b7718ac3c88a38420e3c1a13644dd759f"
+      "sha256": "1e3bcfedbcea3d53ba7d9a8f186245496e18a27ee100cec3d7b2c8f54c977f02"
     },
     {
       "binary": "trivy",
-      "sha256": "0c35b7c78c1ad23112ad7d00dab1b26d6e910aa7102270d88da721f284608c2f"
+      "sha256": "8b2961b0164133d2cc24329a375647e940561bf82491c0493ddc77fc164891e2"
     }
   ],
   "modules": [
@@ -4763,7 +4763,7 @@
       "goChecksum": "h1:rIkQfkCOVKc1OiRCNcSDD8ml5RJlZbH/Xsq7lbpynwc=",
       "requiredFiles": [
         {
-          "path": "texts/1ef082c2fa6493a151895cd0/LICENSE",
+          "path": "texts/89cd5e6dd1d37a6b8b8d3453/LICENSE",
           "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
         }
       ]
@@ -9891,7 +9891,7 @@
       "goChecksum": "h1:62yY3dT7/ShwOxzA0RsKRgshBmfElKI4d/Myu2OxDFU=",
       "requiredFiles": [
         {
-          "path": "texts/9d5a5570a79d246e33005b43/LICENSE",
+          "path": "texts/3f071dc53c4c463676e773e5/LICENSE",
           "sha256": "1ae07514be1d7bb33f0698f8d91fb51b8b9fe1463157ec1c72081a49b9bc6f40"
         }
       ]
@@ -10554,31 +10554,11 @@
     },
     {
       "module": "golang.org/x/crypto",
-      "version": "v0.52.0",
-      "replacement": null,
-      "consumingBinaries": [
-        "rclone"
-      ],
-      "sourceUrl": "https://pkg.go.dev/golang.org/x/crypto@v0.52.0",
-      "spdxExpression": "BSD-3-Clause",
-      "goChecksum": "h1:RMs7fP2rXdep0CftQlK8Uf+kibLm7qkCcradZWYz988=",
-      "requiredFiles": [
-        {
-          "path": "texts/ba65ba02141ebc7a084aff5f/LICENSE",
-          "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
-        },
-        {
-          "path": "texts/ba65ba02141ebc7a084aff5f/PATENTS",
-          "sha256": "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc"
-        }
-      ]
-    },
-    {
-      "module": "golang.org/x/crypto",
       "version": "v0.53.0",
       "replacement": null,
       "consumingBinaries": [
         "docker-compose",
+        "rclone",
         "trivy"
       ],
       "sourceUrl": "https://pkg.go.dev/golang.org/x/crypto@v0.53.0",
@@ -10660,43 +10640,21 @@
     },
     {
       "module": "golang.org/x/mod",
-      "version": "v0.36.0",
+      "version": "v0.37.0",
       "replacement": null,
       "consumingBinaries": [
         "trivy"
       ],
-      "sourceUrl": "https://pkg.go.dev/golang.org/x/mod@v0.36.0",
+      "sourceUrl": "https://pkg.go.dev/golang.org/x/mod@v0.37.0",
       "spdxExpression": "BSD-3-Clause",
-      "goChecksum": "h1:JJjpVx6myfUsUdAzZuOSTTmRE0PfZeNWzzvKrP7amb4=",
+      "goChecksum": "h1:vF1DjpVEshcIqoEaauuHebaLk1O1forxjxBaVn884JQ=",
       "requiredFiles": [
         {
-          "path": "texts/c8486a88000249babe30ad4b/LICENSE",
+          "path": "texts/84892de4fc2cf60a1130fa9f/LICENSE",
           "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
         },
         {
-          "path": "texts/c8486a88000249babe30ad4b/PATENTS",
-          "sha256": "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc"
-        }
-      ]
-    },
-    {
-      "module": "golang.org/x/net",
-      "version": "v0.55.0",
-      "replacement": null,
-      "consumingBinaries": [
-        "rclone",
-        "trivy"
-      ],
-      "sourceUrl": "https://pkg.go.dev/golang.org/x/net@v0.55.0",
-      "spdxExpression": "BSD-3-Clause",
-      "goChecksum": "h1:bcvxaJn3e1U6InsFWt1JUq1aSjnRxLzT2rtD2KfkDF8=",
-      "requiredFiles": [
-        {
-          "path": "texts/58f989d29631729c8ed1f76c/LICENSE",
-          "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
-        },
-        {
-          "path": "texts/58f989d29631729c8ed1f76c/PATENTS",
+          "path": "texts/84892de4fc2cf60a1130fa9f/PATENTS",
           "sha256": "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc"
         }
       ]
@@ -10707,7 +10665,9 @@
       "replacement": null,
       "consumingBinaries": [
         "docker-cli",
-        "docker-compose"
+        "docker-compose",
+        "rclone",
+        "trivy"
       ],
       "sourceUrl": "https://pkg.go.dev/golang.org/x/net@v0.56.0",
       "spdxExpression": "BSD-3-Clause",
@@ -10787,32 +10747,12 @@
     },
     {
       "module": "golang.org/x/sys",
-      "version": "v0.45.0",
-      "replacement": null,
-      "consumingBinaries": [
-        "rclone"
-      ],
-      "sourceUrl": "https://pkg.go.dev/golang.org/x/sys@v0.45.0",
-      "spdxExpression": "BSD-3-Clause",
-      "goChecksum": "h1:dO4czNzziLiiXplLQgBCEpCvXQ3dnkn0SdaZSYdQ+FY=",
-      "requiredFiles": [
-        {
-          "path": "texts/7c2aacf5b87cfab9f9a48944/LICENSE",
-          "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
-        },
-        {
-          "path": "texts/7c2aacf5b87cfab9f9a48944/PATENTS",
-          "sha256": "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc"
-        }
-      ]
-    },
-    {
-      "module": "golang.org/x/sys",
       "version": "v0.46.0",
       "replacement": null,
       "consumingBinaries": [
         "docker-cli",
         "docker-compose",
+        "rclone",
         "trivy"
       ],
       "sourceUrl": "https://pkg.go.dev/golang.org/x/sys@v0.46.0",
@@ -10831,32 +10771,12 @@
     },
     {
       "module": "golang.org/x/term",
-      "version": "v0.43.0",
-      "replacement": null,
-      "consumingBinaries": [
-        "rclone"
-      ],
-      "sourceUrl": "https://pkg.go.dev/golang.org/x/term@v0.43.0",
-      "spdxExpression": "BSD-3-Clause",
-      "goChecksum": "h1:S4RLU2sB31O/NCl+zFN9Aru9A/Cq2aqKpTZJ6B+DwT4=",
-      "requiredFiles": [
-        {
-          "path": "texts/a9222edb644df54f45e5183a/LICENSE",
-          "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
-        },
-        {
-          "path": "texts/a9222edb644df54f45e5183a/PATENTS",
-          "sha256": "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc"
-        }
-      ]
-    },
-    {
-      "module": "golang.org/x/term",
       "version": "v0.44.0",
       "replacement": null,
       "consumingBinaries": [
         "docker-cli",
         "docker-compose",
+        "rclone",
         "trivy"
       ],
       "sourceUrl": "https://pkg.go.dev/golang.org/x/term@v0.44.0",
@@ -10878,14 +10798,11 @@
       "version": "v0.38.0",
       "replacement": null,
       "consumingBinaries": [
-        "docker-cli",
-        "docker-compose",
-        "rclone",
-        "trivy"
+        "docker-cli"
       ],
       "sourceUrl": "https://pkg.go.dev/golang.org/x/text@v0.38.0",
       "spdxExpression": "BSD-3-Clause",
-      "goChecksum": "h1:sXmwo9DwP3OK9EZ7PqAdaooSGozfl/3a6/xJcbzPRhE=",
+      "goChecksum": null,
       "requiredFiles": [
         {
           "path": "texts/65d3e3b44e83605316bb196c/LICENSE",
@@ -10893,6 +10810,29 @@
         },
         {
           "path": "texts/65d3e3b44e83605316bb196c/PATENTS",
+          "sha256": "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc"
+        }
+      ]
+    },
+    {
+      "module": "golang.org/x/text",
+      "version": "v0.39.0",
+      "replacement": null,
+      "consumingBinaries": [
+        "docker-compose",
+        "rclone",
+        "trivy"
+      ],
+      "sourceUrl": "https://pkg.go.dev/golang.org/x/text@v0.39.0",
+      "spdxExpression": "BSD-3-Clause",
+      "goChecksum": "h1:UbZz4pLOvn600D6Oh6GGEI6VAmndrEBLv8/6BEXzyus=",
+      "requiredFiles": [
+        {
+          "path": "texts/c66bf25f3463cadf2078625a/LICENSE",
+          "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+        },
+        {
+          "path": "texts/c66bf25f3463cadf2078625a/PATENTS",
           "sha256": "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc"
         }
       ]
@@ -11040,7 +10980,7 @@
       "goChecksum": "h1:RmoJA1ujG+/lRGNfUnOMfhCy5EipVMyvUE+KNbPbTlw=",
       "requiredFiles": [
         {
-          "path": "texts/b1e8ecaa27dd782e1465a7ad/LICENSE",
+          "path": "texts/6ebeaab5be636482650020aa/LICENSE",
           "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
         }
       ]
@@ -11089,7 +11029,7 @@
       ],
       "sourceUrl": "https://pkg.go.dev/google.golang.org/grpc@v1.81.1",
       "spdxExpression": "Apache-2.0",
-      "goChecksum": "h1:VnnIIZ88UzOOKLukQi+ImGz8O1Wdp8nAGGnvOfEIWQQ=",
+      "goChecksum": null,
       "requiredFiles": [
         {
           "path": "texts/ebaf2612104bd207aa794dc0/LICENSE",
@@ -11115,11 +11055,11 @@
       "goChecksum": "h1:NnAxzGRA0677vCa4BUkOAnO5+FfQqVl9iUXeD0IqcGE=",
       "requiredFiles": [
         {
-          "path": "texts/ebaf2612104bd207aa794dc0/LICENSE",
+          "path": "texts/4150128750c40e2a5c6ddcf8/LICENSE",
           "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
         },
         {
-          "path": "texts/ebaf2612104bd207aa794dc0/NOTICE.txt",
+          "path": "texts/4150128750c40e2a5c6ddcf8/NOTICE.txt",
           "sha256": "693ff28ec216d5112ac1bbfe64ef539005867d1c7bd427b57d579683293b947f"
         }
       ]

@@ -7,6 +7,7 @@ ARG RCLONE_SOURCE_COMMIT=5bc93a2a7ab0ebd0a11352bc4968eabeffb18027
 ARG RCLONE_SOURCE_SHA256=1d604c49673ddbb8829563c6768d3d69cd0a8ddc4a0beec3b42a9dae3ea34a63
 ARG RCLONE_LICENSE_SHA256=8cd2e9e750b90a04b7d82dbbca3930c696ae0309d7c10464f90a44f45754cd04
 ARG GO_GRPC_VERSION=1.82.1
+ARG GO_TEXT_VERSION=0.39.0
 ARG APP_VERSION=source
 
 FROM node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a AS deps
@@ -34,6 +35,7 @@ ARG TRIVY_SOURCE_COMMIT
 ARG TRIVY_SOURCE_SHA256
 ARG TRIVY_ORAS_VERSION
 ARG GO_GRPC_VERSION
+ARG GO_TEXT_VERSION
 RUN set -eux; \
     apk add --no-cache ca-certificates curl; \
     curl -fsSLo /tmp/trivy-source.tar.gz "https://github.com/aquasecurity/trivy/archive/${TRIVY_SOURCE_COMMIT}.tar.gz"; \
@@ -43,8 +45,10 @@ RUN set -eux; \
     cd /src; \
     go get "oras.land/oras-go/v2@${TRIVY_ORAS_VERSION}"; \
     go get "google.golang.org/grpc@v${GO_GRPC_VERSION}"; \
+    go get "golang.org/x/text@v${GO_TEXT_VERSION}"; \
     test "$(go list -m -f '{{.Version}}' oras.land/oras-go/v2)" = "${TRIVY_ORAS_VERSION}"; \
     test "$(go list -m -f '{{.Version}}' google.golang.org/grpc)" = "v${GO_GRPC_VERSION}"; \
+    test "$(go list -m -f '{{.Version}}' golang.org/x/text)" = "v${GO_TEXT_VERSION}"; \
     go test oras.land/oras-go/v2/content/file -run '^Test_extractTarDirectory_HardLink$'; \
     CGO_ENABLED=0 GOEXPERIMENT=jsonv2 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" \
       go build -mod=readonly -buildvcs=false -trimpath \
@@ -75,6 +79,7 @@ ARG RCLONE_SOURCE_COMMIT
 ARG RCLONE_SOURCE_SHA256
 ARG RCLONE_LICENSE_SHA256
 ARG GO_GRPC_VERSION
+ARG GO_TEXT_VERSION
 RUN set -eux; \
     apk add --no-cache ca-certificates curl; \
     curl -fsSLo /tmp/rclone-source.tar.gz "https://github.com/rclone/rclone/archive/${RCLONE_SOURCE_COMMIT}.tar.gz"; \
@@ -84,7 +89,9 @@ RUN set -eux; \
     echo "${RCLONE_LICENSE_SHA256}  /src/COPYING" | sha256sum -c -; \
     cd /src; \
     go get "google.golang.org/grpc@v${GO_GRPC_VERSION}"; \
+    go get "golang.org/x/text@v${GO_TEXT_VERSION}"; \
     test "$(go list -m -f '{{.Version}}' google.golang.org/grpc)" = "v${GO_GRPC_VERSION}"; \
+    test "$(go list -m -f '{{.Version}}' golang.org/x/text)" = "v${GO_TEXT_VERSION}"; \
     CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" \
       go build -mod=readonly -buildvcs=false -trimpath \
         -ldflags="-s -w -X github.com/rclone/rclone/fs.Version=v${RCLONE_VERSION}" \
