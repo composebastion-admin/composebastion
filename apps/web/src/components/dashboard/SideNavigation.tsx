@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { hostlessTabs, navigationGroups, tabs, type Tab } from "../../lib/navigation.js";
 import { tabPath } from "../../lib/tabRoute.js";
 import { useAuthorization } from "../AuthorizationContext.js";

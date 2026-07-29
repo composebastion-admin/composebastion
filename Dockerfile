@@ -4,9 +4,10 @@ ARG TRIVY_SOURCE_SHA256=5a922c388846d11345ce8283e4373be312458f002abc667c3cd1f77c
 ARG TRIVY_ORAS_VERSION=v2.6.2
 ARG RCLONE_VERSION=1.74.4
 ARG RCLONE_SOURCE_COMMIT=5bc93a2a7ab0ebd0a11352bc4968eabeffb18027
-ARG RCLONE_SHA256_AMD64=fe435e0c36228e7c2f116a8701f01127bb1f694005fc11d1f27186c8bca4115d
-ARG RCLONE_SHA256_ARM64=97685285c9ad6a0cf17d5844115d2a67245af6444db672187074bd9c358de419
+ARG RCLONE_SOURCE_SHA256=1d604c49673ddbb8829563c6768d3d69cd0a8ddc4a0beec3b42a9dae3ea34a63
 ARG RCLONE_LICENSE_SHA256=8cd2e9e750b90a04b7d82dbbca3930c696ae0309d7c10464f90a44f45754cd04
+ARG GO_GRPC_VERSION=1.82.1
+ARG GO_TEXT_VERSION=0.39.0
 ARG APP_VERSION=source
 
 FROM node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a AS deps
@@ -33,6 +34,8 @@ ARG TRIVY_VERSION
 ARG TRIVY_SOURCE_COMMIT
 ARG TRIVY_SOURCE_SHA256
 ARG TRIVY_ORAS_VERSION
+ARG GO_GRPC_VERSION
+ARG GO_TEXT_VERSION
 RUN set -eux; \
     apk add --no-cache ca-certificates curl; \
     curl -fsSLo /tmp/trivy-source.tar.gz "https://github.com/aquasecurity/trivy/archive/${TRIVY_SOURCE_COMMIT}.tar.gz"; \
@@ -41,7 +44,11 @@ RUN set -eux; \
     tar -xzf /tmp/trivy-source.tar.gz -C /src --strip-components=1; \
     cd /src; \
     go get "oras.land/oras-go/v2@${TRIVY_ORAS_VERSION}"; \
+    go get "google.golang.org/grpc@v${GO_GRPC_VERSION}"; \
+    go get "golang.org/x/text@v${GO_TEXT_VERSION}"; \
     test "$(go list -m -f '{{.Version}}' oras.land/oras-go/v2)" = "${TRIVY_ORAS_VERSION}"; \
+    test "$(go list -m -f '{{.Version}}' google.golang.org/grpc)" = "v${GO_GRPC_VERSION}"; \
+    test "$(go list -m -f '{{.Version}}' golang.org/x/text)" = "v${GO_TEXT_VERSION}"; \
     go test oras.land/oras-go/v2/content/file -run '^Test_extractTarDirectory_HardLink$'; \
     CGO_ENABLED=0 GOEXPERIMENT=jsonv2 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" \
       go build -mod=readonly -buildvcs=false -trimpath \
@@ -57,44 +64,46 @@ RUN set -eux; \
     go version -m /out/trivy \
       | awk -F '\t' '$2 == "mod" || $2 == "dep" || $2 == "=>" { print $2 "\t" $3 "\t" $4 "\t" $5 }' \
       | LC_ALL=C sort -u > /out/licenses/go-buildinfo/trivy.modules.tsv; \
+    sed -i "s#(devel)#v${TRIVY_VERSION}#" /out/licenses/go-buildinfo/trivy.modules.tsv; \
     test -s /out/licenses/go-buildinfo/trivy.modules.tsv; \
     cd /out/licenses; \
     sha256sum trivy-LICENSE.txt trivy-NOTICE.txt oras-go-LICENSE.txt go-LICENSE.txt go-PATENTS.txt go-buildinfo/trivy.modules.tsv \
       | LC_ALL=C sort > go-buildinfo/trivy.artifacts.sha256
 
-FROM node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a AS tools
+FROM --platform=$BUILDPLATFORM golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS rclone-builder
+ENV GOTOOLCHAIN=local
+ARG TARGETOS
 ARG TARGETARCH
 ARG RCLONE_VERSION
 ARG RCLONE_SOURCE_COMMIT
-ARG RCLONE_SHA256_AMD64
-ARG RCLONE_SHA256_ARM64
+ARG RCLONE_SOURCE_SHA256
 ARG RCLONE_LICENSE_SHA256
+ARG GO_GRPC_VERSION
+ARG GO_TEXT_VERSION
 RUN set -eux; \
-    apk add --no-cache ca-certificates curl unzip; \
-    case "${TARGETARCH}" in \
-      amd64) rclone_arch="amd64"; rclone_sha256="${RCLONE_SHA256_AMD64}" ;; \
-      arm64) rclone_arch="arm64"; rclone_sha256="${RCLONE_SHA256_ARM64}" ;; \
-      *) echo "Unsupported tools architecture: ${TARGETARCH}" >&2; exit 1 ;; \
-    esac; \
-    mkdir -p /out/licenses; \
-    curl -fsSLo /tmp/rclone.zip "https://downloads.rclone.org/v${RCLONE_VERSION}/rclone-v${RCLONE_VERSION}-linux-${rclone_arch}.zip"; \
-    echo "${rclone_sha256}  /tmp/rclone.zip" | sha256sum -c -; \
-    curl -fsSLo /tmp/rclone-LICENSE "https://raw.githubusercontent.com/rclone/rclone/${RCLONE_SOURCE_COMMIT}/COPYING"; \
-    echo "${RCLONE_LICENSE_SHA256}  /tmp/rclone-LICENSE" | sha256sum -c -; \
-    unzip -j /tmp/rclone.zip "rclone-v${RCLONE_VERSION}-linux-${rclone_arch}/rclone" -d /out; \
+    apk add --no-cache ca-certificates curl; \
+    curl -fsSLo /tmp/rclone-source.tar.gz "https://github.com/rclone/rclone/archive/${RCLONE_SOURCE_COMMIT}.tar.gz"; \
+    echo "${RCLONE_SOURCE_SHA256}  /tmp/rclone-source.tar.gz" | sha256sum -c -; \
+    mkdir -p /src /out/licenses/go-buildinfo; \
+    tar -xzf /tmp/rclone-source.tar.gz -C /src --strip-components=1; \
+    echo "${RCLONE_LICENSE_SHA256}  /src/COPYING" | sha256sum -c -; \
+    cd /src; \
+    go get "google.golang.org/grpc@v${GO_GRPC_VERSION}"; \
+    go get "golang.org/x/text@v${GO_TEXT_VERSION}"; \
+    test "$(go list -m -f '{{.Version}}' google.golang.org/grpc)" = "v${GO_GRPC_VERSION}"; \
+    test "$(go list -m -f '{{.Version}}' golang.org/x/text)" = "v${GO_TEXT_VERSION}"; \
+    CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" \
+      go build -mod=readonly -buildvcs=false -trimpath \
+        -ldflags="-s -w -X github.com/rclone/rclone/fs.Version=v${RCLONE_VERSION}" \
+        -o /out/rclone .; \
     chmod 0755 /out/rclone; \
-    env -u RCLONE_VERSION /out/rclone version; \
-    install -m 0644 /tmp/rclone-LICENSE /out/licenses/rclone-LICENSE.txt
-
-FROM --platform=$BUILDPLATFORM golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS rclone-evidence
-ENV GOTOOLCHAIN=local
-COPY --from=tools /out/rclone /out/rclone
-COPY --from=tools /out/licenses/rclone-LICENSE.txt /out/licenses/rclone-LICENSE.txt
-RUN set -eux; \
-    mkdir -p /out/licenses/go-buildinfo; \
+    env -u RCLONE_VERSION /out/rclone version | grep -F "rclone v${RCLONE_VERSION}"; \
+    go version -m /out/rclone | grep -F "go1.26.5"; \
+    install -m 0644 /src/COPYING /out/licenses/rclone-LICENSE.txt; \
     go version -m /out/rclone \
       | awk -F '\t' '$2 == "mod" || $2 == "dep" || $2 == "=>" { print $2 "\t" $3 "\t" $4 "\t" $5 }' \
       | LC_ALL=C sort -u > /out/licenses/go-buildinfo/rclone.modules.tsv; \
+    sed -i -e "s#(devel)#v${RCLONE_VERSION}#" -e "s#v${RCLONE_VERSION}+dirty#v${RCLONE_VERSION}#" /out/licenses/go-buildinfo/rclone.modules.tsv; \
     grep -F 'github.com/rclone/rclone' /out/licenses/go-buildinfo/rclone.modules.tsv; \
     cd /out/licenses; \
     sha256sum rclone-LICENSE.txt go-buildinfo/rclone.modules.tsv \
@@ -125,9 +134,9 @@ RUN set -eux; \
     rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 
 COPY --from=trivy-builder /out/trivy /usr/local/bin/trivy
-COPY --from=tools /out/rclone /usr/local/bin/rclone
+COPY --from=rclone-builder /out/rclone /usr/local/bin/rclone
 COPY --from=trivy-builder /out/licenses/ /licenses/third-party/
-COPY --from=rclone-evidence /out/licenses/ /licenses/third-party/
+COPY --from=rclone-builder /out/licenses/ /licenses/third-party/
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/apps/api/package.json ./apps/api/package.json
