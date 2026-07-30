@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   acceptanceNonqualifyingReasons,
+  acceptanceOwnsDockerResource,
   cleanupEmptyFields,
   cleanupEvidenceFailures,
   cleanupTrueFields,
@@ -73,4 +74,38 @@ test("image ownership uses supported list fields and inspected Compose labels", 
     /inspected project label is missing/
   );
   assert.throws(() => requireImageComposeProject(null), /inspected project label is missing/);
+});
+
+test("cleanup owns recovery-labeled resources in the isolated workload namespace", () => {
+  const input = {
+    projectNames: [
+      "composebastion-acceptance-46000-fresh"
+    ],
+    workloadPrefix: "cbacceptance46000"
+  };
+  assert.equal(acceptanceOwnsDockerResource({
+    ...input,
+    project: "composebastion-acceptance-46000-fresh",
+    name: "postgres"
+  }), true);
+  assert.equal(acceptanceOwnsDockerResource({
+    ...input,
+    project: "",
+    name: "cbacceptance46000clone_database-data"
+  }), true);
+  assert.equal(acceptanceOwnsDockerResource({
+    ...input,
+    project: "cbacceptance46000clone-restore-abcd",
+    name: "acceptance-net"
+  }), true);
+  assert.equal(acceptanceOwnsDockerResource({
+    ...input,
+    project: "",
+    name: "customer-production-data"
+  }), false);
+  assert.equal(acceptanceOwnsDockerResource({
+    ...input,
+    project: "",
+    name: "customer-cbacceptance46000-data"
+  }), false);
 });

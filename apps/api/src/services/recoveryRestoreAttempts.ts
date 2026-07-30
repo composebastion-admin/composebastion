@@ -286,13 +286,25 @@ function restoreOwnershipValue(attempt: AttemptRow) {
   return `${attempt.id}|${attempt.restore_scope}`;
 }
 
+type RestoreDockerResourceKind =
+  "container" | "network" | "volume";
+
+function ownedDockerResourceLabelsField(
+  kind: RestoreDockerResourceKind
+) {
+  return kind === "container"
+    ? ".Config.Labels"
+    : ".Labels";
+}
+
 function ownedDockerResourceInspectCommand(
-  kind: "container" | "network" | "volume",
+  kind: RestoreDockerResourceKind,
   resourceReference: string
 ) {
   const identityField = kind === "volume" ? ".Name" : ".Id";
+  const labelsField = ownedDockerResourceLabelsField(kind);
   const format =
-    `{{${identityField}}}|{{ index .Labels "${RESTORE_ATTEMPT_LABEL}" }}|{{ index .Labels "${RESTORE_SCOPE_LABEL}" }}`;
+    `{{${identityField}}}|{{ index ${labelsField} "${RESTORE_ATTEMPT_LABEL}" }}|{{ index ${labelsField} "${RESTORE_SCOPE_LABEL}" }}`;
   return `docker ${kind} inspect --format ${shQuote(format)} ${shQuote(resourceReference)}`;
 }
 
@@ -374,7 +386,7 @@ async function runClaimedRemoteCommand<T>(
 async function cleanupDockerResource(
   host: Awaited<ReturnType<typeof getHostForWorker>>,
   attempt: AttemptRow,
-  kind: "container" | "network" | "volume",
+  kind: RestoreDockerResourceKind,
   resourceName: string
 ) {
   const inspect = await runClaimedRemoteCommand(

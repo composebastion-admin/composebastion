@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { dockerBindPathRelativeChild } from "./bind-paths.mjs";
 import {
   acceptanceNonqualifyingReasons,
+  acceptanceOwnsDockerResource,
   cleanupEvidenceFailures,
   composeProjectImageListArguments,
   ownedCandidateImageTags,
@@ -1106,13 +1107,16 @@ async function cleanupManagedDockerState() {
   if (!activeProject || !activeEnv) return;
   const cleanup = `
 set -eu
-for id in $(docker ps -aq --filter 'label=com.docker.compose.project=${workloadProject}'); do docker rm -f "$id" >/dev/null; done
-for volume in $(docker volume ls -q --filter 'label=com.docker.compose.project=${workloadProject}'); do docker volume rm -f "$volume" >/dev/null; done
-for network in $(docker network ls -q --filter 'label=com.docker.compose.project=${workloadProject}'); do docker network rm "$network" >/dev/null; done
+for id in $( { docker ps -aq --filter 'label=com.docker.compose.project=${workloadProject}'; docker ps -aq --filter 'name=^/${workloadPrefix}'; } | sort -u); do docker rm -f "$id" >/dev/null; done
+for volume in $( { docker volume ls -q --filter 'label=com.docker.compose.project=${workloadProject}'; docker volume ls -q --filter 'name=^${workloadPrefix}'; } | sort -u); do docker volume rm -f "$volume" >/dev/null; done
+for network in $( { docker network ls -q --filter 'label=com.docker.compose.project=${workloadProject}'; docker network ls -q --filter 'name=^${workloadPrefix}'; } | sort -u); do docker network rm "$network" >/dev/null; done
 find '${acceptanceBindDir}' -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
 test -z "$(docker ps -aq --filter 'label=com.docker.compose.project=${workloadProject}')"
 test -z "$(docker volume ls -q --filter 'label=com.docker.compose.project=${workloadProject}')"
 test -z "$(docker network ls -q --filter 'label=com.docker.compose.project=${workloadProject}')"
+test -z "$(docker ps -aq --filter 'name=^/${workloadPrefix}')"
+test -z "$(docker volume ls -q --filter 'name=^${workloadPrefix}')"
+test -z "$(docker network ls -q --filter 'name=^${workloadPrefix}')"
 test -z "$(find '${acceptanceBindDir}' -mindepth 1 -maxdepth 1 -print -quit)"
 `;
   await compose(activeProject, activeEnv, ["exec", "-T", "sshhost", "sh", "-lc", cleanup]);
@@ -2838,6 +2842,15 @@ function ownsDockerProject(project) {
     || project.startsWith(workloadPrefix);
 }
 
+function ownsDockerResource(project, name) {
+  return acceptanceOwnsDockerResource({
+    project,
+    name,
+    projectNames: Object.values(report.environment.projects),
+    workloadPrefix
+  });
+}
+
 async function collectOwnedDockerResources() {
   const [containerResult, networkResult, volumeResult, imageResult] = await Promise.all([
     run("docker", ["container", "ls", "--all", "--no-trunc", "--format",
@@ -2849,13 +2862,19 @@ async function collectOwnedDockerResources() {
     run("docker", composeProjectImageListArguments)
   ]);
   const containers = parseDockerRows(containerResult.stdout, 3)
-    .filter(([, , project]) => ownsDockerProject(project))
+    .filter(([, name, project]) =>
+      ownsDockerResource(project, name)
+    )
     .map(([id, name, project]) => ({ id, name, project }));
   const networks = parseDockerRows(networkResult.stdout, 3)
-    .filter(([, , project]) => ownsDockerProject(project))
+    .filter(([, name, project]) =>
+      ownsDockerResource(project, name)
+    )
     .map(([id, name, project]) => ({ id, name, project }));
   const volumes = parseDockerRows(volumeResult.stdout, 2)
-    .filter(([, project]) => ownsDockerProject(project))
+    .filter(([name, project]) =>
+      ownsDockerResource(project, name)
+    )
     .map(([name, project]) => ({ name, project }));
   const imageRows = parseDockerRows(imageResult.stdout, 2);
   const imageProjects = new Map(await Promise.all(

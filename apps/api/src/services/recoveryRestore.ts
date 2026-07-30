@@ -535,11 +535,34 @@ async function cleanupOwnedRemoteDirectory(
 
 type OwnedDockerResourceKind = "container" | "network" | "volume";
 
+function ownedDockerResourceLabelsField(
+  kind: OwnedDockerResourceKind
+) {
+  return kind === "container"
+    ? ".Config.Labels"
+    : ".Labels";
+}
+
+function ownedDockerResourceOwnershipFormat(
+  kind: OwnedDockerResourceKind
+) {
+  const labelsField = ownedDockerResourceLabelsField(kind);
+  return `{{ index ${labelsField} "${RESTORE_ATTEMPT_LABEL}" }}|{{ index ${labelsField} "${RESTORE_SCOPE_LABEL}" }}`;
+}
+
+function ownedDockerResourceBoundaryFormat(
+  kind: OwnedDockerResourceKind
+) {
+  const identityField = kind === "volume" ? ".Name" : ".Id";
+  return `{{${identityField}}}|${ownedDockerResourceOwnershipFormat(kind)}`;
+}
+
 function ownedDockerResourceInspectCommand(
   kind: OwnedDockerResourceKind,
   resourceName: string
 ) {
-  const ownershipFormat = `{{ index .Labels "${RESTORE_ATTEMPT_LABEL}" }}|{{ index .Labels "${RESTORE_SCOPE_LABEL}" }}`;
+  const ownershipFormat =
+    ownedDockerResourceOwnershipFormat(kind);
   return `docker ${kind} inspect --format ${shQuote(ownershipFormat)} ${shQuote(resourceName)}`;
 }
 
@@ -547,9 +570,7 @@ function ownedDockerResourceBoundaryInspectCommand(
   kind: OwnedDockerResourceKind,
   resourceReference: string
 ) {
-  const identityField = kind === "volume" ? ".Name" : ".Id";
-  const format =
-    `{{${identityField}}}|{{ index .Labels "${RESTORE_ATTEMPT_LABEL}" }}|{{ index .Labels "${RESTORE_SCOPE_LABEL}" }}`;
+  const format = ownedDockerResourceBoundaryFormat(kind);
   return `docker ${kind} inspect --format ${shQuote(format)} ${shQuote(resourceReference)}`;
 }
 
@@ -679,13 +700,10 @@ async function cleanupOwnedDockerResource(
     inspectCommand,
     host.public.dockerSocketPath
   );
-  const inspectById = kind === "volume"
-    ? `docker volume inspect --format ${shQuote(
-        `{{.Name}}|{{ index .Labels "${RESTORE_ATTEMPT_LABEL}" }}|{{ index .Labels "${RESTORE_SCOPE_LABEL}" }}`
-      )} "$restore_id"`
-    : `docker ${kind} inspect --format ${shQuote(
-        `{{.Id}}|{{ index .Labels "${RESTORE_ATTEMPT_LABEL}" }}|{{ index .Labels "${RESTORE_SCOPE_LABEL}" }}`
-      )} "$restore_id"`;
+  const inspectById =
+    `docker ${kind} inspect --format ${shQuote(
+      ownedDockerResourceBoundaryFormat(kind)
+    )} "$restore_id"`;
   const boundaryInspect = withDockerEnv(
     inspectById,
     host.public.dockerSocketPath

@@ -443,6 +443,8 @@ describe("recovery standalone restore cleanup", () => {
       if (command.includes(`docker start '${restoredName}'`)) return { code: 1, stdout: "", stderr: "start failed" };
       if (command.includes(`docker rm --force '${restoredName}'`)) return { code: 1, stdout: "", stderr: "remove failed" };
       if (command.includes("docker container inspect") && command.includes(`'${restoredName}'`)) {
+        expect(command).toContain("index .Config.Labels");
+        expect(command).not.toContain("index .Labels");
         return { code: 0, stdout: containerOwner ?? "", stderr: "" };
       }
       return { code: 1, stdout: "", stderr: `unexpected command: ${command}` };
@@ -1494,6 +1496,17 @@ describe("recovery standalone restore cleanup", () => {
         return { code: 0, stdout: "", stderr: "" };
       }
       if (command.includes("docker container inspect") && command.includes(`'${composeContainer}'`)) {
+        if (
+          !command.includes("index .Config.Labels")
+          || command.includes("index .Labels")
+        ) {
+          return {
+            code: 1,
+            stdout: "",
+            stderr:
+              "template parsing error: map has no entry for key \"Labels\""
+          };
+        }
         return composeContainerPresent
           ? { code: 0, stdout: composeContainerOwner ?? "", stderr: "" }
           : { code: 1, stdout: "", stderr: "not found" };

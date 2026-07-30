@@ -210,6 +210,8 @@ describe("durable recovery restore reconciliation", () => {
         expect(command).toContain(
           "docker volume inspect --format"
         );
+        expect(command).toContain("index .Labels");
+        expect(command).not.toContain(".Config.Labels");
         const oldToken = attempt.reconciliation_token;
         claimValid = false;
         attempt = {
@@ -316,6 +318,8 @@ describe("durable recovery restore reconciliation", () => {
           command.includes("docker container inspect")
           && command.endsWith(`'${resourceName}'`)
         ) {
+          expect(command).toContain("index .Config.Labels");
+          expect(command).not.toContain("index .Labels");
           successorPresent = true;
           return {
             code: 0,
@@ -327,6 +331,8 @@ describe("durable recovery restore reconciliation", () => {
           command.includes("docker container inspect")
           && command.endsWith(`'${originalId}'`)
         ) {
+          expect(command).toContain("index .Config.Labels");
+          expect(command).not.toContain("index .Labels");
           return originalPresent
             ? {
                 code: 0,

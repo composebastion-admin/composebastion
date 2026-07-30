@@ -42,6 +42,17 @@ export function requireImageComposeProject(image) {
   return project;
 }
 
+export function acceptanceOwnsDockerResource({
+  project,
+  name,
+  projectNames,
+  workloadPrefix
+}) {
+  return projectNames.includes(project)
+    || project.startsWith(workloadPrefix)
+    || name.startsWith(workloadPrefix);
+}
+
 export function acceptanceNonqualifyingReasons({
   worktreeDirty,
   skipBuild,
