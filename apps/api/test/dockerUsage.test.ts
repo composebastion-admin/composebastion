@@ -7,6 +7,18 @@ const getAgentContainerUsage = vi.fn();
 const runAgentDockerCommand = vi.fn();
 const streamAgentContainerUsage = vi.fn();
 
+const dockerStatsTombstone = {
+  BlockIO: "0B / 0B",
+  CPUPerc: "0.00%",
+  Container: "5fb479d76eb43580fcd59f1739151aa4922d80b8292d25fecc76af9a149b7398",
+  ID: "",
+  MemPerc: "0.00%",
+  MemUsage: "0B / 0B",
+  Name: "--",
+  NetIO: "0B / 0B",
+  PIDs: "0"
+};
+
 class AgentHttpError extends Error {
   constructor(message: string, public readonly status: number) {
     super(message);
@@ -107,13 +119,48 @@ describe("container usage polling", () => {
     expect(runAgentDockerCommand).toHaveBeenCalledTimes(1);
   });
 
-  it("proxies the native agent usage stream", async () => {
+  it("proxies the native agent usage stream without lifecycle tombstones", async () => {
     getHostForWorker.mockResolvedValue(agentHost());
     const stop = vi.fn();
-    streamAgentContainerUsage.mockResolvedValue(stop);
+    streamAgentContainerUsage.mockImplementation(async (_target, onStats) => {
+      onStats({ ID: "container-1", Name: "web", CPUPerc: "1.00%" });
+      onStats(dockerStatsTombstone);
+      onStats({ ...dockerStatsTombstone, ID: "5fb479d76eb4" });
+      return stop;
+    });
+    const stats: Array<Record<string, unknown>> = [];
 
-    await expect(streamContainerUsage("host-1", vi.fn(), vi.fn())).resolves.toBe(stop);
+    await expect(streamContainerUsage("host-1", (row) => stats.push(row), vi.fn())).resolves.toBe(stop);
     expect(streamAgentContainerUsage).toHaveBeenCalledTimes(1);
+    expect(stats).toEqual([
+      { ID: "container-1", Name: "web", CPUPerc: "1.00%" },
+      { ...dockerStatsTombstone, ID: "5fb479d76eb4" }
+    ]);
+  });
+
+  it("parses ANSI SSH stats, ignores lifecycle tombstones, and reports malformed JSON", async () => {
+    getHostForWorker.mockResolvedValue(host("online"));
+    streamSshCommandLines.mockImplementation(async (_target, _command, onLine) => {
+      onLine('\u001b[H{"ID":"container-1","Name":"web","CPUPerc":"1.00%"}\u001b[K');
+      onLine(`\u001b[H${JSON.stringify({
+        ...dockerStatsTombstone,
+        CPUPerc: "0%",
+        MemUsage: "0 bytes / 0 bytes",
+        PIDs: 0
+      })}\u001b[K`);
+      onLine("\u001b[H[]\u001b[K");
+      onLine("\u001b[Hnot-json\u001b[K");
+      return () => undefined;
+    });
+    const stats: Array<Record<string, unknown>> = [];
+    const errors: Error[] = [];
+
+    await streamContainerUsage("host-1", (row) => stats.push(row), (error) => errors.push(error));
+
+    expect(stats).toEqual([{ ID: "container-1", Name: "web", CPUPerc: "1.00%" }]);
+    expect(errors).toHaveLength(2);
+    expect(errors[0]).toEqual(new Error("Docker stats row must be a JSON object"));
+    expect(errors[1]).toBeInstanceOf(SyntaxError);
   });
 
   it("does not attempt Docker stats against known-offline hosts", async () => {

@@ -52,6 +52,17 @@ vi.mock("node:child_process", () => ({
 }));
 
 const token = "agent-server-test-token-that-is-long-enough";
+const dockerStatsTombstone = {
+  BlockIO: "0B / 0B",
+  CPUPerc: "0.00%",
+  Container: "5fb479d76eb43580fcd59f1739151aa4922d80b8292d25fecc76af9a149b7398",
+  ID: "",
+  MemPerc: "0.00%",
+  MemUsage: "0B / 0B",
+  Name: "--",
+  NetIO: "0B / 0B",
+  PIDs: "0"
+};
 const originalEnvironment = {
   AGENT_HOST: process.env.AGENT_HOST,
   AGENT_PORT: process.env.AGENT_PORT,
@@ -233,11 +244,25 @@ describe("agent server", () => {
         '{"ID":"def456","Name":"db","CPUPerc":"0.3%","PIDs":"4"}\u001b[K'
       )
     ).toMatchObject({ ID: "def456", Name: "db" });
+    expect(parseDockerStatsLine(JSON.stringify(dockerStatsTombstone))).toBeNull();
+    expect(
+      parseDockerStatsLine(JSON.stringify({
+        ...dockerStatsTombstone,
+        CPUPerc: "0%",
+        MemUsage: "0 bytes / 0 bytes",
+        PIDs: 0
+      }))
+    ).toBeNull();
+    expect(
+      parseDockerStatsLine(JSON.stringify({ ...dockerStatsTombstone, ID: "5fb479d76eb4" }))
+    ).toMatchObject({ ID: "5fb479d76eb4", Name: "--" });
     expect(parseDockerStatsLine("\u001b[K")).toBeNull();
+    expect(() => parseDockerStatsLine("null")).toThrow("must be a JSON object");
+    expect(() => parseDockerStatsLine("[]")).toThrow("must be a JSON object");
     expect(() => parseDockerStatsLine("\u001b[Hnot-json\u001b[K")).toThrow();
   });
 
-  it("streams ANSI-wrapped Docker stats as message events without error events", async () => {
+  it("streams ANSI stats, ignores lifecycle tombstones, and reports malformed JSON", async () => {
     const stdout = new EventEmitter();
     const stderr = new EventEmitter();
     const child = Object.assign(new EventEmitter(), {
@@ -265,13 +290,23 @@ describe("agent server", () => {
 
     stdout.emit(
       "data",
-      Buffer.from('\u001b[H{"ID":"abc123","Name":"web","CPUPerc":"1.2%","PIDs":"2"}\u001b[K\n')
+      Buffer.from(
+        `\u001b[H{"ID":"abc123","Name":"web","CPUPerc":"1.2%","PIDs":"2"}\u001b[K\n`
+        + `\u001b[H${JSON.stringify(dockerStatsTombstone)}\u001b[K\n`
+      )
     );
-    const writes = raw.write.mock.calls.map(([chunk]) => String(chunk));
-    expect(writes).toContain(
+    const writesBeforeMalformed = raw.write.mock.calls.map(([chunk]) => String(chunk));
+    expect(writesBeforeMalformed).toEqual([
       'data: {"stats":{"ID":"abc123","Name":"web","CPUPerc":"1.2%","PIDs":"2"}}\n\n'
-    );
-    expect(writes.some((chunk) => chunk.startsWith("event: error"))).toBe(false);
+    ]);
+
+    stdout.emit("data", Buffer.from("\u001b[H[]\u001b[K\n\u001b[Hnot-json\u001b[K\n"));
+    const writes = raw.write.mock.calls.map(([chunk]) => String(chunk));
+    expect(writes).toEqual([
+      'data: {"stats":{"ID":"abc123","Name":"web","CPUPerc":"1.2%","PIDs":"2"}}\n\n',
+      'event: error\ndata: {"error":"Docker returned malformed container stats"}\n\n',
+      'event: error\ndata: {"error":"Docker returned malformed container stats"}\n\n'
+    ]);
 
     raw.emit("close");
     expect(child.kill).toHaveBeenCalledWith("SIGTERM");

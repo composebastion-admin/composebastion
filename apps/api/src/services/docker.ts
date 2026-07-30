@@ -67,6 +67,28 @@ function parseJsonLines(stdout: string) {
     .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
+function isDockerStatsLifecycleTombstone(stats: Record<string, unknown>) {
+  return typeof stats.Container === "string"
+    && /^[0-9a-f]{64}$/i.test(stats.Container)
+    && stats.ID === ""
+    && stats.Name === "--";
+}
+
+function parseDockerStatsStreamLine(line: string) {
+  const normalized = line
+    .replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, "")
+    .trim();
+  if (!normalized) return null;
+  const parsed: unknown = JSON.parse(normalized);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Docker stats row must be a JSON object");
+  }
+  const stats = parsed as Record<string, unknown>;
+  // Docker 29 emits this zeroed terminal row when a container disappears
+  // during a continuous stats stream. It is lifecycle bookkeeping, not stats.
+  return isDockerStatsLifecycleTombstone(stats) ? null : stats;
+}
+
 function normalizeImageReference(value: string) {
   return value.trim().split("@")[0] ?? "";
 }
@@ -599,14 +621,21 @@ export async function streamContainerUsage(hostId: string, onStats: (stats: Reco
   }
   if (host.connectionMode === "agent") {
     if (!host.agent) throw new Error("Agent host is missing agent connection details");
-    return streamAgentContainerUsage(host.agent, onStats, onError);
+    return streamAgentContainerUsage(
+      host.agent,
+      (stats) => {
+        if (!isDockerStatsLifecycleTombstone(stats)) onStats(stats);
+      },
+      onError
+    );
   }
   return streamSshCommandLines(
     host.ssh,
     withDockerEnv("docker stats --format '{{json .}}'", host.public.dockerSocketPath),
     (line) => {
       try {
-        onStats(JSON.parse(line) as Record<string, unknown>);
+        const stats = parseDockerStatsStreamLine(line);
+        if (stats) onStats(stats);
       } catch (error) {
         onError(error instanceof Error ? error : new Error(String(error)));
       }

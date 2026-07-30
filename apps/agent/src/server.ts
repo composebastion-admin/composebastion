@@ -81,6 +81,13 @@ async function run(command: string, timeout = 120_000) {
   return execDocker(parsed, timeout);
 }
 
+function isDockerStatsLifecycleTombstone(stats: Record<string, unknown>) {
+  return typeof stats.Container === "string"
+    && /^[0-9a-f]{64}$/i.test(stats.Container)
+    && stats.ID === ""
+    && stats.Name === "--";
+}
+
 export function parseDockerStatsLine(line: string) {
   // Continuous `docker stats` output uses ANSI cursor-control sequences to
   // repaint its table even when a custom JSON format is sent through a pipe.
@@ -89,7 +96,14 @@ export function parseDockerStatsLine(line: string) {
     .replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, "")
     .trim();
   if (!normalized) return null;
-  return JSON.parse(normalized) as Record<string, unknown>;
+  const parsed: unknown = JSON.parse(normalized);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Docker stats row must be a JSON object");
+  }
+  const stats = parsed as Record<string, unknown>;
+  // Docker 29 emits this zeroed terminal row when a container disappears
+  // during a continuous stats stream. It is lifecycle bookkeeping, not stats.
+  return isDockerStatsLifecycleTombstone(stats) ? null : stats;
 }
 
 function parseDockerStats(stdout: string) {
