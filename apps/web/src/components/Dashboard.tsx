@@ -229,8 +229,10 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
   }, [refresh]);
 
   useEffect(() => {
+    // Route changes close the mobile drawer. Background host reconciliation
+    // must not dismiss navigation that the user has just opened.
     setIsSidebarOpen(false);
-  }, [tab, selectedHostId]);
+  }, [tab]);
 
   useEffect(() => () => {
     if (clearActivityTimer.current) window.clearTimeout(clearActivityTimer.current);

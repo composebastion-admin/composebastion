@@ -312,6 +312,7 @@ const recoveryReadiness = {
 type MockApiOptions = {
   needsSetup?: boolean;
   hosts?: unknown[];
+  hostsReady?: Promise<void>;
   role?: "owner" | "admin" | "operator" | "viewer";
   failChannelTest?: boolean;
   appOverride?: Record<string, unknown>;
@@ -392,7 +393,10 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
     if (path === "/api/auth/setup-state") return json({ needsSetup: Boolean(options.needsSetup) });
     if (path === "/api/auth/me") return options.needsSetup ? json({ error: "Authentication required" }, 401) : json({ user: currentUser });
     if (path === "/api/auth/setup" || path === "/api/auth/login") return json({ user: currentUser });
-    if (path === "/api/hosts") return json({ hosts: hostList });
+    if (path === "/api/hosts") {
+      if (options.hostsReady) await options.hostsReady;
+      return json({ hosts: hostList });
+    }
     if (path === `/api/hosts/${host.id}/resources`) return json({ resources: options.resources ?? [currentContainerResource] });
     if (path === `/api/hosts/${fileHost.id}/resources`) return json({ resources: [] });
     if (path === `/api/hosts/${host.id}/containers/usage`) return json({ usage: [{ ID: "web", CPUPerc: "1.2%", MemPerc: "3.4%", MemUsage: "20MiB / 512MiB" }] });
@@ -1208,6 +1212,37 @@ test("mobile navigation opens and supports keyboard-visible links", async ({ pag
   await expect(page.getByRole("navigation", { name: "Main navigation" })).toBeVisible();
   await page.keyboard.press("Tab");
   await expect(page.getByRole("link", { name: /Dashboard/ })).toBeVisible();
+});
+
+test("mobile drawer remains open while initial host selection settles", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 820 });
+  let releaseHosts!: () => void;
+  const hostsReady = new Promise<void>((resolve) => {
+    releaseHosts = resolve;
+  });
+  await page.addInitScript(() => {
+    window.localStorage.removeItem("composebastion.selectedHostId");
+  });
+  await mockApi(page, { hostsReady });
+  await gotoApp(page, "/overview");
+  await expect(page.getByRole("heading", { name: "All Docker hosts" })).toBeVisible();
+
+  await page.getByLabel("Open sidebar").click();
+  const sidebar = page.locator("aside.sidebar");
+  await expect(sidebar).toHaveClass(/\bopen\b/);
+
+  releaseHosts();
+  await expect(page.getByText("1/1 online")).toBeVisible();
+  await page.waitForFunction(
+    (hostId) => window.localStorage.getItem("composebastion.selectedHostId") === hostId,
+    host.id
+  );
+  await expect(sidebar).toHaveClass(/\bopen\b/);
+  const containersLink = page.getByRole("link", { name: "Containers", exact: true });
+  await expect(containersLink).toBeInViewport();
+  await containersLink.click();
+  await expect(page).toHaveURL(/\/containers$/);
+  await expect(sidebar).not.toHaveClass(/\bopen\b/);
 });
 
 test("mobile admin settings remain reachable", async ({ page }) => {
