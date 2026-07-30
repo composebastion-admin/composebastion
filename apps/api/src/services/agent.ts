@@ -82,6 +82,10 @@ function parseAgentJson<T>(body: string): T {
   return JSON.parse(body) as T;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
 export async function runAgentDockerCommand(target: AgentTarget, command: string, timeoutMs = 120_000) {
   const response = await agentRequest(target, "api/run", {
     method: "POST",
@@ -293,11 +297,19 @@ export async function streamAgentContainerUsage(
     "api/containers/usage-stream",
     (event, data) => {
       try {
-        const payload = JSON.parse(data) as { stats?: unknown; error?: string };
+        const payload: unknown = JSON.parse(data);
         if (event === "error") {
-          onError(new Error(payload.error ?? "Agent usage stream error"));
-        } else if (event === "message" && payload.stats && typeof payload.stats === "object") {
-          onStats(payload.stats as Record<string, unknown>);
+          const message = isRecord(payload) && typeof payload.error === "string"
+            ? payload.error
+            : "Agent usage stream error";
+          onError(new Error(message));
+        } else if (event === "message") {
+          const stats = isRecord(payload) ? payload.stats : undefined;
+          if (!isRecord(stats)) {
+            onError(new Error("Agent returned malformed container usage stream data"));
+            return;
+          }
+          onStats(stats);
         }
       } catch (error) {
         onError(error instanceof Error ? error : new Error(String(error)));
