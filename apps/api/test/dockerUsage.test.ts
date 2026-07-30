@@ -6,6 +6,8 @@ const streamSshCommandLines = vi.fn();
 const getAgentContainerUsage = vi.fn();
 const runAgentDockerCommand = vi.fn();
 const streamAgentContainerUsage = vi.fn();
+const getDemoContainerUsage = vi.fn();
+const streamDemoContainerUsage = vi.fn();
 
 const dockerStatsTombstone = {
   BlockIO: "0B / 0B",
@@ -44,6 +46,18 @@ vi.mock("../src/services/agent.js", () => ({
   runAgentDockerCommand,
   streamAgentContainerLogs: vi.fn(),
   streamAgentContainerUsage
+}));
+
+vi.mock("../src/services/demo.js", () => ({
+  demoInventorySummary: vi.fn(),
+  execDemoContainer: vi.fn(),
+  executeDemoDockerAction: vi.fn(),
+  getDemoContainerLogs: vi.fn(),
+  getDemoContainerStats: vi.fn(),
+  getDemoContainerUsage,
+  getDemoContainerVolumeMounts: vi.fn(),
+  isDemoHost: (candidate: { tags?: string[] | null }) => Array.isArray(candidate.tags) && candidate.tags.includes("demo"),
+  streamDemoContainerUsage
 }));
 
 const { getContainerUsage, streamContainerLogs, streamContainerUsage } = await import("../src/services/docker.js");
@@ -92,6 +106,14 @@ function agentHost(lastStatus: "unknown" | "online" | "offline" | "checking" = "
   };
 }
 
+function demoHost() {
+  const value = host("online");
+  return {
+    ...value,
+    public: { ...value.public, tags: ["demo"] }
+  };
+}
+
 describe("container usage polling", () => {
   beforeEach(() => {
     getHostForWorker.mockReset();
@@ -100,6 +122,8 @@ describe("container usage polling", () => {
     getAgentContainerUsage.mockReset();
     runAgentDockerCommand.mockReset();
     streamAgentContainerUsage.mockReset();
+    getDemoContainerUsage.mockReset();
+    streamDemoContainerUsage.mockReset();
   });
 
   it("uses the agent read endpoint without consuming the command endpoint", async () => {
@@ -107,6 +131,17 @@ describe("container usage polling", () => {
     getAgentContainerUsage.mockResolvedValue([{ ID: "container-1", CPUPerc: "1.00%" }]);
 
     await expect(getContainerUsage("host-1")).resolves.toEqual([{ ID: "container-1", CPUPerc: "1.00%" }]);
+    expect(runAgentDockerCommand).not.toHaveBeenCalled();
+  });
+
+  it("rejects an agent snapshot atomically when any forwarded row lacks identity", async () => {
+    getHostForWorker.mockResolvedValue(agentHost());
+    getAgentContainerUsage.mockResolvedValue([
+      { ID: "container-1", CPUPerc: "1.00%" },
+      { CPUPerc: "2.00%", MemPerc: "3.00%" }
+    ]);
+
+    await expect(getContainerUsage("host-1")).rejects.toThrow("Agent returned malformed container usage data");
     expect(runAgentDockerCommand).not.toHaveBeenCalled();
   });
 
@@ -119,23 +154,64 @@ describe("container usage polling", () => {
     expect(runAgentDockerCommand).toHaveBeenCalledTimes(1);
   });
 
-  it("proxies the native agent usage stream without lifecycle tombstones", async () => {
+  it("proxies only identified native agent stats without lifecycle tombstones", async () => {
     getHostForWorker.mockResolvedValue(agentHost());
     const stop = vi.fn();
     streamAgentContainerUsage.mockImplementation(async (_target, onStats) => {
       onStats({ ID: "container-1", Name: "web", CPUPerc: "1.00%" });
       onStats(dockerStatsTombstone);
       onStats({ ...dockerStatsTombstone, ID: "5fb479d76eb4" });
+      onStats({ CPUPerc: "2.00%", MemPerc: "3.00%" });
+      onStats({ Container: "5fb479d76eb4", CPUPerc: "4.00%" });
       return stop;
     });
     const stats: Array<Record<string, unknown>> = [];
+    const errors: Error[] = [];
 
-    await expect(streamContainerUsage("host-1", (row) => stats.push(row), vi.fn())).resolves.toBe(stop);
+    await expect(streamContainerUsage("host-1", (row) => stats.push(row), (error) => errors.push(error))).resolves.toBe(stop);
     expect(streamAgentContainerUsage).toHaveBeenCalledTimes(1);
     expect(stats).toEqual([
       { ID: "container-1", Name: "web", CPUPerc: "1.00%" },
       { ...dockerStatsTombstone, ID: "5fb479d76eb4" }
     ]);
+    expect(errors.map((error) => error.message)).toEqual([
+      "Docker stats row must include a container identity",
+      "Docker stats row must include a container identity"
+    ]);
+  });
+
+  it("rejects an entire SSH snapshot instead of filtering an identity-less row", async () => {
+    getHostForWorker.mockResolvedValue(host("online"));
+    runSshCommand.mockResolvedValue({
+      stdout: '{"ID":"container-1","Name":"web","CPUPerc":"1.00%"}\n{"CPUPerc":"2.00%","MemPerc":"3.00%"}\n',
+      stderr: "",
+      code: 0
+    });
+
+    await expect(getContainerUsage("host-1")).rejects.toThrow("must include a container identity");
+  });
+
+  it("validates demo snapshots and stream rows at the forwarding boundary", async () => {
+    getHostForWorker.mockResolvedValue(demoHost());
+    getDemoContainerUsage.mockResolvedValue([
+      { ID: "demo-1", Name: "demo-web" },
+      { CPUPerc: "2.00%" }
+    ]);
+    await expect(getContainerUsage("host-1")).rejects.toThrow("Docker returned malformed container stats");
+
+    const stop = vi.fn();
+    streamDemoContainerUsage.mockImplementation(async (_hostId, onStats) => {
+      onStats({ ID: "demo-1", Name: "demo-web", CPUPerc: "1.00%" });
+      onStats(dockerStatsTombstone);
+      onStats({ CPUPerc: "2.00%" });
+      return stop;
+    });
+    const stats: Array<Record<string, unknown>> = [];
+    const errors: Error[] = [];
+
+    await expect(streamContainerUsage("host-1", (row) => stats.push(row), (error) => errors.push(error))).resolves.toBe(stop);
+    expect(stats).toEqual([{ ID: "demo-1", Name: "demo-web", CPUPerc: "1.00%" }]);
+    expect(errors.map((error) => error.message)).toEqual(["Docker stats row must include a container identity"]);
   });
 
   it("parses ANSI SSH stats, ignores lifecycle tombstones, and reports malformed JSON", async () => {
@@ -148,6 +224,8 @@ describe("container usage polling", () => {
         MemUsage: "0 bytes / 0 bytes",
         PIDs: 0
       })}\u001b[K`);
+      onLine('\u001b[H{"CPUPerc":"2.00%","MemPerc":"3.00%"}\u001b[K');
+      onLine('\u001b[H{"Container":"5fb479d76eb4","CPUPerc":"4.00%"}\u001b[K');
       onLine("\u001b[H[]\u001b[K");
       onLine("\u001b[Hnot-json\u001b[K");
       return () => undefined;
@@ -158,9 +236,13 @@ describe("container usage polling", () => {
     await streamContainerUsage("host-1", (row) => stats.push(row), (error) => errors.push(error));
 
     expect(stats).toEqual([{ ID: "container-1", Name: "web", CPUPerc: "1.00%" }]);
-    expect(errors).toHaveLength(2);
-    expect(errors[0]).toEqual(new Error("Docker stats row must be a JSON object"));
-    expect(errors[1]).toBeInstanceOf(SyntaxError);
+    expect(errors).toHaveLength(4);
+    expect(errors.slice(0, 2).map((error) => error.message)).toEqual([
+      "Docker stats row must include a container identity",
+      "Docker stats row must include a container identity"
+    ]);
+    expect(errors[2]).toEqual(new Error("Docker stats row must be a JSON object"));
+    expect(errors[3]).toBeInstanceOf(SyntaxError);
   });
 
   it("does not attempt Docker stats against known-offline hosts", async () => {

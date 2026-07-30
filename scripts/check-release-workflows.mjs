@@ -485,6 +485,7 @@ for (const [invariant, message] of [
   ["go-buildinfo/docker-compose.modules.tsv", "Compose linked-module inventory"],
   ["go-buildinfo/agent.artifacts.sha256", "agent tool legal-artifact checksums"],
   ["COPY --from=docker-tools-builder /out/licenses/ /licenses/third-party/", "Docker/Compose/Go licenses"],
+  ["node -e \"import('@composebastion/shared')\"", "agent runtime workspace dependency resolution check"],
   ["COPY LICENSES/go-modules/ /licenses/third-party/go-modules/", "checked-in Go attribution bundle"],
   ["node /tmp/go-attribution.mjs verify", "linked Go attribution verification"],
   ['docker --version | grep -F "Docker version ${DOCKER_CLI_VERSION},"', "runtime Docker CLI version check"],

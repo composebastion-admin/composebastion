@@ -1413,6 +1413,7 @@ export const networkDriverExplanations = {
 export type NetworkDriver = keyof typeof networkDriverExplanations;
 
 export * from "./dockerResource.js";
+export * from "./dockerStats.js";
 export * from "./pagination.js";
 export * from "./password.js";
 export * from "./auditActions.js";

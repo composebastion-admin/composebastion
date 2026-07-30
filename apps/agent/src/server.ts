@@ -6,6 +6,7 @@ import path from "node:path";
 import rateLimit from "@fastify/rate-limit";
 import Fastify from "fastify";
 import { z } from "zod";
+import { isDockerStatsLifecycleTombstone, isDockerStatsRecord } from "@composebastion/shared";
 import { parseAgentEnvironment, resolveAgentVersion } from "./config.js";
 import { isPermittedDockerCommand, parsePermittedDockerCommand, type ParsedDockerCommand } from "./security.js";
 import { validateAgentFilePath } from "./paths.js";
@@ -81,13 +82,6 @@ async function run(command: string, timeout = 120_000) {
   return execDocker(parsed, timeout);
 }
 
-function isDockerStatsLifecycleTombstone(stats: Record<string, unknown>) {
-  return typeof stats.Container === "string"
-    && /^[0-9a-f]{64}$/i.test(stats.Container)
-    && stats.ID === ""
-    && stats.Name === "--";
-}
-
 export function parseDockerStatsLine(line: string) {
   // Continuous `docker stats` output uses ANSI cursor-control sequences to
   // repaint its table even when a custom JSON format is sent through a pipe.
@@ -101,9 +95,13 @@ export function parseDockerStatsLine(line: string) {
     throw new Error("Docker stats row must be a JSON object");
   }
   const stats = parsed as Record<string, unknown>;
-  // Docker 29 emits this zeroed terminal row when a container disappears
+  // Docker 29 emits this terminal identity row when a container disappears
   // during a continuous stats stream. It is lifecycle bookkeeping, not stats.
-  return isDockerStatsLifecycleTombstone(stats) ? null : stats;
+  if (isDockerStatsLifecycleTombstone(stats)) return null;
+  if (!isDockerStatsRecord(stats)) {
+    throw new Error("Docker stats row must include a container identity");
+  }
+  return stats;
 }
 
 function parseDockerStats(stdout: string) {

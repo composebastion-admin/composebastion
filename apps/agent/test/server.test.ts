@@ -218,6 +218,15 @@ describe("agent server", () => {
     expect(malformedReply.statusCode).toBe(502);
 
     setExecResult(statsArgs, {
+      stdout: '{"ID":"web","Name":"web","CPUPerc":"1.2%"}\n{"CPUPerc":"0.3%","MemPerc":"2.0%"}\n'
+    });
+    const identitylessReply = createReply();
+    await expect(route("GET", "/api/containers/usage")({}, identitylessReply)).resolves.toEqual({
+      error: "Docker returned malformed container stats"
+    });
+    expect(identitylessReply.statusCode).toBe(502);
+
+    setExecResult(statsArgs, {
       error: Object.assign(new Error("daemon unavailable"), { code: 1 }),
       stderr: "daemon unavailable"
     });
@@ -259,6 +268,9 @@ describe("agent server", () => {
     expect(parseDockerStatsLine("\u001b[K")).toBeNull();
     expect(() => parseDockerStatsLine("null")).toThrow("must be a JSON object");
     expect(() => parseDockerStatsLine("[]")).toThrow("must be a JSON object");
+    expect(() => parseDockerStatsLine('{"CPUPerc":"1.2%","MemPerc":"3.4%"}')).toThrow("must include a container identity");
+    expect(() => parseDockerStatsLine('{"Name":"--","CPUPerc":"0.0%"}')).toThrow("must include a container identity");
+    expect(() => parseDockerStatsLine('{"Container":"5fb479d76eb4","CPUPerc":"1.2%"}')).toThrow("must include a container identity");
     expect(() => parseDockerStatsLine("\u001b[Hnot-json\u001b[K")).toThrow();
   });
 
@@ -300,10 +312,18 @@ describe("agent server", () => {
       'data: {"stats":{"ID":"abc123","Name":"web","CPUPerc":"1.2%","PIDs":"2"}}\n\n'
     ]);
 
-    stdout.emit("data", Buffer.from("\u001b[H[]\u001b[K\n\u001b[Hnot-json\u001b[K\n"));
+    stdout.emit(
+      "data",
+      Buffer.from(
+        '\u001b[H{"CPUPerc":"1.2%","MemPerc":"3.4%"}\u001b[K\n'
+        + "\u001b[H[]\u001b[K\n"
+        + "\u001b[Hnot-json\u001b[K\n"
+      )
+    );
     const writes = raw.write.mock.calls.map(([chunk]) => String(chunk));
     expect(writes).toEqual([
       'data: {"stats":{"ID":"abc123","Name":"web","CPUPerc":"1.2%","PIDs":"2"}}\n\n',
+      'event: error\ndata: {"error":"Docker returned malformed container stats"}\n\n',
       'event: error\ndata: {"error":"Docker returned malformed container stats"}\n\n',
       'event: error\ndata: {"error":"Docker returned malformed container stats"}\n\n'
     ]);

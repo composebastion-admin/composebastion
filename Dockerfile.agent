@@ -12,12 +12,15 @@ FROM node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY apps/agent/package.json apps/agent/package.json
+COPY packages/shared/package.json packages/shared/package.json
 RUN npm ci --workspace @composebastion/agent --include-workspace-root=false --ignore-scripts
 
 FROM deps AS build
 WORKDIR /app
 COPY apps/agent apps/agent
+COPY packages/shared packages/shared
 COPY tsconfig.base.json tsconfig.base.json
+RUN npm run build --workspace @composebastion/shared
 RUN npm run build --workspace @composebastion/agent
 RUN npm prune --omit=dev
 
@@ -133,10 +136,13 @@ COPY scripts/go-attribution-review.mjs /tmp/go-attribution-review.mjs
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/apps/agent/package.json ./apps/agent/package.json
 COPY --from=build /app/apps/agent/dist ./apps/agent/dist
+COPY --from=build /app/packages/shared/package.json ./packages/shared/package.json
+COPY --from=build /app/packages/shared/dist ./packages/shared/dist
 COPY LICENSE.md LICENSING_SUMMARY.md COMMERCIAL-LICENSE.md NOTICE.md THIRD-PARTY-NOTICES.md TRADEMARKS.md /licenses/
 COPY LICENSES /licenses/LICENSES
 RUN mkdir -p /tmp/composebastion
 RUN set -eux; \
+    node -e "import('@composebastion/shared')"; \
     docker --version | grep -F "Docker version ${DOCKER_CLI_VERSION},"; \
     test "$(docker compose version --short)" = "${COMPOSE_VERSION}"; \
     test -s /licenses/third-party/docker-cli-LICENSE.txt; \

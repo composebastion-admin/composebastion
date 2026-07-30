@@ -1,6 +1,13 @@
 import http from "node:http";
 import https from "node:https";
-import { compareReleaseVersions, parseReleaseVersion, type HostDisk } from "@composebastion/shared";
+import {
+  compareReleaseVersions,
+  isDockerStatsLifecycleTombstone,
+  isDockerStatsRecord,
+  parseReleaseVersion,
+  type DockerStatsRecord,
+  type HostDisk
+} from "@composebastion/shared";
 import { env } from "../config/env.js";
 import { createAgentLookup, shouldAllowPrivateAgentUrls } from "./ssrf.js";
 
@@ -159,7 +166,13 @@ export async function getAgentContainerUsage(target: AgentTarget, timeoutMs = 15
     throw new AgentHttpError(data.error ?? `Agent container usage failed with ${response.status}`, response.status);
   }
   if (!Array.isArray(data.usage)) throw new Error("Agent returned malformed container usage data");
-  return data.usage.filter((row): row is Record<string, unknown> => Boolean(row) && typeof row === "object");
+  const usage: DockerStatsRecord[] = [];
+  for (const row of data.usage) {
+    if (isDockerStatsLifecycleTombstone(row)) continue;
+    if (!isDockerStatsRecord(row)) throw new Error("Agent returned malformed container usage data");
+    usage.push(row);
+  }
+  return usage;
 }
 
 export function agentCompatibilityStatus(version: string | null | undefined) {
@@ -305,7 +318,8 @@ export async function streamAgentContainerUsage(
           onError(new Error(message));
         } else if (event === "message") {
           const stats = isRecord(payload) ? payload.stats : undefined;
-          if (!isRecord(stats)) {
+          if (isDockerStatsLifecycleTombstone(stats)) return;
+          if (!isDockerStatsRecord(stats)) {
             onError(new Error("Agent returned malformed container usage stream data"));
             return;
           }

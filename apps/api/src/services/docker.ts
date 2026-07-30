@@ -1,6 +1,14 @@
 import { v4 as uuid } from "uuid";
 import path from "node:path";
-import type { DockerActionRequest, ImageCleanupCandidate, ImageCleanupTarget, ResourceKind } from "@composebastion/shared";
+import {
+  isDockerStatsLifecycleTombstone,
+  isDockerStatsRecord,
+  type DockerActionRequest,
+  type DockerStatsRecord,
+  type ImageCleanupCandidate,
+  type ImageCleanupTarget,
+  type ResourceKind
+} from "@composebastion/shared";
 import type { PoolClient } from "pg";
 import { query, withTransaction } from "../db/pool.js";
 import { buildComposeCommand, buildDockerActionCommand, dockerCommandFailureMessage, inventoryCommands, shQuote, withDockerEnv } from "./commands.js";
@@ -67,11 +75,15 @@ function parseJsonLines(stdout: string) {
     .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
-function isDockerStatsLifecycleTombstone(stats: Record<string, unknown>) {
-  return typeof stats.Container === "string"
-    && /^[0-9a-f]{64}$/i.test(stats.Container)
-    && stats.ID === ""
-    && stats.Name === "--";
+function normalizeDockerStatsRows(value: unknown, message = "Docker returned malformed container stats") {
+  if (!Array.isArray(value)) throw new Error(message);
+  const rows: DockerStatsRecord[] = [];
+  for (const row of value) {
+    if (isDockerStatsLifecycleTombstone(row)) continue;
+    if (!isDockerStatsRecord(row)) throw new Error(message);
+    rows.push(row);
+  }
+  return rows;
 }
 
 function parseDockerStatsStreamLine(line: string) {
@@ -84,9 +96,22 @@ function parseDockerStatsStreamLine(line: string) {
     throw new Error("Docker stats row must be a JSON object");
   }
   const stats = parsed as Record<string, unknown>;
-  // Docker 29 emits this zeroed terminal row when a container disappears
+  // Docker 29 emits this terminal identity row when a container disappears
   // during a continuous stats stream. It is lifecycle bookkeeping, not stats.
-  return isDockerStatsLifecycleTombstone(stats) ? null : stats;
+  if (isDockerStatsLifecycleTombstone(stats)) return null;
+  if (!isDockerStatsRecord(stats)) {
+    throw new Error("Docker stats row must include a container identity");
+  }
+  return stats;
+}
+
+function parseDockerStatsSnapshot(stdout: string) {
+  const rows: DockerStatsRecord[] = [];
+  for (const line of stdout.split(/\r?\n/)) {
+    const stats = parseDockerStatsStreamLine(line);
+    if (stats) rows.push(stats);
+  }
+  return rows;
 }
 
 function normalizeImageReference(value: string) {
@@ -598,12 +623,14 @@ export async function getContainerStats(hostId: string, containerId: string) {
 
 export async function getContainerUsage(hostId: string) {
   const host = await getHostForWorker(hostId);
-  if (isDemoHost(host.public)) return getDemoContainerUsage(hostId);
+  if (isDemoHost(host.public)) {
+    return normalizeDockerStatsRows(await getDemoContainerUsage(hostId));
+  }
   if (host.public.lastStatus === "offline") return [];
   if (host.connectionMode === "agent") {
     if (!host.agent) throw new Error("Agent host is missing agent connection details");
     try {
-      return await getAgentContainerUsage(host.agent);
+      return normalizeDockerStatsRows(await getAgentContainerUsage(host.agent), "Agent returned malformed container usage data");
     } catch (error) {
       // Agents older than 1.0.7 do not expose the read-only usage endpoint. Keep
       // one low-frequency snapshot fallback during rolling upgrades.
@@ -611,21 +638,27 @@ export async function getContainerUsage(hostId: string) {
     }
   }
   const result = await runDocker(hostId, "docker stats --no-stream --format '{{json .}}'", 60_000);
-  return parseJsonLines(result.stdout);
+  return parseDockerStatsSnapshot(result.stdout);
 }
 
 export async function streamContainerUsage(hostId: string, onStats: (stats: Record<string, unknown>) => void, onError: (error: Error) => void) {
   const host = await getHostForWorker(hostId);
+  const forwardStats = (stats: unknown) => {
+    if (isDockerStatsLifecycleTombstone(stats)) return;
+    if (!isDockerStatsRecord(stats)) {
+      onError(new Error("Docker stats row must include a container identity"));
+      return;
+    }
+    onStats(stats);
+  };
   if (isDemoHost(host.public)) {
-    return streamDemoContainerUsage(hostId, onStats);
+    return streamDemoContainerUsage(hostId, forwardStats);
   }
   if (host.connectionMode === "agent") {
     if (!host.agent) throw new Error("Agent host is missing agent connection details");
     return streamAgentContainerUsage(
       host.agent,
-      (stats) => {
-        if (!isDockerStatsLifecycleTombstone(stats)) onStats(stats);
-      },
+      forwardStats,
       onError
     );
   }
