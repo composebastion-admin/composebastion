@@ -3,7 +3,8 @@ import { z } from "zod";
 const scpStyleRepositoryUrl =
   /^(?<user>[a-z0-9._-]+)@(?<host>[a-z0-9._-]+):(?<path>\/?[a-z0-9._~+@/-]+)$/i;
 const allowedUrlProtocols = new Set(["http:", "https:", "ssh:", "git:"]);
-const urlDiagnosticPattern = /\b(?:https?|ssh|git):\/\/[^\s<>"']+/gi;
+const urlDiagnosticSchemePattern = /(?:https?|ssh|git):/gi;
+const trailingDiagnosticPunctuationPattern = /[)\]},.;:!?'"`>]+$/u;
 
 function parseScpStyleRepositoryUrl(value: string) {
   const match = scpStyleRepositoryUrl.exec(value);
@@ -245,6 +246,170 @@ export function sanitizeDeploymentSourceLocator(
   return value;
 }
 
+function normalizedDiagnosticUrlCandidate(value: string) {
+  const match = /^(https?|ssh|git):[\\/]*(.*)$/isu.exec(value);
+  if (!match?.[1]) return value;
+  return `${match[1].toLowerCase()}://${match[2] ?? ""}`;
+}
+
+function diagnosticTokenEnd(value: string, start: number) {
+  for (let index = start; index < value.length; index += 1) {
+    const character = value[index]!;
+    const codePoint = character.charCodeAt(0);
+    const isAsciiControl = codePoint <= 0x1f || codePoint === 0x7f;
+    if (!isAsciiControl && /\s/u.test(character)) return index;
+  }
+  return value.length;
+}
+
+function apparentAuthorityHasCredentialDelimiter(value: string) {
+  let insideIpv6Literal = false;
+  for (const character of value) {
+    if (character === "[") {
+      insideIpv6Literal = true;
+      continue;
+    }
+    if (character === "]") {
+      insideIpv6Literal = false;
+      continue;
+    }
+    if (character === ":" && !insideIpv6Literal) return true;
+  }
+  return false;
+}
+
+function hasWhitespaceAfterQueryOrFragmentStart(value: string) {
+  const queryStart = value.indexOf("?");
+  const fragmentStart = value.indexOf("#");
+  const delimiterStart = [queryStart, fragmentStart]
+    .filter((index) => index >= 0)
+    .sort((left, right) => left - right)[0];
+  return delimiterStart !== undefined
+    && /\s/u.test(value.slice(delimiterStart + 1));
+}
+
+function canWhitespaceContinueApparentUserInfo(
+  value: string,
+  start: number,
+  whitespaceStart: number,
+  userInfoEnd: number
+) {
+  const schemeColon = value.indexOf(":", start);
+  if (schemeColon < 0 || schemeColon >= whitespaceStart) return false;
+  let authorityStart = schemeColon + 1;
+  while (value[authorityStart] === "/" || value[authorityStart] === "\\") {
+    authorityStart += 1;
+  }
+  if (userInfoEnd < authorityStart) return false;
+  if (value.slice(authorityStart, whitespaceStart).includes("@")) return false;
+
+  let authorityEnd = whitespaceStart;
+  for (let index = authorityStart; index < whitespaceStart; index += 1) {
+    const character = value[index]!;
+    if (character === "/" || character === "\\" || character === "?" || character === "#") {
+      authorityEnd = index;
+      break;
+    }
+  }
+  if (authorityEnd === whitespaceStart) return true;
+  return apparentAuthorityHasCredentialDelimiter(
+    value.slice(authorityStart, authorityEnd)
+  );
+}
+
+function hasWhitespaceInApparentUserInfo(value: string) {
+  const whitespaceStart = diagnosticTokenEnd(value, 0);
+  if (whitespaceStart >= value.length) return false;
+  const userInfoEnd = value.indexOf("@", whitespaceStart);
+  return userInfoEnd >= whitespaceStart
+    && canWhitespaceContinueApparentUserInfo(
+      value,
+      0,
+      whitespaceStart,
+      userInfoEnd
+    );
+}
+
+function diagnosticSensitiveContinuationEnd(
+  value: string,
+  start: number,
+  whitespaceStart: number
+) {
+  if (whitespaceStart >= value.length) return whitespaceStart;
+
+  const candidateBeforeWhitespace = value.slice(start, whitespaceStart);
+  if (candidateBeforeWhitespace.includes("?") || candidateBeforeWhitespace.includes("#")) {
+    return value.length;
+  }
+
+  const userInfoEnd = value.indexOf("@", whitespaceStart);
+  if (
+    userInfoEnd >= whitespaceStart
+    && canWhitespaceContinueApparentUserInfo(value, start, whitespaceStart, userInfoEnd)
+  ) {
+    return diagnosticTokenEnd(value, userInfoEnd + 1);
+  }
+
+  let continuationStart = whitespaceStart;
+  while (
+    continuationStart < value.length
+    && /\s/u.test(value[continuationStart]!)
+    && !/[\u0000-\u001f\u007f]/u.test(value[continuationStart]!)
+  ) {
+    continuationStart += 1;
+  }
+  if (
+    continuationStart < value.length
+    && (value[continuationStart] === "?" || value[continuationStart] === "#")
+  ) {
+    return value.length;
+  }
+  return whitespaceStart;
+}
+
+function schemeStartFallsInsideUserInfo(
+  value: string,
+  outerSchemeStart: number,
+  nestedSchemeStart: number
+) {
+  const colon = value.indexOf(":", outerSchemeStart);
+  if (colon < 0 || colon >= nestedSchemeStart) return false;
+  let authorityStart = colon + 1;
+  while (value[authorityStart] === "/" || value[authorityStart] === "\\") {
+    authorityStart += 1;
+  }
+  const tokenEnd = diagnosticTokenEnd(value, authorityStart);
+  let authorityEnd = tokenEnd;
+  for (let index = authorityStart; index < tokenEnd; index += 1) {
+    const character = value[index]!;
+    if (character === "/" || character === "\\" || character === "?" || character === "#") {
+      authorityEnd = index;
+      break;
+    }
+  }
+  const userInfoEnd = value.lastIndexOf("@", authorityEnd);
+  return userInfoEnd >= authorityStart
+    && nestedSchemeStart >= authorityStart
+    && nestedSchemeStart < userInfoEnd;
+}
+
+function sanitizeDiagnosticUrlCandidate(value: string) {
+  const trailing = trailingDiagnosticPunctuationPattern.exec(value)?.[0] ?? "";
+  const candidate = trailing ? value.slice(0, -trailing.length) : value;
+  const normalized = normalizedDiagnosticUrlCandidate(candidate);
+  if (
+    /[\u0000-\u001f\u007f]/u.test(normalized)
+    || hasWhitespaceInApparentUserInfo(normalized)
+    || hasWhitespaceAfterQueryOrFragmentStart(normalized)
+  ) {
+    return `[redacted-url]${trailing}`;
+  }
+  const sanitized = sanitizeGitRepositoryUrl(normalized)
+    ?? sanitizePlaintextHttpSourceUrl(normalized)
+    ?? "[redacted-url]";
+  return `${sanitized}${trailing}`;
+}
+
 /**
  * Scrub URL-shaped fragments in human-readable job diagnostics. Non-URL
  * diagnostics are retained verbatim so useful worker failure context remains
@@ -252,39 +417,79 @@ export function sanitizeDeploymentSourceLocator(
  */
 export function sanitizeUrlDiagnosticText(value: unknown): unknown {
   if (typeof value !== "string") return value;
-  return value.replace(urlDiagnosticPattern, (match) => {
-    const trailing = /[),.;:]+$/.exec(match)?.[0] ?? "";
-    const candidate = trailing ? match.slice(0, -trailing.length) : match;
-    const sanitized = sanitizeGitRepositoryUrl(candidate)
-      ?? sanitizePlaintextHttpSourceUrl(candidate)
-      ?? "[redacted-url]";
-    return `${sanitized}${trailing}`;
-  });
+  const schemeStarts = Array.from(value.matchAll(urlDiagnosticSchemePattern), (match) => match.index);
+  if (schemeStarts.length === 0) return value;
+
+  const output: string[] = [];
+  let cursor = 0;
+  for (let index = 0; index < schemeStarts.length; index += 1) {
+    const start = schemeStarts[index]!;
+    if (start < cursor) continue;
+    output.push(value.slice(cursor, start));
+
+    const whitespaceEnd = diagnosticTokenEnd(value, start);
+    let nextSchemeStart: number | undefined;
+    for (let candidateIndex = index + 1; candidateIndex < schemeStarts.length; candidateIndex += 1) {
+      const candidateStart = schemeStarts[candidateIndex]!;
+      if (candidateStart >= whitespaceEnd) break;
+      if (!schemeStartFallsInsideUserInfo(value, start, candidateStart)) {
+        nextSchemeStart = candidateStart;
+        break;
+      }
+    }
+    const defaultEnd = nextSchemeStart !== undefined && nextSchemeStart < whitespaceEnd
+      ? nextSchemeStart
+      : whitespaceEnd;
+    const end = defaultEnd === whitespaceEnd
+      ? diagnosticSensitiveContinuationEnd(
+        value,
+        start,
+        whitespaceEnd
+      )
+      : defaultEnd;
+    output.push(sanitizeDiagnosticUrlCandidate(value.slice(start, end)));
+    cursor = end;
+  }
+  output.push(value.slice(cursor));
+  return output.join("");
 }
 
 /**
- * Operation-job payloads and results are schemaless JSON. Sanitize known Git
- * URL fields recursively so legacy rows cannot reflect embedded credentials to
- * operators while preserving all unrelated diagnostic data.
+ * Operation-job payloads, results, and other persisted diagnostics are
+ * schemaless JSON. Sanitize URL-shaped fragments in every string leaf so
+ * legacy rows cannot reflect embedded credentials to operators while
+ * preserving all unrelated diagnostic text. Known repository and source
+ * locator fields retain their stricter whole-value handling.
  */
 export function sanitizeGitRepositoryUrlFields<T>(value: T): T {
+  if (typeof value === "string") {
+    return sanitizeUrlDiagnosticText(value) as T;
+  }
   if (Array.isArray(value)) {
     return value.map((item) => sanitizeGitRepositoryUrlFields(item)) as T;
   }
   if (!value || typeof value !== "object") return value;
 
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>).map(([key, item]) => {
-      if (/^(?:repositoryUrl|repository_url|hostCloneUrl|host_clone_url)$/i.test(key)) {
-        return [key, sanitizeGitRepositoryUrl(item)];
-      }
-      if (/^(?:sourceInput|source_input|sourceLocator|source_locator)$/i.test(key)) {
-        return [key, sanitizeDeploymentSourceLocator(item)];
-      }
-      if (/^(?:error|detail)$/i.test(key)) {
-        return [key, sanitizeUrlDiagnosticText(item)];
-      }
-      return [key, sanitizeGitRepositoryUrlFields(item)];
-    })
-  ) as T;
+  const sanitizedEntries: Array<[string, unknown]> = [];
+  const usedKeys = new Set<string>();
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    const sanitizedKeyValue = sanitizeUrlDiagnosticText(key);
+    const sanitizedKey = typeof sanitizedKeyValue === "string" ? sanitizedKeyValue : key;
+    let uniqueKey = sanitizedKey;
+    for (let suffix = 2; usedKeys.has(uniqueKey); suffix += 1) {
+      uniqueKey = `${sanitizedKey} [${suffix}]`;
+    }
+    usedKeys.add(uniqueKey);
+
+    let sanitizedItem: unknown;
+    if (/^(?:repositoryUrl|repository_url|hostCloneUrl|host_clone_url)$/i.test(key)) {
+      sanitizedItem = sanitizeGitRepositoryUrl(item);
+    } else if (/^(?:sourceInput|source_input|sourceLocator|source_locator)$/i.test(key)) {
+      sanitizedItem = sanitizeUrlDiagnosticText(sanitizeDeploymentSourceLocator(item));
+    } else {
+      sanitizedItem = sanitizeGitRepositoryUrlFields(item);
+    }
+    sanitizedEntries.push([uniqueKey, sanitizedItem]);
+  }
+  return Object.fromEntries(sanitizedEntries) as T;
 }

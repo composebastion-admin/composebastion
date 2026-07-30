@@ -1,15 +1,11 @@
 import type { FastifyInstance } from "fastify";
-import { idSchema, sanitizeGitRepositoryUrlFields, type OperationJob } from "@composebastion/shared";
+import { idSchema } from "@composebastion/shared";
 import { cancelQueuedJob, getJob, getWorkerStatus, listJobs, retryJob } from "../services/jobs.js";
 import { requireRole } from "../services/auth.js";
 import { sendApiError } from "../services/apiError.js";
 import { auditContextFromRequest, writeAuditEvent } from "../services/audit.js";
 import { authenticatedReadRateLimit, sensitiveMutationRateLimit } from "../services/rateLimits.js";
-import { redactJobSensitiveFields } from "../services/mappers.js";
-
-function sanitizeJobRepositoryUrls(job: OperationJob): OperationJob {
-  return sanitizeGitRepositoryUrlFields(job);
-}
+import { redactJobSensitiveFields, sanitizeOperationJobForRead } from "../services/mappers.js";
 
 const nonIdempotentWorkerLossTypes = new Set([
   "host.configureRegistryTrust",
@@ -22,7 +18,7 @@ export async function registerJobRoutes(app: FastifyInstance) {
 
   app.get("/api/jobs", { preHandler: viewer, config: { rateLimit: authenticatedReadRateLimit } }, async (request) => {
     const page = await listJobs(request.query);
-    const sanitized = page.items.map(sanitizeJobRepositoryUrls);
+    const sanitized = page.items.map(sanitizeOperationJobForRead);
     const items = request.user?.role === "viewer"
       ? sanitized.map(redactJobSensitiveFields)
       : sanitized;
@@ -41,8 +37,8 @@ export async function registerJobRoutes(app: FastifyInstance) {
     }
     return {
       job: request.user?.role === "viewer"
-        ? redactJobSensitiveFields(sanitizeJobRepositoryUrls(job))
-        : sanitizeJobRepositoryUrls(job)
+        ? redactJobSensitiveFields(sanitizeOperationJobForRead(job))
+        : sanitizeOperationJobForRead(job)
     };
   });
 
@@ -60,7 +56,7 @@ export async function registerJobRoutes(app: FastifyInstance) {
       details: { type: result.job.type },
       ...auditContextFromRequest(request)
     });
-    return { job: sanitizeJobRepositoryUrls(result.job) };
+    return { job: sanitizeOperationJobForRead(result.job) };
   });
 
   app.post("/api/jobs/:id/retry", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request, reply) => {
@@ -89,8 +85,8 @@ export async function registerJobRoutes(app: FastifyInstance) {
       ...auditContextFromRequest(request)
     });
     return {
-      job: sanitizeJobRepositoryUrls(result.retried),
-      original: sanitizeJobRepositoryUrls(result.original)
+      job: sanitizeOperationJobForRead(result.retried),
+      original: sanitizeOperationJobForRead(result.original)
     };
   });
 }

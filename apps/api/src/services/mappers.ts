@@ -16,6 +16,7 @@ import {
   migrationPlanSchema,
   recoveryAppIdentitySchema,
   sanitizeGitRepositoryUrl,
+  sanitizeGitRepositoryUrlFields,
   sanitizeUrlDiagnosticText
 } from "@composebastion/shared";
 import { mapBackupTargetFields } from "./recoveryBackupTargets.js";
@@ -169,6 +170,16 @@ export function mapJob(row: any): OperationJob {
     updatedAt: iso(row.updated_at)!,
     startedAt: iso(row.started_at),
     completedAt: iso(row.completed_at)
+  };
+}
+
+export function sanitizeOperationJobForRead(job: OperationJob): OperationJob {
+  return {
+    ...job,
+    payload: sanitizeGitRepositoryUrlFields(job.payload),
+    result: job.result === null ? null : sanitizeGitRepositoryUrlFields(job.result),
+    progress: sanitizeGitRepositoryUrlFields(job.progress),
+    error: sanitizeUrlDiagnosticText(job.error) as string | null
   };
 }
 

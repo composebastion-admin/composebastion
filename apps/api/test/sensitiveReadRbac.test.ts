@@ -9,16 +9,26 @@ const stackId = "33333333-3333-4333-8333-333333333333";
 const jobId = "44444444-4444-4444-8444-444444444444";
 const secret = "qualification-secret-value";
 const urlSecret = "git-url-only-secret";
+const structuredUrlLikeName = "https:structured-user@display.example/app";
+const structuredUrlLikePath = String.raw`/srv/https:\structured-user@path.example/source`;
+const structuredUrlLikeRef = "https:/structured-user@ref.example/release";
+const structuredUrlLikeCompose = `services:\n  app:\n    labels:\n      fixture: ${structuredUrlLikeName}\n`;
+const unsafeDynamicKey = `https://key-user:${urlSecret}@keys.example.test/path`;
+const safeDynamicKey = "https://keys.example.test/path";
+const unsafeLatestHtmlUrl = `https://release-user:${urlSecret}@release.example.test/v1?token=${urlSecret}`;
+const safeLatestHtmlUrl = "https://release.example.test/v1";
 const query = vi.hoisted(() => vi.fn());
+const cancelQueuedJob = vi.hoisted(() => vi.fn());
 const enqueueJob = vi.hoisted(() => vi.fn());
 const retryJob = vi.hoisted(() => vi.fn());
+const updateApp = vi.hoisted(() => vi.fn());
 const upsertAppSourceLink = vi.hoisted(() => vi.fn());
 const writeAuditEvent = vi.hoisted(() => vi.fn(async () => undefined));
 
 const sensitiveJob = {
   id: jobId,
   correlationId: jobId,
-  type: "compose.writeDeployPath",
+  type: structuredUrlLikeName,
   status: "failed",
   hostId,
   payload: {
@@ -29,7 +39,18 @@ const sensitiveJob = {
     sourceInput: `https://git.example.test/team/app.git?token=${urlSecret}`
   },
   result: {
-    stdout: secret,
+    stdout: `stdout ${secret}; remote https://git-user:${urlSecret}@git.example.test/team/app.git?token=${urlSecret}`,
+    stderr: `stderr ${secret}; remote ssh://git:${urlSecret}@git.example.test/team/app.git#${urlSecret}`,
+    diagnostics: {
+      attempts: [
+        `attempt ${secret}; remote https://git.example.test/team/app.git?token=${urlSecret}`,
+        {
+          message: `nested ${secret}; remote git://git-user:${urlSecret}@git.example.test/team/app.git`
+        }
+      ],
+      [unsafeDynamicKey]: `first dynamic ${secret}`,
+      [safeDynamicKey]: `second dynamic ${secret}`
+    },
     repositoryUrl: `https://git-user:${urlSecret}@git.example.test/team/app.git#${urlSecret}`,
     sourceLocator: `https://git-user:${urlSecret}@git.example.test/team/app.git?token=${urlSecret}`
   },
@@ -45,6 +66,47 @@ const sensitiveJob = {
   updatedAt: new Date(0).toISOString(),
   startedAt: new Date(0).toISOString(),
   completedAt: new Date(0).toISOString()
+};
+
+const sensitiveApp = {
+  id: "app:sensitive",
+  hostId,
+  hostName: structuredUrlLikeName,
+  hostHostname: "host.example.test",
+  name: structuredUrlLikeName,
+  source: "git",
+  status: "running",
+  imageReferences: [structuredUrlLikeName],
+  ports: "",
+  containerIds: [],
+  primaryContainerId: null,
+  stackId,
+  repositoryId: null,
+  repositoryUrl: `https://git-user:${urlSecret}@github.com/example/private.git?token=${urlSecret}`,
+  branch: structuredUrlLikeRef,
+  projectName: structuredUrlLikeName,
+  sourceLink: {
+    id: "66666666-6666-4666-8666-666666666666",
+    sourceType: "git",
+    name: structuredUrlLikeName,
+    repositoryUrl: `https://git-user:${urlSecret}@github.com/example/private.git?token=${urlSecret}`,
+    branch: structuredUrlLikeRef,
+    workingDir: `${structuredUrlLikePath}/${secret}`,
+    composePath: `${structuredUrlLikeRef}/${secret}.yaml`,
+    imageReference: structuredUrlLikeName,
+    currentCommitSha: null,
+    latestCommitSha: null,
+    checkedAt: null,
+    checkError: `git failed: ${secret}; remote https://git-user:${urlSecret}@github.com/example/private.git?token=${urlSecret}`,
+    updatedAt: new Date(0).toISOString()
+  },
+  update: {
+    status: "error",
+    kind: "git",
+    checkedAt: null,
+    riskNote: `update failed: ${secret}; remote ssh://git:${urlSecret}@github.com/example/private.git#${urlSecret}`
+  },
+  updatedAt: new Date(0).toISOString()
 };
 
 const stackRow = {
@@ -91,7 +153,7 @@ vi.mock("../src/services/audit.js", () => ({
 }));
 
 vi.mock("../src/services/jobs.js", () => ({
-  cancelQueuedJob: vi.fn(async () => ({ job: sensitiveJob, canceled: false })),
+  cancelQueuedJob,
   enqueueJob,
   getJob: vi.fn(async () => sensitiveJob),
   getWorkerStatus: vi.fn(async () => ({ queued: 0, running: 0, lastJobCompletedAt: null })),
@@ -167,58 +229,57 @@ vi.mock("../src/services/deployments.js", () => ({
 }));
 
 vi.mock("../src/services/apps.js", () => ({
-  checkAppUpdates: vi.fn(),
+  checkAppUpdates: vi.fn(async () => [sensitiveApp]),
   deleteAppSourceLink: vi.fn(),
   listAppGithubVersions: vi.fn(async () => ({
-    repositoryUrl: `https://git-user:${secret}@github.com/example/private.git?token=${secret}`,
-    selectedRef: "main",
+    repositoryUrl: `https://git-user:${urlSecret}@github.com/example/private.git?token=${urlSecret}`,
+    selectedRef: structuredUrlLikeRef,
     currentCommitSha: "a".repeat(40),
-    options: []
+    options: [{
+      kind: "branch",
+      name: structuredUrlLikeName,
+      ref: structuredUrlLikeRef,
+      label: structuredUrlLikeName,
+      commitSha: null,
+      publishedAt: null,
+      htmlUrl: structuredUrlLikePath,
+      selected: true,
+      deployed: true,
+      updateAvailable: false
+    }]
   })),
-  listApps: vi.fn(async () => [{
-    id: "app:sensitive",
-    hostId,
-    hostName: "Sensitive host",
-    hostHostname: "host.example.test",
-    name: "Sensitive app",
-    source: "git",
-    status: "running",
-    imageReferences: [],
-    ports: "",
-    containerIds: [],
-    primaryContainerId: null,
-    stackId,
-    repositoryId: null,
-    repositoryUrl: `https://git-user:${secret}@github.com/example/private.git?token=${secret}`,
-    branch: "main",
-    projectName: "sensitive",
-    sourceLink: {
-      id: "66666666-6666-4666-8666-666666666666",
-      sourceType: "git",
-      name: "Sensitive source",
-      repositoryUrl: `https://git-user:${secret}@github.com/example/private.git?token=${secret}`,
-      branch: "main",
-      workingDir: `/srv/${secret}`,
-      composePath: `${secret}.yaml`,
-      imageReference: null,
-      currentCommitSha: null,
-      latestCommitSha: null,
-      checkedAt: null,
-      checkError: `git failed: ${secret}`,
-      updatedAt: new Date(0).toISOString()
-    },
-    update: {
-      status: "error",
-      kind: "git",
-      checkedAt: null,
-      riskNote: `update failed: ${secret}`
-    },
-    updatedAt: new Date(0).toISOString()
-  }]),
-  renameApp: vi.fn(),
-  selectAppGithubVersion: vi.fn(),
-  updateApp: vi.fn(),
+  listApps: vi.fn(async () => [sensitiveApp]),
+  renameApp: vi.fn(async () => ({ app: sensitiveApp })),
+  selectAppGithubVersion: vi.fn(async () => ({ app: sensitiveApp })),
+  updateApp,
   upsertAppSourceLink
+}));
+
+vi.mock("../src/services/selfUpdate.js", () => ({
+  checkSelfUpdateLatest: vi.fn(async () => ({
+    version: "1.2.0",
+    checkedAt: new Date(0).toISOString(),
+    error: `release check ${secret}; remote https://git-user:${urlSecret}@github.com/example/private/releases?token=${urlSecret}`,
+    htmlUrl: unsafeLatestHtmlUrl
+  })),
+  enqueueSelfUpdate: vi.fn(async () => sensitiveJob),
+  getSelfUpdateStatus: vi.fn(async () => ({
+    configured: true,
+    config: {
+      workingDir: structuredUrlLikePath,
+      composeFile: structuredUrlLikeName
+    },
+    runtime: { version: "1.2.0-beta.1", revision: structuredUrlLikeRef },
+    latest: {
+      version: "1.2.0",
+      checkedAt: new Date(0).toISOString(),
+      error: null,
+      htmlUrl: unsafeLatestHtmlUrl
+    },
+    updateAvailable: true,
+    lastJob: sensitiveJob
+  })),
+  saveSelfUpdateConfig: vi.fn()
 }));
 
 const { registerAppRoutes } = await import("../src/routes/apps.js");
@@ -226,6 +287,7 @@ const { registerComposeRoutes } = await import("../src/routes/compose.js");
 const { registerDeploymentRoutes } = await import("../src/routes/deployments.js");
 const { registerGithubRoutes } = await import("../src/routes/github.js");
 const { registerJobRoutes } = await import("../src/routes/jobs.js");
+const { registerSelfUpdateRoutes } = await import("../src/routes/selfUpdate.js");
 
 type Role = "viewer" | "operator" | "admin" | "owner";
 
@@ -249,6 +311,7 @@ async function buildApp() {
   await registerDeploymentRoutes(app);
   await registerGithubRoutes(app);
   await registerJobRoutes(app);
+  await registerSelfUpdateRoutes(app);
   return app;
 }
 
@@ -268,8 +331,21 @@ describe("secret-bearing read boundaries", () => {
     query.mockResolvedValue({ rows: [stackRow] });
     enqueueJob.mockReset();
     enqueueJob.mockResolvedValue(sensitiveJob);
+    cancelQueuedJob.mockReset();
+    cancelQueuedJob.mockResolvedValue({ job: sensitiveJob, canceled: true });
     retryJob.mockReset();
-    retryJob.mockResolvedValue({ original: sensitiveJob, retried: null });
+    retryJob.mockResolvedValue({ original: sensitiveJob, retried: sensitiveJob });
+    updateApp.mockReset();
+    updateApp.mockResolvedValue({
+      jobs: [sensitiveJob],
+      mode: structuredUrlLikeName,
+      branch: structuredUrlLikeRef,
+      stack: {
+        name: structuredUrlLikeName,
+        workingDir: structuredUrlLikePath,
+        composeYaml: structuredUrlLikeCompose
+      }
+    });
     upsertAppSourceLink.mockReset();
     upsertAppSourceLink.mockImplementation(async (_appId, input) => ({
       id: "77777777-7777-4777-8777-777777777777",
@@ -317,13 +393,14 @@ describe("secret-bearing read boundaries", () => {
     }
   });
 
-  it("returns viewer-safe job status without payload, result, progress detail, or raw error", async () => {
+  it("keeps the exact viewer job shape and recursively sanitizes every authorized job response", async () => {
     const app = await buildApp();
     try {
       for (const url of ["/api/jobs", `/api/jobs/${jobId}`]) {
         const viewer = await injectAs(app, "viewer", { method: "GET", url });
         expect(viewer.statusCode, url).toBe(200);
         expect(viewer.body, url).not.toContain(secret);
+        expect(viewer.body, url).not.toContain(urlSecret);
         const job = url === "/api/jobs" ? viewer.json().jobs[0] : viewer.json().job;
         expect(job).toMatchObject({
           payload: {},
@@ -334,25 +411,64 @@ describe("secret-bearing read boundaries", () => {
         expect(job.error).toBe("Operation failed; details require operator access.");
       }
 
-      const operator = await injectAs(app, "operator", { method: "GET", url: `/api/jobs/${jobId}` });
-      expect(operator.statusCode).toBe(200);
-      expect(operator.body).toContain(secret);
-      expect(operator.body).not.toContain(urlSecret);
-      expect(operator.json().job.sensitiveFieldsRedacted).toBeUndefined();
-      expect(operator.json().job.payload.repositoryUrl)
-        .toBe("https://git.example.test/team/app.git");
-      expect(operator.json().job.result.repositoryUrl)
-        .toBe("https://git.example.test/team/app.git");
-      expect(operator.json().job.payload).toMatchObject({
-        hostCloneUrl: "ssh://git@git.example.test/team/app.git",
-        sourceInput: "https://git.example.test/team/app.git"
-      });
-      expect(operator.json().job.result.sourceLocator)
-        .toBe("https://git.example.test/team/app.git");
-      expect(operator.json().job.progress[0].detail)
-        .toContain("remote https://git.example.test/team/app.git");
-      expect(operator.json().job.error)
-        .toContain("remote https://git.example.test/team/app.git");
+      const assertAuthorizedJob = (job: any) => {
+        expect(JSON.stringify(job)).toContain(secret);
+        expect(JSON.stringify(job)).not.toContain(urlSecret);
+        expect(job.sensitiveFieldsRedacted).toBeUndefined();
+        expect(job.type).toBe(structuredUrlLikeName);
+        expect(job.payload).toMatchObject({
+          repositoryUrl: "https://git.example.test/team/app.git",
+          hostCloneUrl: "ssh://git@git.example.test/team/app.git",
+          sourceInput: "https://git.example.test/team/app.git"
+        });
+        expect(job.result).toMatchObject({
+          stdout: `stdout ${secret}; remote https://git.example.test/team/app.git`,
+          stderr: `stderr ${secret}; remote ssh://git@git.example.test/team/app.git`,
+          repositoryUrl: "https://git.example.test/team/app.git",
+          sourceLocator: "https://git.example.test/team/app.git",
+          diagnostics: {
+            attempts: [
+              `attempt ${secret}; remote https://git.example.test/team/app.git`,
+              {
+                message: `nested ${secret}; remote git://git.example.test/team/app.git`
+              }
+            ]
+          }
+        });
+        expect(job.progress[0].detail)
+          .toContain("remote https://git.example.test/team/app.git");
+        expect(job.error)
+          .toContain("remote https://git.example.test/team/app.git");
+        expect(job.result.diagnostics[safeDynamicKey]).toBe(`first dynamic ${secret}`);
+        expect(job.result.diagnostics[`${safeDynamicKey} [2]`])
+          .toBe(`second dynamic ${secret}`);
+      };
+
+      for (const role of ["operator", "admin", "owner"] as Role[]) {
+        const list = await injectAs(app, role, { method: "GET", url: "/api/jobs" });
+        expect(list.statusCode, `${role} list`).toBe(200);
+        assertAuthorizedJob(list.json().jobs[0]);
+        assertAuthorizedJob(list.json().items[0]);
+
+        const detail = await injectAs(app, role, { method: "GET", url: `/api/jobs/${jobId}` });
+        expect(detail.statusCode, `${role} detail`).toBe(200);
+        assertAuthorizedJob(detail.json().job);
+
+        const canceled = await injectAs(app, role, {
+          method: "POST",
+          url: `/api/jobs/${jobId}/cancel`
+        });
+        expect(canceled.statusCode, `${role} cancel`).toBe(200);
+        assertAuthorizedJob(canceled.json().job);
+
+        const retried = await injectAs(app, role, {
+          method: "POST",
+          url: `/api/jobs/${jobId}/retry`
+        });
+        expect(retried.statusCode, `${role} retry`).toBe(200);
+        assertAuthorizedJob(retried.json().job);
+        assertAuthorizedJob(retried.json().original);
+      }
     } finally {
       await app.close();
     }
@@ -427,6 +543,75 @@ describe("secret-bearing read boundaries", () => {
     }
   });
 
+  it("sanitizes legacy self-update jobs in status, check, and start responses", async () => {
+    const app = await buildApp();
+    try {
+      for (const role of ["viewer", "operator"] as Role[]) {
+        expect((await injectAs(app, role, {
+          method: "GET",
+          url: "/api/self-update"
+        })).statusCode).toBe(403);
+      }
+
+      for (const role of ["admin", "owner"] as Role[]) {
+        const status = await injectAs(app, role, {
+          method: "GET",
+          url: "/api/self-update"
+        });
+        expect(status.statusCode, `${role} status`).toBe(200);
+        expect(status.body).toContain(secret);
+        expect(status.body).not.toContain(urlSecret);
+        expect(status.json().config).toEqual({
+          workingDir: structuredUrlLikePath,
+          composeFile: structuredUrlLikeName
+        });
+        expect(status.json().runtime).toEqual({
+          version: "1.2.0-beta.1",
+          revision: structuredUrlLikeRef
+        });
+        expect(status.json().latest.htmlUrl).toBe(safeLatestHtmlUrl);
+        expect(status.json().lastJob.type).toBe(structuredUrlLikeName);
+        expect(status.json().lastJob.result).toMatchObject({
+          stdout: `stdout ${secret}; remote https://git.example.test/team/app.git`,
+          stderr: `stderr ${secret}; remote ssh://git@git.example.test/team/app.git`
+        });
+
+        const checked = await injectAs(app, role, {
+          method: "POST",
+          url: "/api/self-update/check",
+          payload: {}
+        });
+        expect(checked.statusCode, `${role} check`).toBe(200);
+        expect(checked.body).toContain(secret);
+        expect(checked.body).not.toContain(urlSecret);
+        expect(checked.json().config).toEqual({
+          workingDir: structuredUrlLikePath,
+          composeFile: structuredUrlLikeName
+        });
+        expect(checked.json().runtime.revision).toBe(structuredUrlLikeRef);
+        expect(checked.json().latest.htmlUrl).toBe(safeLatestHtmlUrl);
+        expect(checked.json().latest.error)
+          .toBe(`release check ${secret}; remote https://github.com/example/private/releases`);
+        expect(checked.json().lastJob.result.diagnostics.attempts[1].message)
+          .toBe(`nested ${secret}; remote git://git.example.test/team/app.git`);
+
+        const started = await injectAs(app, role, {
+          method: "POST",
+          url: "/api/self-update/start",
+          payload: { targetVersion: "1.2.0" }
+        });
+        expect(started.statusCode, `${role} start`).toBe(200);
+        expect(started.body).toContain(secret);
+        expect(started.body).not.toContain(urlSecret);
+        expect(started.json().job.type).toBe(structuredUrlLikeName);
+        expect(started.json().job.result.stdout)
+          .toBe(`stdout ${secret}; remote https://git.example.test/team/app.git`);
+      }
+    } finally {
+      await app.close();
+    }
+  });
+
   it("operator-gates definition-bearing history, My Library, GitHub, and analysis reads", async () => {
     const app = await buildApp();
     try {
@@ -447,12 +632,14 @@ describe("secret-bearing read boundaries", () => {
     }
   });
 
-  it("removes embedded credentials, host paths, and raw source errors from viewer app reads", async () => {
+  it("preserves the viewer app shape and sanitizes every authorized app outward response", async () => {
     const app = await buildApp();
+    upsertAppSourceLink.mockResolvedValue(sensitiveApp.sourceLink);
     try {
       const viewer = await injectAs(app, "viewer", { method: "GET", url: "/api/apps" });
       expect(viewer.statusCode).toBe(200);
       expect(viewer.body).not.toContain(secret);
+      expect(viewer.body).not.toContain(urlSecret);
       expect(viewer.body).not.toContain("git-user");
       expect((await injectAs(app, "viewer", {
         method: "GET",
@@ -461,10 +648,18 @@ describe("secret-bearing read boundaries", () => {
 
       const viewerApps = viewer.json().apps;
       expect(viewerApps[0]).toMatchObject({
+        hostName: structuredUrlLikeName,
+        name: structuredUrlLikeName,
+        imageReferences: [structuredUrlLikeName],
+        branch: structuredUrlLikeRef,
+        projectName: structuredUrlLikeName,
         repositoryUrl: "https://github.com/example/private.git",
         sensitiveFieldsRedacted: true,
         sourceLink: {
+          name: structuredUrlLikeName,
           repositoryUrl: "https://github.com/example/private.git",
+          branch: structuredUrlLikeRef,
+          imageReference: structuredUrlLikeName,
           workingDir: null,
           composePath: null,
           checkError: "Source check failed; details require operator access."
@@ -472,21 +667,121 @@ describe("secret-bearing read boundaries", () => {
         update: { riskNote: "Update details require operator access." }
       });
 
-      const operator = await injectAs(app, "operator", { method: "GET", url: "/api/apps" });
-      expect(operator.statusCode).toBe(200);
-      expect(operator.body).toContain(secret);
-      expect(operator.body).not.toContain("git-user");
-      expect(operator.json().apps[0].sensitiveFieldsRedacted).toBeUndefined();
+      const assertAuthorizedApp = (outwardApp: any) => {
+        expect(JSON.stringify(outwardApp)).toContain(secret);
+        expect(JSON.stringify(outwardApp)).not.toContain(urlSecret);
+        expect(JSON.stringify(outwardApp)).not.toContain("git-user");
+        expect(outwardApp.sensitiveFieldsRedacted).toBeUndefined();
+        expect(outwardApp).toMatchObject({
+          hostName: structuredUrlLikeName,
+          name: structuredUrlLikeName,
+          imageReferences: [structuredUrlLikeName],
+          branch: structuredUrlLikeRef,
+          projectName: structuredUrlLikeName
+        });
+        expect(outwardApp.repositoryUrl).toBe("https://github.com/example/private.git");
+        expect(outwardApp.sourceLink).toMatchObject({
+          name: structuredUrlLikeName,
+          repositoryUrl: "https://github.com/example/private.git",
+          branch: structuredUrlLikeRef,
+          workingDir: `${structuredUrlLikePath}/${secret}`,
+          composePath: `${structuredUrlLikeRef}/${secret}.yaml`,
+          imageReference: structuredUrlLikeName,
+          checkError: `git failed: ${secret}; remote https://github.com/example/private.git`
+        });
+        expect(outwardApp.update.riskNote)
+          .toBe(`update failed: ${secret}; remote ssh://git@github.com/example/private.git`);
+      };
 
-      const operatorVersions = await injectAs(app, "operator", {
-        method: "GET",
-        url: "/api/apps/app%3Asensitive/versions"
-      });
-      expect(operatorVersions.statusCode).toBe(200);
-      expect(operatorVersions.body).not.toContain(secret);
-      expect(operatorVersions.body).not.toContain("git-user");
-      expect(operatorVersions.json().versions.repositoryUrl)
-        .toBe("https://github.com/example/private.git");
+      for (const role of ["operator", "admin", "owner"] as Role[]) {
+        const list = await injectAs(app, role, { method: "GET", url: "/api/apps" });
+        expect(list.statusCode, `${role} list`).toBe(200);
+        assertAuthorizedApp(list.json().apps[0]);
+
+        const checked = await injectAs(app, role, {
+          method: "POST",
+          url: "/api/apps/check-updates",
+          payload: {}
+        });
+        expect(checked.statusCode, `${role} check`).toBe(200);
+        assertAuthorizedApp(checked.json().apps[0]);
+
+        const renamed = await injectAs(app, role, {
+          method: "PUT",
+          url: "/api/apps/app%3Asensitive/name",
+          payload: { name: "Sensitive app" }
+        });
+        expect(renamed.statusCode, `${role} rename`).toBe(200);
+        assertAuthorizedApp(renamed.json().app);
+
+        const selected = await injectAs(app, role, {
+          method: "PUT",
+          url: "/api/apps/app%3Asensitive/version",
+          payload: { ref: "main", kind: "branch" }
+        });
+        expect(selected.statusCode, `${role} select version`).toBe(200);
+        assertAuthorizedApp(selected.json().app);
+
+        const versions = await injectAs(app, role, {
+          method: "GET",
+          url: "/api/apps/app%3Asensitive/versions"
+        });
+        expect(versions.statusCode, `${role} versions`).toBe(200);
+        expect(versions.body).not.toContain(urlSecret);
+        expect(versions.body).not.toContain("git-user");
+        expect(versions.json().versions.repositoryUrl)
+          .toBe("https://github.com/example/private.git");
+        expect(versions.json().versions.selectedRef).toBe(structuredUrlLikeRef);
+        expect(versions.json().versions.options[0]).toMatchObject({
+          name: structuredUrlLikeName,
+          ref: structuredUrlLikeRef,
+          label: structuredUrlLikeName,
+          htmlUrl: structuredUrlLikePath
+        });
+
+        const update = await injectAs(app, role, {
+          method: "POST",
+          url: "/api/apps/app%3Asensitive/update"
+        });
+        expect(update.statusCode, `${role} update`).toBe(200);
+        expect(update.body).toContain(secret);
+        expect(update.body).not.toContain(urlSecret);
+        expect(update.json().jobs[0].result.stdout)
+          .toBe(`stdout ${secret}; remote https://git.example.test/team/app.git`);
+        expect(update.json()).toMatchObject({
+          mode: structuredUrlLikeName,
+          branch: structuredUrlLikeRef,
+          stack: {
+            name: structuredUrlLikeName,
+            workingDir: structuredUrlLikePath,
+            composeYaml: structuredUrlLikeCompose
+          }
+        });
+
+        const source = await injectAs(app, role, {
+          method: "PUT",
+          url: "/api/apps/app%3Asensitive/source",
+          payload: {
+            sourceType: "git",
+            repositoryUrl: "https://github.com/example/private.git",
+            branch: "main",
+            workingDir: "/srv/private",
+            composePath: "compose.yaml"
+          }
+        });
+        expect(source.statusCode, `${role} source`).toBe(200);
+        expect(source.body).toContain(secret);
+        expect(source.body).not.toContain(urlSecret);
+        expect(source.json().link).toMatchObject({
+          name: structuredUrlLikeName,
+          repositoryUrl: "https://github.com/example/private.git",
+          branch: structuredUrlLikeRef,
+          workingDir: `${structuredUrlLikePath}/${secret}`,
+          composePath: `${structuredUrlLikeRef}/${secret}.yaml`,
+          imageReference: structuredUrlLikeName,
+          checkError: `git failed: ${secret}; remote https://github.com/example/private.git`
+        });
+      }
     } finally {
       await app.close();
     }

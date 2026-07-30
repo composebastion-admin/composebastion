@@ -4,15 +4,18 @@ import {
   appRenameInputSchema,
   appSourceLinkInputSchema,
   sanitizeGitRepositoryUrl,
-  type DockerApp
+  sanitizeUrlDiagnosticText,
+  type DockerApp,
+  type OperationJob
 } from "@composebastion/shared";
 import { auditContextFromRequest, writeAuditEvent } from "../services/audit.js";
 import { requireRole } from "../services/auth.js";
 import { checkAppUpdates, deleteAppSourceLink, listAppGithubVersions, listApps, renameApp, selectAppGithubVersion, updateApp, upsertAppSourceLink } from "../services/apps.js";
+import { sanitizeOperationJobForRead } from "../services/mappers.js";
 import { sensitiveMutationRateLimit } from "../services/rateLimits.js";
 
 function redactViewerApp(app: DockerApp): DockerApp {
-  const sanitized = sanitizeAppRepositoryUrls(app);
+  const sanitized = sanitizeAppForRead(app);
   return {
     ...sanitized,
     sensitiveFieldsRedacted: true,
@@ -33,15 +36,37 @@ function redactViewerApp(app: DockerApp): DockerApp {
   };
 }
 
-function sanitizeAppRepositoryUrls(app: DockerApp): DockerApp {
+function sanitizeAppForRead(app: DockerApp): DockerApp {
   return {
     ...app,
     repositoryUrl: sanitizeGitRepositoryUrl(app.repositoryUrl),
     sourceLink: app.sourceLink ? {
       ...app.sourceLink,
-      repositoryUrl: sanitizeGitRepositoryUrl(app.sourceLink.repositoryUrl)
-    } : null
+      repositoryUrl: sanitizeGitRepositoryUrl(app.sourceLink.repositoryUrl),
+      checkError: sanitizeUrlDiagnosticText(app.sourceLink.checkError) as string | null
+    } : null,
+    update: {
+      ...app.update,
+      riskNote: sanitizeUrlDiagnosticText(app.update.riskNote) as typeof app.update.riskNote
+    }
   };
+}
+
+function sanitizeAppUpdateResult<T>(result: T): T {
+  if (!result || typeof result !== "object" || Array.isArray(result)) return result;
+  const source = result as Record<string, unknown>;
+  const sanitized = { ...source };
+  if (source.job && typeof source.job === "object" && !Array.isArray(source.job)) {
+    sanitized.job = sanitizeOperationJobForRead(source.job as OperationJob);
+  }
+  if (Array.isArray(source.jobs)) {
+    sanitized.jobs = source.jobs.map((job) => (
+      job && typeof job === "object" && !Array.isArray(job)
+        ? sanitizeOperationJobForRead(job as OperationJob)
+        : job
+    ));
+  }
+  return sanitized as T;
 }
 
 export async function registerAppRoutes(app: FastifyInstance) {
@@ -50,7 +75,7 @@ export async function registerAppRoutes(app: FastifyInstance) {
 
   app.get("/api/apps", { preHandler: viewer }, async (request) => {
     const { hostId } = request.query as { hostId?: string };
-    const apps = (await listApps(hostId)).map(sanitizeAppRepositoryUrls);
+    const apps = (await listApps(hostId)).map(sanitizeAppForRead);
     return {
       apps: request.user?.role === "viewer"
         ? apps.map(redactViewerApp)
@@ -60,7 +85,7 @@ export async function registerAppRoutes(app: FastifyInstance) {
 
   app.post("/api/apps/check-updates", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
     const { hostId } = (request.body ?? {}) as { hostId?: string };
-    const apps = (await checkAppUpdates(hostId)).map(sanitizeAppRepositoryUrls);
+    const apps = (await checkAppUpdates(hostId)).map(sanitizeAppForRead);
     await writeAuditEvent({
       userId: request.user?.id,
       hostId: hostId ?? null,
@@ -97,7 +122,7 @@ export async function registerAppRoutes(app: FastifyInstance) {
     });
     return {
       ...result,
-      app: result.app ? sanitizeAppRepositoryUrls(result.app) : null
+      app: result.app ? sanitizeAppForRead(result.app) : null
     };
   });
 
@@ -111,7 +136,7 @@ export async function registerAppRoutes(app: FastifyInstance) {
       targetId: appId,
       ...auditContextFromRequest(request)
     });
-    return result;
+    return sanitizeAppUpdateResult(result);
   });
 
   app.put("/api/apps/:appId/name", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
@@ -128,7 +153,7 @@ export async function registerAppRoutes(app: FastifyInstance) {
     });
     return {
       ...result,
-      app: result.app ? sanitizeAppRepositoryUrls(result.app) : null
+      app: result.app ? sanitizeAppForRead(result.app) : null
     };
   });
 
@@ -143,7 +168,13 @@ export async function registerAppRoutes(app: FastifyInstance) {
       details: { sourceType: link.sourceType },
       ...auditContextFromRequest(request)
     });
-    return { link };
+    return {
+      link: {
+        ...link,
+        repositoryUrl: sanitizeGitRepositoryUrl(link.repositoryUrl),
+        checkError: sanitizeUrlDiagnosticText(link.checkError) as string | null
+      }
+    };
   });
 
   app.delete("/api/apps/:appId/source", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {

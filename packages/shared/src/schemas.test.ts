@@ -240,6 +240,43 @@ describe("shared schemas", () => {
       { source_locator: "https://compose.example.test/compose.yaml" },
       "unchanged"
     ]);
+
+    const urlCanary = "url-diagnostic-secret";
+    const diagnosticCanary = "useful-non-url-diagnostic";
+    const schemaless = sanitizeGitRepositoryUrlFields({
+      stdout: `stdout ${diagnosticCanary}: https://git-user:${urlCanary}@git.example.test/team/app.git?token=${urlCanary}`,
+      stderr: `stderr ${diagnosticCanary}: ssh://git:${urlCanary}@git.example.test/team/app.git#${urlCanary}`,
+      diagnostics: {
+        attempts: [
+          `first ${diagnosticCanary}: https://git.example.test/team/app.git?token=${urlCanary}`,
+          {
+            message: `second ${diagnosticCanary}: git://git-user:${urlCanary}@git.example.test/team/app.git`
+          }
+        ],
+        prefixed: `prefix_${diagnosticCanary}_https://git-user:${urlCanary}@git.example.test/team/app.git?token=${urlCanary}`
+      },
+      repository_url: `https://git-user:${urlCanary}@git.example.test/team/app.git?token=${urlCanary}`,
+      sourceLocator: `https://git-user:${urlCanary}@compose.example.test/compose.yaml?token=${urlCanary}`,
+      source_input: `source ${diagnosticCanary}: https://git-user:${urlCanary}@git.example.test/team/app.git?token=${urlCanary}`
+    });
+    expect(schemaless).toEqual({
+      stdout: `stdout ${diagnosticCanary}: https://git.example.test/team/app.git`,
+      stderr: `stderr ${diagnosticCanary}: ssh://git@git.example.test/team/app.git`,
+      diagnostics: {
+        attempts: [
+          `first ${diagnosticCanary}: https://git.example.test/team/app.git`,
+          {
+            message: `second ${diagnosticCanary}: git://git.example.test/team/app.git`
+          }
+        ],
+        prefixed: `prefix_${diagnosticCanary}_https://git.example.test/team/app.git`
+      },
+      repository_url: "https://git.example.test/team/app.git",
+      sourceLocator: "https://compose.example.test/compose.yaml",
+      source_input: `source ${diagnosticCanary}: https://git.example.test/team/app.git`
+    });
+    expect(JSON.stringify(schemaless)).not.toContain(urlCanary);
+    expect(JSON.stringify(schemaless).match(new RegExp(diagnosticCanary, "g"))).toHaveLength(6);
   });
 
   it("represents explicit Docker host secret clearing without ambiguous replacements", () => {

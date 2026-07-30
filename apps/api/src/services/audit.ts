@@ -1,9 +1,71 @@
 import { v4 as uuid } from "uuid";
 import type { AuditEvent } from "@composebastion/shared";
-import { paginationQuerySchema, paginatedResponse } from "@composebastion/shared";
+import {
+  paginationQuerySchema,
+  paginatedResponse,
+  sanitizeGitRepositoryUrlFields
+} from "@composebastion/shared";
 import type { FastifyRequest } from "fastify";
 import type { PoolClient } from "pg";
 import { query } from "../db/pool.js";
+
+const secretDetailKeys = new Set([
+  "password",
+  "passphrase",
+  "token",
+  "apikey",
+  "accesstoken",
+  "refreshtoken",
+  "sessiontoken",
+  "clientsecret",
+  "privatekey",
+  "secretkey",
+  "sshprivatekey",
+  "sshpassword",
+  "sshkeypassphrase",
+  "agenttoken",
+  "githubtoken",
+  "credentialsecret",
+  "credentials",
+  "rcloneconfig",
+  "rclonecredentials",
+  "genericconfig",
+  "genericcredentials",
+  "registrypassword",
+  "smtppassword",
+  "webhooksecret",
+  "accesskeyid",
+  "secretaccesskey",
+  "appsecret",
+  "appsecretkey"
+]);
+
+function isSecretDetailKey(key: string) {
+  const normalized = key.replace(/[_-]/g, "").toLowerCase();
+  if (secretDetailKeys.has(normalized)) return true;
+  const encryptedSuffix = "encrypted";
+  return normalized.endsWith(encryptedSuffix)
+    && secretDetailKeys.has(normalized.slice(0, -encryptedSuffix.length));
+}
+
+function redactAuditSecretFields(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactAuditSecretFields);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+      key,
+      isSecretDetailKey(key) ? "[redacted]" : redactAuditSecretFields(item)
+    ])
+  );
+}
+
+function sanitizeAuditDetails(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return redactAuditSecretFields(
+    sanitizeGitRepositoryUrlFields(value)
+  ) as Record<string, unknown>;
+}
+
 function mapAudit(row: any): AuditEvent {
   return {
     id: row.id,
@@ -12,7 +74,7 @@ function mapAudit(row: any): AuditEvent {
     action: row.action,
     targetKind: row.target_kind,
     targetId: row.target_id,
-    details: row.details ?? {},
+    details: sanitizeAuditDetails(row.details),
     createdAt: new Date(row.created_at).toISOString()
   };
 }
@@ -37,10 +99,7 @@ export async function writeAuditEvent(input: {
   ipAddress?: string | null;
   userAgent?: string | null;
 }, client?: PoolClient) {
-  const safeDetails = { ...(input.details ?? {}) };
-  for (const key of ["password", "sshPrivateKey", "sshPassword", "agentToken", "token", "passphrase"]) {
-    if (key in safeDetails) safeDetails[key] = "[redacted]";
-  }
+  const safeDetails = sanitizeAuditDetails(input.details);
 
   const execute = client ? client.query.bind(client) : query;
   await execute(
