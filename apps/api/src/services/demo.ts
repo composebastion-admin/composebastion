@@ -4,6 +4,7 @@ import { registryCreateSchema, type DockerActionRequest, type DockerHost, type R
 import { query, withTransaction } from "../db/pool.js";
 import { encryptSecret } from "./crypto.js";
 import { mapHost } from "./mappers.js";
+import { lockHostIdentityScope } from "./hostIdentity.js";
 
 export const DEMO_TAG = "demo";
 const DEMO_HOSTNAME = "demo.composebastion.local";
@@ -181,8 +182,16 @@ function composeLabels(project: string, service: string) {
   };
 }
 
+function demoHostIdentityConflict() {
+  return Object.assign(
+    new Error("Demo workspace cannot be seeded because an active host has the same name or connection"),
+    { statusCode: 409 }
+  );
+}
+
 export async function seedDemoWorkspace(createdBy?: string | null) {
   return withTransaction(async (client) => {
+    await lockHostIdentityScope(client);
     const hostSpecs = [
       {
         key: "primary",
@@ -232,8 +241,9 @@ export async function seedDemoWorkspace(createdBy?: string | null) {
       }
     ] as const;
 
-    const demoHostnames = hostSpecs.map((host) => host.hostname);
-    const demoHostNames = ["Demo Host", ...hostSpecs.map((host) => host.name)];
+    const demoHostnames = hostSpecs.map((host) => host.hostname.trim().toLowerCase());
+    const demoHostNames = ["Demo Host", ...hostSpecs.map((host) => host.name)]
+      .map((name) => name.trim().toLowerCase());
     const demoChannelNames = ["Demo webhook", "Demo operations webhook", "Demo email digest"];
     const demoBackupTargetNames = ["Demo Local Vault", "Demo SMB Remote", "Demo S3 Archive"];
     const demoRegistryNames = ["Demo GHCR", "Demo Docker Hub Mirror", "Demo Insecure Lab Registry"];
@@ -242,8 +252,11 @@ export async function seedDemoWorkspace(createdBy?: string | null) {
 
     const staleHosts = await client.query<{ id: string }>(
       `SELECT id FROM docker_hosts
-       WHERE hostname = ANY($1::text[])
-          OR ($2 = ANY(tags) AND name = ANY($3::text[]))`,
+       WHERE $2 = ANY(tags)
+         AND (
+           lower(btrim(hostname)) = ANY($1::text[])
+           OR lower(btrim(name)) = ANY($3::text[])
+         )`,
       [demoHostnames, DEMO_TAG, demoHostNames]
     );
     const staleHostIds = staleHosts.rows.map((row) => row.id);
@@ -272,17 +285,59 @@ export async function seedDemoWorkspace(createdBy?: string | null) {
     await client.query("DELETE FROM custom_catalog_templates WHERE id = ANY($1::text[])", [demoTemplateIds]);
 
     const hostIds: Record<string, string> = {};
+    const claimedHostIds = new Set<string>();
     for (const spec of hostSpecs) {
-      const existing = await client.query<{ id: string }>(
-        "SELECT id FROM docker_hosts WHERE hostname = $1 ORDER BY created_at ASC LIMIT 1",
-        [spec.hostname]
+      const candidates = await client.query<{ id: string; deleted_at: Date | string | null }>(
+        `SELECT id, deleted_at
+         FROM docker_hosts
+         WHERE $2 = ANY(tags)
+           AND (
+             lower(btrim(hostname)) = lower(btrim($1))
+             OR lower(btrim(name)) = lower(btrim($3))
+           )
+         ORDER BY (deleted_at IS NULL) DESC, created_at ASC`,
+        [spec.hostname, DEMO_TAG, spec.name]
       );
-      const hostId = existing.rows[0]?.id ?? uuid();
+      const activeCandidates = candidates.rows.filter((row) => row.deleted_at == null);
+      if (activeCandidates.length > 1) {
+        throw demoHostIdentityConflict();
+      }
+      const existing = activeCandidates[0] ?? candidates.rows[0];
+      if (existing && claimedHostIds.has(existing.id)) {
+        throw demoHostIdentityConflict();
+      }
+      const conflicting = await client.query<{ id: string }>(
+        `SELECT id
+         FROM docker_hosts
+         WHERE deleted_at IS NULL
+           AND ($5::uuid IS NULL OR id <> $5::uuid)
+           AND (
+             lower(btrim(name)) = lower(btrim($1))
+             OR (
+               lower(btrim(hostname)) = lower(btrim($2))
+               AND username = $3
+               AND port = $4
+             )
+           )
+         LIMIT 1`,
+        [
+          spec.name,
+          spec.hostname,
+          spec.username,
+          spec.port,
+          existing?.id ?? null
+        ]
+      );
+      if (conflicting.rows[0]) {
+        throw demoHostIdentityConflict();
+      }
+      const hostId = existing?.id ?? uuid();
+      claimedHostIds.add(hostId);
       hostIds[spec.key] = hostId;
       const sshPassword = spec.connectionMode === "ssh" ? encryptSecret("demo-password") : null;
       const agentToken = spec.connectionMode === "agent" ? encryptSecret("demo-agent-token") : null;
       const agentUrl = "agentUrl" in spec ? spec.agentUrl : null;
-      if (existing.rows[0]) {
+      if (existing) {
         await client.query(
           `UPDATE docker_hosts
            SET name = $2,

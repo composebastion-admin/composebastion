@@ -647,6 +647,118 @@ describe("config backup product identity", () => {
     expect(linkValues[5]).toBe("https://git.example.test/Team/App.git");
   });
 
+  it("rejects an invalid imported host id before opening a transaction", async () => {
+    const encrypted = encryptConfigPayload({
+      ...emptyConfigPayload("ComposeBastion"),
+      hosts: [{
+        id: "not-a-uuid",
+        name: "Invalid id host",
+        hostname: "invalid-id.example.test",
+        port: 22,
+        username: "docker",
+        connectionMode: "ssh",
+        sshAuthType: "password",
+        dockerSocketPath: "/var/run/docker.sock",
+        tags: [],
+        secrets: { sshPassword: "password" }
+      }]
+    }, "long-test-passphrase");
+
+    await expect(importConfigBackup(
+      encrypted as unknown as Record<string, unknown>,
+      "long-test-passphrase"
+    )).rejects.toMatchObject({
+      message: expect.stringContaining("Config backup host 1 is invalid"),
+      statusCode: 400
+    });
+    expect(withTransaction).not.toHaveBeenCalled();
+  });
+
+  it("canonicalizes uppercase imported host ids while retaining dependent UUID references", async () => {
+    const uppercaseHostId = "A0000000-0000-4000-8000-000000000125";
+    const encrypted = encryptConfigPayload({
+      ...emptyConfigPayload("ComposeBastion"),
+      hosts: [{
+        id: uppercaseHostId,
+        name: "Uppercase id host",
+        hostname: "uppercase-id.example.test",
+        port: 22,
+        username: "docker",
+        connectionMode: "ssh",
+        sshAuthType: "password",
+        dockerSocketPath: "/var/run/docker.sock",
+        tags: [],
+        secrets: { sshPassword: "password" }
+      }],
+      composeStacks: [{
+        id: "B0000000-0000-4000-8000-000000000126",
+        hostId: uppercaseHostId,
+        name: "Uppercase host dependency",
+        projectName: "uppercase-host-dependency",
+        composeYaml: "services: {}"
+      }]
+    }, "long-test-passphrase");
+
+    await importConfigBackup(
+      encrypted as unknown as Record<string, unknown>,
+      "long-test-passphrase"
+    );
+
+    const hostValues = transactionQuery.mock.calls.find(([sql]) =>
+      typeof sql === "string" && sql.includes("INSERT INTO docker_hosts")
+    )?.[1] as unknown[];
+    const stackValues = transactionQuery.mock.calls.find(([sql]) =>
+      typeof sql === "string" && sql.includes("INSERT INTO compose_stacks")
+    )?.[1] as unknown[];
+    expect(hostValues[0]).toBe(uppercaseHostId.toLowerCase());
+    expect(String(stackValues[1]).toLowerCase()).toBe(uppercaseHostId.toLowerCase());
+  });
+
+  it("rejects exact and case-equivalent duplicate imported host ids before a transaction", async () => {
+    const canonicalId = "a0000000-0000-4000-8000-000000000127";
+    for (const duplicateId of [canonicalId, canonicalId.toUpperCase()]) {
+      withTransaction.mockClear();
+      const encrypted = encryptConfigPayload({
+        ...emptyConfigPayload("ComposeBastion"),
+        hosts: [
+          {
+            id: canonicalId,
+            name: "First id owner",
+            hostname: "first-id.example.test",
+            port: 22,
+            username: "docker",
+            connectionMode: "ssh",
+            sshAuthType: "password",
+            dockerSocketPath: "/var/run/docker.sock",
+            tags: [],
+            secrets: { sshPassword: "password" }
+          },
+          {
+            id: duplicateId,
+            name: "Second id owner",
+            hostname: "second-id.example.test",
+            port: 2222,
+            username: "operator",
+            connectionMode: "ssh",
+            sshAuthType: "password",
+            dockerSocketPath: "/var/run/docker.sock",
+            tags: [],
+            secrets: { sshPassword: "password" }
+          }
+        ]
+      }, "long-test-passphrase");
+
+      await expect(importConfigBackup(
+        encrypted as unknown as Record<string, unknown>,
+        "long-test-passphrase"
+      )).rejects.toMatchObject({
+        message: "Config backup contains duplicate host ids",
+        statusCode: 400
+      });
+      expect(withTransaction).not.toHaveBeenCalled();
+    }
+  });
+
   it("rejects duplicate imported hosts before opening a transaction", async () => {
     const host = {
       name: "Duplicate host",
@@ -720,6 +832,47 @@ describe("config backup product identity", () => {
     expect(transactionQuery.mock.calls.some(([sql]) =>
       typeof sql === "string" && /\b(?:INSERT|UPDATE|DELETE)\b/.test(sql)
     )).toBe(false);
+  });
+
+  it("reactivates imported host ids with a fresh health state", async () => {
+    const hostId = "00000000-0000-4000-8000-000000000124";
+    const encrypted = encryptConfigPayload({
+      ...emptyConfigPayload("ComposeBastion"),
+      hosts: [{
+        id: hostId,
+        name: "Restored host",
+        hostname: "restored.example.test",
+        port: 22,
+        username: "docker",
+        connectionMode: "ssh",
+        sshAuthType: "password",
+        dockerSocketPath: "/var/run/docker.sock",
+        tags: ["restored"],
+        secrets: { sshPassword: "imported-password" }
+      }]
+    }, "long-test-passphrase");
+
+    await importConfigBackup(
+      encrypted as unknown as Record<string, unknown>,
+      "long-test-passphrase"
+    );
+
+    const hostUpsert = transactionQuery.mock.calls.find(([sql]) =>
+      typeof sql === "string" && sql.includes("INSERT INTO docker_hosts")
+    );
+    expect(hostUpsert?.[1]?.[0]).toBe(hostId);
+    const sql = String(hostUpsert?.[0]);
+    expect(sql).toContain("last_status = 'unknown'");
+    for (const field of [
+      "last_seen_at",
+      "last_error",
+      "docker_version",
+      "compose_version",
+      "agent_version",
+      "deleted_at"
+    ]) {
+      expect(sql).toContain(`${field} = NULL`);
+    }
   });
 
   it("imports only a fully usable active host credential set", async () => {

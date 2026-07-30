@@ -300,7 +300,14 @@ describe("Docker host updates", () => {
             agent_url: values[10],
             agent_token_encrypted: values[11],
             docker_socket_path: values[12],
-            tags: values[13]
+            tags: values[13],
+            last_status: "unknown",
+            last_seen_at: null,
+            last_error: null,
+            docker_version: null,
+            compose_version: null,
+            agent_version: null,
+            deleted_at: null
           })]
         };
       }
@@ -309,10 +316,28 @@ describe("Docker host updates", () => {
 
     await expect(restoreHost(deleted.id)).resolves.toMatchObject({
       connectionMode: "agent",
-      agentUrl: "https://agent.example.test/"
+      agentUrl: "https://agent.example.test/",
+      lastStatus: "unknown",
+      lastSeenAt: null,
+      lastError: null,
+      dockerVersion: null,
+      composeVersion: null,
+      agentVersion: null
     });
     expect(validateAgentUrl).toHaveBeenCalledWith("https://agent.example.test");
     const update = query.mock.calls.find(([sql]) => String(sql).includes("UPDATE docker_hosts"));
+    const sql = String(update?.[0]);
+    expect(sql).toContain("last_status = 'unknown'");
+    for (const field of [
+      "last_seen_at",
+      "last_error",
+      "docker_version",
+      "compose_version",
+      "agent_version",
+      "deleted_at"
+    ]) {
+      expect(sql).toContain(`${field} = NULL`);
+    }
     const values = update?.[1] as unknown[];
     expect(values.slice(7, 10)).toEqual([null, null, null]);
     expect(values[11]).toBe("encrypted:active-agent-token");

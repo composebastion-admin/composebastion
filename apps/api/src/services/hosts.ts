@@ -9,8 +9,9 @@ import type { SshTarget } from "./ssh.js";
 import { env } from "../config/env.js";
 import { validateAgentUrl } from "./ssrf.js";
 import { enqueueJobInTransaction, notifyJobQueued } from "./jobs.js";
+import { lockHostIdentityScope } from "./hostIdentity.js";
 
-export const HOST_CREATE_LOCK_ID = "484624819832837";
+export { HOST_CREATE_LOCK_ID } from "./hostIdentity.js";
 const PRIVATE_AGENT_URL_ERROR = "This agent URL points at a private network address, which is blocked by default to prevent request forgery. If your agent really lives on a private LAN (typical for homelabs), set ALLOW_PRIVATE_AGENT_URLS=true on the ComposeBastion server and try again.";
 
 async function assertAgentUrlAllowed(agentUrl: string) {
@@ -164,7 +165,7 @@ async function prepareHostCreate(input: unknown) {
 
 async function insertPreparedHost(client: PoolClient, prepared: Awaited<ReturnType<typeof prepareHostCreate>>) {
   const { parsed } = prepared;
-  await client.query("SELECT pg_advisory_xact_lock($1::bigint)", [HOST_CREATE_LOCK_ID]);
+  await lockHostIdentityScope(client);
   if (await findDuplicateHost(parsed, undefined, client)) {
     throw Object.assign(new Error("A host with this name or connection already exists"), { statusCode: 409 });
   }
@@ -223,7 +224,7 @@ export async function updateHost(id: string, input: unknown) {
   return withTransaction(async (client) => {
     // Serialize create/update duplicate checks, then lock this row so two
     // partial patches cannot overwrite each other's effective settings.
-    await client.query("SELECT pg_advisory_xact_lock($1::bigint)", [HOST_CREATE_LOCK_ID]);
+    await lockHostIdentityScope(client);
     const currentResult = await client.query(
       "SELECT * FROM docker_hosts WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
       [id]
@@ -362,7 +363,7 @@ export async function deleteHost(id: string) {
 
 export async function restoreHost(id: string) {
   return withTransaction(async (client) => {
-    await client.query("SELECT pg_advisory_xact_lock($1::bigint)", [HOST_CREATE_LOCK_ID]);
+    await lockHostIdentityScope(client);
     const selected = await client.query(
       "SELECT * FROM docker_hosts WHERE id = $1 AND deleted_at IS NOT NULL FOR UPDATE",
       [id]
@@ -412,6 +413,12 @@ export async function restoreHost(id: string) {
            agent_token_encrypted = $12,
            docker_socket_path = $13,
            tags = $14,
+           last_status = 'unknown',
+           last_seen_at = NULL,
+           last_error = NULL,
+           docker_version = NULL,
+           compose_version = NULL,
+           agent_version = NULL,
            deleted_at = NULL,
            updated_at = now()
        WHERE id = $1 AND deleted_at IS NOT NULL

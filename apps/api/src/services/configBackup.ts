@@ -33,7 +33,8 @@ import {
 } from "./recoveryBackupTargets.js";
 import { APP_VERSION } from "./version.js";
 import { validateAgentUrl } from "./ssrf.js";
-import { HOST_CREATE_LOCK_ID, normalizeHostCreateCredentials } from "./hosts.js";
+import { normalizeHostCreateCredentials } from "./hosts.js";
+import { lockHostIdentityScope } from "./hostIdentity.js";
 
 const CONFIG_BACKUP_APP_NAME = "ComposeBastion";
 
@@ -132,6 +133,11 @@ async function normalizeImportedHosts(hosts: Array<Record<string, any>>) {
     if (!host || typeof host !== "object") {
       throw configImportError(`Config backup host ${index + 1} is invalid`);
     }
+    const parsedId = idSchema.safeParse(host.id);
+    if (!parsedId.success) {
+      const detail = parsedId.error.issues[0]?.message ?? "Host id is invalid";
+      throw configImportError(`Config backup host ${index + 1} is invalid: ${detail}`);
+    }
     const parsed = dockerHostCreateSchema.safeParse({
       name: host.name,
       hostname: host.hostname,
@@ -162,7 +168,10 @@ async function normalizeImportedHosts(hosts: Array<Record<string, any>>) {
         `Config backup host ${index + 1} is invalid: the agent URL is blocked by the private-network request policy`
       );
     }
-    return { id: host.id, ...normalizeHostCreateCredentials(parsed.data) };
+    return {
+      id: parsedId.data.toLowerCase(),
+      ...normalizeHostCreateCredentials(parsed.data)
+    };
   }));
 }
 
@@ -477,20 +486,25 @@ function normalizedHostConnection(host: {
 }
 
 function assertUniqueImportedHosts(hosts: Array<{
-  id?: unknown;
+  id: string;
   name: string;
   hostname: string;
   username: string;
   port: number;
 }>) {
+  const ids = new Set<string>();
   const names = new Set<string>();
   const connections = new Set<string>();
   for (const host of hosts) {
+    if (ids.has(host.id)) {
+      throw configImportError("Config backup contains duplicate host ids");
+    }
     const name = normalizedHostName(host);
     const connection = normalizedHostConnection(host);
     if (names.has(name) || connections.has(connection)) {
       throw configImportError("Config backup contains duplicate host names or connection identities");
     }
+    ids.add(host.id);
     names.add(name);
     connections.add(connection);
   }
@@ -692,7 +706,7 @@ export async function importConfigBackup(backup: Record<string, unknown>, passph
   assertUniqueImportedHosts(normalizedHosts);
 
   const summary = await withTransaction(async (client) => {
-    await client.query("SELECT pg_advisory_xact_lock($1::bigint)", [HOST_CREATE_LOCK_ID]);
+    await lockHostIdentityScope(client);
     const activeHosts = await client.query(
       `SELECT id, name, hostname, username, port
        FROM docker_hosts
@@ -750,6 +764,13 @@ export async function importConfigBackup(backup: Record<string, unknown>, passph
                        agent_token_encrypted = EXCLUDED.agent_token_encrypted,
                        docker_socket_path = EXCLUDED.docker_socket_path,
                        tags = EXCLUDED.tags,
+                       last_status = 'unknown',
+                       last_seen_at = NULL,
+                       last_error = NULL,
+                       docker_version = NULL,
+                       compose_version = NULL,
+                       agent_version = NULL,
+                       deleted_at = NULL,
                        updated_at = now()`,
         [
           host.id,
