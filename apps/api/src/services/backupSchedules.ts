@@ -1,11 +1,12 @@
 import { v4 as uuid } from "uuid";
-import { backupScheduleCreateSchema } from "@composebastion/shared";
+import { backupScheduleCreateSchema, sanitizeUrlDiagnosticText } from "@composebastion/shared";
+import type { PoolClient } from "pg";
 import { query } from "../db/pool.js";
 import { enqueueJobInTransaction, notifyJobQueued } from "./jobs.js";
 import { withTransaction } from "../db/pool.js";
 import {
   assertBackupTargetUsable,
-  insertPreparedBackupRecord,
+  insertPreparedBackupJob,
   prepareBackupRecord,
   prepareHostPathBackupRecord,
   type PreparedBackupRecord
@@ -39,7 +40,7 @@ function mapBackupSchedule(row: any) {
     lastRunAt: row.last_run_at ? new Date(row.last_run_at).toISOString() : null,
     nextRunAt: new Date(row.next_run_at).toISOString(),
     lastStatus: row.last_status ?? null,
-    lastError: row.last_error ?? null,
+    lastError: sanitizeUrlDiagnosticText(row.last_error ?? null) as string | null,
     createdAt: new Date(row.created_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString()
   };
@@ -56,7 +57,14 @@ export async function listBackupSchedules() {
   return result.rows.map(mapBackupSchedule);
 }
 
-export async function createBackupSchedule(input: unknown, createdBy?: string | null) {
+export async function createBackupSchedule(
+  input: unknown,
+  createdBy?: string | null,
+  onCreated?: (
+    client: PoolClient,
+    schedule: ReturnType<typeof mapBackupSchedule>
+  ) => Promise<void>
+) {
   const body = parseCreateInput(input);
   const id = uuid();
   const nextRunAt = new Date(Date.now() + body.intervalMs);
@@ -67,7 +75,7 @@ export async function createBackupSchedule(input: unknown, createdBy?: string | 
     await assertBackupTargetUsableForReference(client, backupTargetId, {
       allowedKinds: ["s3", "rclone"]
     });
-    return client.query(
+    const result = await client.query(
       `INSERT INTO backup_schedules
         (id, host_id, kind, volume_name, source_path, backup_target_id, encryption, interval_ms, retention_count, next_run_at, created_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
@@ -86,15 +94,32 @@ export async function createBackupSchedule(input: unknown, createdBy?: string | 
         createdBy ?? null
       ]
     );
+    const row = result.rows[0];
+    if (!row) throw new Error("Failed to create backup schedule");
+    const schedule = mapBackupSchedule(row);
+    await onCreated?.(client, schedule);
+    return schedule;
   });
-  const row = result.rows[0];
-  if (!row) throw new Error("Failed to create backup schedule");
-  return mapBackupSchedule(row);
+  return result;
 }
 
-export async function deleteBackupSchedule(id: string) {
-  const result = await query("DELETE FROM backup_schedules WHERE id = $1 RETURNING *", [id]);
-  return result.rows[0] ? mapBackupSchedule(result.rows[0]) : null;
+export async function deleteBackupSchedule(
+  id: string,
+  onDeleted?: (
+    client: PoolClient,
+    schedule: ReturnType<typeof mapBackupSchedule>
+  ) => Promise<void>
+) {
+  return withTransaction(async (client) => {
+    const result = await client.query(
+      "DELETE FROM backup_schedules WHERE id = $1 RETURNING *",
+      [id]
+    );
+    if (!result.rows[0]) return null;
+    const schedule = mapBackupSchedule(result.rows[0]);
+    await onDeleted?.(client, schedule);
+    return schedule;
+  });
 }
 
 async function prepareScheduledBackupRecord(schedule: any): Promise<PreparedBackupRecord> {
@@ -121,7 +146,7 @@ async function prepareScheduledBackupRecord(schedule: any): Promise<PreparedBack
 
 export async function runDueBackupSchedules() {
   const due = await query(
-    `SELECT *
+    `SELECT *, xmin::text AS row_version
      FROM backup_schedules
      WHERE enabled = true AND next_run_at <= now()
      ORDER BY next_run_at ASC
@@ -135,11 +160,20 @@ export async function runDueBackupSchedules() {
       const prepared = await prepareScheduledBackupRecord(row);
       const scheduled = await withTransaction(async (client) => {
         const locked = await client.query(
-          `SELECT * FROM backup_schedules WHERE id = $1 FOR UPDATE`,
+          `SELECT *, xmin::text AS row_version
+           FROM backup_schedules
+           WHERE id = $1
+           FOR UPDATE`,
           [row.id]
         );
         const current = locked.rows[0];
         if (!current || !current.enabled || new Date(current.next_run_at) > new Date()) {
+          return null;
+        }
+        if (current.row_version !== row.row_version) {
+          // Preparation intentionally happens outside the transaction. A
+          // concurrent edit invalidates that snapshot; leave the newly due
+          // configuration for the next scheduler pass.
           return null;
         }
 
@@ -151,20 +185,9 @@ export async function runDueBackupSchedules() {
            WHERE id = $1`,
           [current.id, nextRunAt]
         );
-        const backup = await insertPreparedBackupRecord(client, prepared);
-        const job = await enqueueJobInTransaction(
+        const { backup, job } = await insertPreparedBackupJob(
           client,
-          prepared.kind === "host_path"
-            ? {
-              type: "hostPath.backup",
-              hostId: current.host_id,
-              payload: { backupId: backup.id, sourcePath: prepared.sourcePath }
-            }
-            : {
-              type: "volume.backup",
-              hostId: current.host_id,
-              payload: { backupId: backup.id, volumeName: prepared.volumeName }
-            },
+          prepared,
           current.created_by
         );
         return { backup, job };

@@ -4,8 +4,7 @@ import { z } from "zod";
 import {
   adminCount,
   clearSessionCookie,
-  createAdmin,
-  createSession,
+  createLoginSession,
   destroyAllSessionsForUser,
   destroySession,
   hashToken,
@@ -13,10 +12,9 @@ import {
   readSession,
   revokeSessionForUser,
   setSessionCookie,
-  touchLastLogin,
+  setupInitialAdmin,
   verifyAdmin
 } from "../services/auth.js";
-import { seedDemoWorkspace } from "../services/demo.js";
 import { auditContextFromRequest, writeAuditEvent } from "../services/audit.js";
 import { isLoginLocked, recordLoginAttempt } from "../services/loginAttempts.js";
 import { sendApiError } from "../services/apiError.js";
@@ -39,12 +37,21 @@ export async function registerAuthRoutes(app: FastifyInstance) {
 
   app.post("/api/auth/setup", { config: { rateLimit: setupRateLimit } }, async (request, reply) => {
     const body = setupRequestSchema.parse(request.body);
-    const user = await createAdmin(body);
-    if (body.includeDemoData) {
-      await seedDemoWorkspace(user.id);
-    }
-    const session = await createSession(user.id, auditContextFromRequest(request));
-    await touchLastLogin(user.id);
+    const setupContext = auditContextFromRequest(request);
+    const { user, session } = await setupInitialAdmin(
+      body,
+      setupContext,
+      async (client, created) => {
+        await writeAuditEvent({
+          userId: created.id,
+          action: "auth.setup",
+          targetKind: "user",
+          targetId: created.id,
+          details: { includeDemoData: body.includeDemoData },
+          ...setupContext
+        }, client);
+      }
+    );
     setSessionCookie(reply, session.token, session.expiresAt);
     return { user };
   });
@@ -53,25 +60,67 @@ export async function registerAuthRoutes(app: FastifyInstance) {
     const body = loginRequestSchema.parse(request.body);
     const identifier = body.identifier ?? body.email ?? "";
     const ipAddress = request.ip ?? "unknown";
+    const loginContext = auditContextFromRequest(request);
     if (await isLoginLocked(identifier, ipAddress)) {
+      await writeAuditEvent({
+        action: "auth.lockout",
+        targetKind: "authentication",
+        details: { reason: "failure_threshold" },
+        ...loginContext
+      });
       return sendApiError(reply, 429, "ACCOUNT_LOCKED", "Too many failed login attempts. Try again later.");
     }
 
     const user = await verifyAdmin(identifier, body.password);
     if (!user) {
-      await recordLoginAttempt(identifier, ipAddress, false);
+      await recordLoginAttempt(
+        identifier,
+        ipAddress,
+        false,
+        async (client) => {
+          await writeAuditEvent({
+            action: "auth.login_failed",
+            targetKind: "authentication",
+            details: { reason: "invalid_credentials" },
+            ...loginContext
+          }, client);
+        }
+      );
       return sendApiError(reply, 401, "AUTH_REQUIRED", "Invalid username/email or password");
     }
 
     await recordLoginAttempt(identifier, ipAddress, true);
-    const session = await createSession(user.id, auditContextFromRequest(request));
-    await touchLastLogin(user.id);
+    const session = await createLoginSession(
+      user.id,
+      loginContext,
+      async (client) => {
+        await writeAuditEvent({
+          userId: user.id,
+          action: "auth.login",
+          targetKind: "user",
+          targetId: user.id,
+          ...loginContext
+        }, client);
+      }
+    );
     setSessionCookie(reply, session.token, session.expiresAt);
     return { user };
   });
 
   app.post("/api/auth/logout", async (request, reply) => {
-    await destroySession(request.cookies.cb_session);
+    const logoutContext = auditContextFromRequest(request);
+    await destroySession(
+      request.cookies.cb_session,
+      async (client, userId) => {
+        await writeAuditEvent({
+          userId,
+          action: "auth.logout",
+          targetKind: "user",
+          targetId: userId,
+          ...logoutContext
+        }, client);
+      }
+    );
     clearSessionCookie(reply);
     return { ok: true };
   });
@@ -81,16 +130,17 @@ export async function registerAuthRoutes(app: FastifyInstance) {
     if (!user) {
       return sendApiError(reply, 401, "AUTH_REQUIRED", "Authentication required");
     }
-    await destroyAllSessionsForUser(user.id);
-    clearSessionCookie(reply);
     const ctx = auditContextFromRequest(request);
-    await writeAuditEvent({
-      userId: user.id,
-      action: "auth.logout_all",
-      targetKind: "user",
-      targetId: user.id,
-      ...ctx
+    await destroyAllSessionsForUser(user.id, async (client) => {
+      await writeAuditEvent({
+        userId: user.id,
+        action: "auth.logout_all",
+        targetKind: "user",
+        targetId: user.id,
+        ...ctx
+      }, client);
     });
+    clearSessionCookie(reply);
     return { ok: true };
   });
 
@@ -100,6 +150,12 @@ export async function registerAuthRoutes(app: FastifyInstance) {
       return sendApiError(reply, 401, "AUTH_REQUIRED", "Authentication required");
     }
     const currentHash = request.cookies.cb_session ? hashToken(request.cookies.cb_session) : "";
+    await writeAuditEvent({
+      userId: user.id,
+      action: "auth.sessions_read",
+      targetKind: "session",
+      ...auditContextFromRequest(request)
+    });
     return { sessions: await listSessionsForUser(user.id, currentHash) };
   });
 
@@ -110,19 +166,25 @@ export async function registerAuthRoutes(app: FastifyInstance) {
     }
     const { id } = sessionParamSchema.parse(request.params);
     const currentHash = request.cookies.cb_session ? hashToken(request.cookies.cb_session) : "";
-    const result = await revokeSessionForUser(id, user.id, currentHash);
+    const ctx = auditContextFromRequest(request);
+    const result = await revokeSessionForUser(
+      id,
+      user.id,
+      currentHash,
+      async (client) => {
+        await writeAuditEvent({
+          userId: user.id,
+          action: "auth.session.revoke",
+          targetKind: "session",
+          targetId: id,
+          ...ctx
+        }, client);
+      }
+    );
     if (!result.revoked) {
       return sendApiError(reply, 404, "NOT_FOUND", "Session not found");
     }
     if (result.wasCurrent) clearSessionCookie(reply);
-    const ctx = auditContextFromRequest(request);
-    await writeAuditEvent({
-      userId: user.id,
-      action: "auth.session.revoke",
-      targetKind: "session",
-      targetId: id,
-      ...ctx
-    });
     return { ok: true };
   });
 

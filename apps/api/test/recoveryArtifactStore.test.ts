@@ -95,6 +95,8 @@ describe("recovery artifact store", () => {
   it("downloads and verifies a missing local artifact from S3", async () => {
     const content = "{\"ok\":true}";
     downloadRecoveryArtifactFromS3.mockImplementation(async (_client: unknown, _bucket: string, _key: string, downloadPath: string) => {
+      expect(await readFile(`${downloadPath}.composebastion-active`, "utf8"))
+        .toBe(`${process.pid}\n`);
       await mkdir(path.dirname(downloadPath), { recursive: true });
       await writeFile(downloadPath, content);
       return { objectKey: "points/rp/manifest.json", sizeBytes: Buffer.byteLength(content), etag: null, checksum: checksum(content) };
@@ -116,6 +118,91 @@ describe("recovery artifact store", () => {
     );
     expect(destroyS3Client).toHaveBeenCalledTimes(1);
     await expect(stat(downloadPath)).rejects.toThrow();
+    await expect(stat(`${downloadPath}.composebastion-active`)).rejects.toThrow();
+  });
+
+  it("hydrates the exact URL-shaped locator produced by the internal row mapper", async () => {
+    const content = "{\"urlShapedLocator\":true}";
+    const rawLocator =
+      "https:/storage-user:storage-password@archive.example.test/root/manifest.json";
+    downloadRecoveryArtifactFromS3.mockImplementation(async (
+      _client: unknown,
+      _bucket: string,
+      _key: string,
+      downloadPath: string
+    ) => {
+      await mkdir(path.dirname(downloadPath), { recursive: true });
+      await writeFile(downloadPath, content);
+      return {
+        objectKey: rawLocator,
+        sizeBytes: Buffer.byteLength(content),
+        etag: null,
+        checksum: checksum(content)
+      };
+    });
+
+    const { ensureRecoveryArtifactLocalPath } = await importStore(tmpDir);
+    const { mapRecoveryArtifact } = await import("../src/services/mappers.js");
+    const mappedArtifact = mapRecoveryArtifact({
+      id: "00000000-0000-4000-8000-000000000014",
+      recovery_point_id: recoveryPointId,
+      kind: "metadata",
+      backup_target_id: backupTargetId,
+      storage_key: "manifest.json",
+      size_bytes: Buffer.byteLength(content),
+      checksum: checksum(content),
+      status: "completed",
+      error: null,
+      metadata: { remoteObjectKey: rawLocator },
+      created_at: "2026-06-15T12:00:00.000Z",
+      completed_at: "2026-06-15T12:00:00.000Z"
+    });
+
+    await expect(
+      ensureRecoveryArtifactLocalPath(recoveryPoint(), mappedArtifact)
+    ).resolves.toContain("manifest.json");
+    expect(downloadRecoveryArtifactFromS3.mock.calls[0]?.[2]).toBe(rawLocator);
+    expect(mappedArtifact.metadata.remoteObjectKey).toBe(rawLocator);
+  });
+
+  it("forces a separately scoped remote verification even when a valid local cache exists", async () => {
+    const content = "{\"remoteVerification\":true}";
+    const rawLocator = "points/rp/exact-remote-manifest.json";
+    const canonicalPath = path.join(tmpDir, "recovery-points", recoveryPointId, "manifest.json");
+    await mkdir(path.dirname(canonicalPath), { recursive: true });
+    await writeFile(canonicalPath, content);
+    downloadRecoveryArtifactFromS3.mockImplementation(async (
+      _client: unknown,
+      _bucket: string,
+      _key: string,
+      downloadPath: string
+    ) => {
+      await mkdir(path.dirname(downloadPath), { recursive: true });
+      await writeFile(downloadPath, content);
+      return {
+        objectKey: rawLocator,
+        sizeBytes: Buffer.byteLength(content),
+        etag: null,
+        checksum: checksum(content)
+      };
+    });
+
+    const { withRecoveryArtifactRemotePath } = await importStore(tmpDir);
+    let remoteVerificationPath = "";
+    await expect(withRecoveryArtifactRemotePath(
+      recoveryPoint(),
+      artifact(content, { remoteObjectKey: rawLocator }),
+      async (localPath) => {
+        remoteVerificationPath = localPath;
+        return readFile(localPath, "utf8");
+      }
+    )).resolves.toBe(content);
+
+    expect(downloadRecoveryArtifactFromS3.mock.calls[0]?.[2]).toBe(rawLocator);
+    expect(remoteVerificationPath).not.toBe(canonicalPath);
+    expect(remoteVerificationPath).toContain(`${path.sep}.remote-verify${path.sep}`);
+    await expect(stat(remoteVerificationPath)).rejects.toThrow();
+    expect(await readFile(canonicalPath, "utf8")).toBe(content);
   });
 
   it("removes scoped remote-only hydration after a successful consumer", async () => {

@@ -1,6 +1,7 @@
 import { v4 as uuid } from "uuid";
 import type { AppGithubVersionSelect, AppGithubVersions, AppRenameInput, AppSourceLink, AppSourceLinkInput, ComposeStack, DockerActionRequest, DockerApp, DockerAppUpdate, GithubRepository, ImageUpdateCheck, ResourceSnapshot } from "@composebastion/shared";
 import { sanitizeGitRepositoryUrl } from "@composebastion/shared";
+import type { PoolClient } from "pg";
 import { query, withTransaction } from "../db/pool.js";
 import { shQuote } from "./commands.js";
 import { isDemoHost } from "./demo.js";
@@ -15,7 +16,12 @@ import {
   parseGithubUrl
 } from "./github.js";
 import { checkImageUpdatesForHost, listImageUpdateChecks } from "./imageUpdates.js";
-import { enqueueJob, enqueueJobInTransaction, notifyJobQueued } from "./jobs.js";
+import {
+  enqueueJobInTransaction,
+  lockComposeStackForMutation,
+  lockGithubRepositoryForMutation,
+  notifyJobQueued
+} from "./jobs.js";
 import { mapResource, mapStack } from "./mappers.js";
 import { getHostForWorker, listHostIds } from "./hosts.js";
 import { runSshCommand } from "./ssh.js";
@@ -72,16 +78,37 @@ function projectNameFromAppName(name: string) {
   return name.toLowerCase().replace(/[^a-z0-9_-]+/g, "").slice(0, 48) || "app";
 }
 
-async function enqueueAppJobBatch(actions: DockerActionRequest[], createdBy?: string | null) {
-  const jobs = await withTransaction(async (client) => {
+type AppUpdateQueuedResult = {
+  job?: Awaited<ReturnType<typeof enqueueJobInTransaction>>;
+  jobs?: Array<Awaited<ReturnType<typeof enqueueJobInTransaction>>>;
+};
+
+type AppUpdateQueuedCallback = (
+  client: PoolClient,
+  result: AppUpdateQueuedResult
+) => Promise<void>;
+
+type AppMutationCallback<T = void> = (
+  client: PoolClient,
+  result: T
+) => Promise<void>;
+
+async function enqueueAppJobBatch(
+  actions: DockerActionRequest[],
+  createdBy?: string | null,
+  onQueued?: AppUpdateQueuedCallback
+) {
+  const result = await withTransaction(async (client) => {
     const inserted = [];
     for (const action of actions) {
       inserted.push(await enqueueJobInTransaction(client, action, createdBy));
     }
-    return inserted;
+    const queued = { jobs: inserted };
+    await onQueued?.(client, queued);
+    return queued;
   });
-  await Promise.all(jobs.map((job) => notifyJobQueued(job.id)));
-  return jobs;
+  await Promise.all(result.jobs.map((job) => notifyJobQueued(job.id)));
+  return result.jobs;
 }
 
 function gitRemoteLatestCommands() {
@@ -676,6 +703,125 @@ async function findApp(appId: string) {
   return app;
 }
 
+function staleAppMutation(message: string) {
+  return Object.assign(new Error(message), { statusCode: 409 });
+}
+
+function lockedRepositoryStillMatchesStack(repository: any, stack: any) {
+  if (
+    repository.default_host_id === stack.host_id
+    && repository.project_name === stack.project_name
+  ) {
+    return true;
+  }
+  if (!stack.source_repository_url) return false;
+  try {
+    const parsed = parseGithubUrl(stack.source_repository_url);
+    return repository.owner === parsed.owner && repository.repo === parsed.repo;
+  } catch {
+    return false;
+  }
+}
+
+async function lockAndValidateAppMutationSnapshot(
+  client: PoolClient,
+  appId: string,
+  app: DockerApp,
+  operation: string
+) {
+  const stale = () => staleAppMutation(
+    `This service changed while it was being ${operation}. Refresh and try again.`
+  );
+  if (app.id !== appId) throw stale();
+  const [kind, identity] = appId.split(":", 2);
+  if (
+    (kind === "git" && (!app.repositoryId || identity !== app.repositoryId))
+    || (kind === "stack" && (!app.stackId || app.repositoryId || identity !== app.stackId))
+    || (kind === "container" && (app.stackId || app.repositoryId || !identity))
+    || !["git", "stack", "container"].includes(kind ?? "")
+  ) {
+    throw stale();
+  }
+
+  // Keep the repository -> stack order used by GitHub deployment admission.
+  const repository = app.repositoryId
+    ? await lockGithubRepositoryForMutation<any>(client, app.repositoryId)
+    : null;
+  if (app.repositoryId && !repository) throw stale();
+
+  const stack = app.stackId
+    ? await lockComposeStackForMutation<any>(client, app.stackId)
+    : null;
+  if (
+    app.stackId
+    && (
+      !stack
+      || stack.host_id !== app.hostId
+      || stack.project_name !== app.projectName
+    )
+  ) {
+    throw stale();
+  }
+
+  if (repository) {
+    if (app.stackId) {
+      if (!stack || !lockedRepositoryStillMatchesStack(repository, stack)) {
+        throw stale();
+      }
+    } else if (
+      repository.default_host_id !== app.hostId
+      || repository.project_name !== app.projectName
+    ) {
+      throw stale();
+    }
+  }
+
+  let sourceLink: any = null;
+  if (app.sourceLink?.id) {
+    const selected = await client.query<any>(
+      "SELECT * FROM app_source_links WHERE id = $1 FOR UPDATE",
+      [app.sourceLink.id]
+    );
+    sourceLink = selected.rows[0] ?? null;
+    if (
+      !sourceLink
+      || sourceLink.host_id !== app.hostId
+      || sourceLink.container_external_id !== app.primaryContainerId
+    ) {
+      throw stale();
+    }
+  }
+
+  if (kind === "container") {
+    const resource = await client.query<any>(
+      `SELECT id, host_id, external_id
+       FROM resource_snapshots
+       WHERE id = $1 AND kind = 'container'
+       FOR UPDATE`,
+      [identity]
+    );
+    const row = resource.rows[0];
+    if (
+      !row
+      || row.host_id !== app.hostId
+      || row.external_id !== app.primaryContainerId
+    ) {
+      throw stale();
+    }
+    if (
+      sourceLink
+      && (
+        sourceLink.host_id !== row.host_id
+        || sourceLink.container_external_id !== row.external_id
+      )
+    ) {
+      throw stale();
+    }
+  }
+
+  return { repository, stack, sourceLink };
+}
+
 async function currentGitCommitForApp(app: DockerApp) {
   if (app.stackId) {
     const result = await query<{ source_current_commit_sha: string | null }>(
@@ -709,51 +855,65 @@ export async function listAppGithubVersions(appId: string): Promise<AppGithubVer
   return listGithubVersionsForUrlWithStoredCredentials(app.repositoryUrl, { selectedRef, currentCommitSha });
 }
 
-export async function selectAppGithubVersion(appId: string, input: AppGithubVersionSelect) {
+export async function selectAppGithubVersion(
+  appId: string,
+  input: AppGithubVersionSelect,
+  onChanged?: AppMutationCallback
+) {
   const app = await findApp(appId);
   if (app.source !== "git") throw new Error("Only Git-backed services can select a GitHub version");
   const ref = input.ref.trim();
-  let updated = false;
+  const updated = await withTransaction(async (client) => {
+    await lockAndValidateAppMutationSnapshot(
+      client,
+      appId,
+      app,
+      "selected for a GitHub version"
+    );
 
-  if (app.repositoryId) {
-    await query(
-      `UPDATE github_repositories
-       SET branch = $2,
-           latest_commit_sha = null,
-           update_checked_at = null,
-           update_check_error = null,
-           updated_at = now()
-       WHERE id = $1`,
-      [app.repositoryId, ref]
-    );
-    updated = true;
-  }
-  if (app.sourceLink?.id) {
-    await query(
-      `UPDATE app_source_links
-       SET branch = $2,
-           latest_commit_sha = null,
-           checked_at = null,
-           check_error = null,
-           updated_at = now()
-       WHERE id = $1`,
-      [app.sourceLink.id, ref]
-    );
-    updated = true;
-  }
-  if (app.stackId) {
-    await query(
-      `UPDATE compose_stacks
-       SET source_branch = $3,
-           source_latest_commit_sha = null,
-           source_checked_at = null,
-           source_check_error = null,
-           updated_at = now()
-       WHERE id = $1 AND host_id = $2`,
-      [app.stackId, app.hostId, ref]
-    );
-    updated = true;
-  }
+    let changed = false;
+    if (app.repositoryId) {
+      await client.query(
+        `UPDATE github_repositories
+         SET branch = $2,
+             latest_commit_sha = null,
+             update_checked_at = null,
+             update_check_error = null,
+             updated_at = now()
+         WHERE id = $1`,
+        [app.repositoryId, ref]
+      );
+      changed = true;
+    }
+    if (app.sourceLink?.id) {
+      await client.query(
+        `UPDATE app_source_links
+         SET branch = $2,
+             latest_commit_sha = null,
+             checked_at = null,
+             check_error = null,
+             updated_at = now()
+         WHERE id = $1`,
+        [app.sourceLink.id, ref]
+      );
+      changed = true;
+    }
+    if (app.stackId) {
+      await client.query(
+        `UPDATE compose_stacks
+         SET source_branch = $3,
+             source_latest_commit_sha = null,
+             source_checked_at = null,
+             source_check_error = null,
+             updated_at = now()
+         WHERE id = $1 AND host_id = $2`,
+        [app.stackId, app.hostId, ref]
+      );
+      changed = true;
+    }
+    if (changed) await onChanged?.(client, undefined);
+    return changed;
+  });
   if (!updated) {
     throw new Error("This service does not have a selectable Git source yet");
   }
@@ -769,132 +929,155 @@ async function findLinkableApp(appId: string) {
   return app;
 }
 
-export async function upsertAppSourceLink(appId: string, input: AppSourceLinkInput) {
+export async function upsertAppSourceLink(
+  appId: string,
+  input: AppSourceLinkInput,
+  onChanged?: AppMutationCallback<AppSourceLink>
+) {
   const app = await findLinkableApp(appId);
-  const saved = await query<any>(
-    `INSERT INTO app_source_links (
-       id, host_id, container_external_id, source_type, name, repository_url, branch,
-       working_dir, compose_path, image_reference, updated_at
-     )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
-     ON CONFLICT (host_id, container_external_id)
-     DO UPDATE SET
-       source_type = EXCLUDED.source_type,
-       name = EXCLUDED.name,
-       repository_url = EXCLUDED.repository_url,
-       branch = EXCLUDED.branch,
-       working_dir = EXCLUDED.working_dir,
-       compose_path = EXCLUDED.compose_path,
-       image_reference = EXCLUDED.image_reference,
-       current_commit_sha = null,
-       latest_commit_sha = null,
-       checked_at = null,
-       check_error = null,
-       updated_at = now()
-     RETURNING *`,
-    [
-      uuid(),
-      app.hostId,
-      app.primaryContainerId,
-      input.sourceType,
-      nullIfBlank(input.name),
-      nullIfBlank(input.repositoryUrl),
-      nullIfBlank(input.branch),
-      nullIfBlank(input.workingDir),
-      nullIfBlank(input.composePath),
-      nullIfBlank(input.imageReference)
-    ]
-  );
-  return mapAppSourceLink(saved.rows[0]);
-}
-
-export async function deleteAppSourceLink(appId: string) {
-  const app = await findLinkableApp(appId);
-  await query(
-    `DELETE FROM app_source_links
-     WHERE host_id = $1 AND container_external_id = $2`,
-    [app.hostId, app.primaryContainerId]
-  );
-  return { ok: true };
-}
-
-export async function renameApp(appId: string, input: AppRenameInput) {
-  const app = await findApp(appId);
-  const name = input.name.trim();
-  let updated = false;
-
-  if (app.stackId) {
-    await query(
-      `UPDATE compose_stacks
-       SET name = $3,
-           updated_at = now()
-       WHERE id = $1 AND host_id = $2`,
-      [app.stackId, app.hostId, name]
-    );
-    updated = true;
-  }
-
-  if (app.repositoryId) {
-    await query(
-      `UPDATE github_repositories
-       SET name = $2,
-           updated_at = now()
-       WHERE id = $1`,
-      [app.repositoryId, name]
-    );
-    updated = true;
-  }
-
-  if (app.sourceLink?.id) {
-    await query(
-      `UPDATE app_source_links
-       SET name = $2,
-           updated_at = now()
-       WHERE id = $1`,
-      [app.sourceLink.id, name]
-    );
-    updated = true;
-  } else if (!app.stackId && !app.repositoryId && app.primaryContainerId) {
-    await query(
+  return withTransaction(async (client) => {
+    const saved = await client.query<any>(
       `INSERT INTO app_source_links (
-         id, host_id, container_external_id, source_type, name, image_reference, updated_at
+         id, host_id, container_external_id, source_type, name, repository_url, branch,
+         working_dir, compose_path, image_reference, updated_at
        )
-       VALUES ($1, $2, $3, 'image', $4, $5, now())
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
        ON CONFLICT (host_id, container_external_id)
        DO UPDATE SET
+         source_type = EXCLUDED.source_type,
          name = EXCLUDED.name,
-         updated_at = now()`,
-      [uuid(), app.hostId, app.primaryContainerId, name, app.imageReferences[0] ?? null]
+         repository_url = EXCLUDED.repository_url,
+         branch = EXCLUDED.branch,
+         working_dir = EXCLUDED.working_dir,
+         compose_path = EXCLUDED.compose_path,
+         image_reference = EXCLUDED.image_reference,
+         current_commit_sha = null,
+         latest_commit_sha = null,
+         checked_at = null,
+         check_error = null,
+         updated_at = now()
+       RETURNING *`,
+      [
+        uuid(),
+        app.hostId,
+        app.primaryContainerId,
+        input.sourceType,
+        nullIfBlank(input.name),
+        nullIfBlank(input.repositoryUrl),
+        nullIfBlank(input.branch),
+        nullIfBlank(input.workingDir),
+        nullIfBlank(input.composePath),
+        nullIfBlank(input.imageReference)
+      ]
     );
-    updated = true;
-  }
+    const link = mapAppSourceLink(saved.rows[0]);
+    await onChanged?.(client, link);
+    return link;
+  });
+}
+
+export async function deleteAppSourceLink(
+  appId: string,
+  onChanged?: AppMutationCallback<{ ok: true }>
+) {
+  const app = await findLinkableApp(appId);
+  return withTransaction(async (client) => {
+    await client.query(
+      `DELETE FROM app_source_links
+       WHERE host_id = $1 AND container_external_id = $2`,
+      [app.hostId, app.primaryContainerId]
+    );
+    const result = { ok: true } as const;
+    await onChanged?.(client, result);
+    return result;
+  });
+}
+
+export async function renameApp(
+  appId: string,
+  input: AppRenameInput,
+  onChanged?: AppMutationCallback
+) {
+  const app = await findApp(appId);
+  const name = input.name.trim();
+  const updated = await withTransaction(async (client) => {
+    await lockAndValidateAppMutationSnapshot(client, appId, app, "renamed");
+
+    let changed = false;
+    if (app.stackId) {
+      await client.query(
+        `UPDATE compose_stacks
+         SET name = $3,
+             updated_at = now()
+         WHERE id = $1 AND host_id = $2`,
+        [app.stackId, app.hostId, name]
+      );
+      changed = true;
+    }
+    if (app.repositoryId) {
+      await client.query(
+        `UPDATE github_repositories
+         SET name = $2,
+             updated_at = now()
+         WHERE id = $1`,
+        [app.repositoryId, name]
+      );
+      changed = true;
+    }
+    if (app.sourceLink?.id) {
+      await client.query(
+        `UPDATE app_source_links
+         SET name = $2,
+             updated_at = now()
+         WHERE id = $1`,
+        [app.sourceLink.id, name]
+      );
+      changed = true;
+    } else if (!app.stackId && !app.repositoryId && app.primaryContainerId) {
+      await client.query(
+        `INSERT INTO app_source_links (
+           id, host_id, container_external_id, source_type, name, image_reference, updated_at
+         )
+         VALUES ($1, $2, $3, 'image', $4, $5, now())
+         ON CONFLICT (host_id, container_external_id)
+         DO UPDATE SET
+           name = EXCLUDED.name,
+           updated_at = now()`,
+        [uuid(), app.hostId, app.primaryContainerId, name, app.imageReferences[0] ?? null]
+      );
+      changed = true;
+    }
+    if (changed) await onChanged?.(client, undefined);
+    return changed;
+  });
 
   if (!updated) throw new Error("This service cannot be renamed yet");
   return { app: (await listApps(app.hostId)).find((item) => item.id === appId) ?? null };
 }
 
-export async function updateApp(appId: string, createdBy?: string | null) {
+export async function updateApp(
+  appId: string,
+  createdBy?: string | null,
+  onQueued?: AppUpdateQueuedCallback
+) {
   const app = await findApp(appId);
 
   if ((app.source === "git" || app.source === "compose") && app.sourceLink?.workingDir && app.sourceLink.composePath) {
-    const actions: DockerActionRequest[] = [];
-    if (app.source === "git") {
-      actions.push({
-        type: "git.pull",
-        hostId: app.hostId,
-        payload: { directory: app.sourceLink.workingDir, ...(app.sourceLink.branch ? { branch: app.sourceLink.branch } : {}) }
-      });
-    }
-    actions.push({
+    const jobs = await enqueueAppJobBatch([{
       type: "compose.deployPath",
       hostId: app.hostId,
       payload: {
         projectName: app.projectName ?? projectNameFromAppName(app.sourceLink.name ?? app.name),
         workingDir: app.sourceLink.workingDir,
-        composePath: app.sourceLink.composePath
+        composePath: app.sourceLink.composePath,
+        ...(app.source === "git"
+          ? {
+            gitPullBeforeDeploy: true,
+            ...(app.sourceLink.branch ? { branch: app.sourceLink.branch } : {})
+          }
+          : {})
       }
-    });
-    const jobs = await enqueueAppJobBatch(actions, createdBy);
+    }], createdBy, onQueued);
     return { jobs };
   }
 
@@ -907,47 +1090,62 @@ export async function updateApp(appId: string, createdBy?: string | null) {
       const jobs = await enqueueAppJobBatch(
         [
           {
-            type: "git.pull",
-            hostId: app.hostId,
-            payload: { directory: stack.source_working_dir, ...(stack.source_branch ? { branch: stack.source_branch } : {}) }
-          },
-          {
             type: "compose.deployPath",
             hostId: app.hostId,
             payload: {
               projectName: stack.project_name,
               workingDir: stack.source_working_dir,
-              composePath: stack.source_compose_path
+              composePath: stack.source_compose_path,
+              gitPullBeforeDeploy: true,
+              ...(stack.source_branch
+                ? { branch: stack.source_branch }
+                : {})
             }
           }
         ],
-        createdBy
+        createdBy,
+        onQueued
       );
       return { jobs };
     }
 
     const actions: DockerActionRequest[] = [];
-    if (app.update.kind === "image" && app.update.imageReference) {
-      actions.push({ type: "image.pull", hostId: app.hostId, payload: { image: app.update.imageReference } });
-    }
-    actions.push({ type: "compose.deploy", hostId: app.hostId, payload: { stackId: app.stackId } });
-    const jobs = await enqueueAppJobBatch(actions, createdBy);
+    actions.push({
+      type: "compose.deploy",
+      hostId: app.hostId,
+      payload: {
+        stackId: app.stackId,
+        pullBeforeDeploy: app.update.kind === "image"
+      }
+    });
+    const jobs = await enqueueAppJobBatch(actions, createdBy, onQueued);
     return { jobs };
   }
 
   if (app.source === "git" && app.repositoryId) {
-    return deployGithubRepository(app.repositoryId, { hostId: app.hostId, branch: app.branch ?? undefined }, createdBy);
+    return deployGithubRepository(
+      app.repositoryId,
+      { hostId: app.hostId, branch: app.branch ?? undefined },
+      createdBy,
+      async (client, queued) => onQueued?.(client, { job: queued.job })
+    );
   }
 
   if (app.primaryContainerId) {
+    const containerId = app.primaryContainerId;
     const targetImage = app.update.kind === "image" && app.update.imageReference
       ? app.update.imageReference
       : app.imageReferences[0];
-    const job = await enqueueJob({
-      type: "container.update",
-      hostId: app.hostId,
-      payload: { containerId: app.primaryContainerId, ...(targetImage ? { targetImage } : {}) }
-    }, createdBy);
+    const job = await withTransaction(async (client) => {
+      const queued = await enqueueJobInTransaction(client, {
+        type: "container.update",
+        hostId: app.hostId,
+        payload: { containerId, ...(targetImage ? { targetImage } : {}) }
+      }, createdBy);
+      await onQueued?.(client, { job: queued });
+      return queued;
+    });
+    await notifyJobQueued(job.id);
     return { job };
   }
 

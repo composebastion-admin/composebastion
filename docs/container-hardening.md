@@ -1,19 +1,20 @@
 # Opt-in Container Hardening
 
-ComposeBastion `1.1` includes optional Compose overlays that make the manager
-and agent containers more restrictive. They are not enabled by default in this
-release so existing NAS, bind-mount, and Docker-socket installations keep their
-current behavior.
+ComposeBastion `1.2` runs the manager app and worker as numeric UID/GID
+`1000:1000` by default. Optional Compose overlays add a read-only root
+filesystem, dropped capabilities, `no-new-privileges`, and an init process.
+The agent remains root because its Docker-socket access is already
+host-root-equivalent.
 
 ## Manager app and worker
 
-The manager overlay runs the app and worker with a configurable numeric
-UID/GID, a read-only root filesystem, all Linux capabilities dropped,
+The manager overlay keeps the app and worker on a configurable numeric UID/GID
+and adds a read-only root filesystem, all Linux capabilities dropped,
 `no-new-privileges`, and an init process. `/tmp`, backup storage, and a dedicated
 Trivy cache volume remain writable.
 
-The default UID/GID is `1000:1000`. Before enabling it for an image install,
-make the backup directory writable by the selected identity:
+The default UID/GID is `1000:1000`. Before any image install that uses a host
+bind mount, make the backup directory writable by the selected identity:
 
 ```bash
 export COMPOSEBASTION_UID=1000
@@ -85,6 +86,30 @@ container host-root-equivalent control through the Docker API regardless of its
 Linux UID or capability set. Restrict port `8090`, use a long unique agent
 token, protect the manager-to-agent network, and treat anyone able to replace
 the agent image or call its authenticated API as a host administrator.
+
+## Container image-user scan policy
+
+Run `npm run check:container-config` during release qualification. It executes
+Trivy `0.72.0` from an immutable digest-pinned image and verifies the reported
+version. Pass `-- --local` only when an exact local Trivy `0.72.0` binary has
+already been installed. The manager `Dockerfile` must pass the HIGH-severity
+DS-0002 non-root check. Two exact DS-0002 findings are reviewed operational
+exceptions:
+
+- `Dockerfile.agent` mounts the root-owned Docker socket. On a standard
+  `root:docker 0660` socket, arbitrary numeric non-root users cannot connect;
+  successful Docker API access is host-root-equivalent in either case.
+- `infra/dev/sshhost.Dockerfile` is an acceptance-only fixture. Its sshd must
+  read root-owned host keys, bind port 22, provision `/root/.ssh`, and exercise
+  the root remote-host identity used by ephemeral SSH tests. It is not a
+  published release image.
+
+The container configuration check admits only those file-and-rule pairs and
+fails if a required DS-0002 result is absent, altered, or duplicated, or on
+every other HIGH/CRITICAL Dockerfile finding. CI, scheduled container scans, and
+image-publication workflows all invoke the gate. It uses `/dev/null` as its
+Trivy ignore file and does not use or modify `.trivyignore.yaml`; that file
+remains limited to path- and PURL-scoped release image vulnerability exceptions.
 
 ## Verification
 

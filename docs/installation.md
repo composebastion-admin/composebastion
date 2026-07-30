@@ -11,6 +11,8 @@ server deployment.
 - OpenSSL for generating secrets.
 - Network access from the manager to each Docker host you plan to manage.
 - Git only when building from source.
+- Node.js 24 and npm 11.19 or newer within npm 11 when running source or
+  release checks outside the provided Docker build.
 
 The published images support `linux/amd64` and `linux/arm64`, which covers most
 Proxmox Docker VMs, Synology/QNAP-style NAS devices with native Docker support,
@@ -82,6 +84,15 @@ in production; replace it with the generated `APP_SECRET` before starting.
 Leave `DATABASE_URL` blank for a new Compose-managed database. A non-empty value
 is an advanced/external-database or existing-install compatibility override and
 takes precedence for `app` and `worker`.
+
+The app and worker images run as numeric UID/GID `1000:1000`. Pre-create the
+bind-mounted backup directory with that ownership; allowing Compose to create a
+missing bind source produces a root-owned directory that backup and recovery
+jobs cannot write:
+
+```bash
+sudo install -d -m 0750 -o 1000 -g 1000 /srv/composebastion/backups
+```
 
 Start the stack:
 
@@ -164,9 +175,7 @@ docker compose down
 Create a persistent backup directory on the manager host:
 
 ```bash
-sudo mkdir -p /srv/composebastion/backups
-sudo chown -R root:root /srv/composebastion
-sudo chmod 750 /srv/composebastion /srv/composebastion/backups
+sudo install -d -m 0750 -o 1000 -g 1000 /srv/composebastion/backups
 ```
 
 Set production environment values in `.env`:
@@ -194,9 +203,11 @@ docker compose -f docker-compose.image.yml pull
 docker compose -f docker-compose.image.yml up -d
 ```
 
-To enable the optional non-root/read-only manager overlay, first prepare backup
-directory ownership and follow the [container hardening guide](container-hardening.md).
-The overlay is intentionally not a default in `1.1`.
+The manager image is non-root by default. To add a read-only root filesystem,
+dropped capabilities, and the other optional controls, follow the
+[container hardening guide](container-hardening.md). Prepare bind-mount
+ownership before changing the overlay's `COMPOSEBASTION_UID` or
+`COMPOSEBASTION_GID`.
 
 If you are building from source instead, validate and start with:
 

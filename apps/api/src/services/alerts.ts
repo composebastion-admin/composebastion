@@ -1,10 +1,10 @@
 import nodemailer from "nodemailer";
 import { v4 as uuid } from "uuid";
-import { alertRuleCreateSchema, alertSilenceCreateSchema, hostMetricAlertConditionSchema, hostThresholdParamsSchema, notificationChannelCreateSchema } from "@composebastion/shared";
+import { alertRuleCreateSchema, alertSilenceCreateSchema, hostMetricAlertConditionSchema, hostThresholdParamsSchema, notificationChannelCreateSchema, sanitizePlaintextHttpSourceUrl } from "@composebastion/shared";
 import type { HostMetricAlertCondition } from "@composebastion/shared";
 import type { PoolClient } from "pg";
 import { env } from "../config/env.js";
-import { query } from "../db/pool.js";
+import { query, withTransaction } from "../db/pool.js";
 import { evaluateHostThreshold } from "./hostAlertEvaluation.js";
 import { getFleetHostSnapshot } from "./hostMetrics.js";
 import { postJsonWebhook, shouldAllowPrivateWebhookUrls, validateWebhookUrl } from "./webhooks.js";
@@ -15,7 +15,10 @@ export function mapChannel(row: any) {
     name: row.name,
     type: row.type,
     emailTo: row.email_to,
-    webhookUrl: row.webhook_url,
+    // Webhook query strings and userinfo commonly carry bearer credentials.
+    // Delivery uses the encrypted-at-rest database value; API reads only need
+    // a safe destination label for display.
+    webhookUrl: sanitizePlaintextHttpSourceUrl(row.webhook_url),
     enabled: row.enabled,
     createdAt: new Date(row.created_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString()
@@ -87,7 +90,13 @@ export async function listChannels() {
   return result.rows.map(mapChannel);
 }
 
-export async function createChannel(input: unknown) {
+export async function createChannel(
+  input: unknown,
+  onChanged?: (
+    client: PoolClient,
+    channel: ReturnType<typeof mapChannel>
+  ) => Promise<void>
+) {
   const body = notificationChannelCreateSchema.parse(input);
   if (body.type === "webhook" && body.webhookUrl) {
     const allowed = await validateWebhookUrl(body.webhookUrl, {
@@ -97,13 +106,17 @@ export async function createChannel(input: unknown) {
       throw Object.assign(new Error("Webhook URL resolves to a private network address, which is blocked by default in production to prevent request forgery. Set ALLOW_PRIVATE_WEBHOOK_URLS=true only when internal webhook targets are intentional."), { statusCode: 400 });
     }
   }
-  const result = await query(
-    `INSERT INTO notification_channels (id, name, type, email_to, webhook_url, enabled)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     RETURNING *`,
-    [uuid(), body.name, body.type, body.emailTo ?? null, body.webhookUrl ?? null, body.enabled]
-  );
-  return mapChannel(result.rows[0]);
+  return withTransaction(async (client) => {
+    const result = await client.query(
+      `INSERT INTO notification_channels (id, name, type, email_to, webhook_url, enabled)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING *`,
+      [uuid(), body.name, body.type, body.emailTo ?? null, body.webhookUrl ?? null, body.enabled]
+    );
+    const channel = mapChannel(result.rows[0]);
+    await onChanged?.(client, channel);
+    return channel;
+  });
 }
 
 export async function deleteChannel(id: string, client?: PoolClient) {
@@ -151,17 +164,27 @@ export async function listAlertRules() {
   return result.rows.map(mapAlertRule);
 }
 
-export async function createAlertRule(input: unknown) {
+export async function createAlertRule(
+  input: unknown,
+  onChanged?: (
+    client: PoolClient,
+    rule: ReturnType<typeof mapAlertRule>
+  ) => Promise<void>
+) {
   const body = alertRuleCreateSchema.parse(input);
   const params = "params" in body ? body.params : null;
   const containerId = "containerId" in body ? body.containerId ?? null : null;
-  const result = await query(
-    `INSERT INTO alert_rules (id, name, condition, host_id, container_id, channel_id, enabled, params)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-     RETURNING *`,
-    [uuid(), body.name, body.condition, body.hostId, containerId, body.channelId, body.enabled, params]
-  );
-  return mapAlertRule(result.rows[0]);
+  return withTransaction(async (client) => {
+    const result = await client.query(
+      `INSERT INTO alert_rules (id, name, condition, host_id, container_id, channel_id, enabled, params)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING *`,
+      [uuid(), body.name, body.condition, body.hostId, containerId, body.channelId, body.enabled, params]
+    );
+    const rule = mapAlertRule(result.rows[0]);
+    await onChanged?.(client, rule);
+    return rule;
+  });
 }
 
 export async function deleteAlertRule(id: string, client?: PoolClient) {
@@ -174,28 +197,40 @@ export async function listAlertSilences() {
   return result.rows.map(mapAlertSilence);
 }
 
-export async function createAlertSilence(input: unknown, createdBy?: string | null) {
+export async function createAlertSilence(
+  input: unknown,
+  createdBy?: string | null,
+  onChanged?: (
+    client: PoolClient,
+    silence: ReturnType<typeof mapAlertSilence>
+  ) => Promise<void>
+) {
   const body = alertSilenceCreateSchema.parse(input);
-  const result = await query(
-    `INSERT INTO alert_silences (id, name, host_id, rule_id, starts_at, ends_at, reason, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-     RETURNING *`,
-    [
-      uuid(),
-      body.name,
-      body.hostId ?? null,
-      body.ruleId ?? null,
-      body.startsAt ? new Date(body.startsAt) : new Date(),
-      new Date(body.endsAt),
-      body.reason ?? null,
-      createdBy ?? null
-    ]
-  );
-  return mapAlertSilence(result.rows[0]);
+  return withTransaction(async (client) => {
+    const result = await client.query(
+      `INSERT INTO alert_silences (id, name, host_id, rule_id, starts_at, ends_at, reason, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING *`,
+      [
+        uuid(),
+        body.name,
+        body.hostId ?? null,
+        body.ruleId ?? null,
+        body.startsAt ? new Date(body.startsAt) : new Date(),
+        new Date(body.endsAt),
+        body.reason ?? null,
+        createdBy ?? null
+      ]
+    );
+    const silence = mapAlertSilence(result.rows[0]);
+    await onChanged?.(client, silence);
+    return silence;
+  });
 }
 
-export async function deleteAlertSilence(id: string) {
-  await query("DELETE FROM alert_silences WHERE id = $1", [id]);
+export async function deleteAlertSilence(id: string, client?: PoolClient) {
+  const execute = client ? client.query.bind(client) : query;
+  await execute("DELETE FROM alert_silences WHERE id = $1", [id]);
 }
 
 export async function listAlertEvents(input: unknown = {}) {

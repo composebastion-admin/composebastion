@@ -4,7 +4,7 @@ const username = process.env.COMPOSEBASTION_LIVE_USERNAME;
 const password = process.env.COMPOSEBASTION_LIVE_PASSWORD;
 const expectedVersion = process.env.COMPOSEBASTION_LIVE_VERSION;
 
-test("real API, database, Redis, worker, and browser are release-ready", async ({ page }) => {
+test("real API, database, Redis, worker, and browser are release-ready", { tag: ["@critical", "@live-matrix-safe"] }, async ({ page }) => {
   expect(username, "COMPOSEBASTION_LIVE_USERNAME must be set").toBeTruthy();
   expect(password, "COMPOSEBASTION_LIVE_PASSWORD must be set").toBeTruthy();
   expect(expectedVersion, "COMPOSEBASTION_LIVE_VERSION must be set").toBeTruthy();

@@ -8,7 +8,10 @@ export type BackupTargetIdentityRow = {
   config?: Record<string, unknown> | null;
   provider?: string | null;
   remote_path?: string | null;
+  access_key_id?: string | null;
+  secret_access_key_encrypted?: string | null;
   generic_config_encrypted?: string | null;
+  generic_credentials_encrypted?: string | null;
 };
 
 export type BackupTargetReferenceCounts = {
@@ -104,6 +107,81 @@ export function backupTargetStorageIdentityChanged(
     backupTargetStorageIdentity(current),
     backupTargetStorageIdentity(next)
   );
+}
+
+function backupTargetOrphanCleanupBinding(row: BackupTargetIdentityRow) {
+  return {
+    kind: row.kind,
+    config: configRecord(row.config),
+    provider: nullableText(row.provider),
+    remotePath: nullableText(row.remote_path),
+    accessKeyId: nullableText(row.access_key_id),
+    secretAccessKeyEncrypted: nullableText(row.secret_access_key_encrypted),
+    genericConfigEncrypted: nullableText(row.generic_config_encrypted),
+    genericCredentialsEncrypted: nullableText(row.generic_credentials_encrypted)
+  };
+}
+
+function backupTargetOrphanCleanupBindingChanged(
+  current: BackupTargetIdentityRow,
+  next: BackupTargetIdentityRow
+) {
+  return !isDeepStrictEqual(
+    backupTargetOrphanCleanupBinding(current),
+    backupTargetOrphanCleanupBinding(next)
+  );
+}
+
+export async function getRemoteArtifactOrphanCount(
+  client: BackupTargetLifecycleClient,
+  id: string
+) {
+  const result = await client.query<{ count: number | string }>(
+    `SELECT count(*)::text AS count
+     FROM remote_artifact_orphans
+     WHERE backup_target_id = $1`,
+    [id]
+  );
+  return Number(result.rows[0]?.count ?? 0);
+}
+
+function remoteArtifactOrphanConflict(
+  operation: "delete" | "change cleanup binding",
+  count: number
+) {
+  const action = operation === "delete"
+    ? "cannot be deleted"
+    : "storage configuration and credentials cannot be changed";
+  return Object.assign(
+    new Error(
+      `Backup target ${action} while ${count} unresolved remote artifact cleanup obligation${count === 1 ? "" : "s"} remain.`
+    ),
+    {
+      statusCode: 409,
+      remoteArtifactOrphanCount: count
+    }
+  );
+}
+
+export async function assertBackupTargetOrphanCleanupBindingChangeAllowed(
+  client: BackupTargetLifecycleClient,
+  id: string,
+  current: BackupTargetIdentityRow,
+  next: BackupTargetIdentityRow
+) {
+  if (!backupTargetOrphanCleanupBindingChanged(current, next)) return;
+  const count = await getRemoteArtifactOrphanCount(client, id);
+  if (count > 0) {
+    throw remoteArtifactOrphanConflict("change cleanup binding", count);
+  }
+}
+
+export async function assertBackupTargetHasNoRemoteArtifactOrphans(
+  client: BackupTargetLifecycleClient,
+  id: string
+) {
+  const count = await getRemoteArtifactOrphanCount(client, id);
+  if (count > 0) throw remoteArtifactOrphanConflict("delete", count);
 }
 
 export async function lockBackupTarget(

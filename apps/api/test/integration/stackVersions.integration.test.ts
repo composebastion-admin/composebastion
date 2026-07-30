@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../../src/server.js";
@@ -50,7 +51,60 @@ describe.skipIf(!integrationEnabled)("stack versions API integration", () => {
   });
 
   afterAll(async () => {
+    await pool.query("DROP TRIGGER IF EXISTS compose_create_audit_reject ON audit_events");
+    await pool.query("DROP FUNCTION IF EXISTS compose_create_audit_reject_fn()");
     await app.close();
+  });
+
+  it("rolls back stack and initial version when create audit persistence fails", async () => {
+    await pool.query(`
+      CREATE FUNCTION compose_create_audit_reject_fn() RETURNS trigger AS $$
+      BEGIN
+        IF NEW.action = 'compose.create' THEN
+          RAISE EXCEPTION 'intentional compose create audit failure';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql
+    `);
+    await pool.query(`
+      CREATE TRIGGER compose_create_audit_reject
+      BEFORE INSERT ON audit_events
+      FOR EACH ROW EXECUTE FUNCTION compose_create_audit_reject_fn()
+    `);
+    const projectName = `audit-${randomUUID().slice(0, 8)}`;
+
+    try {
+      const created = await app.inject({
+        method: "POST",
+        url: `/api/hosts/${hostId}/compose`,
+        headers: { cookie: sessionCookie },
+        payload: {
+          name: "Atomic create",
+          projectName,
+          composeYaml: "services:\n  app:\n    image: nginx:alpine\n",
+          env: ""
+        }
+      });
+      expect(created.statusCode).toBe(500);
+
+      const stacks = await pool.query(
+        "SELECT id FROM compose_stacks WHERE host_id = $1 AND project_name = $2",
+        [hostId, projectName]
+      );
+      expect(stacks.rowCount).toBe(0);
+      const versions = await pool.query(
+        `SELECT versions.id
+         FROM compose_stack_versions AS versions
+         JOIN compose_stacks AS stacks ON stacks.id = versions.stack_id
+         WHERE stacks.host_id = $1 AND stacks.project_name = $2`,
+        [hostId, projectName]
+      );
+      expect(versions.rowCount).toBe(0);
+    } finally {
+      await pool.query("DROP TRIGGER IF EXISTS compose_create_audit_reject ON audit_events");
+      await pool.query("DROP FUNCTION IF EXISTS compose_create_audit_reject_fn()");
+    }
   });
 
   it("creates a version on stack create and lists versions after update", async () => {

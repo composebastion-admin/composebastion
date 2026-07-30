@@ -12,14 +12,18 @@ import {
   createBackupWithJob,
   createHostPathBackupWithJob,
   deleteBackup,
+  enqueueBackupDrillJob,
+  enqueueBackupVerifyJob,
+  enqueueHostPathRestoreJob,
+  enqueueVolumeRestoreJob,
   getBackup,
   getBackupDownloadStream,
   getBackupHealthSummary,
   listBackups
 } from "../services/backups.js";
 import { requireRole } from "../services/auth.js";
-import { enqueueJob } from "../services/jobs.js";
 import { auditContextFromRequest, writeAuditEvent } from "../services/audit.js";
+import { sanitizeBackupForRead } from "../services/mappers.js";
 import { downloadRateLimit, sensitiveMutationRateLimit } from "../services/rateLimits.js";
 
 export async function registerBackupRoutes(app: FastifyInstance) {
@@ -29,7 +33,7 @@ export async function registerBackupRoutes(app: FastifyInstance) {
   app.get("/api/backups", { preHandler: viewer }, async (request) => {
     const page = await listBackups(backupListQuerySchema.parse(request.query ?? {}));
     return {
-      backups: page.items,
+      backups: page.items.map(sanitizeBackupForRead),
       total: page.total,
       limit: page.limit,
       offset: page.offset,
@@ -43,38 +47,42 @@ export async function registerBackupRoutes(app: FastifyInstance) {
 
   app.post("/api/backups", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
     const body = backupCreateSchema.parse(request.body);
+    const auditContext = auditContextFromRequest(request);
     const { backup, job } = await createBackupWithJob(body.hostId, body.volumeName, {
       backupTargetId: body.backupTargetId,
       encryption: body.encryption
-    }, request.user?.id);
-    await writeAuditEvent({
-      userId: request.user?.id,
-      hostId: body.hostId,
-      action: "volume.backup",
-      targetKind: "backup",
-      targetId: backup.id,
-      details: { volumeName: body.volumeName, backupTargetId: body.backupTargetId ?? null, encryption: body.encryption },
-      ...auditContextFromRequest(request)
+    }, request.user?.id, async (client, created) => {
+      await writeAuditEvent({
+        userId: request.user?.id,
+        hostId: body.hostId,
+        action: "volume.backup",
+        targetKind: "backup",
+        targetId: created.backup.id,
+        details: { volumeName: body.volumeName, backupTargetId: body.backupTargetId ?? null, encryption: body.encryption },
+        ...auditContext
+      }, client);
     });
-    return { backup, job };
+    return { backup: sanitizeBackupForRead(backup), job };
   });
 
   app.post("/api/backups/host-path", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
     const body = hostPathBackupCreateSchema.parse(request.body);
+    const auditContext = auditContextFromRequest(request);
     const { backup, job } = await createHostPathBackupWithJob(body.hostId, body.sourcePath, {
       backupTargetId: body.backupTargetId,
       encryption: body.encryption
-    }, request.user?.id);
-    await writeAuditEvent({
-      userId: request.user?.id,
-      hostId: body.hostId,
-      action: "hostPath.backup",
-      targetKind: "backup",
-      targetId: backup.id,
-      details: { sourcePath: backup.sourcePath, backupTargetId: body.backupTargetId ?? null, encryption: body.encryption },
-      ...auditContextFromRequest(request)
+    }, request.user?.id, async (client, created) => {
+      await writeAuditEvent({
+        userId: request.user?.id,
+        hostId: body.hostId,
+        action: "hostPath.backup",
+        targetKind: "backup",
+        targetId: created.backup.id,
+        details: { sourcePath: created.backup.sourcePath, backupTargetId: body.backupTargetId ?? null, encryption: body.encryption },
+        ...auditContext
+      }, client);
     });
-    return { backup, job };
+    return { backup: sanitizeBackupForRead(backup), job };
   });
 
   app.get("/api/backups/:id", { preHandler: viewer }, async (request, reply) => {
@@ -84,116 +92,143 @@ export async function registerBackupRoutes(app: FastifyInstance) {
       reply.code(404);
       return { error: "Backup not found" };
     }
-    return { backup };
+    return { backup: sanitizeBackupForRead(backup) };
   });
 
   app.post("/api/backups/:id/restore", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request, reply) => {
     const { id } = request.params as { id: string };
-    const backup = await getBackup(id);
-    if (!backup) {
+    const body = backupRestoreSchema.parse(request.body);
+    const auditContext = auditContextFromRequest(request);
+    const result = await enqueueVolumeRestoreJob({
+      backupId: id,
+      targetHostId: body.targetHostId,
+      targetVolumeName: body.targetVolumeName,
+      overwrite: body.overwrite
+    }, request.user?.id, async (client) => {
+      await writeAuditEvent({
+        userId: request.user?.id,
+        hostId: body.targetHostId,
+        action: "volume.restore",
+        targetKind: "backup",
+        targetId: id,
+        details: { targetVolumeName: body.targetVolumeName, overwrite: body.overwrite },
+        ...auditContext
+      }, client);
+    });
+    if (!result) {
       reply.code(404);
       return { error: "Backup not found" };
     }
-    if (backup.kind !== "volume") {
-      reply.code(400);
-      return { error: "Use the host-path restore endpoint for host-path backups" };
-    }
-    const body = backupRestoreSchema.parse(request.body);
-    const job = await enqueueJob(
-      { type: "volume.restore", hostId: body.targetHostId, payload: { backupId: id, targetVolumeName: body.targetVolumeName, overwrite: body.overwrite } },
-      request.user?.id
-    );
-    await writeAuditEvent({
-      userId: request.user?.id,
-      hostId: body.targetHostId,
-      action: "volume.restore",
-      targetKind: "backup",
-      targetId: id,
-      details: { targetVolumeName: body.targetVolumeName, overwrite: body.overwrite },
-      ...auditContextFromRequest(request)
-    });
-    return { job };
+    return { job: result.job };
   });
 
   app.post("/api/backups/:id/restore-host-path", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request, reply) => {
     const { id } = request.params as { id: string };
-    const backup = await getBackup(id);
-    if (!backup) {
+    const body = hostPathBackupRestoreSchema.parse(request.body);
+    const auditContext = auditContextFromRequest(request);
+    const result = await enqueueHostPathRestoreJob({
+      backupId: id,
+      targetHostId: body.targetHostId,
+      targetPath: body.targetPath,
+      overwrite: body.overwrite
+    }, request.user?.id, async (client) => {
+      await writeAuditEvent({
+        userId: request.user?.id,
+        hostId: body.targetHostId,
+        action: "hostPath.restore",
+        targetKind: "backup",
+        targetId: id,
+        details: { targetPath: body.targetPath, overwrite: body.overwrite },
+        ...auditContext
+      }, client);
+    });
+    if (!result) {
       reply.code(404);
       return { error: "Backup not found" };
     }
-    if (backup.kind !== "host_path") {
-      reply.code(400);
-      return { error: "Use the volume restore endpoint for volume backups" };
-    }
-    const body = hostPathBackupRestoreSchema.parse(request.body);
-    const job = await enqueueJob(
-      { type: "hostPath.restore", hostId: body.targetHostId, payload: { backupId: id, targetPath: body.targetPath, overwrite: body.overwrite } },
-      request.user?.id
-    );
-    await writeAuditEvent({
-      userId: request.user?.id,
-      hostId: body.targetHostId,
-      action: "hostPath.restore",
-      targetKind: "backup",
-      targetId: id,
-      details: { targetPath: body.targetPath, overwrite: body.overwrite },
-      ...auditContextFromRequest(request)
-    });
-    return { job };
+    return { job: result.job };
   });
 
   app.post("/api/backups/:id/verify", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request, reply) => {
     const { id } = request.params as { id: string };
-    const backup = await getBackup(id);
-    if (!backup) {
+    const body = backupVerifySchema.parse(request.body ?? {});
+    const auditContext = auditContextFromRequest(request);
+    const result = await enqueueBackupVerifyJob(
+      id,
+      body.testArchive,
+      request.user?.id,
+      async (client, queued) => {
+        await writeAuditEvent({
+          userId: request.user?.id,
+          hostId: queued.backup.hostId,
+          action: "backup.verify",
+          targetKind: "backup",
+          targetId: id,
+          details: { testArchive: body.testArchive },
+          ...auditContext
+        }, client);
+      }
+    );
+    if (!result) {
       reply.code(404);
       return { error: "Backup not found" };
     }
-    const body = backupVerifySchema.parse(request.body ?? {});
-    const job = await enqueueJob(
-      { type: "backup.verify", hostId: backup.hostId, payload: { backupId: id, testArchive: body.testArchive } },
-      request.user?.id
-    );
-    await writeAuditEvent({
-      userId: request.user?.id,
-      hostId: backup.hostId,
-      action: "backup.verify",
-      targetKind: "backup",
-      targetId: id,
-      details: { testArchive: body.testArchive },
-      ...auditContextFromRequest(request)
-    });
-    return { job };
+    return { job: result.job };
   });
 
   app.post("/api/backups/:id/drill", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request, reply) => {
     const { id } = request.params as { id: string };
     backupDrillSchema.parse(request.body ?? {});
-    const backup = await getBackup(id);
-    if (!backup) {
+    const auditContext = auditContextFromRequest(request);
+    const result = await enqueueBackupDrillJob(
+      id,
+      request.user?.id,
+      async (client, queued) => {
+        await writeAuditEvent({
+          userId: request.user?.id,
+          hostId: queued.backup.hostId,
+          action: "backup.drill",
+          targetKind: "backup",
+          targetId: id,
+          details: {
+            kind: queued.backup.kind,
+            label: queued.backup.kind === "host_path"
+              ? queued.backup.sourcePath
+              : queued.backup.volumeName
+          },
+          ...auditContext
+        }, client);
+      }
+    );
+    if (!result) {
       reply.code(404);
       return { error: "Backup not found" };
     }
-    const job = await enqueueJob(
-      { type: "backup.drill", hostId: backup.hostId, payload: { backupId: id } },
-      request.user?.id
-    );
-    await writeAuditEvent({
-      userId: request.user?.id,
-      hostId: backup.hostId,
-      action: "backup.drill",
-      targetKind: "backup",
-      targetId: id,
-      details: { kind: backup.kind, label: backup.kind === "host_path" ? backup.sourcePath : backup.volumeName },
-      ...auditContextFromRequest(request)
-    });
-    return { job };
+    return { job: result.job };
   });
 
   const downloadHandler = async (request: any, reply: any) => {
     const { id } = request.params as { id: string };
-    const download = await getBackupDownloadStream(id);
+    const auditContext = auditContextFromRequest(request);
+    const download = await getBackupDownloadStream(
+      id,
+      async (client, backup) => {
+        await writeAuditEvent({
+          userId: request.user?.id,
+          hostId: backup.hostId,
+          action: "backup.download",
+          targetKind: "backup",
+          targetId: id,
+          details: {
+            kind: backup.kind,
+            label: backup.kind === "host_path"
+              ? backup.sourcePath
+              : backup.volumeName
+          },
+          ...auditContext
+        }, client);
+      }
+    );
     if (!download) {
       reply.code(404);
       return { error: "Backup not found" };
@@ -207,20 +242,27 @@ export async function registerBackupRoutes(app: FastifyInstance) {
 
   app.delete("/api/backups/:id", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request, reply) => {
     const { id } = request.params as { id: string };
-    const backup = await deleteBackup(id);
+    const auditContext = auditContextFromRequest(request);
+    const backup = await deleteBackup(id, async (client, deleted) => {
+      await writeAuditEvent({
+        userId: request.user?.id,
+        hostId: deleted.hostId,
+        action: "backup.delete",
+        targetKind: "backup",
+        targetId: id,
+        details: {
+          kind: deleted.kind,
+          label: deleted.kind === "host_path"
+            ? deleted.sourcePath
+            : deleted.volumeName
+        },
+        ...auditContext
+      }, client);
+    });
     if (!backup) {
       reply.code(404);
       return { error: "Backup not found" };
     }
-    await writeAuditEvent({
-      userId: request.user?.id,
-      hostId: backup.hostId,
-      action: "backup.delete",
-      targetKind: "backup",
-      targetId: id,
-      details: { kind: backup.kind, label: backup.kind === "host_path" ? backup.sourcePath : backup.volumeName },
-      ...auditContextFromRequest(request)
-    });
     return { ok: true };
   });
 }

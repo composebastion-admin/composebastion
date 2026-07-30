@@ -77,6 +77,17 @@ describe("universal deployment source detection", () => {
 });
 
 describe("Compose analysis helpers", () => {
+  it("preserves exact Git filenames from NUL-delimited source inventory", () => {
+    expect(deploymentAnalysisInternals.trackedGitFiles(
+      "compose.yaml\0dir/line\nbreak.env\0 leading-space\0unicodé.env\0"
+    )).toEqual([
+      "compose.yaml",
+      "dir/line\nbreak.env",
+      " leading-space",
+      "unicodé.env"
+    ]);
+  });
+
   it("prioritizes root Compose files in the documented order", () => {
     expect(selectComposeCandidates([
       "examples/compose.yaml",
@@ -389,9 +400,9 @@ services:
 
     const raw = rawEnvValues("A=one\nexport B=\"two\"\nC='three'\ninvalid\n");
     expect(Array.from(raw.entries())).toEqual([["A", "one"], ["B", "two"], ["C", "three"]]);
-    expect(serializeEnv(raw)).toBe("A=one\nB=two\nC=three");
+    expect(serializeEnv(raw)).toBe("A='one'\nB='two'\nC='three'");
     expect(sanitizeEnvForResponse("PORT=3000\nAPI_TOKEN=secret", new Set(["API_TOKEN"])))
-      .toBe("PORT=3000\nAPI_TOKEN=");
+      .toBe("PORT='3000'\nAPI_TOKEN=''");
 
     const variables = [
       { key: "PORT", value: "3000", defaultValue: "3000", required: false, secret: false, source: "compose" as const },
@@ -399,7 +410,7 @@ services:
       { key: "OPTIONAL", value: "", defaultValue: null, required: false, secret: false, source: "compose" as const }
     ];
     expect(mergeStoredAnalysisEnv("PORT=3000", "PORT=4000\nAPI_TOKEN=stored", variables)).toEqual({
-      env: "PORT=4000\nAPI_TOKEN=stored",
+      env: "PORT='4000'\nAPI_TOKEN='stored'",
       variables: [
         { ...variables[0], value: "4000" },
         variables[1],
@@ -410,8 +421,8 @@ services:
       "API_TOKEN=stored\nPORT=3000",
       "API_TOKEN=\nPORT=4000\nNEW=value",
       variables
-    )).toBe("API_TOKEN=stored\nPORT=4000\nNEW=value");
-    expect(variablesToEnv(variables)).toBe("PORT=3000\nOPTIONAL=");
+    )).toBe("API_TOKEN='stored'\nPORT='4000'\nNEW='value'");
+    expect(variablesToEnv(variables)).toBe("PORT='3000'\nOPTIONAL=''");
   });
 
   it("filters unresolved images and normalizes Git remotes", () => {

@@ -10,7 +10,16 @@ const analysisId = "44444444-4444-4444-8444-444444444444";
 const currentRole = vi.hoisted(() => ({ value: "owner" }));
 const createHostWithSync = vi.hoisted(() => vi.fn());
 const enqueueJob = vi.hoisted(() => vi.fn());
+const enqueueJobInTransaction = vi.hoisted(() => vi.fn());
+const notifyJobQueued = vi.hoisted(() => vi.fn());
 const writeAuditEvent = vi.hoisted(() => vi.fn());
+const transactionClient = vi.hoisted(() => ({ query: vi.fn() }));
+
+vi.mock("../src/db/pool.js", () => ({
+  withTransaction: async (
+    handler: (client: typeof transactionClient) => Promise<unknown>
+  ) => handler(transactionClient)
+}));
 
 vi.mock("../src/services/auth.js", () => ({
   requireRole: (roles: string[]) => async (request: any, reply: any) => {
@@ -42,7 +51,9 @@ vi.mock("../src/services/hosts.js", () => ({
 }));
 
 vi.mock("../src/services/jobs.js", () => ({
-  enqueueJob
+  enqueueJob,
+  enqueueJobInTransaction,
+  notifyJobQueued
 }));
 
 const { registerHostRoutes } = await import("../src/routes/hosts.js");
@@ -65,6 +76,8 @@ describe("host routes", () => {
     currentRole.value = "owner";
     createHostWithSync.mockReset();
     enqueueJob.mockReset();
+    enqueueJobInTransaction.mockReset();
+    notifyJobQueued.mockReset();
     writeAuditEvent.mockReset();
 
     const host = {
@@ -92,6 +105,16 @@ describe("host routes", () => {
     };
     createHostWithSync.mockResolvedValue({ host, job });
     enqueueJob.mockResolvedValue(job);
+    enqueueJobInTransaction.mockImplementation(async (
+      _client: unknown,
+      action: { type: string; hostId: string; payload: unknown }
+    ) => ({
+      ...job,
+      type: action.type,
+      hostId: action.hostId,
+      payload: action.payload
+    }));
+    notifyJobQueued.mockResolvedValue(undefined);
     writeAuditEvent.mockResolvedValue(undefined);
   });
 
@@ -114,8 +137,17 @@ describe("host routes", () => {
       });
 
       expect(response.statusCode).toBe(200);
-      expect(createHostWithSync).toHaveBeenCalledWith(expect.objectContaining({ name: "Prod" }), userId);
+      expect(createHostWithSync).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "Prod" }),
+        userId,
+        {
+          ipAddress: "127.0.0.1",
+          userAgent: "test",
+          userId
+        }
+      );
       expect(enqueueJob).not.toHaveBeenCalled();
+      expect(enqueueJobInTransaction).not.toHaveBeenCalled();
       expect(response.json().job).toMatchObject({ type: "host.sync", status: "queued" });
     } finally {
       await app.close();
@@ -207,6 +239,7 @@ describe("host routes", () => {
         });
       }
       expect(enqueueJob).not.toHaveBeenCalled();
+      expect(enqueueJobInTransaction).not.toHaveBeenCalled();
       expect(writeAuditEvent).not.toHaveBeenCalled();
     } finally {
       await app.close();
@@ -263,12 +296,14 @@ describe("host routes", () => {
       });
 
       expect(response.statusCode, response.body).toBe(200);
-      expect(enqueueJob).toHaveBeenCalledWith(
+      expect(enqueueJobInTransaction).toHaveBeenCalledWith(
+        transactionClient,
         { type: "container.restart", hostId, payload: { containerId: "web" } },
         userId,
         undefined
       );
       expect(writeAuditEvent).toHaveBeenCalledOnce();
+      expect(notifyJobQueued).toHaveBeenCalledWith(jobId);
     } finally {
       await app.close();
     }
@@ -303,6 +338,7 @@ describe("host routes", () => {
         }
       }
       expect(enqueueJob).not.toHaveBeenCalled();
+      expect(enqueueJobInTransaction).not.toHaveBeenCalled();
       expect(writeAuditEvent).not.toHaveBeenCalled();
 
       const safe = await app.inject({
@@ -314,13 +350,47 @@ describe("host routes", () => {
         }
       });
       expect(safe.statusCode).toBe(200);
-      expect(enqueueJob).toHaveBeenCalledWith({
-        type: "git.testRemote",
-        hostId,
+      expect(enqueueJobInTransaction).toHaveBeenCalledWith(
+        transactionClient,
+        {
+          type: "git.testRemote",
+          hostId,
+          payload: {
+            repositoryUrl: "git@git-host-alias:team/app.git"
+          }
+        },
+        userId,
+        undefined
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("does not notify a direct mutation job when its transactional audit fails", async () => {
+    const app = await buildApp();
+    currentRole.value = "operator";
+    writeAuditEvent.mockRejectedValueOnce(new Error("audit unavailable"));
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/hosts/${hostId}/actions`,
         payload: {
-          repositoryUrl: "git@git-host-alias:team/app.git"
+          type: "container.restart",
+          payload: { containerId: "web" }
         }
-      }, userId, undefined);
+      });
+
+      expect(response.statusCode).toBe(500);
+      expect(enqueueJobInTransaction).toHaveBeenCalledOnce();
+      expect(writeAuditEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: "container.restart",
+          targetId: jobId
+        }),
+        transactionClient
+      );
+      expect(notifyJobQueued).not.toHaveBeenCalled();
     } finally {
       await app.close();
     }

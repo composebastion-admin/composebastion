@@ -11,8 +11,10 @@
     "build": "vite build",
     "dev": "vite --host 0.0.0.0",
     "preview": "vite preview --host 0.0.0.0",
-    "smoke": "playwright test",
+    "smoke": "playwright test --project=chromium",
+    "smoke:qualification": "playwright test --project=chromium --project=chromium-mobile --project=firefox-critical --project=firefox-mobile-critical --project=webkit-critical --project=webkit-mobile-critical",
     "smoke:live": "playwright test --config playwright.live.config.ts",
+    "smoke:live:qualification": "playwright test --config playwright.live.qualification.config.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests",
     "test:coverage": "vitest run --coverage --passWithNoTests"

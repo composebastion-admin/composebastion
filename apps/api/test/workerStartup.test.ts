@@ -3,6 +3,17 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 const workerMocks = vi.hoisted(() => ({
   backfillDeploymentSourceEncryptedEnvironment: vi.fn(),
   claimNextJob: vi.fn(),
+  cleanupStaleBackupTemporaryDirectories: vi.fn(),
+  cleanupStaleDeploymentGitCredentialFiles: vi.fn(),
+  cleanupStaleRecoveryTemporaryResidue: vi.fn(),
+  cleanupStaleRcloneConfigDirectories: vi.fn(),
+  cleanupTerminalRemoteOperationProofs: vi.fn(),
+  reconcileClaimedBackupDeletions: vi.fn(),
+  reconcileClaimedRecoveryPointDeletions: vi.fn(),
+  reconcileRemoteArtifactOrphans: vi.fn(),
+  reconcileAmbiguousRemoteOutcomes: vi.fn(),
+  reconcileRecoveryRestoreAttempts: vi.fn(),
+  reconcileRecoverySourceRestartObligations: vi.fn(),
   reconcileSelfUpdateHandoffs: vi.fn(),
   redisClose: vi.fn(),
   startRedisWakeupSubscription: vi.fn()
@@ -22,6 +33,9 @@ vi.mock("../src/db/pool.js", () => ({ pool: { end: asyncNoop() } }));
 vi.mock("../src/services/auth.js", () => ({ deleteExpiredSessions: asyncNoop() }));
 vi.mock("../src/services/alerts.js", () => ({ runAlertChecks: asyncNoop() }));
 vi.mock("../src/services/backups.js", () => ({
+  cleanupStaleBackupTemporaryDirectories: workerMocks.cleanupStaleBackupTemporaryDirectories,
+  reconcileClaimedBackupDeletions:
+    workerMocks.reconcileClaimedBackupDeletions,
   runBackupDrill: asyncNoop(),
   runBackupVerify: asyncNoop(),
   runHostPathBackup: asyncNoop(),
@@ -34,6 +48,7 @@ vi.mock("../src/services/docker.js", () => ({ executeDockerAction: asyncNoop() }
 vi.mock("../src/services/deployments.js", () => ({
   analyzeDeployment: asyncNoop(),
   backfillDeploymentSourceEncryptedEnvironment: workerMocks.backfillDeploymentSourceEncryptedEnvironment,
+  cleanupStaleDeploymentGitCredentialFiles: workerMocks.cleanupStaleDeploymentGitCredentialFiles,
   cleanupExpiredDeploymentAnalyses: asyncNoop(),
   configureRegistryTrust: asyncNoop(),
   executeDeployment: asyncNoop()
@@ -77,8 +92,37 @@ vi.mock("../src/services/recoveryCenter.js", () => ({
   runDueRecoverySchedules: asyncNoop(),
   runMigrationExecute: asyncNoop(),
   runRecoveryCreate: asyncNoop(),
-  runRecoveryRestore: asyncNoop(),
   runRecoveryVerify: asyncNoop()
+}));
+vi.mock("../src/services/workerRecoveryRestore.js", () => ({
+  runWorkerRecoveryRestore: asyncNoop()
+}));
+vi.mock("../src/services/recoveryRclone.js", () => ({
+  cleanupStaleRcloneConfigDirectories: workerMocks.cleanupStaleRcloneConfigDirectories
+}));
+vi.mock("../src/services/recoveryRestartReconciliation.js", () => ({
+  reconcileRecoverySourceRestartObligations: workerMocks.reconcileRecoverySourceRestartObligations
+}));
+vi.mock("../src/services/recoveryRestoreAttempts.js", () => ({
+  reconcileRecoveryRestoreAttempts:
+    workerMocks.reconcileRecoveryRestoreAttempts
+}));
+vi.mock("../src/services/recoveryPointDelete.js", () => ({
+  reconcileClaimedRecoveryPointDeletions:
+    workerMocks.reconcileClaimedRecoveryPointDeletions
+}));
+vi.mock("../src/services/recoveryTemporaryStorage.js", () => ({
+  cleanupStaleRecoveryTemporaryResidue: workerMocks.cleanupStaleRecoveryTemporaryResidue
+}));
+vi.mock("../src/services/recoveryRemoteOrphans.js", () => ({
+  reconcileRemoteArtifactOrphans: workerMocks.reconcileRemoteArtifactOrphans
+}));
+vi.mock("../src/services/remoteOutcomeReconciliation.js", () => ({
+  reconcileAmbiguousRemoteOutcomes: workerMocks.reconcileAmbiguousRemoteOutcomes
+}));
+vi.mock("../src/services/remoteOperationProofCleanup.js", () => ({
+  cleanupTerminalRemoteOperationProofs:
+    workerMocks.cleanupTerminalRemoteOperationProofs
 }));
 vi.mock("../src/services/selfUpdate.js", () => ({
   confirmSelfUpdateHandoff: asyncNoop(),
@@ -114,6 +158,49 @@ describe("worker self-update startup handoff", () => {
     vi.spyOn(console, "error").mockImplementation(() => undefined);
 
     workerMocks.claimNextJob.mockResolvedValue(null);
+    workerMocks.cleanupStaleDeploymentGitCredentialFiles.mockResolvedValue({
+      checked: 1,
+      cleaned: 1,
+      failures: []
+    });
+    workerMocks.cleanupStaleRcloneConfigDirectories.mockResolvedValue({ removed: 1, skipped: 0 });
+    workerMocks.cleanupStaleBackupTemporaryDirectories.mockResolvedValue({ removed: 1, skipped: 0 });
+    workerMocks.cleanupStaleRecoveryTemporaryResidue.mockResolvedValue({ removed: 1, skipped: 0 });
+    workerMocks.cleanupTerminalRemoteOperationProofs.mockResolvedValue({
+      checked: 1,
+      removed: 1,
+      failures: []
+    });
+    workerMocks.reconcileRemoteArtifactOrphans.mockResolvedValue({
+      checked: 1,
+      cleaned: 1,
+      failed: 0
+    });
+    workerMocks.reconcileAmbiguousRemoteOutcomes.mockResolvedValue({
+      checked: 0,
+      reconciled: 0,
+      pending: 0
+    });
+    workerMocks.reconcileRecoveryRestoreAttempts.mockResolvedValue({
+      checked: 0,
+      cleaned: 0,
+      failed: 0
+    });
+    workerMocks.reconcileClaimedBackupDeletions.mockResolvedValue({
+      checked: 0,
+      deleted: 0,
+      failed: 0
+    });
+    workerMocks.reconcileClaimedRecoveryPointDeletions.mockResolvedValue({
+      checked: 0,
+      deleted: 0,
+      failed: 0
+    });
+    workerMocks.reconcileRecoverySourceRestartObligations.mockResolvedValue({
+      checked: 0,
+      restarted: 0,
+      failed: 0
+    });
     let finishBackfill!: () => void;
     workerMocks.backfillDeploymentSourceEncryptedEnvironment.mockReturnValueOnce(
       new Promise<void>((resolve) => {
@@ -133,6 +220,11 @@ describe("worker self-update startup handoff", () => {
     });
     expect(workerMocks.startRedisWakeupSubscription).not.toHaveBeenCalled();
     expect(workerMocks.claimNextJob).not.toHaveBeenCalled();
+    expect(workerMocks.cleanupStaleBackupTemporaryDirectories).not.toHaveBeenCalled();
+    expect(workerMocks.cleanupStaleRecoveryTemporaryResidue).not.toHaveBeenCalled();
+    expect(workerMocks.reconcileRemoteArtifactOrphans).not.toHaveBeenCalled();
+    expect(workerMocks.cleanupStaleDeploymentGitCredentialFiles).not.toHaveBeenCalled();
+    expect(workerMocks.cleanupStaleRcloneConfigDirectories).not.toHaveBeenCalled();
 
     finishBackfill();
     await vi.waitFor(() => {
@@ -140,7 +232,29 @@ describe("worker self-update startup handoff", () => {
     });
 
     expect(workerMocks.startRedisWakeupSubscription).toHaveBeenCalledTimes(1);
+    expect(workerMocks.cleanupStaleDeploymentGitCredentialFiles).toHaveBeenCalledTimes(1);
+    expect(workerMocks.cleanupStaleRcloneConfigDirectories).toHaveBeenCalledTimes(1);
+    expect(workerMocks.cleanupStaleBackupTemporaryDirectories).toHaveBeenCalledTimes(1);
+    expect(workerMocks.cleanupStaleRecoveryTemporaryResidue).toHaveBeenCalledTimes(1);
+    expect(workerMocks.reconcileRemoteArtifactOrphans).toHaveBeenCalledTimes(1);
+    expect(workerMocks.cleanupTerminalRemoteOperationProofs).toHaveBeenCalledTimes(1);
+    expect(workerMocks.reconcileRecoveryRestoreAttempts).toHaveBeenCalledTimes(1);
+    expect(workerMocks.reconcileClaimedBackupDeletions).toHaveBeenCalledTimes(1);
+    expect(workerMocks.reconcileClaimedRecoveryPointDeletions).toHaveBeenCalledTimes(1);
+    expect(workerMocks.reconcileRecoverySourceRestartObligations).toHaveBeenCalledTimes(1);
     expect(workerMocks.backfillDeploymentSourceEncryptedEnvironment.mock.invocationCallOrder[0])
+      .toBeLessThan(workerMocks.cleanupStaleDeploymentGitCredentialFiles.mock.invocationCallOrder[0]!);
+    expect(workerMocks.cleanupStaleDeploymentGitCredentialFiles.mock.invocationCallOrder[0])
+      .toBeLessThan(workerMocks.cleanupStaleRcloneConfigDirectories.mock.invocationCallOrder[0]!);
+    expect(workerMocks.cleanupStaleRcloneConfigDirectories.mock.invocationCallOrder[0])
+      .toBeLessThan(workerMocks.cleanupStaleBackupTemporaryDirectories.mock.invocationCallOrder[0]!);
+    expect(workerMocks.cleanupStaleBackupTemporaryDirectories.mock.invocationCallOrder[0])
+      .toBeLessThan(workerMocks.cleanupStaleRecoveryTemporaryResidue.mock.invocationCallOrder[0]!);
+    expect(workerMocks.cleanupStaleRecoveryTemporaryResidue.mock.invocationCallOrder[0])
+      .toBeLessThan(workerMocks.reconcileRemoteArtifactOrphans.mock.invocationCallOrder[0]!);
+    expect(workerMocks.reconcileRemoteArtifactOrphans.mock.invocationCallOrder[0])
+      .toBeLessThan(workerMocks.cleanupTerminalRemoteOperationProofs.mock.invocationCallOrder[0]!);
+    expect(workerMocks.cleanupTerminalRemoteOperationProofs.mock.invocationCallOrder[0])
       .toBeLessThan(workerMocks.startRedisWakeupSubscription.mock.invocationCallOrder[0]!);
     expect(workerMocks.claimNextJob).not.toHaveBeenCalled();
     expect(intervals.slice(0, 4).map(({ timeout }) => timeout)).toEqual([2_500, 5_000, 10_000, 10_000]);
@@ -151,9 +265,24 @@ describe("worker self-update startup handoff", () => {
     });
     expect(workerMocks.claimNextJob).not.toHaveBeenCalled();
 
+    intervals[2]!.handler();
+    await vi.waitFor(() => {
+      expect(workerMocks.reconcileRecoverySourceRestartObligations).toHaveBeenCalledTimes(2);
+    });
+
     intervals[0]!.handler();
     await vi.waitFor(() => {
       expect(workerMocks.claimNextJob).toHaveBeenCalledTimes(1);
+    });
+
+    const residueInterval = intervals.find(({ timeout }) => timeout === 15 * 60_000);
+    expect(residueInterval).toBeDefined();
+    residueInterval!.handler();
+    await vi.waitFor(() => {
+      expect(workerMocks.cleanupStaleBackupTemporaryDirectories).toHaveBeenCalledTimes(2);
+      expect(workerMocks.cleanupStaleRecoveryTemporaryResidue).toHaveBeenCalledTimes(2);
+      expect(workerMocks.reconcileRemoteArtifactOrphans).toHaveBeenCalledTimes(2);
+      expect(workerMocks.cleanupTerminalRemoteOperationProofs).toHaveBeenCalledTimes(2);
     });
   });
 });

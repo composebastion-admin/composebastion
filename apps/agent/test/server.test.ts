@@ -1,17 +1,31 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
+import {
+  lstat,
+  mkdir,
+  readFile,
+  rm,
+  stat,
+  symlink,
+  writeFile
+} from "node:fs/promises";
 import packageJson from "../package.json";
 
 type ExecResult = {
   stdout?: string;
   stderr?: string;
-  error?: Error & { code?: number | string };
+  error?: Error & {
+    code?: number | string;
+    killed?: boolean;
+    signal?: string;
+  };
 };
 
 const state = vi.hoisted(() => ({
   routes: new Map<string, { options: any; handler: (...args: any[]) => any }>(),
   preHandler: undefined as ((request: any, reply: any) => Promise<void>) | undefined,
   execResults: new Map<string, ExecResult>(),
+  execOptions: [] as Array<{ args: string[]; options: Record<string, unknown> }>,
   listen: vi.fn(async () => undefined),
   register: vi.fn(async () => undefined),
   stdinEnd: vi.fn(),
@@ -41,7 +55,8 @@ vi.mock("fastify", () => ({
 }));
 
 vi.mock("node:child_process", () => ({
-  execFile: vi.fn((_file: string, args: string[], _options: unknown, callback: (...args: any[]) => void) => {
+  execFile: vi.fn((_file: string, args: string[], options: Record<string, unknown>, callback: (...args: any[]) => void) => {
+    state.execOptions.push({ args, options });
     const result = state.execResults.get(args.join("\0")) ?? {
       error: Object.assign(new Error(`Unexpected docker command: ${args.join(" ")}`), { code: 1 })
     };
@@ -52,6 +67,10 @@ vi.mock("node:child_process", () => ({
 }));
 
 const token = "agent-server-test-token-that-is-long-enough";
+const agentFileFixtureRoot =
+  `/tmp/composebastion/agent-operation-test-${process.pid}`;
+const agentFileOutsideRoot =
+  `/tmp/composebastion-agent-outside-${process.pid}`;
 const dockerStatsTombstone = {
   BlockIO: "0B / 0B",
   CPUPerc: "0.00%",
@@ -73,6 +92,7 @@ const originalEnvironment = {
   AGENT_STREAM_RATE_LIMIT: process.env.AGENT_STREAM_RATE_LIMIT
 };
 let parseDockerStatsLine: typeof import("../src/server.js").parseDockerStatsLine;
+let signalDetachedProcessGroup: typeof import("../src/server.js").signalDetachedProcessGroup;
 
 function setExecResult(args: string[], result: ExecResult) {
   state.execResults.set(args.join("\0"), result);
@@ -113,12 +133,14 @@ beforeAll(async () => {
 
   const server = await import("../src/server.js");
   parseDockerStatsLine = server.parseDockerStatsLine;
+  signalDetachedProcessGroup = server.signalDetachedProcessGroup;
   await server.main();
   await vi.waitFor(() => expect(state.routes.size).toBeGreaterThanOrEqual(9));
 });
 
 beforeEach(() => {
   state.execResults.clear();
+  state.execOptions.length = 0;
   state.stdinEnd.mockClear();
   state.spawn.mockReset();
   state.spawn.mockImplementation(() => {
@@ -126,7 +148,9 @@ beforeEach(() => {
   });
 });
 
-afterAll(() => {
+afterAll(async () => {
+  await rm(agentFileFixtureRoot, { recursive: true, force: true });
+  await rm(agentFileOutsideRoot, { recursive: true, force: true });
   for (const [name, value] of Object.entries(originalEnvironment)) {
     if (value === undefined) delete process.env[name];
     else process.env[name] = value;
@@ -156,6 +180,7 @@ describe("agent server", () => {
     const expected = new Map([
       ["GET /api/health", 240],
       ["GET /api/host-stats", 240],
+      ["GET /api/operations/:id", 240],
       ["GET /api/containers/usage", 240],
       ["GET /api/containers/usage-stream", 20],
       ["POST /api/run", 45],
@@ -171,6 +196,281 @@ describe("agent server", () => {
       rateLimits: { read: 240, run: 45, file: 90, stream: 20 },
       maxConcurrentUsageStreams: 4
     }, "Agent rate limits configured");
+  });
+
+  it("honors the requested bounded timeout and exposes terminal operation proof", async () => {
+    const operationId = "a".repeat(64);
+    setExecResult(["pull", "registry.example.test/app:1"], {
+      stdout: "pulled\n"
+    });
+    const reply = createReply();
+    await expect(route("POST", "/api/run")({
+      body: {
+        command: "docker pull registry.example.test/app:1",
+        timeoutMs: 5 * 60_000,
+        operationId
+      }
+    }, reply)).resolves.toMatchObject({
+      stdout: "pulled\n",
+      code: 0,
+      outcome: "completed",
+      operation: {
+        operationId,
+        status: "completed",
+        timeoutMs: 5 * 60_000
+      }
+    });
+    expect(reply.statusCode).toBe(200);
+    expect(state.execOptions.at(-1)?.options).toMatchObject({
+      timeout: 5 * 60_000,
+      killSignal: "SIGTERM",
+      detached: true
+    });
+
+    const statusReply = createReply();
+    await expect(route("GET", "/api/operations/:id")({
+      params: { id: operationId }
+    }, statusReply)).resolves.toMatchObject({
+      operationId,
+      status: "completed",
+      timeoutMs: 5 * 60_000
+    });
+  });
+
+  it("returns structured ambiguity on a server-side timeout without replaying the operation id", async () => {
+    const operationId = "b".repeat(64);
+    setExecResult(["compose", "up", "-d"], {
+      error: Object.assign(new Error("Docker command timed out"), {
+        code: "ETIMEDOUT",
+        killed: true,
+        signal: "SIGTERM"
+      })
+    });
+    const payload = {
+      command: "docker compose up -d",
+      timeoutMs: 5 * 60_000,
+      operationId
+    };
+
+    const firstReply = createReply();
+    await expect(route("POST", "/api/run")({ body: payload }, firstReply)).resolves.toMatchObject({
+      code: 124,
+      outcome: "timed_out",
+      operation: {
+        operationId,
+        status: "timed_out"
+      }
+    });
+    expect(firstReply.statusCode).toBe(504);
+    const executions = state.execOptions.length;
+
+    const duplicateReply = createReply();
+    await expect(route("POST", "/api/run")({ body: payload }, duplicateReply)).resolves.toMatchObject({
+      code: 124,
+      outcome: "timed_out",
+      operation: {
+        operationId,
+        status: "timed_out"
+      }
+    });
+    expect(duplicateReply.statusCode).toBe(504);
+    expect(state.execOptions).toHaveLength(executions);
+  });
+
+  it("atomically receipts and deduplicates an exact agent file write", async () => {
+    const operationId = "d".repeat(64);
+    const target = `${agentFileFixtureRoot}/dedupe/compose.yml`;
+    await rm(agentFileFixtureRoot, { recursive: true, force: true });
+    const payload = {
+      path: target,
+      content: "services:\n  web:\n    image: nginx:alpine\n",
+      operationId
+    };
+
+    const firstReply = createReply();
+    await expect(
+      route("POST", "/api/files/write")(
+        { body: payload },
+        firstReply
+      )
+    ).resolves.toMatchObject({
+      ok: true,
+      path: target,
+      operation: {
+        operationId,
+        status: "completed",
+        timeoutMs: 30_000
+      }
+    });
+    expect(firstReply.statusCode).toBe(200);
+    expect(await readFile(target, "utf8")).toBe(payload.content);
+    expect((await stat(target)).mode & 0o777).toBe(0o600);
+
+    // Removing the target makes a replay observable. An exact duplicate must
+    // return the retained receipt without executing the write a second time.
+    await rm(target);
+    const duplicateReply = createReply();
+    await expect(
+      route("POST", "/api/files/write")(
+        { body: payload },
+        duplicateReply
+      )
+    ).resolves.toMatchObject({
+      operation: { operationId, status: "completed" }
+    });
+    await expect(readFile(target, "utf8")).rejects.toMatchObject({
+      code: "ENOENT"
+    });
+
+    const statusReply = createReply();
+    await expect(
+      route("GET", "/api/operations/:id")(
+        { params: { id: operationId } },
+        statusReply
+      )
+    ).resolves.toMatchObject({
+      operationId,
+      status: "completed"
+    });
+
+    const mismatchReply = createReply();
+    await expect(
+      route("POST", "/api/files/write")(
+        {
+          body: {
+            ...payload,
+            content: "services:\n  changed: {}\n"
+          }
+        },
+        mismatchReply
+      )
+    ).resolves.toMatchObject({
+      code: "REMOTE_OPERATION_IDENTITY_MISMATCH"
+    });
+    expect(mismatchReply.statusCode).toBe(409);
+  });
+
+  it("atomically replaces a file symlink without changing its link target", async () => {
+    const operationId = "e".repeat(64);
+    const directory = `${agentFileFixtureRoot}/symlink`;
+    const target = `${directory}/compose.yml`;
+    const sentinel = `${directory}/sentinel`;
+    await rm(directory, { recursive: true, force: true });
+    await mkdir(directory, { recursive: true });
+    await writeFile(sentinel, "sentinel", { mode: 0o600 });
+    await symlink(sentinel, target);
+
+    const reply = createReply();
+    await expect(
+      route("POST", "/api/files/write")(
+        {
+          body: {
+            path: target,
+            content: "services: {}\n",
+            operationId
+          }
+        },
+        reply
+      )
+    ).resolves.toMatchObject({
+      ok: true,
+      operation: { operationId, status: "completed" }
+    });
+
+    expect((await lstat(target)).isSymbolicLink()).toBe(false);
+    expect(await readFile(target, "utf8")).toBe("services: {}\n");
+    expect(await readFile(sentinel, "utf8")).toBe("sentinel");
+  });
+
+  it("rejects symlinked parents and final file links for every file route", async () => {
+    const operationId = "f".repeat(64);
+    const safeDirectory = `${agentFileFixtureRoot}/confinement`;
+    const linkedParent = `${safeDirectory}/outside`;
+    const escapedTarget = `${linkedParent}/escaped.yml`;
+    const outsideTarget = `${agentFileOutsideRoot}/escaped.yml`;
+    const outsideSentinel = `${agentFileOutsideRoot}/sentinel`;
+    const linkedFile = `${safeDirectory}/linked-file`;
+    await rm(safeDirectory, { recursive: true, force: true });
+    await rm(agentFileOutsideRoot, { recursive: true, force: true });
+    await mkdir(safeDirectory, { recursive: true });
+    await mkdir(agentFileOutsideRoot, { recursive: true });
+    await writeFile(outsideSentinel, "outside-sentinel", { mode: 0o600 });
+    await symlink(agentFileOutsideRoot, linkedParent);
+    await symlink(outsideSentinel, linkedFile);
+
+    const writeReply = createReply();
+    await expect(
+      route("POST", "/api/files/write")(
+        {
+          body: {
+            path: escapedTarget,
+            content: "services: {}\n",
+            operationId
+          }
+        },
+        writeReply
+      )
+    ).resolves.toMatchObject({
+      code: "AGENT_PATH_CONFINEMENT",
+      operation: {
+        operationId,
+        status: "failed"
+      }
+    });
+    expect(writeReply.statusCode).toBe(400);
+    await expect(readFile(outsideTarget, "utf8")).rejects.toMatchObject({
+      code: "ENOENT"
+    });
+
+    await expect(
+      route("GET", "/api/files/stat")(
+        { query: { path: escapedTarget } },
+        createReply()
+      )
+    ).rejects.toMatchObject({ code: "AGENT_PATH_CONFINEMENT" });
+    await expect(
+      route("GET", "/api/files/read")(
+        { query: { path: escapedTarget } },
+        createReply()
+      )
+    ).rejects.toMatchObject({ code: "AGENT_PATH_CONFINEMENT" });
+    await expect(
+      route("GET", "/api/files/stat")(
+        { query: { path: linkedFile } },
+        createReply()
+      )
+    ).rejects.toMatchObject({ code: "AGENT_PATH_CONFINEMENT" });
+    await expect(
+      route("GET", "/api/files/read")(
+        { query: { path: linkedFile } },
+        createReply()
+      )
+    ).rejects.toMatchObject({ code: "AGENT_PATH_CONFINEMENT" });
+    expect(await readFile(outsideSentinel, "utf8")).toBe(
+      "outside-sentinel"
+    );
+  });
+
+  it("force-kills the detached process group even after its direct leader exits", () => {
+    const groupKill = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const directKill = vi.fn(() => true);
+    const child = {
+      pid: 4242,
+      exitCode: null as number | null,
+      signalCode: null as NodeJS.Signals | null,
+      kill: directKill
+    };
+
+    signalDetachedProcessGroup(child as any, "SIGTERM");
+    child.signalCode = "SIGTERM";
+    signalDetachedProcessGroup(child as any, "SIGKILL", true);
+    signalDetachedProcessGroup(child as any, "SIGKILL");
+
+    expect(groupKill).toHaveBeenNthCalledWith(1, -4242, "SIGTERM");
+    expect(groupKill).toHaveBeenNthCalledWith(2, -4242, "SIGKILL");
+    expect(groupKill).toHaveBeenCalledTimes(2);
+    expect(directKill).not.toHaveBeenCalled();
+    groupKill.mockRestore();
   });
 
   it("reports healthy only when both Docker and Compose respond", async () => {

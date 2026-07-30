@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const query = vi.hoisted(() => vi.fn());
 const validateAgentUrl = vi.hoisted(() => vi.fn());
+const enqueueJobInTransaction = vi.hoisted(() => vi.fn());
+const notifyJobQueued = vi.hoisted(() => vi.fn());
 
 vi.mock("../src/db/pool.js", () => ({
   query: (...args: unknown[]) => query(...args),
@@ -25,12 +27,13 @@ vi.mock("../src/services/ssrf.js", () => ({
 }));
 
 vi.mock("../src/services/jobs.js", () => ({
-  enqueueJobInTransaction: vi.fn(),
-  notifyJobQueued: vi.fn()
+  enqueueJobInTransaction,
+  notifyJobQueued
 }));
 
 const {
   createHost,
+  createHostWithSync,
   getHostForWorker,
   restoreHost,
   updateHost
@@ -64,13 +67,34 @@ function hostRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function arrangeCurrentHost(current: ReturnType<typeof hostRow>) {
+function arrangeCurrentHost(
+  current: ReturnType<typeof hostRow>,
+  operationRows: Array<Record<string, unknown>> = []
+) {
   query.mockImplementation(async (sql: string, values: unknown[] = []) => {
     if (sql.includes("pg_advisory_xact_lock")) {
       return { rows: [] };
     }
-    if (sql.includes("SELECT * FROM docker_hosts")) {
+    if (sql.includes("SELECT *") && sql.includes("FROM docker_hosts")) {
       return { rows: [current] };
+    }
+    if (sql.includes("FROM operation_jobs AS jobs")) {
+      const unknownMutationTypes = Array.isArray(values[1])
+        ? values[1] as string[]
+        : [];
+      return {
+        rows: operationRows.filter((row) =>
+          row.status === "queued"
+          || row.status === "running"
+          || unknownMutationTypes.includes(String(row.type))
+        )
+      };
+    }
+    if (
+      sql.includes("FROM recovery_restore_attempts")
+      || sql.includes("FROM recovery_points")
+    ) {
+      return { rows: [] };
     }
     if (sql.includes("SELECT id FROM docker_hosts")) {
       return { rows: [] };
@@ -110,6 +134,8 @@ describe("Docker host updates", () => {
     query.mockReset();
     validateAgentUrl.mockReset();
     validateAgentUrl.mockResolvedValue(true);
+    enqueueJobInTransaction.mockReset();
+    notifyJobQueued.mockReset();
   });
 
   it("rejects a switch to agent mode without an effective token", async () => {
@@ -174,6 +200,50 @@ describe("Docker host updates", () => {
     expect(values[9]).toBe("encrypted:active-password");
     expect(values[10]).toBeNull();
     expect(values[11]).toBeNull();
+  });
+
+  it("keeps host creation, initial sync, and required audit in one transaction", async () => {
+    const createdJob = {
+      id: "00000000-0000-4000-8000-000000000099"
+    };
+    enqueueJobInTransaction.mockResolvedValue(createdJob);
+    query.mockImplementation(async (sql: string, values: unknown[] = []) => {
+      if (sql.includes("pg_advisory_xact_lock") || sql.includes("SELECT id FROM docker_hosts")) {
+        return { rows: [] };
+      }
+      if (sql.includes("INSERT INTO docker_hosts")) {
+        return {
+          rows: [hostRow({
+            id: values[0],
+            name: values[1],
+            hostname: values[2],
+            port: values[3],
+            username: values[4]
+          })]
+        };
+      }
+      if (sql.includes("INSERT INTO audit_events")) {
+        throw new Error("audit unavailable");
+      }
+      throw new Error(`Unexpected query: ${sql}`);
+    });
+
+    await expect(createHostWithSync({
+      name: "Atomic host",
+      hostname: "atomic.example.test",
+      username: "docker",
+      connectionMode: "ssh",
+      sshAuthType: "password",
+      sshPassword: "secret"
+    }, "00000000-0000-4000-8000-000000000088", {
+      userId: "00000000-0000-4000-8000-000000000088"
+    })).rejects.toThrow("audit unavailable");
+
+    expect(enqueueJobInTransaction).toHaveBeenCalledOnce();
+    expect(notifyJobQueued).not.toHaveBeenCalled();
+    expect(query.mock.calls.some(([sql]) =>
+      String(sql).includes("INSERT INTO audit_events")
+    )).toBe(true);
   });
 
   it("applies private-address validation when an existing agent URL changes", async () => {
@@ -244,7 +314,49 @@ describe("Docker host updates", () => {
 
     expect(String(query.mock.calls[0]?.[0])).toContain("pg_advisory_xact_lock");
     expect(String(query.mock.calls[1]?.[0])).toContain("FOR UPDATE");
+    expect(String(query.mock.calls[2]?.[1]?.[0])).toContain(
+      "docker-mutation-admission:"
+    );
     expect(String(query.mock.calls.at(-1)?.[0])).toContain("deleted_at IS NULL");
+  });
+
+  it("does not permanently block host updates after a read-only worker loss", async () => {
+    arrangeCurrentHost(hostRow(), [{
+      id: "00000000-0000-4000-8000-000000000099",
+      type: "host.check",
+      status: "failed",
+      error: "WORKER_LOST: retry limit reached",
+      result: null
+    }]);
+
+    await expect(updateHost(
+      "00000000-0000-4000-8000-000000000001",
+      { name: "Still manageable" }
+    )).resolves.toMatchObject({ name: "Still manageable" });
+
+    const guardCall = query.mock.calls.find(([sql]) =>
+      String(sql).includes("FROM operation_jobs AS jobs")
+    );
+    expect(guardCall?.[1]?.[1]).not.toContain("host.check");
+  });
+
+  it("blocks host updates while a mutating remote outcome is unresolved", async () => {
+    arrangeCurrentHost(hostRow(), [{
+      id: "00000000-0000-4000-8000-000000000099",
+      type: "container.restart",
+      status: "failed",
+      error: "REMOTE_OUTCOME_UNKNOWN: connection reset",
+      result: null
+    }]);
+
+    await expect(updateHost(
+      "00000000-0000-4000-8000-000000000001",
+      { name: "Must wait" }
+    )).rejects.toMatchObject({
+      statusCode: 409,
+      activeJobId: "00000000-0000-4000-8000-000000000099"
+    });
+    expect(updateParameters()).toBeUndefined();
   });
 
   it("strips legacy URL credentials before an agent worker connection", async () => {
@@ -281,8 +393,15 @@ describe("Docker host updates", () => {
       if (sql.includes("pg_advisory_xact_lock") || sql.includes("SELECT id FROM docker_hosts")) {
         return { rows: [] };
       }
-      if (sql.includes("deleted_at IS NOT NULL FOR UPDATE")) {
+      if (sql.includes("SELECT *") && sql.includes("FROM docker_hosts")) {
         return { rows: [deleted] };
+      }
+      if (
+        sql.includes("FROM operation_jobs AS jobs")
+        || sql.includes("FROM recovery_restore_attempts")
+        || sql.includes("FROM recovery_points")
+      ) {
+        return { rows: [] };
       }
       if (sql.includes("UPDATE docker_hosts")) {
         return {
@@ -346,7 +465,7 @@ describe("Docker host updates", () => {
   it("rejects a deleted legacy host with an unsafe effective agent URL before restore", async () => {
     query.mockImplementation(async (sql: string) => {
       if (sql.includes("pg_advisory_xact_lock")) return { rows: [] };
-      if (sql.includes("deleted_at IS NOT NULL FOR UPDATE")) {
+      if (sql.includes("SELECT *") && sql.includes("FROM docker_hosts")) {
         return {
           rows: [hostRow({
             connection_mode: "agent",
@@ -356,6 +475,13 @@ describe("Docker host updates", () => {
             deleted_at: new Date(0)
           })]
         };
+      }
+      if (
+        sql.includes("FROM operation_jobs AS jobs")
+        || sql.includes("FROM recovery_restore_attempts")
+        || sql.includes("FROM recovery_points")
+      ) {
+        return { rows: [] };
       }
       throw new Error(`Unexpected query: ${sql}`);
     });

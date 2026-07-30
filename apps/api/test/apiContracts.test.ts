@@ -197,6 +197,7 @@ describe("API contracts", () => {
     const operationJob = (document.components.schemas as any).OperationJob;
     const dockerHost = (document.components.schemas as any).DockerHost;
     const migrationRun = (document.components.schemas as any).MigrationRun;
+    const recoveryProfile = (document.components.schemas as any).RecoveryProfile;
     const migrationPlan = (document.paths["/api/v1/recovery/migrations/plan"] as any).post;
     const migrationExecute = (document.paths["/api/v1/recovery/migrations/execute"] as any).post;
     const readiness = (document.paths["/api/v1/health/ready"] as any).get;
@@ -204,6 +205,8 @@ describe("API contracts", () => {
     const setup = (document.paths["/api/v1/auth/setup"] as any).post;
     const githubCreate = (document.paths["/api/v1/github/repos"] as any).post;
     const deploymentCreate = (document.paths["/api/v1/deploy/analyses"] as any).post;
+    const backupTargetCreate = (document.paths["/api/v1/recovery/targets"] as any).post;
+    const backupTargetUpdate = (document.paths["/api/v1/recovery/targets/{id}"] as any).patch;
     const jobRetry = (document.paths["/api/v1/jobs/{id}/retry"] as any).post;
 
     expect(jobsResponse).toEqual({ $ref: "#/components/schemas/JobsResponse" });
@@ -213,6 +216,8 @@ describe("API contracts", () => {
     expect(operationJob.required).toContain("progress");
     expect(dockerHost.required).toContain("agentVersion");
     expect(migrationRun.required).toContain("planRunId");
+    expect(recoveryProfile.properties.sensitiveFieldsRedacted).toEqual({ type: "boolean" });
+    expect(recoveryProfile.required).not.toContain("sensitiveFieldsRedacted");
     expect(migrationPlan.requestBody.content["application/json"].schema).toEqual({ $ref: "#/components/schemas/MigrationPlanRequest" });
     expect(migrationExecute.requestBody.content["application/json"].schema).toEqual({ $ref: "#/components/schemas/MigrationExecuteRequest" });
     expect((document.components.schemas as any).MigrationExecuteRequest.oneOf).toEqual([
@@ -235,6 +240,45 @@ describe("API contracts", () => {
       .toEqual({ $ref: "#/components/schemas/DeploymentAnalysisCreateRequest" });
     expect((document.components.schemas as any).DeploymentAnalysisCreateRequest.properties.source.description)
       .toContain("reject embedded credentials");
+    expect(backupTargetCreate.requestBody.content["application/json"].schema)
+      .toEqual({ $ref: "#/components/schemas/BackupTargetCreateRequest" });
+    expect(backupTargetUpdate.requestBody.content["application/json"].schema)
+      .toEqual({ $ref: "#/components/schemas/BackupTargetUpdateRequest" });
+    const targetSchemas = document.components.schemas as any;
+    const remoteName = targetSchemas.BackupTargetSmbCreateFlatRequest.properties.remoteName;
+    const remoteNamePattern = new RegExp(remoteName.pattern, "u");
+    expect(remoteName).toMatchObject({
+      type: "string",
+      minLength: 1,
+      maxLength: 120
+    });
+    expect(remoteNamePattern.test("Team NAS 2+ops@example.com")).toBe(true);
+    expect(remoteNamePattern.test("Café.東京")).toBe(true);
+    for (const invalid of ["-nas", " nas", "nas ", "nas#prod", "nas;prod", ":local"]) {
+      expect(remoteNamePattern.test(invalid)).toBe(false);
+    }
+    const smbSubPathPattern = new RegExp(
+      targetSchemas.BackupTargetSmbConnectionRequest.properties.subPath.pattern,
+      "u"
+    );
+    for (const valid of ["", "daily", "ComposeBastion/daily"]) {
+      expect(smbSubPathPattern.test(valid)).toBe(true);
+    }
+    for (const invalid of ["/absolute", "daily/", "../escape", "safe/../../escape", "safe//escape"]) {
+      expect(smbSubPathPattern.test(invalid)).toBe(false);
+    }
+    expect(targetSchemas.BackupTargetSmbCreateFlatRequest.anyOf).toContainEqual({
+      required: ["server", "share"]
+    });
+    expect(targetSchemas.BackupTargetImportedCreateFlatRequest.oneOf).toHaveLength(6);
+    expect(targetSchemas.BackupTargetImportedCreateFlatRequest.oneOf.every(
+      (variant: any) => variant.anyOf.some((option: any) => option.required?.includes("rcloneConfig"))
+    )).toBe(true);
+    expect(targetSchemas.BackupTargetUpdateRequest.description).toContain(
+      "Switching to SMB requires a valid server/share"
+    );
+    expect(targetSchemas.BackupTargetUpdateRequest.properties.remoteName.pattern)
+      .toBe(remoteName.pattern);
     expect((document.components.schemas as any).RegistryTrustRequest.properties.registry.examples)
       .toContain("[2001:db8::1]:5000");
     expect(jobRetry.responses["409"].description).toContain("WORKER_LOST");
@@ -270,7 +314,13 @@ describe("API contracts", () => {
       "volume.create": ["name", "labels"],
       "volume.remove": ["volumeName", "force"],
       "volume.prune": [],
-      "compose.deployPath": ["projectName", "workingDir", "composePath"]
+      "compose.deployPath": [
+        "projectName",
+        "workingDir",
+        "composePath",
+        "gitPullBeforeDeploy",
+        "branch"
+      ]
     } satisfies Record<DirectHostActionType, string[]>;
     const expectedRequiredPayloadProperties = {
       "host.check": [],

@@ -30,7 +30,7 @@ Run the same gates CI expects before release:
 - `npm run check:docker-context`
 - `npm run acceptance:config`
 - `npm test`
-- `npm run smoke:web`
+- `npm run smoke:web:qualification`
 - `npm audit --audit-level=high`
 - the serial PostgreSQL integration/concurrency suite, ephemeral SSH integration,
   and full live-stack acceptance
@@ -85,8 +85,10 @@ Run the same gates CI expects before release:
 - `npm run release:verify-images` applies the same invariant locally. It requires
   a clean checkout; builds app and agent for `linux/amd64` and `linux/arm64`
   exactly once; verifies the archive, manifest, config, platform, and release
-  labels; extracts each verified archive to a fresh OCI layout; and scans that
-  exact content with the immutable Trivy 0.72.0 image.
+  labels; proves the exact candidate legal documents, linked-Go attribution
+  manifest, and component third-party artifacts inside each image; extracts
+  each verified archive to a fresh OCI layout; and scans that exact content
+  with the immutable Trivy 0.72.0 image.
   Its ignored JSON, Markdown, OCI, and scan reports are written below
   `test-results/release-images/`.
 - Multi-arch image publishing targets `linux/amd64` and `linux/arm64` so NAS
@@ -160,8 +162,9 @@ COMPOSEBASTION_INTEGRATION=1 \
   REDIS_URL="${RELEASE_TEST_REDIS_URL:?point this at disposable Redis}" \
   APP_SECRET="${RELEASE_APP_SECRET}" \
   NODE_ENV=test \
-  npm run test --workspace @composebastion/api -- --no-file-parallelism
-npm run smoke:web
+npm run test --workspace @composebastion/api -- --no-file-parallelism
+npx playwright install chromium firefox webkit
+npm run smoke:web:qualification
 npm run coverage
 npm audit --audit-level=high
 npm run acceptance:local
@@ -194,9 +197,11 @@ Set `RELEASE_TEST_DATABASE_URL` and `RELEASE_TEST_REDIS_URL` to isolated,
 disposable services using the same pinned images as the `Postgres integration
 tests` CI job. The explicit API command runs the PostgreSQL concurrency suite
 serially. The local acceptance runner separately supplies pinned Postgres,
-Redis, and SSH fixtures and exercises the live API and worker. On the v1.1
-candidate, also run `npm run smoke:web:live` against that live stack; keep the
-mocked `npm run smoke:web` suite as a separate fast gate.
+Redis, and SSH fixtures and exercises the live API and worker. It invokes
+`npm run smoke:web:live:qualification` against that live stack and requires
+Chromium, Firefox, and WebKit at desktop and mobile widths. The mocked
+`npm run smoke:web` suite remains a fast developer check, but it is not a
+release-qualification gate.
 
 The qualifying acceptance run must also start and finish on the same clean
 candidate commit. Its report records the full HEAD/tree identity and commit
@@ -211,9 +216,10 @@ The image verifier must be the last local gate after the candidate commit is
 created because it deliberately rejects a dirty checkout or a HEAD change. A
 passing report proves all four images were built from an exact Git-derived
 context and that their local OCI archives match their recorded archive,
-manifest, and config digests and the exact candidate version, full commit SHA,
-and commit timestamp. It does not replace the post-publication comparison of
-remote platform/index digests with the scanned digests.
+manifest, and config digests; exact title/source/vendor/license/version labels;
+full commit SHA and commit timestamp; and verified runtime legal-artifact
+digests. It does not replace the post-publication comparison of remote
+platform/index digests with the scanned digests.
 
 The pinned MinIO and Samba fixtures prove reproducible protocol behavior only.
 A real NAS and a real cloud/S3 target must still be tested and recorded manually

@@ -5,6 +5,11 @@ import { createServer } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { dockerBindPathRelativeChild } from "./bind-paths.mjs";
+import {
+  acceptanceNonqualifyingReasons,
+  cleanupEvidenceFailures,
+  ownedCandidateImageTags
+} from "./qualification-policy.mjs";
 import { acceptanceScenarioManifest } from "./scenario-manifest.mjs";
 import { assertSafeTestResultsPath, digestGitBuildContext, materializeGitBuildContext } from "../materialize-git-context.mjs";
 import { validateGoAttributionReview } from "../go-attribution-review.mjs";
@@ -41,8 +46,6 @@ const requiredSourceComposeControls = await composeControlNames([
   path.join(root, "docker-compose.prod.example.yml"),
   sourceAcceptanceComposeFile
 ]);
-const candidateImage = `composebastion-app:${candidateVersion}`;
-const candidateAgentImage = `composebastion-agent:${candidateVersion}`;
 const goAttributionManifest = JSON.parse(await readFile(path.join(root, "LICENSES/go-modules/manifest.json"), "utf8"));
 function goModuleLegalReviewGate(review) {
   const validated = validateGoAttributionReview(review);
@@ -61,6 +64,20 @@ function goModuleLegalReviewGate(review) {
 }
 const goLegalReviewGate = goModuleLegalReviewGate(goAttributionManifest.review);
 const publicImage = "ghcr.io/composebastion-admin/composebastion-app:1.0.6";
+const publicImagePinned = "ghcr.io/composebastion-admin/composebastion-app@sha256:8bbff7cac90e0e6ec77b872f112dd52185c9033e5124e42c3e63a74f9ec42770";
+const externalImageReferences = Object.freeze([
+  publicImagePinned,
+  "node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a",
+  "golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2",
+  "alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b",
+  "alpine:3.20.8@sha256:765942a4039992336de8dd5db680586e1a206607dd06170ff0a37267a9e01958",
+  "postgres:16.6-alpine3.20@sha256:1e59919c179e296eaf3cc701f4d50bab5c393d7ed9746c188c9d519489c998dc",
+  "redis:7.4.1-alpine3.20@sha256:c1e88455c85225310bbea54816e9c3f4b5295815e6dbf80c34d40afc6df28275",
+  "axllent/mailpit:v1.21.8@sha256:81370195cd4a0eab9604d17c2617a7525b0486f9365555253b6c5376c6350f1a",
+  "minio/minio:RELEASE.2024-12-18T13-15-44Z@sha256:1dce27c494a16bae114774f1cec295493f3613142713130c2d22dd5696be6ad3",
+  "dockurr/samba:4.21.10@sha256:fe867f409d3601a2d89b2a6a6da1e4b82dbeb6d04c7a0fcd44488d87058bfe33",
+  "registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373"
+]);
 const keep = process.argv.includes("--keep");
 const skipBuild = process.argv.includes("--skip-build");
 const skipUpgrade = process.argv.includes("--skip-upgrade");
@@ -130,14 +147,19 @@ if (!/^[a-f0-9]{40}$/.test(candidateRevision) || !/^[a-f0-9]{40}$/.test(candidat
 }
 if (Number.isNaN(Date.parse(candidateBuildDate))) throw new Error(`Invalid HEAD commit timestamp: ${candidateBuildDate}`);
 
-const nonqualifyingReasons = [];
-if (worktreeDirty) nonqualifyingReasons.push("The working tree was dirty, so the built context is not identical to the recorded commit");
-if (skipBuild) nonqualifyingReasons.push("Candidate image builds were skipped and existing local images were reused");
-if (skipUpgrade) nonqualifyingReasons.push("The public 1.0.6 upgrade scenario was explicitly skipped");
-if (allowNonqualifying) nonqualifyingReasons.push("Developer --allow-nonqualifying opt-out requested; this report cannot qualify a release");
+const nonqualifyingReasons = acceptanceNonqualifyingReasons({
+  worktreeDirty,
+  skipBuild,
+  skipUpgrade,
+  allowNonqualifying,
+  keep
+});
 
 const portBase = Number(process.env.ACCEPTANCE_PORT_BASE ?? 18000);
 if (!Number.isInteger(portBase) || portBase < 1024 || portBase > 64535) throw new Error("ACCEPTANCE_PORT_BASE must be an integer between 1024 and 64535");
+const candidateTags = ownedCandidateImageTags({ revision: candidateRevision, portBase });
+const candidateImage = candidateTags.app;
+const candidateAgentImage = candidateTags.agent;
 const runtimeDir = path.join(resultsDir, `runtime-${portBase}`);
 const candidateBuildContext = path.join(runtimeDir, "git-build-context");
 const acceptanceBindDir = `/tmp/composebastion-acceptance-${portBase}-bind`;
@@ -151,6 +173,7 @@ const workloadBindMarker = `bind-${randomUUID()}`;
 const workloadRelativeBindMarker = `relative-bind-${randomUUID()}`;
 const projectName = (scenario) => `composebastion-acceptance-${portBase}-${scenario}`;
 const failureLogPath = path.join(resultsDir, "failure.log");
+const liveBrowserEvidencePath = path.join(resultsDir, `live-browser-${candidateRevision}-${portBase}.json`);
 const configuredSubnet = process.env.ACCEPTANCE_WORKLOAD_SUBNET
   ?? `10.${Math.floor(portBase / 256)}.${portBase % 256}.0/24`;
 const subnetMatch = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.0\/24$/.exec(configuredSubnet);
@@ -186,6 +209,28 @@ const report = {
     buildContextStable: null
   },
   candidateImages: null,
+  cleanup: {
+    attempted: false,
+    verified: false,
+    projectResourcesChecked: false,
+    workloadResourcesChecked: false,
+    candidateImagesChecked: false,
+    externalImagesChecked: false,
+    runtimeInputsChecked: false,
+    storageChecked: false,
+    runtimeRemoved: false,
+    bindRemoved: false,
+    containers: [],
+    images: [],
+    networks: [],
+    volumes: [],
+    files: [],
+    runtimeInputFiles: [],
+    backupArtifacts: [],
+    storageObjects: [],
+    candidateTags: [],
+    errors: []
+  },
   acceptanceManifest: acceptanceScenarioManifest,
   releaseQualification: {
     automatedAcceptanceQualifying: false,
@@ -252,6 +297,7 @@ let registryAuthFile = "";
 let failureLogsCaptured = false;
 let ownsRuntimeFixtures = false;
 let gitBuildContextEvidence = null;
+let externalImageBaseline = null;
 
 function activePort(name, fallback) {
   return Number(activeEnv?.[name] ?? fallback);
@@ -338,6 +384,57 @@ function composeWithFiles(project, env, files, args, options = {}) {
     ...options,
     env
   });
+}
+
+async function inspectComposeServiceImage(composeAction, service, {
+  expectedId,
+  expectedReference,
+  expectedRevision,
+  expectedCreated
+} = {}) {
+  const selected = await composeAction(["ps", "--quiet", service]);
+  const containerIds = selected.stdout.split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
+  assert(containerIds.length === 1, `${service} resolved to ${containerIds.length} containers`);
+  const inspected = await run("docker", ["container", "inspect", containerIds[0], "--format", "{{json .}}"]);
+  const detail = JSON.parse(inspected.stdout);
+  const imageId = detail.Image;
+  const configuredImage = detail.Config?.Image ?? null;
+  if (expectedId) assert(imageId === expectedId, `${service} uses image ${imageId}, expected ${expectedId}`);
+  if (expectedReference) {
+    assert(configuredImage === expectedReference, `${service} is configured with ${configuredImage}, expected ${expectedReference}`);
+  }
+  const image = JSON.parse((await run("docker", ["image", "inspect", imageId, "--format", "{{json .}}"])).stdout);
+  const labels = image.Config?.Labels ?? {};
+  if (expectedRevision) {
+    assert(labels["org.opencontainers.image.revision"] === expectedRevision,
+      `${service} image revision is ${labels["org.opencontainers.image.revision"] ?? "missing"}, expected ${expectedRevision}`);
+  }
+  if (expectedCreated) {
+    assert(labels["org.opencontainers.image.created"] === expectedCreated,
+      `${service} image created label is ${labels["org.opencontainers.image.created"] ?? "missing"}, expected ${expectedCreated}`);
+  }
+  return {
+    containerId: containerIds[0],
+    configuredImage,
+    id: imageId,
+    revision: labels["org.opencontainers.image.revision"] ?? null,
+    created: labels["org.opencontainers.image.created"] ?? null
+  };
+}
+
+async function assertActiveCandidateServiceImage(service, kind = "app") {
+  const expected = report.candidateImages?.[kind];
+  assert(expected?.id, `candidate ${kind} image identity is unavailable`);
+  return inspectComposeServiceImage(
+    (args, options) => compose(activeProject, activeEnv, args, options),
+    service,
+    {
+      expectedId: expected.id,
+      expectedReference: kind === "agent" ? candidateAgentImage : candidateImage,
+      expectedRevision: candidateRevision,
+      expectedCreated: candidateBuildDate
+    }
+  );
 }
 
 function assertExplicitComposeControls(env, requiredControls, label) {
@@ -640,7 +737,9 @@ async function loginOwner() {
 }
 
 async function runLiveBrowserSuite() {
-  await run("npm", ["run", "smoke:web:live"], {
+  const outputDir = path.join(runtimeDir, "playwright-live-qualification");
+  const jsonReport = path.join(outputDir, "results.json");
+  await run("npm", ["run", "smoke:web:live:qualification"], {
     inherit: true,
     env: {
       ...hostEnvironment,
@@ -648,10 +747,57 @@ async function runLiveBrowserSuite() {
       COMPOSEBASTION_LIVE_USERNAME: "acceptance-owner",
       COMPOSEBASTION_LIVE_PASSWORD: fixture.ownerPassword,
       COMPOSEBASTION_LIVE_VERSION: candidateVersion,
-      COMPOSEBASTION_LIVE_OUTPUT_DIR: path.join(runtimeDir, "playwright-live")
+      COMPOSEBASTION_LIVE_OUTPUT_DIR: outputDir,
+      COMPOSEBASTION_LIVE_JSON_REPORT: jsonReport
     }
   });
-  return { realBrowser: true, database: true, redis: true, worker: true };
+  const result = JSON.parse(await readFile(jsonReport, "utf8"));
+  const expectedProjects = {
+    chromiumDesktop: "chromium-live",
+    chromiumMobile: "chromium-live-mobile",
+    firefoxDesktop: "firefox-live-critical",
+    firefoxMobile: "firefox-live-mobile-critical",
+    webkitDesktop: "webkit-live-critical",
+    webkitMobile: "webkit-live-mobile-critical"
+  };
+  const configuredProjects = new Set((result.config?.projects ?? []).map((project) => project.name));
+  const tests = [];
+  const collectTests = (suites) => {
+    for (const suite of suites ?? []) {
+      for (const spec of suite.specs ?? []) tests.push(...(spec.tests ?? []));
+      collectTests(suite.suites);
+    }
+  };
+  collectTests(result.suites);
+  const matrix = {};
+  for (const [key, projectName] of Object.entries(expectedProjects)) {
+    assert(configuredProjects.has(projectName), `live browser result omitted project ${projectName}`);
+    const projectTests = tests.filter((item) => item.projectName === projectName);
+    assert(projectTests.length > 0, `live browser project ${projectName} ran no tests`);
+    assert(projectTests.every((item) =>
+      item.status === "expected" && item.results?.at(-1)?.status === "passed"
+    ), `live browser project ${projectName} was skipped, flaky, or failed`);
+    matrix[key] = { project: projectName, tests: projectTests.length, passed: true };
+  }
+  assert((result.errors ?? []).length === 0, "live browser qualification reported top-level errors");
+  const evidence = {
+    realBrowser: true,
+    database: true,
+    redis: true,
+    worker: true,
+    readOnlyQualificationSmoke: true,
+    projectCount: Object.keys(expectedProjects).length,
+    matrix,
+    rawSecretBearingArtifactsExcluded: true
+  };
+  const evidenceJson = redact(`${JSON.stringify(evidence, null, 2)}\n`);
+  const evidenceFile = path.basename(liveBrowserEvidencePath);
+  await writeFile(liveBrowserEvidencePath, evidenceJson, { mode: 0o600 });
+  return {
+    ...evidence,
+    evidenceFile,
+    evidenceSha256: `sha256:${createHash("sha256").update(evidenceJson).digest("hex")}`
+  };
 }
 
 async function verifyRoleBoundaries() {
@@ -830,16 +976,18 @@ async function inspectCandidateImage(image, expectedTitle) {
 }
 
 async function inspectPublicUpgradeImage() {
-  const inspected = await run("docker", ["image", "inspect", publicImage, "--format", "{{json .}}"]);
+  const inspected = await run("docker", ["image", "inspect", publicImagePinned, "--format", "{{json .}}"]);
   const details = JSON.parse(inspected.stdout);
   const repoDigest = (details.RepoDigests ?? []).find((value) =>
     /^ghcr\.io\/composebastion-admin\/composebastion-app@sha256:[a-f0-9]{64}$/i.test(value)
   );
   assert(repoDigest, "public 1.0.6 image did not expose an immutable GHCR digest");
+  assert(repoDigest === publicImagePinned, `public 1.0.6 digest is ${repoDigest}, expected ${publicImagePinned}`);
   const version = details.Config?.Labels?.["org.opencontainers.image.version"] ?? null;
   assert(version === "1.0.6", `public upgrade image label is ${version ?? "missing"}`);
   return {
-    reference: publicImage,
+    reference: publicImagePinned,
+    releaseTag: publicImage,
     id: details.Id,
     repoDigest,
     architecture: details.Architecture,
@@ -919,13 +1067,51 @@ async function createMinioBucket() {
   }
 }
 
+async function assertRemoteFixtureStorageEmpty() {
+  const { ListObjectsV2Command, S3Client } = await import("@aws-sdk/client-s3");
+  const client = new S3Client({
+    endpoint: `http://127.0.0.1:${activePort("ACCEPTANCE_MINIO_PORT", portBase + 1000)}`,
+    region: "us-east-1",
+    forcePathStyle: true,
+    credentials: { accessKeyId: fixture.minioUser, secretAccessKey: fixture.minioPassword }
+  });
+  const objects = [];
+  let continuationToken;
+  try {
+    do {
+      const page = await client.send(new ListObjectsV2Command({
+        Bucket: "composebastion-acceptance",
+        ContinuationToken: continuationToken
+      }));
+      objects.push(...(page.Contents ?? []).map((item) => item.Key).filter(Boolean));
+      continuationToken = page.IsTruncated ? page.NextContinuationToken : undefined;
+    } while (continuationToken);
+  } finally {
+    client.destroy();
+  }
+  const samba = await compose(activeProject, activeEnv, [
+    "exec", "-T", "samba", "sh", "-lc", "find /storage -type f -print"
+  ]);
+  const smbFiles = samba.stdout.split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
+  assert(objects.length === 0, `MinIO fixture retained ${objects.length} storage objects`);
+  assert(smbFiles.length === 0, `SMB fixture retained ${smbFiles.length} storage files`);
+  report.cleanup.storageChecked = true;
+  report.cleanup.storageObjects = [];
+  return { minioObjectsAbsent: true, smbFilesAbsent: true };
+}
+
 async function cleanupManagedDockerState() {
   if (!activeProject || !activeEnv) return;
   const cleanup = `
-for id in $(docker ps -aq --filter name=${workloadPrefix}); do docker rm -f "$id" >/dev/null 2>&1 || true; done
-for volume in $(docker volume ls -q | awk '/^${workloadPrefix}/ { print }'); do docker volume rm -f "$volume" >/dev/null 2>&1 || true; done
-for network in $(docker network ls --format '{{.Name}}' | awk '/^${workloadPrefix}/ { print }'); do docker network rm "$network" >/dev/null 2>&1 || true; done
-find '${acceptanceBindDir}' -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+set -eu
+for id in $(docker ps -aq --filter 'label=com.docker.compose.project=${workloadProject}'); do docker rm -f "$id" >/dev/null; done
+for volume in $(docker volume ls -q --filter 'label=com.docker.compose.project=${workloadProject}'); do docker volume rm -f "$volume" >/dev/null; done
+for network in $(docker network ls -q --filter 'label=com.docker.compose.project=${workloadProject}'); do docker network rm "$network" >/dev/null; done
+find '${acceptanceBindDir}' -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+test -z "$(docker ps -aq --filter 'label=com.docker.compose.project=${workloadProject}')"
+test -z "$(docker volume ls -q --filter 'label=com.docker.compose.project=${workloadProject}')"
+test -z "$(docker network ls -q --filter 'label=com.docker.compose.project=${workloadProject}')"
+test -z "$(find '${acceptanceBindDir}' -mindepth 1 -maxdepth 1 -print -quit)"
 `;
   await compose(activeProject, activeEnv, ["exec", "-T", "sshhost", "sh", "-lc", cleanup]);
 }
@@ -1192,6 +1378,7 @@ async function verifySafeJobLeaseRecovery(host) {
     await compose(activeProject, activeEnv, ["unpause", "sshhost"]);
     sshPaused = false;
     await compose(activeProject, activeEnv, ["up", "--detach", "worker"]);
+    await assertActiveCandidateServiceImage("worker");
     workerNeedsStart = false;
 
     const completed = await waitForJob(jobId, { timeoutMs: 3 * 60_000 });
@@ -1202,7 +1389,7 @@ async function verifySafeJobLeaseRecovery(host) {
       const body = await response.json();
       assert(response.status === 200 && body.checks?.worker?.ok === true, "worker was not ready after lease recovery");
     });
-    return { jobId, recoveredAttempt: 2, fencedWorkerLoss: true };
+    return { jobId, recoveredAttempt: 2, fencedWorkerLoss: true, candidateImageRebound: true };
   } finally {
     if (sshPaused) await compose(activeProject, activeEnv, ["unpause", "sshhost"]).catch(() => undefined);
     if (workerNeedsStart) await compose(activeProject, activeEnv, ["up", "--detach", "worker"]).catch(() => undefined);
@@ -1696,15 +1883,17 @@ async function freshCandidateScenario() {
   operatorSessionCookie = "";
   let stack;
   let targets;
-  await compose(project, env, ["down", "--volumes", "--remove-orphans"], {}).catch(() => undefined);
   try {
     await compose(project, env, ["up", "--detach", "--build", "postgres", "redis", "mailpit", "minio", "samba", "registry", "agent", "sshhost"], { inherit: true });
+    const agentImage = await assertActiveCandidateServiceImage("agent", "agent");
     await cleanupManagedDockerState();
     await createMinioBucket();
     await seedRegistry();
     await compose(project, env, ["up", "--detach", "app"], { inherit: true });
+    const appImage = await assertActiveCandidateServiceImage("app");
     const health = await waitForApiVersion(candidateVersion);
     await compose(project, env, ["up", "--detach", "worker"], { inherit: true });
+    const workerImage = await assertActiveCandidateServiceImage("worker");
     await waitForReadiness("fresh candidate readiness");
     await setupOwner();
 
@@ -1734,9 +1923,11 @@ async function freshCandidateScenario() {
     await cleanupFresh(stack, targets);
     stack = undefined;
     targets = undefined;
+    const storageCleanup = await assertRemoteFixtureStorageEmpty();
     return {
       runtimeVersion: health.version,
       productionImageCompose: true,
+      imageBindings: { app: appImage, worker: workerImage, agent: agentImage },
       firstRunSetup: true,
       loginSession: true,
       operationsReadiness: true,
@@ -1750,17 +1941,21 @@ async function freshCandidateScenario() {
       leaseRecovery,
       workload,
       targets: targetEvidence,
-      recovery
+      recovery,
+      storageCleanup
     };
   } catch (error) {
     await captureFailureLogs();
     throw error;
   } finally {
     if (!keep) {
-      await cleanupManagedDockerState().catch(() => undefined);
-      await compose(project, env, ["down", "--volumes", "--remove-orphans"], {}).catch(() => undefined);
-      activeProject = null;
-      activeEnv = null;
+      try {
+        await cleanupManagedDockerState();
+        await compose(project, env, ["down", "--volumes", "--remove-orphans", "--rmi", "local"]);
+      } finally {
+        activeProject = null;
+        activeEnv = null;
+      }
     }
   }
 }
@@ -1784,7 +1979,10 @@ async function sourceProductionScenario() {
       smtpHost: ""
     }),
     ACCEPTANCE_SOURCE_HTTP_PORT: String(sourcePort),
-    ACCEPTANCE_SOURCE_CONTEXT: candidateBuildContext
+    ACCEPTANCE_SOURCE_CONTEXT: candidateBuildContext,
+    ACCEPTANCE_CANDIDATE_VERSION: candidateVersion,
+    ACCEPTANCE_CANDIDATE_REVISION: candidateRevision,
+    ACCEPTANCE_CANDIDATE_BUILD_DATE: candidateBuildDate
   };
   assertExplicitComposeControls(env, requiredSourceComposeControls, "source production acceptance Compose");
   const args = [
@@ -1793,9 +1991,19 @@ async function sourceProductionScenario() {
     "--file", path.join(root, "docker-compose.prod.example.yml"),
     "--file", sourceAcceptanceComposeFile
   ];
-  await run("docker", [...args, "down", "--volumes", "--remove-orphans"], { env }).catch(() => undefined);
+  const sourceCompose = (composeArgs, options = {}) => run("docker", [...args, ...composeArgs], { ...options, env });
   try {
-    await run("docker", [...args, "up", "--detach", "--build"], { env, inherit: true });
+    await sourceCompose(["up", "--detach", "--build"], { inherit: true });
+    const sourceImages = {
+      app: await inspectComposeServiceImage(sourceCompose, "app", {
+        expectedRevision: candidateRevision,
+        expectedCreated: candidateBuildDate
+      }),
+      worker: await inspectComposeServiceImage(sourceCompose, "worker", {
+        expectedRevision: candidateRevision,
+        expectedCreated: candidateBuildDate
+      })
+    };
     const health = await retry("source production API", async () => {
       const response = await fetch(`${sourceUrl}/api/health/ready`);
       if (!response.ok) throw new Error(await response.text());
@@ -1810,9 +2018,19 @@ async function sourceProductionScenario() {
       method: "POST",
       cookie: "",
       baseUrl: sourceUrl,
-      body: { username: "source-owner", password: fixture.ownerPassword, includeDemoData: false }
+      body: { username: "source-owner", password: fixture.ownerPassword, includeDemoData: true }
     });
     assert(setup.setCookie.startsWith("cb_session="), "source setup did not establish a session");
+    const demoHosts = await api("/api/hosts", {
+      cookie: setup.setCookie,
+      baseUrl: sourceUrl
+    });
+    assert(
+      demoHosts.data.hosts.some((host) =>
+        Array.isArray(host.tags) && host.tags.includes("demo")
+      ),
+      "source setup with demo data did not create the demo workspace"
+    );
     await api("/api/auth/logout", { method: "POST", cookie: setup.setCookie, baseUrl: sourceUrl, body: {} });
     const login = await api("/api/auth/login", {
       method: "POST",
@@ -1836,9 +2054,9 @@ async function sourceProductionScenario() {
     const proofName = "source-install-proof.txt";
     const proofValue = "source-backup-write-ok";
     const writeProof = `require('node:fs').writeFileSync('/data/backups/${proofName}','${proofValue}')`;
-    await run("docker", [...args, "exec", "-T", "worker", "node", "-e", writeProof], { env });
-    const appProof = await run("docker", [...args, "exec", "-T", "app", "node", "-e",
-      `process.stdout.write(require('node:fs').readFileSync('/data/backups/${proofName}','utf8'))`], { env });
+    await sourceCompose(["exec", "-T", "worker", "node", "-e", writeProof]);
+    const appProof = await sourceCompose(["exec", "-T", "app", "node", "-e",
+      `process.stdout.write(require('node:fs').readFileSync('/data/backups/${proofName}','utf8'))`]);
     assert(appProof.stdout === proofValue, "source app and worker did not share backup storage");
     assert((await readFile(path.join(backupDir, proofName), "utf8")) === proofValue, "source backup bind did not persist to the host");
     await rm(path.join(backupDir, proofName), { force: true });
@@ -1847,7 +2065,9 @@ async function sourceProductionScenario() {
       productionSourceCompose: true,
       exactGitContext: true,
       treeSha: gitBuildContextEvidence.treeSha,
+      sourceImages,
       firstRunSetup: true,
+      demoDataSeeded: true,
       loginSession: true,
       configurationWrite: true,
       backupWrite: true,
@@ -1856,7 +2076,7 @@ async function sourceProductionScenario() {
     };
   } catch (error) {
     try {
-      const logs = await run("docker", [...args, "logs", "--no-color", "--tail", "300"], { env });
+      const logs = await sourceCompose(["logs", "--no-color", "--tail", "300"]);
       await writeFile(failureLogPath, `${redact([logs.stdout, logs.stderr].filter(Boolean).join("\n"))}\n`);
       failureLogsCaptured = true;
     } catch {
@@ -1864,7 +2084,7 @@ async function sourceProductionScenario() {
     }
     throw error;
   } finally {
-    if (!keep) await run("docker", [...args, "down", "--volumes", "--remove-orphans"], { env }).catch(() => undefined);
+    if (!keep) await sourceCompose(["down", "--volumes", "--remove-orphans", "--rmi", "local"]);
   }
 }
 
@@ -1887,10 +2107,12 @@ async function hardenedContainersScenario() {
   const hardenedCompose = (args, options = {}) => composeWithFiles(project, env, files, args, options);
 
   async function prepareBackupOwnership(mode) {
+    const candidateAppId = report.candidateImages?.app?.id;
+    assert(candidateAppId, "candidate app image identity is unavailable for hardened backup ownership");
     await run("docker", [
       "run", "--rm", "--user", "0:0",
       "--volume", `${backupDir}:/data/backups`,
-      candidateImage,
+      candidateAppId,
       "sh", "-ceu",
       mode === "hardened"
         ? "chown -R 1000:1000 /data/backups; chmod -R u+rwX,g+rwX,o-rwx /data/backups"
@@ -1943,12 +2165,31 @@ async function hardenedContainersScenario() {
   await prepareBackupOwnership("hardened");
   activeProject = project;
   activeEnv = env;
-  await hardenedCompose(["--profile", "hardening", "down", "--volumes", "--remove-orphans"]).catch(() => undefined);
   try {
     await hardenedCompose([
       "--profile", "hardening", "up", "--detach",
       "postgres", "redis", "registry", "app", "worker", "composebastion-agent"
     ], { inherit: true });
+    const imageBindings = {
+      app: await inspectComposeServiceImage(hardenedCompose, "app", {
+        expectedId: report.candidateImages.app.id,
+        expectedReference: candidateImage,
+        expectedRevision: candidateRevision,
+        expectedCreated: candidateBuildDate
+      }),
+      worker: await inspectComposeServiceImage(hardenedCompose, "worker", {
+        expectedId: report.candidateImages.app.id,
+        expectedReference: candidateImage,
+        expectedRevision: candidateRevision,
+        expectedCreated: candidateBuildDate
+      }),
+      agent: await inspectComposeServiceImage(hardenedCompose, "composebastion-agent", {
+        expectedId: report.candidateImages.agent.id,
+        expectedReference: candidateAgentImage,
+        expectedRevision: candidateRevision,
+        expectedCreated: candidateBuildDate
+      })
+    };
     await seedRegistry();
     await waitForApiVersion(candidateVersion);
     await waitForReadiness("hardened manager readiness");
@@ -1971,6 +2212,14 @@ async function hardenedContainersScenario() {
     }
 
     await hardenedCompose(["--profile", "hardening", "up", "--detach", "--force-recreate", "app", "worker"]);
+    imageBindings.recreatedApp = await inspectComposeServiceImage(hardenedCompose, "app", {
+      expectedId: report.candidateImages.app.id,
+      expectedReference: candidateImage
+    });
+    imageBindings.recreatedWorker = await inspectComposeServiceImage(hardenedCompose, "worker", {
+      expectedId: report.candidateImages.app.id,
+      expectedReference: candidateImage
+    });
     await waitForReadiness("recreated hardened manager readiness");
     const managerProof = await hardenedCompose([
       "--profile", "hardening", "exec", "-T", "app", "node", "-e",
@@ -2017,6 +2266,10 @@ async function hardenedContainersScenario() {
     await hardenedCompose([
       "--profile", "hardening", "up", "--detach", "--force-recreate", "composebastion-agent"
     ]);
+    imageBindings.recreatedAgent = await inspectComposeServiceImage(hardenedCompose, "composebastion-agent", {
+      expectedId: report.candidateImages.agent.id,
+      expectedReference: candidateAgentImage
+    });
     await retry("recreated hardened agent", async () => {
       const health = await agentApi("/api/health");
       assert(health.ok === true, "recreated agent is not healthy");
@@ -2030,6 +2283,7 @@ async function hardenedContainersScenario() {
 
     return {
       productionImageCompose: true,
+      imageBindings,
       managerIdentity: "1000:1000",
       managerRootfs: "read-only",
       managerCapabilitiesDropped: true,
@@ -2055,10 +2309,13 @@ async function hardenedContainersScenario() {
     throw error;
   } finally {
     if (!keep) {
-      await hardenedCompose(["--profile", "hardening", "down", "--volumes", "--remove-orphans"]).catch(() => undefined);
-      await prepareBackupOwnership("cleanup").catch(() => undefined);
-      activeProject = null;
-      activeEnv = null;
+      try {
+        await hardenedCompose(["--profile", "hardening", "down", "--volumes", "--remove-orphans", "--rmi", "local"]);
+        await prepareBackupOwnership("cleanup");
+      } finally {
+        activeProject = null;
+        activeEnv = null;
+      }
     }
   }
 }
@@ -2066,7 +2323,7 @@ async function hardenedContainersScenario() {
 async function upgradeScenario() {
   const project = projectName("upgrade");
   const upgradeOverrides = { ACCEPTANCE_SCENARIO: "upgrade", ACCEPTANCE_HTTP_PORT: String(portBase + 380) };
-  const oldEnv = acceptanceEnv(publicImage, upgradeOverrides);
+  let oldEnv = acceptanceEnv(publicImagePinned, upgradeOverrides);
   const newEnv = acceptanceEnv(candidateImage, upgradeOverrides);
   await mkdir(oldEnv.COMPOSEBASTION_BACKUP_DIR, { recursive: true });
   activeProject = project;
@@ -2076,11 +2333,24 @@ async function upgradeScenario() {
   const upgradeLocalTargetId = randomUUID();
   const upgradeRepositoryId = randomUUID();
   const upgradeEnvironmentSecret = runtimeSecret(20);
-  await compose(project, oldEnv, ["down", "--volumes", "--remove-orphans"]).catch(() => undefined);
   try {
-    await run("docker", ["pull", publicImage], { inherit: true });
+    await run("docker", ["pull", publicImagePinned], { inherit: true });
     const publicImageEvidence = await inspectPublicUpgradeImage();
+    oldEnv = acceptanceEnv(publicImageEvidence.repoDigest, upgradeOverrides);
+    activeEnv = oldEnv;
     await compose(project, oldEnv, ["up", "--detach", "postgres", "redis", "registry", "app", "worker"], { inherit: true });
+    const imageBindings = {
+      publicApp: await inspectComposeServiceImage(
+        (args, options) => compose(project, oldEnv, args, options),
+        "app",
+        { expectedId: publicImageEvidence.id, expectedReference: publicImageEvidence.repoDigest }
+      ),
+      publicWorker: await inspectComposeServiceImage(
+        (args, options) => compose(project, oldEnv, args, options),
+        "worker",
+        { expectedId: publicImageEvidence.id, expectedReference: publicImageEvidence.repoDigest }
+      )
+    };
     await waitForApiVersion("1.0.6");
     await seedRegistry();
     await setupOwner();
@@ -2155,11 +2425,31 @@ async function upgradeScenario() {
     await compose(project, oldEnv, ["stop", "app"]);
     activeEnv = newEnv;
     await compose(project, newEnv, ["up", "--detach", "app"], { inherit: true });
+    imageBindings.candidateApp = await inspectComposeServiceImage(
+      (args, options) => compose(project, newEnv, args, options),
+      "app",
+      {
+        expectedId: report.candidateImages.app.id,
+        expectedReference: candidateImage,
+        expectedRevision: candidateRevision,
+        expectedCreated: candidateBuildDate
+      }
+    );
     await waitForApiVersion(candidateVersion);
     const queuedAfterMigration = await api(`/api/jobs/${queuedJobId}`);
     assert(queuedAfterMigration.data.job.status === "queued", "queued API job did not survive candidate migrations");
     assert(await jobAttemptCount(queuedJobId) === 0, "queued API job gained an attempt before the candidate worker started");
     await compose(project, newEnv, ["up", "--detach", "worker"], { inherit: true });
+    imageBindings.candidateWorker = await inspectComposeServiceImage(
+      (args, options) => compose(project, newEnv, args, options),
+      "worker",
+      {
+        expectedId: report.candidateImages.app.id,
+        expectedReference: candidateImage,
+        expectedRevision: candidateRevision,
+        expectedCreated: candidateBuildDate
+      }
+    );
     await waitForReadiness("upgraded candidate readiness");
     sessionCookie = "";
     await loginOwner();
@@ -2219,7 +2509,13 @@ async function upgradeScenario() {
           '029_worker_reliability.sql',
           '030_migration_plan_binding.sql',
           '031_universal_deployments.sql',
-          '032_normalize_local_backup_targets.sql'
+          '032_normalize_local_backup_targets.sql',
+          '033_remote_artifact_orphans.sql',
+          '034_github_deployment_jobs.sql',
+          '035_recovery_restore_attempts.sql',
+          '036_deployment_analysis_binding.sql',
+          '037_stack_source_environment_binding.sql',
+          '038_github_clone_deployment_jobs.sql'
         )),
         'workerTable', to_regclass('public.worker_instances') IS NOT NULL,
         'leaseIndex', to_regclass('public.operation_jobs_expired_lease_idx') IS NOT NULL,
@@ -2232,6 +2528,85 @@ async function upgradeScenario() {
         'deploymentSourceColumn', EXISTS (
           SELECT 1 FROM information_schema.columns
           WHERE table_schema = 'public' AND table_name = 'compose_stacks' AND column_name = 'deployment_source_id'
+        ),
+        'remoteArtifactOrphansTable',
+          to_regclass('public.remote_artifact_orphans') IS NOT NULL,
+        'remoteArtifactEncryptedTargetSnapshot', EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'remote_artifact_orphans'
+            AND column_name = 'target_snapshot_encrypted'
+            AND is_nullable = 'NO'
+        ),
+        'githubDeploymentJobsTable',
+          to_regclass('public.github_deployment_jobs') IS NOT NULL,
+        'githubCloneDeploymentJobsTable',
+          to_regclass('public.github_clone_deployment_jobs') IS NOT NULL,
+        'githubCloneDeploymentBindingSchema', (
+          SELECT count(*) = 5 FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'github_clone_deployment_jobs'
+            AND column_name IN (
+              'source_commit_sha',
+              'compose_sha256',
+              'environment_encrypted',
+              'environment_binding',
+              'stack_id'
+            )
+        ) AND (
+          SELECT count(*) = 3 FROM pg_constraint
+          WHERE conname IN (
+            'github_clone_deployment_jobs_source_commit_sha_format',
+            'github_clone_deployment_jobs_compose_sha256_format',
+            'github_clone_deployment_jobs_environment_binding_format'
+          )
+            AND conrelid = 'public.github_clone_deployment_jobs'::regclass
+        ) AND
+          to_regclass('public.github_clone_deployment_jobs_target_idx') IS NOT NULL
+        AND
+          to_regclass('public.github_clone_deployment_jobs_directory_idx') IS NOT NULL,
+        'recoveryRestoreAttemptsTable',
+          to_regclass('public.recovery_restore_attempts') IS NOT NULL,
+        'recoveryRestoreResourcesTable',
+          to_regclass('public.recovery_restore_resources') IS NOT NULL,
+        'recoveryRestoreBackupOwner', EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'recovery_restore_attempts'
+            AND column_name = 'backup_id'
+            AND is_nullable = 'YES'
+        ),
+        'recoveryRestoreJobIndex',
+          to_regclass('public.recovery_restore_attempts_job_idx') IS NOT NULL,
+        'deploymentAnalysisBindingColumns', (
+          SELECT count(*) = 3 FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'deployment_analyses'
+            AND column_name IN ('source_revision', 'compose_sha256', 'environment_sha256')
+            AND is_nullable = 'YES'
+        ),
+        'deploymentAnalysisBindingConstraints', (
+          SELECT count(*) = 3 FROM pg_constraint
+          WHERE conname IN (
+            'deployment_analyses_source_revision_format',
+            'deployment_analyses_compose_sha256_format',
+            'deployment_analyses_environment_sha256_format'
+          )
+            AND conrelid = 'public.deployment_analyses'::regclass
+        ),
+        'stackSourceEnvironmentBinding', (
+          SELECT count(*) = 2 FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'compose_stacks'
+            AND column_name IN (
+              'source_environment_encrypted',
+              'source_environment_binding'
+            )
+            AND is_nullable = 'YES'
+        ) AND EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conname = 'compose_stacks_source_environment_binding_format'
+            AND conrelid = 'public.compose_stacks'::regclass
         ),
         'legacyDeploymentSource', (
           SELECT json_build_object(
@@ -2258,11 +2633,40 @@ async function upgradeScenario() {
       )::text`
     ]);
     const migrated = JSON.parse(migrationResult.stdout);
-    assert(Number(migrated.applied) === 4, "release-candidate migrations 029-032 were not recorded");
+    assert(Number(migrated.applied) === 10, "release-candidate migrations 029-038 were not recorded");
     assert(migrated.workerTable && migrated.leaseIndex && migrated.planColumn && migrated.planIndex,
       "release-candidate worker/migration schema is incomplete after upgrade");
     assert(migrated.deploymentSourcesTable && migrated.deploymentSourceColumn,
       "universal deployment schema is incomplete after upgrade");
+    assert(
+      migrated.remoteArtifactOrphansTable && migrated.remoteArtifactEncryptedTargetSnapshot,
+      "remote artifact orphan durability schema is incomplete after upgrade"
+    );
+    assert(
+      migrated.githubDeploymentJobsTable,
+      "GitHub deployment completion binding schema is incomplete after upgrade"
+    );
+    assert(
+      migrated.githubCloneDeploymentJobsTable
+        && migrated.githubCloneDeploymentBindingSchema,
+      "GitHub clone deployment revision/environment binding schema is incomplete after upgrade"
+    );
+    assert(
+      migrated.recoveryRestoreAttemptsTable
+        && migrated.recoveryRestoreResourcesTable
+        && migrated.recoveryRestoreBackupOwner
+        && migrated.recoveryRestoreJobIndex,
+      "durable recovery restore-attempt schema is incomplete after upgrade"
+    );
+    assert(
+      migrated.deploymentAnalysisBindingColumns
+        && migrated.deploymentAnalysisBindingConstraints,
+      "deployment analysis revision/digest binding schema is incomplete after upgrade"
+    );
+    assert(
+      migrated.stackSourceEnvironmentBinding,
+      "stack source-environment binding schema is incomplete after upgrade"
+    );
     assert(
       migrated.legacyDeploymentSource?.id === upgradeRepositoryId
         && migrated.legacyDeploymentSource?.legacyId === upgradeRepositoryId
@@ -2285,6 +2689,7 @@ async function upgradeScenario() {
       from: "1.0.6",
       to: candidateVersion,
       publicImage: publicImageEvidence,
+      imageBindings,
       preservedConfiguration: true,
       preservedEncryptedConfiguration: true,
       preservedDatabase: true,
@@ -2294,9 +2699,19 @@ async function upgradeScenario() {
         "029_worker_reliability.sql",
         "030_migration_plan_binding.sql",
         "031_universal_deployments.sql",
-        "032_normalize_local_backup_targets.sql"
+        "032_normalize_local_backup_targets.sql",
+        "033_remote_artifact_orphans.sql",
+        "034_github_deployment_jobs.sql",
+        "035_recovery_restore_attempts.sql",
+        "036_deployment_analysis_binding.sql",
+        "037_stack_source_environment_binding.sql",
+        "038_github_clone_deployment_jobs.sql"
       ],
       workerMigrationHealthy: true,
+      recoveryRestoreAttemptMigrationHealthy: true,
+      deploymentAnalysisBindingMigrationHealthy: true,
+      stackSourceEnvironmentBindingMigrationHealthy: true,
+      githubCloneDeploymentBindingMigrationHealthy: true,
       universalDeploymentMigrationHealthy: true,
       legacyRepositoryBackfilled: true,
       legacySourceEnvironmentEncrypted: true,
@@ -2308,9 +2723,12 @@ async function upgradeScenario() {
     throw error;
   } finally {
     if (!keep) {
-      await compose(project, newEnv, ["down", "--volumes", "--remove-orphans"]).catch(() => undefined);
-      activeProject = null;
-      activeEnv = null;
+      try {
+        await compose(project, newEnv, ["down", "--volumes", "--remove-orphans", "--rmi", "local"]);
+      } finally {
+        activeProject = null;
+        activeEnv = null;
+      }
     }
   }
 }
@@ -2354,6 +2772,7 @@ async function writeReport() {
 - Completed: ${report.completedAt}
 - Automated acceptance qualifying: **${report.releaseQualification.automatedAcceptanceQualifying ? "yes" : "no"}**
 - Required scenario manifest complete: **${report.releaseQualification.manifestComplete ? "yes" : "no"}**
+- Disposable cleanup verified: **${report.cleanup.verified ? "yes" : "no"}**
 - Port base: \`${portBase}\`; workload subnet: \`${configuredSubnet}\`
 - Projects: \`${projectName("fresh")}\`, \`${projectName("source")}\`, \`${projectName("hardened")}\`, \`${projectName("upgrade")}\`
 - Fixture credentials: redacted and not retained in this report
@@ -2365,6 +2784,24 @@ ${qualificationReasons}
 ## Deferred external/manual gates
 
 ${deferredGates}
+
+## Disposable cleanup
+
+- Runtime directory removed: **${report.cleanup.runtimeRemoved ? "yes" : "no"}**
+- Bind directory removed: **${report.cleanup.bindRemoved ? "yes" : "no"}**
+- Residual containers/images/networks/volumes: **${[
+    report.cleanup.containers.length,
+    report.cleanup.images.length,
+    report.cleanup.networks.length,
+    report.cleanup.volumes.length
+  ].join("/")}**
+- Residual files/runtime inputs/backups/storage objects: **${[
+    report.cleanup.files.length,
+    report.cleanup.runtimeInputFiles.length,
+    report.cleanup.backupArtifacts.length,
+    report.cleanup.storageObjects.length
+  ].join("/")}**
+- Cleanup errors: **${report.cleanup.errors.length}**
 
 | ID | Scenario | Status | Duration (ms) | Required evidence / error |
 |---|---|---:|---:|---|
@@ -2386,6 +2823,219 @@ async function captureFailureLogs() {
   }
 }
 
+function parseDockerRows(output, fieldCount) {
+  return output.split(/\r?\n/).filter(Boolean).map((line) => {
+    const fields = line.split("\t");
+    while (fields.length < fieldCount) fields.push("");
+    return fields;
+  });
+}
+
+function ownsDockerProject(project) {
+  return Object.values(report.environment.projects).includes(project)
+    || project.startsWith(workloadPrefix);
+}
+
+async function collectOwnedDockerResources() {
+  const [containerResult, networkResult, volumeResult, imageResult] = await Promise.all([
+    run("docker", ["container", "ls", "--all", "--no-trunc", "--format",
+      '{{.ID}}\t{{.Names}}\t{{.Label "com.docker.compose.project"}}']),
+    run("docker", ["network", "ls", "--no-trunc", "--format",
+      '{{.ID}}\t{{.Name}}\t{{.Label "com.docker.compose.project"}}']),
+    run("docker", ["volume", "ls", "--format",
+      '{{.Name}}\t{{.Label "com.docker.compose.project"}}']),
+    run("docker", ["image", "ls", "--no-trunc", "--format",
+      '{{.ID}}\t{{.Repository}}:{{.Tag}}\t{{.Label "com.docker.compose.project"}}'])
+  ]);
+  const containers = parseDockerRows(containerResult.stdout, 3)
+    .filter(([, , project]) => ownsDockerProject(project))
+    .map(([id, name, project]) => ({ id, name, project }));
+  const networks = parseDockerRows(networkResult.stdout, 3)
+    .filter(([, , project]) => ownsDockerProject(project))
+    .map(([id, name, project]) => ({ id, name, project }));
+  const volumes = parseDockerRows(volumeResult.stdout, 2)
+    .filter(([, project]) => ownsDockerProject(project))
+    .map(([name, project]) => ({ name, project }));
+  const images = parseDockerRows(imageResult.stdout, 3)
+    .filter(([, , project]) => ownsDockerProject(project))
+    .map(([id, reference, project]) => ({ id, reference, project }));
+  return { containers, networks, volumes, images };
+}
+
+async function inspectImageOrNull(reference) {
+  try {
+    return JSON.parse((await run("docker", ["image", "inspect", reference, "--format", "{{json .}}"])).stdout);
+  } catch {
+    return null;
+  }
+}
+
+async function snapshotExternalImages() {
+  externalImageBaseline = new Map();
+  for (const reference of externalImageReferences) {
+    externalImageBaseline.set(reference, (await inspectImageOrNull(reference))?.Id ?? null);
+  }
+}
+
+async function assertNoPreexistingOwnedState() {
+  const resources = await collectOwnedDockerResources();
+  const existingTags = [];
+  for (const reference of [candidateImage, candidateAgentImage]) {
+    if (await inspectImageOrNull(reference)) existingTags.push(reference);
+  }
+  const residualCount = Object.values(resources).reduce((total, items) => total + items.length, 0);
+  if (residualCount > 0 || existingTags.length > 0) {
+    throw new Error(
+      `Acceptance-owned Docker state already exists for port ${portBase}; choose another ACCEPTANCE_PORT_BASE or remove the retained fixture explicitly`
+    );
+  }
+}
+
+async function performFinalCleanup() {
+  if (keep || !ownsRuntimeFixtures) return;
+  report.cleanup.attempted = true;
+  const cleanupErrors = [];
+  const cleanupStep = async (label, action) => {
+    try {
+      await action();
+    } catch (error) {
+      cleanupErrors.push(`${label}: ${redact(error instanceof Error ? error.message : error)}`);
+    }
+  };
+
+  let resources = { containers: [], networks: [], volumes: [], images: [] };
+  await cleanupStep("inspect owned Docker resources", async () => {
+    resources = await collectOwnedDockerResources();
+    report.cleanup.projectResourcesChecked = true;
+    report.cleanup.workloadResourcesChecked = true;
+  });
+  for (const container of resources.containers) {
+    await cleanupStep(`remove container ${container.id}`, () => run("docker", ["container", "rm", "--force", container.id]));
+  }
+  for (const network of resources.networks) {
+    await cleanupStep(`remove network ${network.id}`, () => run("docker", ["network", "rm", network.id]));
+  }
+  for (const volume of resources.volumes) {
+    await cleanupStep(`remove volume ${volume.name}`, () => run("docker", ["volume", "rm", "--force", volume.name]));
+  }
+  const ownedImageReferences = [...new Set(resources.images.map((image) => image.reference))]
+    .filter((reference) => reference && reference !== "<none>:<none>");
+  for (const reference of ownedImageReferences) {
+    await cleanupStep(`remove project image ${reference}`, () => run("docker", ["image", "rm", reference]));
+  }
+
+  for (const [kind, reference] of Object.entries({ app: candidateImage, agent: candidateAgentImage })) {
+    await cleanupStep(`remove candidate ${kind} tag`, async () => {
+      const before = await inspectImageOrNull(reference);
+      const expectedId = report.candidateImages?.[kind]?.id ?? null;
+      if (expectedId && !before) throw new Error(`owned tag ${reference} disappeared before cleanup`);
+      if (expectedId && before?.Id !== expectedId) {
+        throw new Error(`owned tag ${reference} changed from ${expectedId} to ${before.Id}`);
+      }
+      if (before) await run("docker", ["image", "rm", reference]);
+      if (await inspectImageOrNull(reference)) throw new Error(`owned tag ${reference} remains after removal`);
+    });
+  }
+
+  for (const [kind, expected] of Object.entries(report.candidateImages
+    ? { app: report.candidateImages.app, agent: report.candidateImages.agent }
+    : {})) {
+    await cleanupStep(`verify candidate ${kind} image removal`, async () => {
+      const remaining = await inspectImageOrNull(expected.id);
+      if (!remaining) return;
+      const foreignTags = (remaining.RepoTags ?? []).filter((tag) => ![candidateImage, candidateAgentImage].includes(tag));
+      if (foreignTags.length > 0) {
+        throw new Error(`candidate image ${expected.id} is retained by ${foreignTags.length} non-acceptance tag(s)`);
+      }
+      await run("docker", ["image", "rm", expected.id]);
+      if (await inspectImageOrNull(expected.id)) throw new Error(`candidate image ${expected.id} remains after removal`);
+    });
+  }
+  report.cleanup.candidateImagesChecked = true;
+
+  if (!(externalImageBaseline instanceof Map)) {
+    cleanupErrors.push("restore external image cache baseline: external image baseline was not captured");
+  } else {
+    for (const reference of externalImageReferences) {
+      await cleanupStep(`restore external image ${reference}`, async () => {
+        const baselineId = externalImageBaseline.get(reference) ?? null;
+        const current = await inspectImageOrNull(reference);
+        if (baselineId) {
+          if (!current || current.Id !== baselineId) {
+            throw new Error(`pre-existing external image ${reference} changed during acceptance`);
+          }
+          return;
+        }
+        if (current) {
+          await run("docker", ["image", "rm", reference]);
+          if (await inspectImageOrNull(reference)) {
+            throw new Error(`new external image ${reference} remains after removal`);
+          }
+        }
+      });
+    }
+    report.cleanup.externalImagesChecked = true;
+  }
+
+  await cleanupStep("remove acceptance runtime directory", () => rm(runtimeDir, { recursive: true, force: true }));
+  await cleanupStep("remove acceptance bind directory", () => rm(acceptanceBindDir, { recursive: true, force: true }));
+
+  let residual = { containers: [], networks: [], volumes: [], images: [] };
+  await cleanupStep("verify owned Docker resource cleanup", async () => {
+    residual = await collectOwnedDockerResources();
+    report.cleanup.projectResourcesChecked = true;
+    report.cleanup.workloadResourcesChecked = true;
+  });
+  report.cleanup.containers = residual.containers.map((item) => `${item.id}:${item.project || item.name}`);
+  report.cleanup.networks = residual.networks.map((item) => `${item.id}:${item.project || item.name}`);
+  report.cleanup.volumes = residual.volumes.map((item) => `${item.name}:${item.project}`);
+  report.cleanup.images = residual.images.map((item) => `${item.id}:${item.reference}`);
+
+  for (const reference of [candidateImage, candidateAgentImage]) {
+    if (await inspectImageOrNull(reference)) report.cleanup.candidateTags.push(reference);
+  }
+  for (const expected of report.candidateImages
+    ? [report.candidateImages.app, report.candidateImages.agent]
+    : []) {
+    if (await inspectImageOrNull(expected.id)) report.cleanup.images.push(expected.id);
+  }
+  if (externalImageBaseline instanceof Map) {
+    for (const reference of externalImageReferences) {
+      if (!externalImageBaseline.get(reference) && await inspectImageOrNull(reference)) {
+        report.cleanup.images.push(reference);
+      }
+    }
+  }
+
+  report.cleanup.runtimeRemoved = !(await pathExists(runtimeDir));
+  report.cleanup.bindRemoved = !(await pathExists(acceptanceBindDir));
+  report.cleanup.files = report.cleanup.bindRemoved ? [] : [acceptanceBindDir];
+  const runtimeInputPaths = [
+    registryAuthFile,
+    path.join(runtimeDir, "id_ed25519"),
+    path.join(runtimeDir, "id_ed25519.pub")
+  ].filter(Boolean);
+  report.cleanup.runtimeInputFiles = [];
+  for (const location of runtimeInputPaths) {
+    if (await pathExists(location)) report.cleanup.runtimeInputFiles.push(location);
+  }
+  report.cleanup.backupArtifacts = [];
+  for (const scenario of ["fresh", "source", "hardened", "upgrade"]) {
+    const location = scenarioBackupDir(scenario);
+    if (await pathExists(location)) report.cleanup.backupArtifacts.push(location);
+  }
+  report.cleanup.runtimeInputsChecked = true;
+  report.cleanup.errors = cleanupErrors;
+  report.cleanup.verified = true;
+  const failures = cleanupEvidenceFailures(report.cleanup);
+  if (failures.length > 0) {
+    report.cleanup.verified = false;
+    for (const failure of failures) {
+      if (!report.cleanup.errors.includes(failure)) report.cleanup.errors.push(failure);
+    }
+  }
+}
+
 async function main() {
   await Promise.all([
     portBase + 25,
@@ -2399,11 +3049,13 @@ async function main() {
     portBase + 590,
     portBase + 1000
   ].map(assertPortAvailable));
-  for (const location of [runtimeDir, acceptanceBindDir]) {
+  for (const location of [runtimeDir, acceptanceBindDir, liveBrowserEvidencePath]) {
     if (await pathExists(location)) {
       throw new Error(`Acceptance fixture path ${location} already exists; use a different ACCEPTANCE_PORT_BASE or remove the retained fixture explicitly`);
     }
   }
+  await snapshotExternalImages();
+  await assertNoPreexistingOwnedState();
   ownsRuntimeFixtures = true;
   await mkdir(resultsDir, { recursive: true });
   await rm(failureLogPath, { force: true });
@@ -2452,9 +3104,19 @@ try {
   console.error(`\n[acceptance] FAILED: ${redact(error instanceof Error ? error.message : error)}`);
 } finally {
   finalizeSourceEvidence();
-  if (!keep && ownsRuntimeFixtures) {
-    await rm(runtimeDir, { recursive: true, force: true });
-    await rm(acceptanceBindDir, { recursive: true, force: true });
+  try {
+    await performFinalCleanup();
+  } catch (error) {
+    report.cleanup.attempted = true;
+    report.cleanup.verified = false;
+    report.cleanup.errors.push(`unhandled cleanup error: ${redact(error instanceof Error ? error.message : error)}`);
+  }
+  const cleanupFailures = cleanupEvidenceFailures(report.cleanup);
+  if (!keep && ownsRuntimeFixtures && cleanupFailures.length > 0) {
+    markNonqualifying("Disposable acceptance cleanup did not complete with empty verified state");
+    report.status = "failed";
+    process.exitCode = 1;
+    console.error(`\n[acceptance] CLEANUP FAILED: ${cleanupFailures.join("; ")}`);
   } else if (keep && ownsRuntimeFixtures) {
     console.log(`[acceptance] retained runtime fixtures in ${runtimeDir}`);
   }

@@ -107,6 +107,123 @@ describe("recovery center schemas", () => {
     })).toThrow("Imported rclone config is required for experimental rclone targets");
   });
 
+  it("confines rclone remote selection and SMB paths for create and update payloads", () => {
+    const smbCreate = {
+      name: "NAS share",
+      type: "rclone" as const,
+      provider: "smb" as const,
+      server: "nas.local",
+      share: "Backups",
+      subPath: "ComposeBastion/daily",
+      remoteName: "nas-prod_1"
+    };
+    expect(backupTargetCreateSchema.safeParse(smbCreate).success).toBe(true);
+    for (const remoteName of [
+      "nas-prod_1",
+      "Team NAS 2+ops@example.com",
+      "Café.東京"
+    ]) {
+      expect(backupTargetCreateSchema.safeParse({ ...smbCreate, remoteName }).success).toBe(true);
+      expect(backupTargetUpdateSchema.safeParse({ remoteName }).success).toBe(true);
+    }
+
+    for (const remoteName of [
+      ":local",
+      "nas:archive",
+      "nas/archive",
+      "nas\\archive",
+      "nas[archive]",
+      "nas\n[local]",
+      "nas#archive",
+      "nas;archive",
+      "-nas",
+      " nas",
+      "nas ",
+      "nas$archive",
+      "nas,archive",
+      "nas=archive"
+    ]) {
+      expect(backupTargetCreateSchema.safeParse({ ...smbCreate, remoteName }).success).toBe(false);
+      expect(backupTargetUpdateSchema.safeParse({ remoteName }).success).toBe(false);
+    }
+
+    for (const share of [
+      ".",
+      "..",
+      "../../../../tmp",
+      "Backups/archive",
+      "Backups\\archive",
+      "Backups:archive"
+    ]) {
+      expect(backupTargetCreateSchema.safeParse({ ...smbCreate, share }).success).toBe(false);
+      expect(backupTargetUpdateSchema.safeParse({ share }).success).toBe(false);
+    }
+
+    for (const subPath of [
+      "/absolute",
+      "../escape",
+      "safe/../../escape",
+      "safe//escape",
+      "safe\\escape",
+      "safe:escape"
+    ]) {
+      expect(backupTargetCreateSchema.safeParse({ ...smbCreate, subPath }).success).toBe(false);
+      expect(backupTargetUpdateSchema.safeParse({ subPath }).success).toBe(false);
+    }
+
+    const importedConfig = "[nas-prod_1]\ntype = local\n";
+    expect(backupTargetCreateSchema.safeParse({
+      ...smbCreate,
+      rcloneConfig: importedConfig
+    }).success).toBe(false);
+    expect(backupTargetUpdateSchema.safeParse({
+      provider: "smb",
+      rcloneConfig: importedConfig
+    }).success).toBe(true);
+    expect(backupTargetCreateSchema.safeParse({
+      ...smbCreate,
+      config: {
+        provider: "smb",
+        rcloneConfig: importedConfig,
+        smb: {
+          server: "nas.local",
+          share: "Backups"
+        }
+      }
+    }).success).toBe(false);
+    expect(backupTargetCreateSchema.safeParse({
+      ...smbCreate,
+      config: {
+        provider: "drive",
+        rcloneConfig: "[drive]\ntype = drive\n"
+      }
+    }).success).toBe(false);
+    expect(backupTargetCreateSchema.safeParse({
+      name: "Mismatched nested target",
+      kind: "rclone",
+      provider: "drive",
+      config: {
+        provider: "smb",
+        smb: {
+          server: "nas.local",
+          share: "Backups"
+        }
+      }
+    }).success).toBe(false);
+    expect(backupTargetCreateSchema.safeParse({
+      name: "Nested NAS share",
+      kind: "rclone",
+      config: {
+        provider: "smb",
+        remoteName: ":local",
+        smb: {
+          server: "nas.local",
+          share: "Backups"
+        }
+      }
+    }).success).toBe(false);
+  });
+
   it("validates app identity variants", () => {
     expect(recoveryAppIdentitySchema.parse({
       kind: "stack",

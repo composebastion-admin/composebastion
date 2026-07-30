@@ -4,6 +4,7 @@ import type { DockerHost, ImageScannerStatus, ImageUpdateCheck, ImageUpdatePrevi
 import { api, postJson } from "../../api.js";
 import { useAsyncAction } from "../../hooks/useAsyncAction.js";
 import { formatDate } from "../../lib/format.js";
+import { captureFocusReturn, scheduleFocusRestoration, type FocusReturnContext } from "../../lib/focusRestoration.js";
 import type { Jobish, JobResult } from "../../lib/dashboardTypes.js";
 import { hostName } from "../../lib/hostScope.js";
 import { HostSelect } from "../dashboard/HostSelect.js";
@@ -41,9 +42,11 @@ export function UpdatesPanel({
     title: string;
     confirmLabel: string;
     onConfirm: () => Promise<void>;
+    focusReturn: FocusReturnContext;
   } | null>(null);
-  const previewReturnFocusRef = useRef<HTMLElement | null>(null);
-  const previewCloseButtonRef = useRef<HTMLButtonElement | null>(null);
+  const previewDialogRef = useRef<HTMLDivElement | null>(null);
+  const previewCancelButtonRef = useRef<HTMLButtonElement | null>(null);
+  const previewRequestRef = useRef(0);
 
   const load = useCallback(async () => {
     const query = hostId ? `?hostId=${encodeURIComponent(hostId)}` : "";
@@ -56,16 +59,60 @@ export function UpdatesPanel({
   }, [hostId]);
 
   useEffect(() => {
-    void load();
+    void load().catch((caught) => action.setError(caught instanceof Error ? caught.message : String(caught)));
   }, [load]);
 
   useEffect(() => {
     setLastContainerUpdate(null);
   }, [hostId]);
 
-  useEffect(() => {
-    if (preview) previewCloseButtonRef.current?.focus();
+  const closePreview = useCallback(() => {
+    if (!preview) return;
+    previewRequestRef.current += 1;
+    setPreview(null);
+    scheduleFocusRestoration(preview.focusReturn);
   }, [preview]);
+
+  useEffect(() => {
+    if (!preview) return;
+    const animationFrame = window.requestAnimationFrame(() => previewCancelButtonRef.current?.focus());
+
+    function handlePreviewKeys(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        closePreview();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const dialog = previewDialogRef.current;
+      if (!dialog) return;
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(
+        "button:not(:disabled), [href], input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex='-1'])"
+      )).filter((element) => element.getClientRects().length > 0);
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (focusable.length === 0) {
+        dialog.focus();
+        return;
+      }
+      const activeIndex = document.activeElement instanceof HTMLElement
+        ? focusable.indexOf(document.activeElement)
+        : -1;
+      const nextIndex = activeIndex < 0
+        ? event.shiftKey ? focusable.length - 1 : 0
+        : event.shiftKey
+          ? (activeIndex - 1 + focusable.length) % focusable.length
+          : (activeIndex + 1) % focusable.length;
+      focusable[nextIndex]!.focus();
+    }
+
+    window.addEventListener("keydown", handlePreviewKeys, true);
+    return () => {
+      window.cancelAnimationFrame(animationFrame);
+      window.removeEventListener("keydown", handlePreviewKeys, true);
+    };
+  }, [preview, closePreview]);
 
   async function checkNow() {
     if (!hostId) return;
@@ -124,25 +171,37 @@ export function UpdatesPanel({
     returnFocus: HTMLElement
   ) {
     if (!hostId) return;
-    previewReturnFocusRef.current = returnFocus;
-    const result = await api<{ preview: ImageUpdatePreview }>(`/api/image-updates/preview?hostId=${encodeURIComponent(hostId)}&image=${encodeURIComponent(imageReference)}`);
-    setPreview({ data: result.preview, title, confirmLabel, onConfirm });
-  }
-
-  function closePreview() {
-    const returnTarget = previewReturnFocusRef.current;
-    previewReturnFocusRef.current = null;
-    setPreview(null);
-    window.setTimeout(() => {
-      if (returnTarget && document.contains(returnTarget)) returnTarget.focus({ preventScroll: true });
-    }, 0);
+    const focusReturn = captureFocusReturn(returnFocus);
+    const requestId = previewRequestRef.current + 1;
+    previewRequestRef.current = requestId;
+    try {
+      const result = await action.run(() =>
+        api<{ preview: ImageUpdatePreview }>(`/api/image-updates/preview?hostId=${encodeURIComponent(hostId)}&image=${encodeURIComponent(imageReference)}`)
+      );
+      if (requestId !== previewRequestRef.current || !document.contains(returnFocus)) return;
+      setPreview({ data: result.preview, title, confirmLabel, onConfirm, focusReturn });
+    } catch {
+      // The action hook renders the failure inline. Consume the rejection at
+      // this click boundary and return keyboard focus to the preview trigger.
+      if (requestId === previewRequestRef.current) {
+        scheduleFocusRestoration(focusReturn, { afterRender: true });
+      }
+    }
   }
 
   async function confirmPreview() {
     const current = preview;
     if (!current) return;
+    previewRequestRef.current += 1;
     setPreview(null);
-    await current.onConfirm();
+    try {
+      await current.onConfirm();
+    } catch {
+      // The action hook renders the failure inline. Consume the rejection at
+      // this event boundary so a failed update cannot become an unhandled one.
+    } finally {
+      scheduleFocusRestoration(current.focusReturn, { afterRender: true });
+    }
   }
 
   return (
@@ -157,7 +216,7 @@ export function UpdatesPanel({
       )}
       <div className="inlineForm">
         <HostSelect hosts={hosts} value={hostId} onChange={setHostId} />
-        <button type="button" className="primary" disabled={!hostId || action.busy} onClick={() => void checkNow()}><RefreshCw size={16} />Check now</button>
+        <button type="button" className="primary" disabled={!hostId || action.busy} onClick={() => void checkNow().catch(() => undefined)}><RefreshCw size={16} />Check now</button>
       </div>
       {lastContainerUpdate && (
         <div className="notice success" role="status">
@@ -178,10 +237,10 @@ export function UpdatesPanel({
             severityBadge(update.severityCounts),
             formatDate(update.lastCheckedAt),
             <ButtonRow key="actions">
-              <button title="Scan image" onClick={() => void scanImage(update.imageReference)}><ShieldAlert size={16} /></button>
-              <button title="Pull latest" onClick={() => void pullImage(update.imageReference)}><Download size={16} /></button>
+              <button disabled={action.busy} title="Scan image" onClick={() => void scanImage(update.imageReference).catch(() => undefined)}><ShieldAlert size={16} /></button>
+              <button disabled={action.busy} title="Pull latest" onClick={() => void pullImage(update.imageReference).catch(() => undefined)}><Download size={16} /></button>
               {update.affectedContainers?.[0] && (
-                <button title="Update container" onClick={(event) => void openPreview(
+                <button disabled={action.busy} title="Update container" onClick={(event) => void openPreview(
                   update.imageReference,
                   "Update container",
                   "Update container",
@@ -190,7 +249,7 @@ export function UpdatesPanel({
                 )}><Play size={16} /></button>
               )}
               {update.affectedStacks?.[0] && update.status === "update_available" && (
-                <button title={`Redeploy ${update.affectedStacks?.[0]!.name}`} onClick={(event) => void openPreview(
+                <button disabled={action.busy} title={`Redeploy ${update.affectedStacks?.[0]!.name}`} onClick={(event) => void openPreview(
                   update.imageReference,
                   `Redeploy ${update.affectedStacks?.[0]!.name}`,
                   "Redeploy stack",
@@ -203,16 +262,24 @@ export function UpdatesPanel({
           ]}
         />
       )}
-      {action.error && <div className="notice error">{action.error}</div>}
+      {action.error && <div className="notice error" role="alert">{action.error}</div>}
       {preview && (
-        <div className="drawerOverlay" role="dialog" aria-modal="true" aria-label={preview.title}>
-          <div className="drawer previewDialog">
+        <div className="drawerOverlay" role="presentation">
+          <div
+            ref={previewDialogRef}
+            className="drawer previewDialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="update-preview-title"
+            aria-describedby="update-preview-description"
+            tabIndex={-1}
+          >
             <div className="panelHeader">
               <div>
-                <h3>{preview.title}</h3>
-                <p>{preview.data.imageReference}</p>
+                <h3 id="update-preview-title">{preview.title}</h3>
+                <p id="update-preview-description">{preview.data.imageReference}</p>
               </div>
-              <button type="button" ref={previewCloseButtonRef} onClick={closePreview} title="Close" aria-label="Close update preview"><X size={16} /></button>
+              <button type="button" onClick={closePreview} title="Close" aria-label="Close update preview"><X size={16} /></button>
             </div>
             <div className="detailStack">
               <div className="detailKeyValueGrid">
@@ -227,7 +294,7 @@ export function UpdatesPanel({
                 <div className="notice">Vulnerabilities: C {preview.data.severityCounts.critical}, H {preview.data.severityCounts.high}, M {preview.data.severityCounts.medium}, L {preview.data.severityCounts.low}</div>
               )}
               <ButtonRow>
-                <button type="button" onClick={closePreview}>Cancel</button>
+                <button ref={previewCancelButtonRef} type="button" onClick={closePreview}>Cancel</button>
                 <button type="button" className="primary" onClick={() => void confirmPreview()}>{preview.confirmLabel}</button>
               </ButtonRow>
             </div>

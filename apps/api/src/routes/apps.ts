@@ -85,20 +85,32 @@ export async function registerAppRoutes(app: FastifyInstance) {
 
   app.post("/api/apps/check-updates", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
     const { hostId } = (request.body ?? {}) as { hostId?: string };
-    const apps = (await checkAppUpdates(hostId)).map(sanitizeAppForRead);
+    // Persist the high-risk refresh intent first. The refresh spans multiple
+    // remote systems and cache rows, so it cannot share one SQL transaction.
     await writeAuditEvent({
       userId: request.user?.id,
       hostId: hostId ?? null,
       action: "app.update_check",
       targetKind: "app",
       targetId: hostId ?? "all",
+      details: { phase: "intent" },
       ...auditContextFromRequest(request)
     });
+    const apps = (await checkAppUpdates(hostId)).map(sanitizeAppForRead);
     return { apps };
   });
 
   app.get("/api/apps/:appId/versions", { preHandler: operator }, async (request) => {
     const { appId } = request.params as { appId: string };
+    // Version discovery can use the app's stored GitHub credential and returns
+    // private branch/tag metadata, so audit failure must prevent the read.
+    await writeAuditEvent({
+      userId: request.user?.id,
+      action: "app.versions_read",
+      targetKind: "app",
+      targetId: appId,
+      ...auditContextFromRequest(request)
+    });
     const versions = await listAppGithubVersions(decodeURIComponent(appId));
     return {
       versions: {
@@ -111,15 +123,20 @@ export async function registerAppRoutes(app: FastifyInstance) {
   app.put("/api/apps/:appId/version", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
     const { appId } = request.params as { appId: string };
     const body = appGithubVersionSelectSchema.parse(request.body);
-    const result = await selectAppGithubVersion(decodeURIComponent(appId), body);
-    await writeAuditEvent({
-      userId: request.user?.id,
-      action: "app.version_select",
-      targetKind: "app",
-      targetId: appId,
-      details: { ref: body.ref, kind: body.kind ?? null },
-      ...auditContextFromRequest(request)
-    });
+    const result = await selectAppGithubVersion(
+      decodeURIComponent(appId),
+      body,
+      async (client) => {
+        await writeAuditEvent({
+          userId: request.user?.id,
+          action: "app.version_select",
+          targetKind: "app",
+          targetId: appId,
+          details: { ref: body.ref, kind: body.kind ?? null },
+          ...auditContextFromRequest(request)
+        }, client);
+      }
+    );
     return {
       ...result,
       app: result.app ? sanitizeAppForRead(result.app) : null
@@ -128,29 +145,39 @@ export async function registerAppRoutes(app: FastifyInstance) {
 
   app.post("/api/apps/:appId/update", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
     const { appId } = request.params as { appId: string };
-    const result = await updateApp(decodeURIComponent(appId), request.user?.id);
-    await writeAuditEvent({
-      userId: request.user?.id,
-      action: "app.update",
-      targetKind: "app",
-      targetId: appId,
-      ...auditContextFromRequest(request)
-    });
+    const result = await updateApp(
+      decodeURIComponent(appId),
+      request.user?.id,
+      async (client) => {
+        await writeAuditEvent({
+          userId: request.user?.id,
+          action: "app.update",
+          targetKind: "app",
+          targetId: appId,
+          ...auditContextFromRequest(request)
+        }, client);
+      }
+    );
     return sanitizeAppUpdateResult(result);
   });
 
   app.put("/api/apps/:appId/name", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
     const { appId } = request.params as { appId: string };
     const body = appRenameInputSchema.parse(request.body);
-    const result = await renameApp(decodeURIComponent(appId), body);
-    await writeAuditEvent({
-      userId: request.user?.id,
-      action: "app.rename",
-      targetKind: "app",
-      targetId: appId,
-      details: { name: body.name },
-      ...auditContextFromRequest(request)
-    });
+    const result = await renameApp(
+      decodeURIComponent(appId),
+      body,
+      async (client) => {
+        await writeAuditEvent({
+          userId: request.user?.id,
+          action: "app.rename",
+          targetKind: "app",
+          targetId: appId,
+          details: { name: body.name },
+          ...auditContextFromRequest(request)
+        }, client);
+      }
+    );
     return {
       ...result,
       app: result.app ? sanitizeAppForRead(result.app) : null
@@ -159,15 +186,20 @@ export async function registerAppRoutes(app: FastifyInstance) {
 
   app.put("/api/apps/:appId/source", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
     const { appId } = request.params as { appId: string };
-    const link = await upsertAppSourceLink(decodeURIComponent(appId), appSourceLinkInputSchema.parse(request.body));
-    await writeAuditEvent({
-      userId: request.user?.id,
-      action: "app.source_link",
-      targetKind: "app",
-      targetId: appId,
-      details: { sourceType: link.sourceType },
-      ...auditContextFromRequest(request)
-    });
+    const link = await upsertAppSourceLink(
+      decodeURIComponent(appId),
+      appSourceLinkInputSchema.parse(request.body),
+      async (client, saved) => {
+        await writeAuditEvent({
+          userId: request.user?.id,
+          action: "app.source_link",
+          targetKind: "app",
+          targetId: appId,
+          details: { sourceType: saved.sourceType },
+          ...auditContextFromRequest(request)
+        }, client);
+      }
+    );
     return {
       link: {
         ...link,
@@ -179,14 +211,18 @@ export async function registerAppRoutes(app: FastifyInstance) {
 
   app.delete("/api/apps/:appId/source", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
     const { appId } = request.params as { appId: string };
-    const result = await deleteAppSourceLink(decodeURIComponent(appId));
-    await writeAuditEvent({
-      userId: request.user?.id,
-      action: "app.source_unlink",
-      targetKind: "app",
-      targetId: appId,
-      ...auditContextFromRequest(request)
-    });
+    const result = await deleteAppSourceLink(
+      decodeURIComponent(appId),
+      async (client) => {
+        await writeAuditEvent({
+          userId: request.user?.id,
+          action: "app.source_unlink",
+          targetKind: "app",
+          targetId: appId,
+          ...auditContextFromRequest(request)
+        }, client);
+      }
+    );
     return result;
   });
 }

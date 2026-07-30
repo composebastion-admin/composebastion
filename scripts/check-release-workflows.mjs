@@ -95,10 +95,93 @@ function requireNode24Setup(file, jobName, job) {
   }
 }
 
+function requireContainerConfigStep(file, jobName, job) {
+  const steps = (job?.steps ?? []).filter(
+    (step) => step.name === "Enforce container configuration policy"
+  );
+  if (steps.length !== 1
+      || String(steps[0]?.run ?? "").trim() !== "npm run check:container-config") {
+    fail(`${file}:${jobName}: must run the exact digest-pinned container configuration gate once`);
+  }
+}
+
+for (const [file, workflow] of Object.entries(workflows)) {
+  for (const [jobName, job] of Object.entries(workflow?.jobs ?? {})) {
+    const steps = job?.steps ?? [];
+    for (const step of steps) {
+      const command = String(step.run ?? "").trim();
+      if (!command.startsWith("npm ci")) continue;
+      if (
+        !command.includes("--engine-strict")
+        || !command.includes("--dangerously-allow-all-scripts=false")
+      ) {
+        fail(`${file}:${jobName}: every npm ci must reject engine drift and the dangerous allow-all override`);
+      }
+      if (command.includes("--ignore-scripts=false")) {
+        if (!command.includes("--strict-allow-scripts")) {
+          fail(`${file}:${jobName}: script-enabled npm ci must enforce the reviewed allowScripts policy`);
+        }
+      } else if (!/(?:^|\s)--ignore-scripts(?:\s|$)/.test(command)) {
+        fail(`${file}:${jobName}: npm ci must explicitly enable reviewed scripts or disable every script`);
+      }
+    }
+    const npmIndexes = steps
+      .map((step, index) => ({ step, index }))
+      .filter(({ step }) =>
+        /(^|[\s;&|])npm(?:\s|$)/m.test(String(step.run ?? ""))
+      )
+      .map(({ index }) => index);
+    if (!npmIndexes.length) continue;
+    const setupIndex = steps.indexOf(actionStep(job, "actions/setup-node"));
+    const bootstrapIndexes = steps
+      .map((step, index) => ({ step, index }))
+      .filter(({ step }) =>
+        String(step.run ?? "").trim() === "node scripts/bootstrap-npm.mjs"
+      )
+      .map(({ index }) => index);
+    requireNode24Setup(file, jobName, job);
+    if (
+      setupIndex < 0
+      || bootstrapIndexes.length !== 1
+      || bootstrapIndexes[0] <= setupIndex
+      || bootstrapIndexes[0] >= npmIndexes[0]
+    ) {
+      fail(`${file}:${jobName}: integrity-pinned npm bootstrap must run exactly once after setup-node and before every npm command`);
+    }
+  }
+}
+
 const ciFile = ".github/workflows/ci.yml";
 const ciJobs = workflows[ciFile]?.jobs ?? {};
+const quality = ciJobs.quality;
+const productionBuild = ciJobs["production-build"];
 const liveAcceptance = ciJobs["live-acceptance"];
 const ciGate = ciJobs["ci-gate"];
+const containerPolicyTests = (quality?.steps ?? []).filter(
+  (step) => String(step.run ?? "").trim() === "npm run test:container-config-policy"
+);
+if (containerPolicyTests.length !== 1) {
+  fail(`${ciFile}:quality: must run the fail-closed container configuration policy tests once`);
+}
+const qualitySteps = quality?.steps ?? [];
+const npmInstallIndex = qualitySteps.findIndex(
+  (step) => String(step.run ?? "").trim().startsWith("npm ci ")
+);
+const npmPolicyIndexes = qualitySteps
+  .map((step, index) => ({ step, index }))
+  .filter(({ step }) =>
+    String(step.run ?? "").trim() === "npm run check:npm-install-policy"
+  )
+  .map(({ index }) => index);
+if (
+  npmInstallIndex < 0
+  || npmPolicyIndexes.length !== 1
+  || npmPolicyIndexes[0] <= npmInstallIndex
+) {
+  fail(`${ciFile}:quality: strict dependency install-script policy must run exactly once after npm ci`);
+}
+requireNode24Setup(ciFile, "production-build", productionBuild);
+requireContainerConfigStep(ciFile, "production-build", productionBuild);
 requireNode24Setup(ciFile, "live-acceptance", liveAcceptance);
 const installBrowser = (liveAcceptance?.steps ?? []).find((step) => String(step.run ?? "").includes("playwright install --with-deps chromium"));
 if (!installBrowser) fail(`${ciFile}:live-acceptance: live Playwright requires an explicit Chromium installation`);
@@ -107,7 +190,7 @@ if (!(liveAcceptance?.steps ?? []).some((step) => String(step.run ?? "").trim() 
   fail(`${ciFile}:live-acceptance: full release acceptance and its qualifying-report assertion are both required`);
 }
 const ciGateNeeds = Array.isArray(ciGate?.needs) ? ciGate.needs : [ciGate?.needs].filter(Boolean);
-for (const dependency of ["browser-smoke", "live-acceptance"]) {
+for (const dependency of ["browser-smoke", "production-build", "live-acceptance"]) {
   if (!ciGateNeeds.includes(dependency)) fail(`${ciFile}:ci-gate: aggregate must require ${dependency}`);
 }
 
@@ -152,6 +235,7 @@ if (JSON.stringify(publicationBranches) !== JSON.stringify(["beta", "main"])) {
   fail(`${publishFile}: push publication must be limited to the main and beta branches`);
 }
 requireNode24Setup(publishFile, "metadata", publishJobs.metadata);
+requireContainerConfigStep(publishFile, "metadata", publishJobs.metadata);
 const metadataSteps = publishJobs.metadata?.steps ?? [];
 const stableTagStep = metadataSteps.find((step) => step.id === "stable-tag");
 const attributionInstallStep = metadataSteps.find((step) => step.name === "Install attribution policy dependencies");
@@ -164,7 +248,8 @@ if (String(strictAttributionStep?.if ?? "") !== "steps.stable-tag.outputs.stable
   fail(`${publishFile}:metadata: stable vX.Y.Z tags must require approved Go attribution before publication`);
 }
 if (String(attributionInstallStep?.if ?? "") !== "steps.stable-tag.outputs.stable == 'true'"
-    || String(attributionInstallStep?.run ?? "").trim() !== "npm ci --ignore-scripts") {
+    || String(attributionInstallStep?.run ?? "").trim()
+      !== "npm ci --engine-strict --dangerously-allow-all-scripts=false --ignore-scripts") {
   fail(`${publishFile}:metadata: stable tags must install locked attribution policy dependencies`);
 }
 const stableTagIndex = metadataSteps.indexOf(stableTagStep);
@@ -220,7 +305,10 @@ for (const invariant of [
   '[[ "${config_digest}" =~ ^sha256:[a-f0-9]{64}$ ]]',
   "mapfile -t layer_digests",
   'test "${#layer_digests[@]}" -gt 0',
-  '[[ "${layer_digest}" =~ ^sha256:[a-f0-9]{64}$ ]]'
+  '[[ "${layer_digest}" =~ ^sha256:[a-f0-9]{64}$ ]]',
+  '.config.Labels["org.opencontainers.image.title"]',
+  '.config.Labels["org.opencontainers.image.source"]',
+  '.config.Labels["org.opencontainers.image.licenses"]'
 ]) {
   if (!verificationRun.includes(invariant)) {
     fail(`${publishFile}:build-scan: archive blob-integrity verification is missing ${invariant}`);
@@ -253,6 +341,26 @@ for (const invariant of [
   }
 }
 const tagScanIndex = tagRescanSteps.indexOf(actionStep(tagRescan, "aquasecurity/trivy-action"));
+const tagLabelStep = tagRescanSteps.find(
+  (step) => step.name === "Verify immutable image labels"
+);
+const tagLabelRun = String(tagLabelStep?.run ?? "");
+for (const invariant of [
+  "org.opencontainers.image.title",
+  "org.opencontainers.image.source",
+  "org.opencontainers.image.licenses",
+  'docker cp "${container_id}:/licenses/."',
+  "cmp LICENSES/go-modules/manifest.json",
+  "THIRD-PARTY-NOTICES.md",
+  "go-buildinfo/trivy.artifacts.sha256",
+  "go-buildinfo/agent.artifacts.sha256"
+]) {
+  if (!tagLabelRun.includes(invariant)) {
+    fail(
+      `${publishFile}:rescan-tag-images: immutable image label/legal verification is missing ${invariant}`
+    );
+  }
+}
 const tagRecordIndex = tagRescanSteps.findIndex((step) => step.name === "Record the exact passing index and platform digests");
 const tagUploadStep = actionStep(tagRescan, "actions/upload-artifact");
 const tagUploadIndex = tagRescanSteps.indexOf(tagUploadStep);
@@ -351,7 +459,10 @@ if (!stableAliasRun.includes('source="${image}@${digest}"')
 
 const scanFile = ".github/workflows/container-scan.yml";
 const scan = workflows[scanFile];
+const containerConfig = scan?.jobs?.["container-config"];
 const imageScan = scan?.jobs?.["image-scan"];
+requireNode24Setup(scanFile, "container-config", containerConfig);
+requireContainerConfigStep(scanFile, "container-config", containerConfig);
 requireNode24Setup(scanFile, "image-scan", imageScan);
 requireExactMatrix(scanFile, "image-scan", imageScan);
 requireTrivy(scanFile, "image-scan", imageScan);
@@ -359,6 +470,19 @@ requireExactGitBuildContext(scanFile, "image-scan", imageScan, actionStep(imageS
 const containerGate = scan?.jobs?.["container-scan-gate"];
 if (containerGate?.name !== "Container scan gate") fail(`${scanFile}: aggregate check name changed`);
 if (!String(containerGate?.if ?? "").includes("always()")) fail(`${scanFile}: aggregate gate must run after scan failure or cancellation`);
+const containerGateNeeds = Array.isArray(containerGate?.needs)
+  ? containerGate.needs
+  : [containerGate?.needs].filter(Boolean);
+for (const dependency of ["container-config", "image-scan"]) {
+  if (!containerGateNeeds.includes(dependency)) {
+    fail(`${scanFile}:container-scan-gate: aggregate must require ${dependency}`);
+  }
+}
+const containerGateRun = String(containerGate?.steps?.[0]?.run ?? "");
+if (!containerGateRun.includes('test "${CONTAINER_CONFIG_RESULT}" = success')
+    || containerGate?.steps?.[0]?.env?.CONTAINER_CONFIG_RESULT !== "${{ needs.container-config.result }}") {
+  fail(`${scanFile}:container-scan-gate: aggregate must fail when container configuration policy fails`);
+}
 
 const trivyIgnoreSource = readFileSync(".trivyignore.yaml", "utf8");
 const trivyIgnore = parse(trivyIgnoreSource);
@@ -377,6 +501,36 @@ for (const cve of allowedPolicyCves) {
     fail(`.trivyignore.yaml: ${cve} must be scoped to the exact Compose target, Docker module PURL, and reachability statement`);
   }
 }
+const rootPackage = JSON.parse(readFileSync("package.json", "utf8"));
+if (rootPackage?.scripts?.["check:container-config"] !== "node scripts/check-container-config.mjs"
+    || rootPackage?.scripts?.["test:container-config-policy"] !== "node --test scripts/container-config-policy.test.mjs") {
+  fail("package.json: container configuration live gate and policy tests must remain directly runnable");
+}
+const containerConfigSource = readFileSync("scripts/check-container-config.mjs", "utf8");
+for (const invariant of [
+  "aquasec/trivy:0.72.0@sha256:cffe3f5161a47a6823fbd23d985795b3ed72a4c806da4c4df16266c02accdd6f",
+  'const useDocker = !cliOptions.has("--local")',
+  '"--ignorefile", "/dev/null"',
+  "actualVersion !== expectedTrivyVersion",
+  "evaluateContainerConfigReport(target, report)"
+]) {
+  if (!containerConfigSource.includes(invariant)) {
+    fail(`scripts/check-container-config.mjs: missing fail-closed invariant ${invariant}`);
+  }
+}
+const containerPolicySource = readFileSync("scripts/container-config-policy.mjs", "utf8");
+for (const invariant of [
+  'export const expectedTrivyVersion = "0.72.0"',
+  '"Dockerfile.agent:DS-0002"',
+  '"infra/dev/sshhost.Dockerfile:DS-0002"',
+  "userChecks.length !== 1",
+  "admitted.length !== 1",
+  "report?.ArtifactName !== target"
+]) {
+  if (!containerPolicySource.includes(invariant)) {
+    fail(`scripts/container-config-policy.mjs: missing fail-closed invariant ${invariant}`);
+  }
+}
 const releaseImageVerifier = readFileSync("scripts/verify-release-images.mjs", "utf8");
 if (!releaseImageVerifier.includes('"--ignorefile", "/workspace/.trivyignore.yaml"') || releaseImageVerifier.includes("--ignore-policy")) {
   fail("scripts/verify-release-images.mjs: local release scans must use the path- and PURL-scoped YAML ignore file");
@@ -384,6 +538,22 @@ if (!releaseImageVerifier.includes('"--ignorefile", "/workspace/.trivyignore.yam
 for (const invariant of ["materializeGitBuildContext", "assertSafeTestResultsPath", "GIT_NO_REPLACE_OBJECTS", "buildContextDirectory", "sourceContext.contextDigest", "digestGitBuildContext"]) {
   if (!releaseImageVerifier.includes(invariant)) {
     fail(`scripts/verify-release-images.mjs: exact Git build-context verification is missing ${invariant}`);
+  }
+}
+for (const invariant of [
+  "org.opencontainers.image.title",
+  "org.opencontainers.image.source",
+  "org.opencontainers.image.licenses",
+  "verifyLegalArtifacts",
+  "LICENSES/go-modules/manifest.json",
+  "third-party/go-modules/manifest.json",
+  "go-buildinfo/trivy.artifacts.sha256",
+  "go-buildinfo/agent.artifacts.sha256"
+]) {
+  if (!releaseImageVerifier.includes(invariant)) {
+    fail(
+      `scripts/verify-release-images.mjs: exact image label/legal verification is missing ${invariant}`
+    );
   }
 }
 const appDockerfile = readFileSync("Dockerfile", "utf8");

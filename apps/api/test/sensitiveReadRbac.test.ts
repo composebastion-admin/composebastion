@@ -20,6 +20,8 @@ const safeLatestHtmlUrl = "https://release.example.test/v1";
 const query = vi.hoisted(() => vi.fn());
 const cancelQueuedJob = vi.hoisted(() => vi.fn());
 const enqueueJob = vi.hoisted(() => vi.fn());
+const enqueueJobInTransaction = vi.hoisted(() => vi.fn());
+const notifyJobQueued = vi.hoisted(() => vi.fn());
 const retryJob = vi.hoisted(() => vi.fn());
 const updateApp = vi.hoisted(() => vi.fn());
 const upsertAppSourceLink = vi.hoisted(() => vi.fn());
@@ -155,6 +157,7 @@ vi.mock("../src/services/audit.js", () => ({
 vi.mock("../src/services/jobs.js", () => ({
   cancelQueuedJob,
   enqueueJob,
+  enqueueJobInTransaction,
   getJob: vi.fn(async () => sensitiveJob),
   getWorkerStatus: vi.fn(async () => ({ queued: 0, running: 0, lastJobCompletedAt: null })),
   listJobs: vi.fn(async () => ({
@@ -164,6 +167,17 @@ vi.mock("../src/services/jobs.js", () => ({
     offset: 0,
     hasMore: false
   })),
+  lockComposeStackForMutation: async (
+    client: { query: typeof query },
+    targetStackId: string
+  ) => {
+    const selected = await client.query(
+      "SELECT * FROM compose_stacks WHERE id = $1 FOR UPDATE",
+      [targetStackId]
+    );
+    return selected.rows[0] ?? null;
+  },
+  notifyJobQueued,
   retryJob
 }));
 
@@ -331,6 +345,10 @@ describe("secret-bearing read boundaries", () => {
     query.mockResolvedValue({ rows: [stackRow] });
     enqueueJob.mockReset();
     enqueueJob.mockResolvedValue(sensitiveJob);
+    enqueueJobInTransaction.mockReset();
+    enqueueJobInTransaction.mockResolvedValue(sensitiveJob);
+    notifyJobQueued.mockReset();
+    notifyJobQueued.mockResolvedValue(undefined);
     cancelQueuedJob.mockReset();
     cancelQueuedJob.mockResolvedValue({ job: sensitiveJob, canceled: true });
     retryJob.mockReset();
@@ -347,15 +365,19 @@ describe("secret-bearing read boundaries", () => {
       }
     });
     upsertAppSourceLink.mockReset();
-    upsertAppSourceLink.mockImplementation(async (_appId, input) => ({
-      id: "77777777-7777-4777-8777-777777777777",
-      ...input,
-      currentCommitSha: null,
-      latestCommitSha: null,
-      checkedAt: null,
-      checkError: null,
-      updatedAt: new Date(0).toISOString()
-    }));
+    upsertAppSourceLink.mockImplementation(async (_appId, input, onChanged) => {
+      const result = {
+        id: "77777777-7777-4777-8777-777777777777",
+        ...input,
+        currentCommitSha: null,
+        latestCommitSha: null,
+        checkedAt: null,
+        checkError: null,
+        updatedAt: new Date(0).toISOString()
+      };
+      await onChanged?.({ query }, result);
+      return result;
+    });
     writeAuditEvent.mockClear();
   });
 
@@ -478,8 +500,10 @@ describe("secret-bearing read boundaries", () => {
     const github = await import("../src/services/github.js");
     const deploy = vi.mocked(github.deployGithubRepository);
     const branches = vi.mocked(github.listGithubBranchesForUrl);
+    const accessCheck = vi.mocked(github.testGithubRepositoryAccess);
     deploy.mockClear();
     branches.mockClear();
+    accessCheck.mockClear();
     writeAuditEvent.mockClear();
     const app = await buildApp();
     try {
@@ -501,9 +525,114 @@ describe("secret-bearing read boundaries", () => {
         }
       });
       expect(deployResponse.statusCode).toBe(400);
+
+      const accessResponse = await injectAs(app, "operator", {
+        method: "POST",
+        url: "/api/github/access-check",
+        payload: {}
+      });
+      expect(accessResponse.statusCode).toBe(400);
       expect(deploy).not.toHaveBeenCalled();
       expect(branches).not.toHaveBeenCalled();
+      expect(accessCheck).not.toHaveBeenCalled();
       expect(writeAuditEvent).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("blocks stored-credential and private-source reads when audit persistence fails", async () => {
+    const apps = await import("../src/services/apps.js");
+    const deployments = await import("../src/services/deployments.js");
+    const github = await import("../src/services/github.js");
+    const stackVersions = await import("../src/services/stackVersions.js");
+    const cases = [
+      {
+        options: {
+          method: "GET" as const,
+          url: `/api/hosts/${hostId}/compose`
+        },
+        service: query
+      },
+      {
+        options: {
+          method: "GET" as const,
+          url: `/api/compose/${stackId}/versions`
+        },
+        service: vi.mocked(stackVersions.listStackVersions)
+      },
+      {
+        options: {
+          method: "GET" as const,
+          url: `/api/compose/${stackId}/versions/diff?from=version-1&to=version-2`
+        },
+        service: vi.mocked(stackVersions.diffStackVersions)
+      },
+      {
+        options: {
+          method: "GET" as const,
+          url: "/api/github/repos"
+        },
+        service: vi.mocked(github.listGithubRepositories)
+      },
+      {
+        options: {
+          method: "POST" as const,
+          url: `/api/hosts/${hostId}/registry-trust/check`,
+          payload: {
+            registry: "http://registry.example.test:5000",
+            insecure: true
+          }
+        },
+        service: vi.mocked(deployments.checkRegistryTrust)
+      },
+      {
+        options: {
+          method: "GET" as const,
+          url: "/api/apps/git%3Arepository/versions"
+        },
+        service: vi.mocked(apps.listAppGithubVersions)
+      },
+      {
+        options: {
+          method: "POST" as const,
+          url: "/api/github/branches",
+          payload: { repositoryUrl: "https://github.com/example/private" }
+        },
+        service: vi.mocked(github.listGithubBranchesForUrl)
+      },
+      {
+        options: {
+          method: "POST" as const,
+          url: "/api/github/access-check",
+          payload: { repositoryUrl: "https://github.com/example/private" }
+        },
+        service: vi.mocked(github.testGithubRepositoryAccess)
+      },
+      {
+        options: {
+          method: "GET" as const,
+          url: "/api/github/repos/repository/branches"
+        },
+        service: vi.mocked(github.listGithubBranchesForRepository)
+      },
+      {
+        options: {
+          method: "GET" as const,
+          url: "/api/github/repos/repository/compose"
+        },
+        service: vi.mocked(github.previewGithubRepositoryCompose)
+      }
+    ];
+    const app = await buildApp();
+    try {
+      for (const testCase of cases) {
+        testCase.service.mockClear();
+        writeAuditEvent.mockRejectedValueOnce(new Error("audit insert failed"));
+        const response = await injectAs(app, "operator", testCase.options);
+        expect(response.statusCode, testCase.options.url).toBe(500);
+        expect(testCase.service, testCase.options.url).not.toHaveBeenCalled();
+      }
     } finally {
       await app.close();
     }
@@ -825,11 +954,11 @@ describe("secret-bearing read boundaries", () => {
         branch: "main",
         workingDir: "/srv/app",
         composePath: "compose.yaml"
-      });
+      }, expect.any(Function));
       expect(writeAuditEvent).toHaveBeenCalledWith(expect.objectContaining({
         action: "app.source_link",
         details: { sourceType: "git" }
-      }));
+      }), expect.objectContaining({ query }));
     } finally {
       await app.close();
     }
@@ -896,6 +1025,7 @@ describe("secret-bearing read boundaries", () => {
       expect(rejected.statusCode, rejected.body).toBe(400);
       expect(rejected.body).not.toContain(secret);
       expect(enqueueJob).not.toHaveBeenCalled();
+      expect(enqueueJobInTransaction).not.toHaveBeenCalled();
       expect(writeAuditEvent).not.toHaveBeenCalled();
 
       const accepted = await injectAs(app, "owner", {
@@ -907,17 +1037,48 @@ describe("secret-bearing read boundaries", () => {
         }
       });
       expect(accepted.statusCode).toBe(202);
-      expect(enqueueJob).toHaveBeenCalledWith({
-        type: "host.configureRegistryTrust",
-        hostId,
-        payload: { registry: "registry.internal:5000" }
-      }, userId);
-      expect(writeAuditEvent).toHaveBeenCalledWith(expect.objectContaining({
-        action: "host.configure_registry_trust",
-        details: { registry: "registry.internal:5000" }
-      }));
-      expect(JSON.stringify(enqueueJob.mock.calls)).not.toContain(secret);
+      expect(enqueueJobInTransaction).toHaveBeenCalledWith(
+        expect.objectContaining({ query }),
+        {
+          type: "host.configureRegistryTrust",
+          hostId,
+          payload: { registry: "registry.internal:5000" }
+        },
+        userId
+      );
+      expect(writeAuditEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: "host.configure_registry_trust",
+          details: { registry: "registry.internal:5000" },
+          ipAddress: "127.0.0.1",
+          userAgent: "test"
+        }),
+        expect.objectContaining({ query })
+      );
+      expect(notifyJobQueued).toHaveBeenCalledWith(jobId);
+      expect(JSON.stringify(enqueueJobInTransaction.mock.calls)).not.toContain(secret);
       expect(JSON.stringify(writeAuditEvent.mock.calls)).not.toContain(secret);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("does not notify registry-trust work when its transactional audit fails", async () => {
+    const app = await buildApp();
+    writeAuditEvent.mockRejectedValueOnce(new Error("audit unavailable"));
+    try {
+      const response = await injectAs(app, "owner", {
+        method: "POST",
+        url: `/api/hosts/${hostId}/registry-trust/apply`,
+        payload: {
+          registry: "registry.internal:5000",
+          insecure: true
+        }
+      });
+
+      expect(response.statusCode).toBe(500);
+      expect(enqueueJobInTransaction).toHaveBeenCalledOnce();
+      expect(notifyJobQueued).not.toHaveBeenCalled();
     } finally {
       await app.close();
     }

@@ -93,6 +93,13 @@ claims for a release.
   registry-trust mutation, ComposeBastion returns a reconciliation warning
   instead of replaying the non-idempotent operation. Inspect Docker, deployment,
   and registry state first, then start a new dedicated operation if needed.
+- Registry-trust candidates under
+  `/tmp/composebastion-daemon-<jobId>-<attempt>.json` are temporary and must be
+  removed before reconciliation releases the target. The matching
+  `/etc/docker/daemon.json.composebastion-<jobId>-<attempt>.bak` file is
+  deliberately retained as root-owned rollback evidence after a successful
+  change. Remove that backup only after Docker readiness and registry behavior
+  have been independently verified and the rollback window has closed.
 - API logs use the route as `action` and include `hostId`/`jobId` when those
   route params are available. Worker logs use the Docker action type as `action`.
 - If a host is offline, run a host check from the UI, then verify SSH or agent

@@ -8,6 +8,10 @@ import { requireRole } from "../services/auth.js";
 import { auditContextFromRequest, writeAuditEvent } from "../services/audit.js";
 import { withTransaction } from "../db/pool.js";
 import { authenticatedReadRateLimit, sensitiveMutationRateLimit, streamRateLimit } from "../services/rateLimits.js";
+import {
+  startSessionReauthorization,
+  type SessionReauthorizationFailure
+} from "../services/sessionReauthorization.js";
 
 const containerParamSchema = z.object({
   hostId: z.string().uuid(),
@@ -19,6 +23,140 @@ const containerTailQuerySchema = z.object({
 });
 
 const inspectEnvRoles = new Set(["owner", "admin", "operator"]);
+const streamRoles = ["owner", "admin", "operator", "viewer"] as const;
+
+function streamAuthorizationMessage(reason: SessionReauthorizationFailure) {
+  return reason === "authorization_check_failed"
+    ? "Stream authorization could not be verified"
+    : "Stream authorization expired";
+}
+
+export async function handleContainerLogsStream(request: any, reply: any) {
+  const { hostId, containerId } = containerParamSchema.parse(request.params);
+  const { tail } = containerTailQuerySchema.parse(request.query);
+  reply.hijack();
+  reply.raw.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no"
+  });
+
+  let stop: () => void = () => undefined;
+  let stopAuthorization: () => void = () => undefined;
+  let ended = false;
+  const write = (event: string, payload: unknown) => {
+    if (reply.raw.destroyed || reply.raw.writableEnded) return;
+    reply.raw.write(`${event === "message" ? "" : `event: ${event}\n`}data: ${JSON.stringify(payload)}\n\n`);
+  };
+  const heartbeat = setInterval(() => write("ping", { ok: true }), 25_000);
+  heartbeat.unref?.();
+  const finish = () => {
+    if (ended) return;
+    ended = true;
+    clearInterval(heartbeat);
+    stopAuthorization();
+    try {
+      stop();
+    } catch (error) {
+      request.log.error({ err: error }, "Failed to stop container log stream");
+    } finally {
+      if (!reply.raw.destroyed && !reply.raw.writableEnded) reply.raw.end();
+    }
+  };
+  stopAuthorization = startSessionReauthorization(
+    request,
+    streamRoles,
+    (reason, error) => {
+      try {
+        if (error) {
+          request.log.error({ err: error }, "Container log stream authorization check failed");
+        }
+        write("error", { error: streamAuthorizationMessage(reason) });
+      } finally {
+        finish();
+      }
+    }
+  );
+  request.raw.on("close", finish);
+
+  try {
+    const connectedStop = await streamContainerLogs(
+      hostId,
+      containerId,
+      tail,
+      (line) => write("message", { line }),
+      (error) => write("error", { error: error.message })
+    );
+    if (ended) connectedStop();
+    else stop = connectedStop;
+  } catch (error) {
+    write("error", { error: error instanceof Error ? error.message : String(error) });
+    finish();
+  }
+}
+
+export async function handleContainerUsageStream(request: any, reply: any) {
+  const { hostId } = request.params as { hostId: string };
+  reply.hijack();
+  reply.raw.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no"
+  });
+
+  let stop: () => void = () => undefined;
+  let stopAuthorization: () => void = () => undefined;
+  let ended = false;
+  const write = (event: string, payload: unknown) => {
+    if (reply.raw.destroyed || reply.raw.writableEnded) return;
+    reply.raw.write(`${event === "message" ? "" : `event: ${event}\n`}data: ${JSON.stringify(payload)}\n\n`);
+  };
+  const heartbeat = setInterval(() => write("ping", { ok: true }), 25_000);
+  heartbeat.unref?.();
+  const finish = () => {
+    if (ended) return;
+    ended = true;
+    clearInterval(heartbeat);
+    stopAuthorization();
+    try {
+      stop();
+    } catch (error) {
+      request.log.error({ err: error }, "Failed to stop container usage stream");
+    } finally {
+      if (!reply.raw.destroyed && !reply.raw.writableEnded) reply.raw.end();
+    }
+  };
+  stopAuthorization = startSessionReauthorization(
+    request,
+    streamRoles,
+    (reason, error) => {
+      try {
+        if (error) {
+          request.log.error({ err: error }, "Container usage stream authorization check failed");
+        }
+        write("error", { error: streamAuthorizationMessage(reason) });
+      } finally {
+        finish();
+      }
+    }
+  );
+  request.raw.on("close", finish);
+
+  try {
+    const connectedStop = await streamContainerUsage(
+      hostId,
+      (stats) => write("message", { stats }),
+      (error) => write("error", { error: error.message })
+    );
+    if (ended) connectedStop();
+    else stop = connectedStop;
+  } catch (error) {
+    write("error", { error: error instanceof Error ? error.message : String(error) });
+    finish();
+  }
+}
 
 export async function registerContainerRoutes(app: FastifyInstance) {
   const viewer = requireRole(["owner", "admin", "operator", "viewer"]);
@@ -30,48 +168,8 @@ export async function registerContainerRoutes(app: FastifyInstance) {
     return getContainerLogs(hostId, containerId, tail ?? 200);
   });
 
-  const logsStreamHandler = async (request: any, reply: any) => {
-    const { hostId, containerId } = containerParamSchema.parse(request.params);
-    const { tail } = containerTailQuerySchema.parse(request.query);
-    reply.hijack();
-    reply.raw.writeHead(200, {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache, no-transform",
-      Connection: "keep-alive",
-      "X-Accel-Buffering": "no"
-    });
-
-    let stop: () => void = () => undefined;
-    let clientClosed = false;
-    const write = (event: string, payload: unknown) => {
-      if (reply.raw.destroyed) return;
-      reply.raw.write(`${event === "message" ? "" : `event: ${event}\n`}data: ${JSON.stringify(payload)}\n\n`);
-    };
-    const heartbeat = setInterval(() => write("ping", { ok: true }), 25_000);
-    request.raw.on("close", () => {
-      clientClosed = true;
-      clearInterval(heartbeat);
-      stop();
-    });
-
-    try {
-      const connectedStop = await streamContainerLogs(
-        hostId,
-        containerId,
-        tail,
-        (line) => write("message", { line }),
-        (error) => write("error", { error: error.message })
-      );
-      if (clientClosed) connectedStop();
-      else stop = connectedStop;
-    } catch (error) {
-      write("error", { error: error instanceof Error ? error.message : String(error) });
-      clearInterval(heartbeat);
-      reply.raw.end();
-    }
-  };
-  app.get("/api/hosts/:hostId/containers/:containerId/logs-stream", { preHandler: viewer, config: { rateLimit: streamRateLimit } }, logsStreamHandler);
-  app.get("/api/v1/hosts/:hostId/containers/:containerId/logs-stream", { preHandler: viewer, config: { rateLimit: streamRateLimit } }, logsStreamHandler);
+  app.get("/api/hosts/:hostId/containers/:containerId/logs-stream", { preHandler: viewer, config: { rateLimit: streamRateLimit } }, handleContainerLogsStream);
+  app.get("/api/v1/hosts/:hostId/containers/:containerId/logs-stream", { preHandler: viewer, config: { rateLimit: streamRateLimit } }, handleContainerLogsStream);
 
   app.get("/api/hosts/:hostId/containers/:containerId/stats", { preHandler: viewer }, async (request) => {
     const { hostId, containerId } = containerParamSchema.parse(request.params);
@@ -93,45 +191,8 @@ export async function registerContainerRoutes(app: FastifyInstance) {
   app.get("/api/hosts/:hostId/containers/usage", { preHandler: viewer, config: { rateLimit: authenticatedReadRateLimit } }, usageHandler);
   app.get("/api/v1/hosts/:hostId/containers/usage", { preHandler: viewer, config: { rateLimit: authenticatedReadRateLimit } }, usageHandler);
 
-  const usageStreamHandler = async (request: any, reply: any) => {
-    const { hostId } = request.params as { hostId: string };
-    reply.hijack();
-    reply.raw.writeHead(200, {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache, no-transform",
-      Connection: "keep-alive",
-      "X-Accel-Buffering": "no"
-    });
-
-    let stop: () => void = () => undefined;
-    let clientClosed = false;
-    const write = (event: string, payload: unknown) => {
-      if (reply.raw.destroyed) return;
-      reply.raw.write(`${event === "message" ? "" : `event: ${event}\n`}data: ${JSON.stringify(payload)}\n\n`);
-    };
-    const heartbeat = setInterval(() => write("ping", { ok: true }), 25_000);
-    request.raw.on("close", () => {
-      clientClosed = true;
-      clearInterval(heartbeat);
-      stop();
-    });
-
-    try {
-      const connectedStop = await streamContainerUsage(
-        hostId,
-        (stats) => write("message", { stats }),
-        (error) => write("error", { error: error.message })
-      );
-      if (clientClosed) connectedStop();
-      else stop = connectedStop;
-    } catch (error) {
-      write("error", { error: error instanceof Error ? error.message : String(error) });
-      clearInterval(heartbeat);
-      reply.raw.end();
-    }
-  };
-  app.get("/api/hosts/:hostId/containers/usage-stream", { preHandler: viewer, config: { rateLimit: streamRateLimit } }, usageStreamHandler);
-  app.get("/api/v1/hosts/:hostId/containers/usage-stream", { preHandler: viewer, config: { rateLimit: streamRateLimit } }, usageStreamHandler);
+  app.get("/api/hosts/:hostId/containers/usage-stream", { preHandler: viewer, config: { rateLimit: streamRateLimit } }, handleContainerUsageStream);
+  app.get("/api/v1/hosts/:hostId/containers/usage-stream", { preHandler: viewer, config: { rateLimit: streamRateLimit } }, handleContainerUsageStream);
 
   app.post("/api/hosts/:hostId/containers/:containerId/backups", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request, reply) => {
     const { hostId, containerId } = request.params as { hostId: string; containerId: string };
@@ -143,18 +204,24 @@ export async function registerContainerRoutes(app: FastifyInstance) {
     const { backups, jobs } = await createVolumeBackupsWithJobs(
       hostId,
       mounts.map((mount: { name: string }) => mount.name),
-      request.user?.id
+      request.user?.id,
+      async (client, created) => {
+        for (let index = 0; index < mounts.length; index += 1) {
+          await writeAuditEvent({
+            userId: request.user?.id,
+            hostId,
+            action: "container.volume_backup",
+            targetKind: "container",
+            targetId: containerId,
+            details: {
+              volumeName: mounts[index]!.name,
+              backupId: created.backups[index]!.id
+            },
+            ...auditContextFromRequest(request)
+          }, client);
+        }
+      }
     );
-    for (let index = 0; index < mounts.length; index += 1) {
-      await writeAuditEvent({
-        userId: request.user?.id,
-        hostId,
-        action: "container.volume_backup",
-        targetKind: "container",
-        targetId: containerId,
-        details: { volumeName: mounts[index]!.name, backupId: backups[index]!.id }
-      });
-    }
     return { backups, jobs };
   });
 

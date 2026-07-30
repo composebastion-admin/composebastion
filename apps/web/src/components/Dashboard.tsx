@@ -225,7 +225,7 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
   });
 
   useEffect(() => {
-    void refresh();
+    void refresh().catch(() => undefined);
   }, [refresh]);
 
   useEffect(() => {
@@ -321,8 +321,12 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
   const topbarTitle = tab === "files" ? "Host Files" : recoverySection ? "Recovery Center" : tab === "catalog" ? "Catalog" : scopeTitle;
 
   async function logout() {
-    await postJson("/api/auth/logout", {});
-    onLogout();
+    try {
+      await postJson("/api/auth/logout", {});
+      onLogout();
+    } catch (caught) {
+      pushToast(caught instanceof Error ? caught.message : String(caught), "error");
+    }
   }
 
   async function hostAction(type: string, payload: Record<string, unknown> = {}, hostId = selectedHost?.id) {
@@ -423,7 +427,7 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
             <span className="buttonText">Host</span>
           </button>
         )}
-        {authorization.canOperate && showHostForm && <HostForm runJob={runJob} onCreated={() => { setShowHostForm(false); void refresh(); }} />}
+        {authorization.canOperate && showHostForm && <HostForm runJob={runJob} onCreated={() => { setShowHostForm(false); void refresh().catch(() => undefined); }} />}
 
         <SideNavigation
           currentTab={tab}
@@ -500,7 +504,7 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
               <button
                 type="button"
                 className="topbarRefresh"
-                onClick={() => void refresh()}
+                onClick={() => void refresh().catch(() => undefined)}
                 disabled={refreshing}
                 title="Refresh data (r)"
                 aria-label="Refresh data"
@@ -512,16 +516,16 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
         </header>
 
         {loadError && (
-          <div className="notice error noticeRow">
+          <div className="notice error noticeRow" role="alert">
             <span>Could not load dashboard data: {loadError}</span>
-            <button type="button" onClick={() => void refresh()} disabled={refreshing}>
+            <button type="button" onClick={() => void refresh().catch(() => undefined)} disabled={refreshing}>
               <RefreshCw size={14} className={refreshing ? "spin" : undefined} />
               Retry
             </button>
           </div>
         )}
-        {selectedHost?.lastError && <div className="notice error">{selectedHost.lastError}</div>}
-        {action.error && <div className="notice error">{action.error}</div>}
+        {selectedHost?.lastError && <div className="notice error" role="alert">{selectedHost.lastError}</div>}
+        {action.error && <div className="notice error" role="alert">{action.error}</div>}
         {activity && (
           <div className="activityBanner">
             <RefreshCw className="spin" size={16} />

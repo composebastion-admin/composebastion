@@ -3,7 +3,11 @@ import type { PoolClient } from "pg";
 import type { StackVersionSource } from "@composebastion/shared";
 import { diffText } from "@composebastion/shared";
 import { query, withTransaction } from "../db/pool.js";
-import { enqueueJobInTransaction, notifyJobQueued } from "./jobs.js";
+import {
+  enqueueJobInTransaction,
+  lockComposeStackForMutation,
+  notifyJobQueued
+} from "./jobs.js";
 
 function iso(value: Date | string | null | undefined) {
   return value ? new Date(value).toISOString() : null;
@@ -96,7 +100,14 @@ export async function rollbackStackVersion(
   stackId: string,
   versionId: string,
   createdBy?: string | null,
-  note?: string | null
+  note?: string | null,
+  onQueued?: (
+    client: PoolClient,
+    result: {
+      version: ReturnType<typeof mapStackVersion>;
+      job: Awaited<ReturnType<typeof enqueueJobInTransaction>>;
+    }
+  ) => Promise<void>
 ) {
   const result = await withTransaction(async (client) => {
     const versionResult = await client.query(
@@ -107,8 +118,7 @@ export async function rollbackStackVersion(
     if (!versionRow) throw new Error("Stack version not found");
     const version = mapStackVersion(versionRow);
 
-    const stack = await client.query<any>("SELECT * FROM compose_stacks WHERE id = $1 FOR UPDATE", [stackId]);
-    const row = stack.rows[0];
+    const row = await lockComposeStackForMutation<any>(client, stackId);
     if (!row) throw new Error("Compose stack not found");
     if (row.source_working_dir || row.source_compose_path) {
       throw Object.assign(
@@ -147,10 +157,12 @@ export async function rollbackStackVersion(
     const job = await enqueueJobInTransaction(client, {
       type: "compose.deploy",
       hostId: row.host_id,
-      payload: { stackId }
+      payload: { stackId, pullBeforeDeploy: false }
     }, createdBy);
 
-    return { version, job };
+    const queued = { version, job };
+    await onQueued?.(client, queued);
+    return queued;
   });
   await notifyJobQueued(result.job.id);
   return result;

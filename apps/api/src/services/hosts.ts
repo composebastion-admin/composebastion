@@ -10,9 +10,164 @@ import { env } from "../config/env.js";
 import { validateAgentUrl } from "./ssrf.js";
 import { enqueueJobInTransaction, notifyJobQueued } from "./jobs.js";
 import { lockHostIdentityScope } from "./hostIdentity.js";
+import { writeAuditEvent } from "./audit.js";
+import { RECONCILABLE_DOCKER_MUTATION_TYPES } from "./dockerMutationScope.js";
 
 export { HOST_CREATE_LOCK_ID } from "./hostIdentity.js";
 const PRIVATE_AGENT_URL_ERROR = "This agent URL points at a private network address, which is blocked by default to prevent request forgery. If your agent really lives on a private LAN (typical for homelabs), set ALLOW_PRIVATE_AGENT_URLS=true on the ComposeBastion server and try again.";
+
+export type HostMutationAuditContext = {
+  userId?: string | null;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+};
+
+const UNKNOWN_OUTCOME_HOST_MUTATION_TYPES = [
+  ...RECONCILABLE_DOCKER_MUTATION_TYPES,
+  "host.configureRegistryTrust",
+  "compose.deploy",
+  "compose.stop",
+  "compose.remove",
+  "deploy.execute",
+  "recovery.restore",
+  "volume.restore",
+  "hostPath.restore",
+  "migration.execute"
+] as const;
+
+function hostMutationConflict(message: string, activeJobId?: string) {
+  return Object.assign(new Error(message), {
+    statusCode: 409,
+    ...(activeJobId ? { activeJobId } : {})
+  });
+}
+
+/**
+ * Lock one host against every job enqueue and reject lifecycle/configuration
+ * changes while a worker, ambiguous outcome, restore intent, or source restart
+ * obligation still owns that host. Callers must mutate through the same client.
+ */
+export async function lockHostForMutation<T = any>(
+  client: PoolClient,
+  hostId: string,
+  options: { includeDeleted?: boolean } = {}
+): Promise<T | null> {
+  const selected = await client.query(
+    `SELECT *
+     FROM docker_hosts
+     WHERE id = $1
+       ${options.includeDeleted ? "" : "AND deleted_at IS NULL"}
+     FOR UPDATE`,
+    [hostId]
+  );
+  const host = selected.rows[0] as T | undefined;
+  if (!host) return null;
+
+  await client.query(
+    "SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))",
+    [`docker-mutation-admission:${hostId}`]
+  );
+  const operations = await client.query<{
+    id: string;
+    status: string;
+    error: string | null;
+    result: Record<string, unknown> | null;
+  }>(
+    `SELECT jobs.id, jobs.status, jobs.error, jobs.result
+     FROM operation_jobs AS jobs
+     LEFT JOIN migration_runs AS migrations
+       ON migrations.id::text = jobs.payload->>'migrationRunId'
+     WHERE (
+       jobs.host_id = $1
+       OR jobs.payload->>'targetHostId' = $1::text
+       OR migrations.source_host_id = $1
+       OR migrations.target_host_id = $1
+     )
+       AND (
+         jobs.status IN ('queued', 'running')
+         OR (
+           jobs.status = 'failed'
+           AND jobs.type = ANY($2::text[])
+           AND (
+             jobs.error LIKE 'WORKER_LOST%'
+             OR jobs.error LIKE 'REMOTE_OUTCOME_UNKNOWN:%'
+           )
+           AND COALESCE(
+             jobs.result->'remoteOutcomeReconciliation'->>'status',
+             ''
+           ) <> 'reconciled'
+         )
+       )
+     ORDER BY jobs.created_at ASC
+     FOR UPDATE OF jobs`,
+    [hostId, [...UNKNOWN_OUTCOME_HOST_MUTATION_TYPES]]
+  );
+  const operation = operations.rows[0];
+  if (operation) {
+    throw hostMutationConflict(
+      operation.status === "failed"
+        ? "This host cannot be changed until its prior unknown remote outcome has been authoritatively reconciled."
+        : "This host cannot be changed while a remote operation is queued or running.",
+      operation.id
+    );
+  }
+
+  const attempts = await client.query<{ id: string }>(
+    `SELECT id
+     FROM recovery_restore_attempts
+     WHERE target_host_id = $1
+       AND status IN (
+         'active',
+         'awaiting_disposition',
+         'cleanup_pending',
+         'reconciling'
+       )
+     ORDER BY created_at ASC
+     FOR UPDATE`,
+    [hostId]
+  );
+  if (attempts.rows[0]) {
+    throw hostMutationConflict(
+      "This host cannot be changed while a restore attempt still owns exact-resource cleanup or reconciliation.",
+      attempts.rows[0].id
+    );
+  }
+
+  const restartObligations = await client.query<{ id: string }>(
+    `SELECT id
+     FROM recovery_points
+     WHERE host_id = $1
+       AND metadata->>'sourceRestartPending' = 'true'
+     ORDER BY created_at ASC
+     FOR UPDATE`,
+    [hostId]
+  );
+  if (restartObligations.rows[0]) {
+    throw hostMutationConflict(
+      "This host cannot be changed until its recovery source restart obligation is reconciled.",
+      restartObligations.rows[0].id
+    );
+  }
+  return host;
+}
+
+async function writeHostMutationAudit(
+  client: PoolClient,
+  hostId: string,
+  action: "host.create" | "host.update" | "host.delete" | "host.restore",
+  context?: HostMutationAuditContext
+) {
+  if (!context) return;
+  await writeAuditEvent({
+    userId: context.userId,
+    hostId,
+    action,
+    targetKind: "host",
+    targetId: hostId,
+    ipAddress: context.ipAddress,
+    userAgent: context.userAgent
+  }, client);
+}
 
 async function assertAgentUrlAllowed(agentUrl: string) {
   if (env.NODE_ENV !== "production" || env.ALLOW_PRIVATE_AGENT_URLS) return;
@@ -195,7 +350,11 @@ async function insertPreparedHost(client: PoolClient, prepared: Awaited<ReturnTy
   return mapHost(result.rows[0]);
 }
 
-export async function createHostWithSync(input: unknown, createdBy?: string | null) {
+export async function createHostWithSync(
+  input: unknown,
+  createdBy?: string | null,
+  auditContext?: HostMutationAuditContext
+) {
   // URL validation and secret encryption happen before the transaction so the
   // database lock is held only for the two durable writes.
   const prepared = await prepareHostCreate(input);
@@ -206,13 +365,18 @@ export async function createHostWithSync(input: unknown, createdBy?: string | nu
       { type: "host.sync", hostId: host.id, payload: {} },
       createdBy
     );
+    await writeHostMutationAudit(client, host.id, "host.create", auditContext);
     return { host, job };
   });
   await notifyJobQueued(result.job.id);
   return result;
 }
 
-export async function updateHost(id: string, input: unknown) {
+export async function updateHost(
+  id: string,
+  input: unknown,
+  auditContext?: HostMutationAuditContext
+) {
   const parsed = dockerHostUpdateSchema.parse(input);
   // Validate an explicitly supplied URL before opening a transaction. A
   // previously stored URL that becomes active is validated below against the
@@ -225,11 +389,7 @@ export async function updateHost(id: string, input: unknown) {
     // Serialize create/update duplicate checks, then lock this row so two
     // partial patches cannot overwrite each other's effective settings.
     await lockHostIdentityScope(client);
-    const currentResult = await client.query(
-      "SELECT * FROM docker_hosts WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
-      [id]
-    );
-    const currentRow = currentResult.rows[0];
+    const currentRow = await lockHostForMutation(client, id);
     if (!currentRow) return null;
     const current = mapHost(currentRow);
 
@@ -353,23 +513,44 @@ export async function updateHost(id: string, input: unknown) {
         updates.tags
       ]
     );
-    return result.rows[0] ? mapHost(result.rows[0]) : null;
+    if (!result.rows[0]) return null;
+    await writeHostMutationAudit(client, id, "host.update", auditContext);
+    return mapHost(result.rows[0]);
   });
 }
 
-export async function deleteHost(id: string) {
-  await query("UPDATE docker_hosts SET deleted_at = now(), updated_at = now() WHERE id = $1 AND deleted_at IS NULL", [id]);
-}
-
-export async function restoreHost(id: string) {
+export async function deleteHost(
+  id: string,
+  auditContext?: HostMutationAuditContext
+) {
   return withTransaction(async (client) => {
-    await lockHostIdentityScope(client);
-    const selected = await client.query(
-      "SELECT * FROM docker_hosts WHERE id = $1 AND deleted_at IS NOT NULL FOR UPDATE",
+    const host = await lockHostForMutation(client, id);
+    if (!host) return false;
+    const result = await client.query(
+      `UPDATE docker_hosts
+       SET deleted_at = now(), updated_at = now()
+       WHERE id = $1 AND deleted_at IS NULL
+       RETURNING id`,
       [id]
     );
-    const row = selected.rows[0];
-    if (!row) return null;
+    if (result.rowCount !== 1) return false;
+    await writeHostMutationAudit(client, id, "host.delete", auditContext);
+    return true;
+  });
+}
+
+export async function restoreHost(
+  id: string,
+  auditContext?: HostMutationAuditContext
+) {
+  return withTransaction(async (client) => {
+    await lockHostIdentityScope(client);
+    const row = await lockHostForMutation<any>(
+      client,
+      id,
+      { includeDeleted: true }
+    );
+    if (!row || row.deleted_at === null) return null;
     const prepared = await prepareHostCreate({
       name: row.name,
       hostname: row.hostname,
@@ -440,7 +621,9 @@ export async function restoreHost(id: string) {
         prepared.parsed.tags
       ]
     );
-    return result.rows[0] ? mapHost(result.rows[0]) : null;
+    if (!result.rows[0]) return null;
+    await writeHostMutationAudit(client, id, "host.restore", auditContext);
+    return mapHost(result.rows[0]);
   });
 }
 

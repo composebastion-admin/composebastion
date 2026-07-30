@@ -240,8 +240,9 @@ project discussion, questions, and updates.
   default; use `false` only for a trusted, direct-HTTP evaluation.
 - Set `CORS_ORIGINS` when the UI and API are served from different origins.
 - Restrict agent port `8090` to the manager network.
-- Consider the opt-in read-only/non-root container overlays after preparing
-  backup and scanner-cache ownership.
+- The manager runs as UID/GID `1000:1000`; pre-create bind-mounted backup
+  storage with that ownership. Consider the optional read-only/capability
+  hardening overlay after preparing backup and scanner-cache ownership.
 - Configure `BACKUP_HOST_PATH_ALLOWED_ROOTS` for production host-path recovery.
 - Test at least one recovery point, verify, and clone restore drill before
   relying on a backup target.
@@ -287,8 +288,12 @@ licensing and written permission requests go to `support@composebastion.com`.
 
 ## Development
 
+Source development and release checks require Node.js 24 and npm 11.19 or
+newer within npm 11. Dependency install scripts are denied by default; the
+reviewed, version-pinned exceptions are recorded in `package.json`.
+
 ```bash
-npm install
+npm ci
 npm run typecheck
 npm test
 npm run smoke:web

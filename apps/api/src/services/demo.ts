@@ -1,7 +1,9 @@
 import path from "node:path";
 import { v4 as uuid } from "uuid";
 import { registryCreateSchema, type DockerActionRequest, type DockerHost, type ResourceKind } from "@composebastion/shared";
+import type { PoolClient } from "pg";
 import { query, withTransaction } from "../db/pool.js";
+import { writeAuditEvent } from "./audit.js";
 import { encryptSecret } from "./crypto.js";
 import { mapHost } from "./mappers.js";
 import { lockHostIdentityScope } from "./hostIdentity.js";
@@ -189,8 +191,16 @@ function demoHostIdentityConflict() {
   );
 }
 
-export async function seedDemoWorkspace(createdBy?: string | null) {
-  return withTransaction(async (client) => {
+export async function seedDemoWorkspace(
+  createdBy?: string | null,
+  auditContext: {
+    ipAddress?: string | null;
+    userAgent?: string | null;
+    source?: "manual" | "setup";
+  } = {},
+  transactionClient?: PoolClient
+) {
+  const seed = async (client: PoolClient) => {
     await lockHostIdentityScope(client);
     const hostSpecs = [
       {
@@ -1157,14 +1167,25 @@ volumes:
         name: "Demo SMB Remote",
         kind: "rclone",
         enabled: true,
-        config: { demo: true, provider: "smb", remoteName: "demo-smb", smb: { server: "nas.demo.local", share: "composebastion", subPath: "showcase" } },
+        config: {
+          demo: true,
+          provider: "smb",
+          remoteName: "demo-smb",
+          remotePath: "composebastion/showcase",
+          smb: {
+            server: "nas.demo.local",
+            share: "composebastion",
+            subPath: "showcase",
+            username: "demo"
+          }
+        },
         accessKeyId: null,
         secret: null,
         provider: "smb",
-        remotePath: "demo-smb:composebastion/showcase",
+        remotePath: "composebastion/showcase",
         cache: "remote_only",
-        genericConfig: encryptSecret("[demo-smb]\ntype = smb\nhost = nas.demo.local\nshare = composebastion\n"),
-        genericCredentials: encryptSecret("username=demo\npassword=demo"),
+        genericConfig: null,
+        genericCredentials: encryptSecret(JSON.stringify({ password: "demo" })),
         health: "healthy",
         healthError: null
       },
@@ -2045,27 +2066,28 @@ volumes:
       );
     }
 
-    await client.query(
-      `INSERT INTO audit_events (id, user_id, host_id, action, target_kind, target_id, details)
-       VALUES ($1, $2, $3, 'demo.seed', 'workspace', $4, $5)`,
-      [
-        uuid(),
-        createdBy ?? null,
-        primaryHostId,
-        primaryHostId,
-        {
-          demo: true,
-          hosts: Object.keys(hostIds).length,
-          stacks: Object.keys(stackIds).length,
-          repositories: Object.keys(repoIds).length,
-          recoveryPoints: Object.keys(recoveryPointIds).length
-        }
-      ]
-    );
+    await writeAuditEvent({
+      userId: createdBy ?? null,
+      hostId: primaryHostId,
+      action: "demo.seed",
+      targetKind: "workspace",
+      targetId: primaryHostId,
+      details: {
+        demo: true,
+        hosts: Object.keys(hostIds).length,
+        stacks: Object.keys(stackIds).length,
+        repositories: Object.keys(repoIds).length,
+        recoveryPoints: Object.keys(recoveryPointIds).length,
+        source: auditContext.source ?? "setup"
+      },
+      ipAddress: auditContext.ipAddress ?? null,
+      userAgent: auditContext.userAgent ?? null
+    }, client);
 
     const host = await client.query("SELECT * FROM docker_hosts WHERE id = $1", [primaryHostId]);
     return { host: mapHost(host.rows[0]), seeded: true };
-  });
+  };
+  return transactionClient ? seed(transactionClient) : withTransaction(seed);
 }
 
 export async function demoInventorySummary(hostId: string) {

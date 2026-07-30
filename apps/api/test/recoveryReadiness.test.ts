@@ -218,6 +218,81 @@ describe("recovery readiness", () => {
     expect(readiness.reasons.map((reason) => reason.code)).toContain("target_health_failed");
   });
 
+  it("sanitizes recovery point, drill, target, and derived readiness diagnostics", async () => {
+    const secret = "readiness-diagnostic-secret";
+    const unsafe = `failed https://worker:${secret}@worker.example.test/recovery`;
+    getRecoveryPoint.mockResolvedValue(point({
+      status: "failed",
+      backupTargetId: targetId,
+      error: unsafe,
+      lastDrillStatus: "failed",
+      lastDrillError: unsafe,
+      lastSuccessfulDrillAt: null
+    }));
+    getBackupTarget.mockResolvedValue(target({
+      healthStatus: "failed",
+      healthError: unsafe
+    }));
+
+    const { analyzeRecoveryReadiness } = await import("../src/services/recoveryReadiness.js");
+    const readiness = await analyzeRecoveryReadiness({ hostId, appIdentity });
+
+    expect(readiness.lastRecoveryPoint?.error).toContain("worker.example.test/recovery");
+    expect(readiness.lastDrill?.lastDrillError).toContain("worker.example.test/recovery");
+    expect(readiness.targetHealth?.error).toContain("worker.example.test/recovery");
+    expect(readiness.reasons.find((reason) => reason.code === "latest_point_failed")?.message)
+      .toContain("worker.example.test/recovery");
+    expect(readiness.reasons.find((reason) => reason.code === "target_health_failed")?.message)
+      .toContain("worker.example.test/recovery");
+    expect(JSON.stringify(readiness)).not.toContain(secret);
+  });
+
+  it("fails closed for viewer readiness diagnostics that are not known profile values or URLs", async () => {
+    const canary = "raw-hook-stderr-client-secret";
+    const privatePath = "/srv/private/unprofiled/client-secret";
+    const raw = `${canary} at ${privatePath}`;
+    const {
+      analyzeRecoveryReadiness,
+      redactRecoveryReadinessForViewer
+    } = await import(
+      "../src/services/recoveryReadiness.js"
+    );
+    const readiness = await analyzeRecoveryReadiness({ hostId, appIdentity });
+    const outward = redactRecoveryReadinessForViewer({
+      ...readiness,
+      reasons: [{
+        code: "future_dynamic_reason",
+        severity: "critical",
+        message: raw,
+        action: `Inspect ${privatePath}`
+      }],
+      lastRecoveryPoint: readiness.lastRecoveryPoint
+        ? { ...readiness.lastRecoveryPoint, error: raw }
+        : null,
+      lastDrill: readiness.lastDrill
+        ? { ...readiness.lastDrill, lastDrillError: raw }
+        : null,
+      targetHealth: {
+        targetId,
+        targetName: "Private target",
+        status: "failed",
+        checkedAt: new Date(0).toISOString(),
+        error: raw
+      }
+    });
+
+    expect(outward.reasons).toEqual([{
+      code: "future_dynamic_reason",
+      severity: "critical",
+      message: "Recovery readiness reported an issue; detailed diagnostics require operator access."
+    }]);
+    expect(outward.lastRecoveryPoint?.error).toMatch(/operators and administrators/);
+    expect(outward.lastDrill?.lastDrillError).toMatch(/operators and administrators/);
+    expect(outward.targetHealth?.error).toMatch(/operators and administrators/);
+    expect(JSON.stringify(outward)).not.toContain(canary);
+    expect(JSON.stringify(outward)).not.toContain(privatePath);
+  });
+
   it.each([
     {
       targetOverrides: { enabled: false, healthStatus: "healthy" },

@@ -8,14 +8,18 @@ import {
 } from "@composebastion/shared";
 import { query, withTransaction } from "../db/pool.js";
 import { requireRole } from "../services/auth.js";
-import { enqueueJob } from "../services/jobs.js";
+import {
+  enqueueJobInTransaction,
+  lockComposeStackForMutation,
+  notifyJobQueued
+} from "../services/jobs.js";
 import { mapStack, redactStackSensitiveFields } from "../services/mappers.js";
 import { writeAuditEvent, auditContextFromRequest } from "../services/audit.js";
 import { buildProxySnippets, mergeTraefikLabelsIntoCompose } from "../services/proxySnippets.js";
 import {
   diffStackVersions,
   listStackVersions,
-  recordStackVersion,
+  recordStackVersionInTransaction,
   rollbackStackVersion
 } from "../services/stackVersions.js";
 import { sensitiveMutationRateLimit } from "../services/rateLimits.js";
@@ -32,6 +36,15 @@ export async function registerComposeRoutes(app: FastifyInstance) {
 
   app.get("/api/hosts/:id/compose", { preHandler: viewer }, async (request) => {
     const { id } = request.params as { id: string };
+    if (request.user?.role !== "viewer") {
+      await writeAuditEvent({
+        userId: request.user?.id,
+        hostId: id,
+        action: "compose.list_read",
+        targetKind: "compose_stack",
+        ...auditContextFromRequest(request)
+      });
+    }
     const result = await query(`${stackSelect} WHERE s.host_id = $1 ORDER BY s.name ASC`, [id]);
     const stacks = result.rows.map(mapStack);
     return {
@@ -44,28 +57,31 @@ export async function registerComposeRoutes(app: FastifyInstance) {
   app.post("/api/hosts/:id/compose", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
     const { id } = request.params as { id: string };
     const body = composeStackCreateSchema.parse(request.body);
-    const result = await query(
-      `INSERT INTO compose_stacks (id, host_id, name, project_name, compose_yaml, env)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING *`,
-      [uuid(), id, body.name, body.projectName, body.composeYaml, body.env]
-    );
-    const stack = mapStack(result.rows[0]);
-    await recordStackVersion({
-      stackId: stack.id,
-      composeYaml: stack.composeYaml,
-      env: stack.env,
-      source: "ui",
-      createdBy: request.user?.id,
-      note: "Initial stack create"
-    });
-    await writeAuditEvent({
-      userId: request.user?.id,
-      hostId: id,
-      action: "compose.create",
-      targetKind: "compose_stack",
-      targetId: stack.id,
-      ...auditContextFromRequest(request)
+    const stack = await withTransaction(async (client) => {
+      const result = await client.query(
+        `INSERT INTO compose_stacks (id, host_id, name, project_name, compose_yaml, env)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING *`,
+        [uuid(), id, body.name, body.projectName, body.composeYaml, body.env]
+      );
+      const created = mapStack(result.rows[0]);
+      await recordStackVersionInTransaction(client, {
+        stackId: created.id,
+        composeYaml: created.composeYaml,
+        env: created.env,
+        source: "ui",
+        createdBy: request.user?.id,
+        note: "Initial stack create"
+      });
+      await writeAuditEvent({
+        userId: request.user?.id,
+        hostId: id,
+        action: "compose.create",
+        targetKind: "compose_stack",
+        targetId: created.id,
+        ...auditContextFromRequest(request)
+      }, client);
+      return created;
     });
     return { stack };
   });
@@ -73,42 +89,45 @@ export async function registerComposeRoutes(app: FastifyInstance) {
   app.put("/api/compose/:stackId", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request, reply) => {
     const { stackId } = request.params as { stackId: string };
     const body = composeStackUpdateSchema.parse(request.body);
-    const current = await query<any>("SELECT * FROM compose_stacks WHERE id = $1", [stackId]);
-    const row = current.rows[0];
-    if (!row) {
+    const stack = await withTransaction(async (client) => {
+      const row = await lockComposeStackForMutation<any>(client, stackId);
+      if (!row) return null;
+      const result = await client.query(
+        `UPDATE compose_stacks
+         SET name = $2, project_name = $3, compose_yaml = $4, env = $5, updated_at = now()
+         WHERE id = $1
+         RETURNING *`,
+        [
+          stackId,
+          body.name ?? row.name,
+          body.projectName ?? row.project_name,
+          body.composeYaml ?? row.compose_yaml,
+          body.env ?? row.env
+        ]
+      );
+      const updated = mapStack(result.rows[0]);
+      await recordStackVersionInTransaction(client, {
+        stackId,
+        composeYaml: updated.composeYaml,
+        env: updated.env,
+        source: "ui",
+        createdBy: request.user?.id,
+        note: "Stack updated from UI"
+      });
+      await writeAuditEvent({
+        userId: request.user?.id,
+        hostId: row.host_id,
+        action: "compose.update",
+        targetKind: "compose_stack",
+        targetId: stackId,
+        ...auditContextFromRequest(request)
+      }, client);
+      return updated;
+    });
+    if (!stack) {
       reply.code(404);
       return { error: "Compose stack not found" };
     }
-    const result = await query(
-      `UPDATE compose_stacks
-       SET name = $2, project_name = $3, compose_yaml = $4, env = $5, updated_at = now()
-       WHERE id = $1
-       RETURNING *`,
-      [
-        stackId,
-        body.name ?? row.name,
-        body.projectName ?? row.project_name,
-        body.composeYaml ?? row.compose_yaml,
-        body.env ?? row.env
-      ]
-    );
-    const stack = mapStack(result.rows[0]);
-    await recordStackVersion({
-      stackId,
-      composeYaml: stack.composeYaml,
-      env: stack.env,
-      source: "ui",
-      createdBy: request.user?.id,
-      note: "Stack updated from UI"
-    });
-    await writeAuditEvent({
-      userId: request.user?.id,
-      hostId: row.host_id,
-      action: "compose.update",
-      targetKind: "compose_stack",
-      targetId: stackId,
-      ...auditContextFromRequest(request)
-    });
     return { stack };
   });
 
@@ -116,11 +135,7 @@ export async function registerComposeRoutes(app: FastifyInstance) {
     const { stackId } = request.params as { stackId: string };
     const body = composeStackProxyUpdateSchema.parse(request.body);
     const stack = await withTransaction(async (client) => {
-      const current = await client.query<any>(
-        "SELECT * FROM compose_stacks WHERE id = $1 FOR UPDATE",
-        [stackId]
-      );
-      const row = current.rows[0];
+      const row = await lockComposeStackForMutation<any>(client, stackId);
       if (!row) return null;
       const result = await client.query(
         `UPDATE compose_stacks
@@ -180,47 +195,60 @@ export async function registerComposeRoutes(app: FastifyInstance) {
 
   app.post("/api/compose/:stackId/proxy/apply-labels", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request, reply) => {
     const { stackId } = request.params as { stackId: string };
-    const result = await query<any>("SELECT * FROM compose_stacks WHERE id = $1", [stackId]);
-    const row = result.rows[0];
-    if (!row) {
+    const applied = await withTransaction(async (client) => {
+      const row = await lockComposeStackForMutation<any>(client, stackId);
+      if (!row) return null;
+      const snippets = buildProxySnippets({
+        domains: row.domains ?? [],
+        exposedService: row.exposed_service ?? null,
+        exposedPort: row.exposed_port === null || row.exposed_port === undefined ? null : Number(row.exposed_port),
+        tlsDesired: row.tls_desired ?? false,
+        projectName: row.project_name
+      });
+      const serviceName = row.exposed_service ?? "app";
+      const composeYaml = mergeTraefikLabelsIntoCompose(row.compose_yaml, serviceName, snippets.traefikLabels);
+      const updated = await client.query(
+        "UPDATE compose_stacks SET compose_yaml = $2, updated_at = now() WHERE id = $1 RETURNING *",
+        [stackId, composeYaml]
+      );
+      await recordStackVersionInTransaction(client, {
+        stackId,
+        composeYaml,
+        env: row.env ?? "",
+        source: "proxy_labels",
+        createdBy: request.user?.id,
+        note: "Merged Traefik labels into compose YAML"
+      });
+      await writeAuditEvent({
+        userId: request.user?.id,
+        hostId: row.host_id,
+        action: "compose.update",
+        targetKind: "compose_stack",
+        targetId: stackId,
+        details: { proxyLabelsApplied: true, serviceName },
+        ...auditContextFromRequest(request)
+      }, client);
+      return {
+        stack: mapStack(updated.rows[0]),
+        warnings: snippets.warnings
+      };
+    });
+    if (!applied) {
       reply.code(404);
       return { error: "Compose stack not found" };
     }
-    const snippets = buildProxySnippets({
-      domains: row.domains ?? [],
-      exposedService: row.exposed_service ?? null,
-      exposedPort: row.exposed_port === null || row.exposed_port === undefined ? null : Number(row.exposed_port),
-      tlsDesired: row.tls_desired ?? false,
-      projectName: row.project_name
-    });
-    const serviceName = row.exposed_service ?? "app";
-    const composeYaml = mergeTraefikLabelsIntoCompose(row.compose_yaml, serviceName, snippets.traefikLabels);
-    const updated = await query(
-      "UPDATE compose_stacks SET compose_yaml = $2, updated_at = now() WHERE id = $1 RETURNING *",
-      [stackId, composeYaml]
-    );
-    await recordStackVersion({
-      stackId,
-      composeYaml,
-      env: row.env ?? "",
-      source: "proxy_labels",
-      createdBy: request.user?.id,
-      note: "Merged Traefik labels into compose YAML"
-    });
-    await writeAuditEvent({
-      userId: request.user?.id,
-      hostId: row.host_id,
-      action: "compose.update",
-      targetKind: "compose_stack",
-      targetId: stackId,
-      details: { proxyLabelsApplied: true, serviceName },
-      ...auditContextFromRequest(request)
-    });
-    return { stack: mapStack(updated.rows[0]), warnings: snippets.warnings };
+    return applied;
   });
 
   app.get("/api/compose/:stackId/versions", { preHandler: operator }, async (request) => {
     const { stackId } = request.params as { stackId: string };
+    await writeAuditEvent({
+      userId: request.user?.id,
+      action: "compose.versions_read",
+      targetKind: "compose_stack",
+      targetId: stackId,
+      ...auditContextFromRequest(request)
+    });
     return { versions: await listStackVersions(stackId) };
   });
 
@@ -231,33 +259,54 @@ export async function registerComposeRoutes(app: FastifyInstance) {
       reply.code(400);
       return { error: "from and to version ids are required" };
     }
+    await writeAuditEvent({
+      userId: request.user?.id,
+      action: "compose.version_diff_read",
+      targetKind: "compose_stack",
+      targetId: stackId,
+      ...auditContextFromRequest(request)
+    });
     return diffStackVersions(stackId, from, to);
   });
 
   app.post("/api/compose/:stackId/rollback", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request, reply) => {
     const { stackId } = request.params as { stackId: string };
     const body = stackRollbackSchema.parse(request.body);
-    const stack = await query<any>("SELECT host_id FROM compose_stacks WHERE id = $1", [stackId]);
-    if (!stack.rows[0]) {
-      reply.code(404);
-      return { error: "Compose stack not found" };
+    try {
+      return await rollbackStackVersion(
+        stackId,
+        body.versionId,
+        request.user?.id,
+        body.note,
+        async (client, queued) => {
+          await writeAuditEvent({
+            userId: request.user?.id,
+            hostId: queued.job.hostId,
+            action: "compose.rollback",
+            targetKind: "compose_stack",
+            targetId: stackId,
+            details: {
+              versionId: body.versionId,
+              versionNumber: queued.version.versionNumber
+            },
+            ...auditContextFromRequest(request)
+          }, client);
+        }
+      );
+    } catch (error) {
+      if (error instanceof Error && error.message === "Compose stack not found") {
+        reply.code(404);
+        return { error: error.message };
+      }
+      throw error;
     }
-    const result = await rollbackStackVersion(stackId, body.versionId, request.user?.id, body.note);
-    await writeAuditEvent({
-      userId: request.user?.id,
-      hostId: stack.rows[0].host_id,
-      action: "compose.rollback",
-      targetKind: "compose_stack",
-      targetId: stackId,
-      details: { versionId: body.versionId, versionNumber: result.version.versionNumber },
-      ...auditContextFromRequest(request)
-    });
-    return result;
   });
 
   app.delete("/api/compose/:stackId", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
     const { stackId } = request.params as { stackId: string };
     await withTransaction(async (client) => {
+      const stack = await lockComposeStackForMutation<{ host_id: string }>(client, stackId);
+      if (!stack) return;
       const result = await client.query<{ host_id: string }>(
         "DELETE FROM compose_stacks WHERE id = $1 RETURNING host_id",
         [stackId]
@@ -280,35 +329,45 @@ export async function registerComposeRoutes(app: FastifyInstance) {
   for (const action of ["deploy", "stop", "remove"] as const) {
     app.post(`/api/compose/:stackId/${action}`, { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request, reply) => {
       const { stackId } = request.params as { stackId: string };
-      const stack = await query<any>("SELECT * FROM compose_stacks WHERE id = $1", [stackId]);
-      const row = stack.rows[0];
-      if (!row) {
+      const body = (request.body ?? {}) as { removeVolumes?: boolean };
+      const type = `compose.${action}` as "compose.deploy" | "compose.stop" | "compose.remove";
+      const transactionResult = await withTransaction(async (client) => {
+        const row = await lockComposeStackForMutation<any>(client, stackId);
+        if (!row) return null;
+        if (action === "deploy") {
+          await recordStackVersionInTransaction(client, {
+            stackId,
+            composeYaml: row.compose_yaml,
+            env: row.env ?? "",
+            source: "deploy",
+            createdBy: request.user?.id,
+            note: "Pre-deploy snapshot"
+          });
+        }
+        const payload = action === "remove"
+          ? { stackId, removeVolumes: body.removeVolumes ?? false }
+          : { stackId };
+        const job = await enqueueJobInTransaction(
+          client,
+          { type, hostId: row.host_id, payload } as Parameters<typeof enqueueJobInTransaction>[1],
+          request.user?.id
+        );
+        await writeAuditEvent({
+          userId: request.user?.id,
+          hostId: row.host_id,
+          action: type,
+          targetKind: "compose_stack",
+          targetId: stackId,
+          ...auditContextFromRequest(request)
+        }, client);
+        return { job };
+      });
+      if (!transactionResult) {
         reply.code(404);
         return { error: "Compose stack not found" };
       }
-      if (action === "deploy") {
-        await recordStackVersion({
-          stackId,
-          composeYaml: row.compose_yaml,
-          env: row.env ?? "",
-          source: "deploy",
-          createdBy: request.user?.id,
-          note: "Pre-deploy snapshot"
-        });
-      }
-      const body = (request.body ?? {}) as { removeVolumes?: boolean };
-      const type = `compose.${action}` as "compose.deploy" | "compose.stop" | "compose.remove";
-      const payload = action === "remove" ? { stackId, removeVolumes: body.removeVolumes ?? false } : { stackId };
-      const job = await enqueueJob({ type, hostId: row.host_id, payload } as Parameters<typeof enqueueJob>[0], request.user?.id);
-      await writeAuditEvent({
-        userId: request.user?.id,
-        hostId: row.host_id,
-        action: type,
-        targetKind: "compose_stack",
-        targetId: stackId,
-        ...auditContextFromRequest(request)
-      });
-      return { job };
+      await notifyJobQueued(transactionResult.job.id);
+      return transactionResult;
     });
   }
 }

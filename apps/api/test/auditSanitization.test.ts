@@ -32,6 +32,9 @@ function legacyDetails() {
       APP_SECRET: `app-secret-upper-${urlCanary}`,
       app_secret: `app-secret-snake-${urlCanary}`,
       appSecret: `app-secret-camel-${urlCanary}`,
+      credentialPassword: `credential-password-${urlCanary}`,
+      dbPassword: `database-password-${urlCanary}`,
+      secretValue: `nested-secret-value-${urlCanary}`,
       secret: true,
       hasSecretAccessKey: true,
       attempts: [
@@ -70,6 +73,9 @@ function safeLegacyDetails() {
       APP_SECRET: "[redacted]",
       app_secret: "[redacted]",
       appSecret: "[redacted]",
+      credentialPassword: "[redacted]",
+      dbPassword: "[redacted]",
+      secretValue: "[redacted]",
       secret: true,
       hasSecretAccessKey: true,
       attempts: [
@@ -99,19 +105,21 @@ describe("audit URL sanitization", () => {
 
     await writeAuditEvent({
       userId,
-      action: "qualification.audit",
+      action: "config.export",
       targetKind: "test",
       targetId: auditId,
       details: {
         ...legacyDetails(),
-        token: "top-level-token"
+        token: "top-level-token",
+        secret: `top-level-secret-${urlCanary}`
       }
     });
 
     const written = query.mock.calls[0]?.[1]?.[6];
     expect(written).toEqual({
       ...safeLegacyDetails(),
-      token: "[redacted]"
+      token: "[redacted]",
+      secret: "[redacted]"
     });
     expect(JSON.stringify(written)).not.toContain(urlCanary);
   });
@@ -123,7 +131,7 @@ describe("audit URL sanitization", () => {
           id: auditId,
           user_id: userId,
           host_id: null,
-          action: "qualification.audit",
+          action: "config.export",
           target_kind: "test",
           target_id: auditId,
           details: legacyDetails(),

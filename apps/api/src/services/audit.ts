@@ -1,5 +1,5 @@
 import { v4 as uuid } from "uuid";
-import type { AuditEvent } from "@composebastion/shared";
+import type { AuditAction, AuditEvent } from "@composebastion/shared";
 import {
   paginationQuerySchema,
   paginatedResponse,
@@ -11,7 +11,10 @@ import { query } from "../db/pool.js";
 
 const secretDetailKeys = new Set([
   "password",
+  "credentialpassword",
+  "dbpassword",
   "passphrase",
+  "secret",
   "token",
   "apikey",
   "accesstoken",
@@ -40,12 +43,32 @@ const secretDetailKeys = new Set([
   "appsecretkey"
 ]);
 
-function isSecretDetailKey(key: string) {
+function isSecretDetailKey(key: string, value: unknown) {
   const normalized = key.replace(/[_-]/g, "").toLowerCase();
+  if (typeof value === "boolean" && (normalized === "secret" || normalized.startsWith("has"))) {
+    return false;
+  }
   if (secretDetailKeys.has(normalized)) return true;
   const encryptedSuffix = "encrypted";
-  return normalized.endsWith(encryptedSuffix)
-    && secretDetailKeys.has(normalized.slice(0, -encryptedSuffix.length));
+  if (
+    normalized.endsWith(encryptedSuffix)
+    && secretDetailKeys.has(normalized.slice(0, -encryptedSuffix.length))
+  ) {
+    return true;
+  }
+  if (
+    typeof value !== "boolean"
+    && (
+      normalized.includes("secret")
+      || normalized.includes("apikey")
+      || normalized.endsWith("credential")
+      || normalized.endsWith("credentials")
+    )
+  ) {
+    return true;
+  }
+  return ["password", "passphrase", "token", "privatekey"]
+    .some((suffix) => normalized.endsWith(suffix));
 }
 
 function redactAuditSecretFields(value: unknown): unknown {
@@ -54,7 +77,7 @@ function redactAuditSecretFields(value: unknown): unknown {
   return Object.fromEntries(
     Object.entries(value as Record<string, unknown>).map(([key, item]) => [
       key,
-      isSecretDetailKey(key) ? "[redacted]" : redactAuditSecretFields(item)
+      isSecretDetailKey(key, item) ? "[redacted]" : redactAuditSecretFields(item)
     ])
   );
 }
@@ -92,7 +115,7 @@ export function auditContextFromRequest(request: FastifyRequest) {
 export async function writeAuditEvent(input: {
   userId?: string | null;
   hostId?: string | null;
-  action: string;
+  action: AuditAction;
   targetKind?: string | null;
   targetId?: string | null;
   details?: Record<string, unknown>;

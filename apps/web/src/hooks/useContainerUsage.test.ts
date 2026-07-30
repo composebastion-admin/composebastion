@@ -7,7 +7,8 @@ import {
   containerUsageStreamDecision,
   isContainerUsageSnapshotRequestCurrent,
   parseContainerUsageSnapshot,
-  reduceContainerUsageRows
+  reduceContainerUsageRows,
+  shouldApplyContainerUsageSnapshot
 } from "./useContainerUsage.js";
 
 const fullId = "5fb479d76eb43580fcd59f1739151aa4922d80b8292d25fecc76af9a149b7398";
@@ -55,6 +56,11 @@ describe("container usage snapshot lifecycle", () => {
     expect(isContainerUsageSnapshotRequestCurrent(activeGeneration, removedHostRequest!)).toBe(false);
     expect(isContainerUsageSnapshotRequestCurrent(activeGeneration, readdedHostRequest!)).toBe(true);
     expect(containerUsageSnapshotRequestGeneration(activeGeneration, inFlightGeneration)).toBeNull();
+  });
+
+  it("does not let a slower snapshot overwrite a newer stream frame", () => {
+    expect(shouldApplyContainerUsageSnapshot(4, 4)).toBe(true);
+    expect(shouldApplyContainerUsageSnapshot(4, 5)).toBe(false);
   });
 });
 

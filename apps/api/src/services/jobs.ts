@@ -1,11 +1,56 @@
 import { v4 as uuid } from "uuid";
+import path from "node:path";
 import type { PoolClient } from "pg";
 import type { DockerActionRequest, JobProgressStep, OperationJob } from "@composebastion/shared";
-import { dockerActionSchema, jobProgressStepSchema, paginationQuerySchema, paginatedResponse } from "@composebastion/shared";
+import {
+  canonicalizeDockerRegistryAuthority,
+  dockerActionSchema,
+  jobProgressStepSchema,
+  normalizeSavedRegistryOrigin,
+  paginationQuerySchema,
+  paginatedResponse,
+  sanitizeGitRepositoryUrlFields,
+  sanitizeUrlDiagnosticText
+} from "@composebastion/shared";
 import { query, withTransaction } from "../db/pool.js";
 import { createRedis } from "./redis.js";
-import { mapJob } from "./mappers.js";
+import { mapJob, sanitizeOperationJobForRead } from "./mappers.js";
+import {
+  canonicalizeDockerMutationScope,
+  dockerMutationAdmissionKeys,
+  dockerMutationScope,
+  dockerMutationScopesConflict,
+  RECONCILABLE_DOCKER_MUTATION_TYPES,
+  type DockerMutationScope
+} from "./dockerMutationScope.js";
+import {
+  hasReconciledRemoteOutcome,
+  REMOTE_OUTCOME_RECONCILIATION_KEY
+} from "./remoteOutcomeReconciliation.js";
 import type { SelfUpdateHandoff } from "./selfUpdate.js";
+import { stackRemoteDirectory } from "./remoteFiles.js";
+import { extractImagesFromCompose } from "./composeImages.js";
+import { decryptSecret } from "./crypto.js";
+import { parseImageReference } from "./registryManifest.js";
+import {
+  assertDockerMutationDoesNotConflictWithRecovery
+} from "./recoveryOperationAdmission.js";
+import {
+  applyGithubDeploymentBinding,
+  discardGithubDeploymentBinding,
+  failGithubDeploymentBinding,
+  githubDeploymentFailureNeedsReconciliation,
+  retainGithubDeploymentBinding
+} from "./githubDeploymentBinding.js";
+import {
+  applyGithubCloneDeploymentBinding,
+  discardGithubCloneDeploymentBinding,
+  failGithubCloneDeploymentBinding,
+  retainGithubCloneDeploymentBinding
+} from "./githubCloneDeploymentBinding.js";
+import {
+  remoteMutationProofFromResult
+} from "./remoteMutationProof.js";
 
 export const WORKER_HEARTBEAT_INTERVAL_MS = 5_000;
 export const WORKER_ACTIVE_WINDOW_SECONDS = 20;
@@ -30,6 +75,7 @@ export const MANUAL_RETRY_JOB_TYPES = new Set([
 
 const NON_IDEMPOTENT_WORKER_LOSS_RETRY_TYPES = new Set([
   "host.configureRegistryTrust",
+  "deploy.analyze",
   "deploy.execute"
 ]);
 
@@ -48,6 +94,8 @@ export class JobLeaseLostError extends Error {
 }
 
 export type JobExecutionFence = {
+  jobId?: string;
+  attemptCount?: number;
   assertActive: () => Promise<void>;
   withActiveLease: <T>(callback: (client: PoolClient) => Promise<T>) => Promise<T>;
 };
@@ -87,16 +135,170 @@ function jobInsert(action: DockerActionRequest, createdBy?: string | null, idemp
   };
 }
 
+function actionHostIds(action: DockerActionRequest) {
+  const targetHostId = "targetHostId" in action.payload
+    && typeof action.payload.targetHostId === "string"
+    ? action.payload.targetHostId
+    : null;
+  return [...new Set([
+    action.hostId,
+    ...(targetHostId ? [targetHostId] : [])
+  ])].sort();
+}
+
+async function lockJobHostsForEnqueue(
+  client: PoolClient,
+  action: DockerActionRequest
+) {
+  const hostIds = actionHostIds(action);
+  const selected = await client.query<{ id: string }>(
+    `SELECT id
+     FROM docker_hosts
+     WHERE id = ANY($1::uuid[])
+       AND deleted_at IS NULL
+     ORDER BY id
+     FOR SHARE`,
+    [hostIds]
+  );
+  if (selected.rows.length !== hostIds.length) {
+    throw Object.assign(
+      new Error("One or more Docker hosts are unavailable or were deleted."),
+      { statusCode: 409 }
+    );
+  }
+  for (const hostId of hostIds) {
+    await client.query(
+      "SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))",
+      [`docker-mutation-admission:${hostId}`]
+    );
+  }
+}
+
 type SingleFlightScope = {
   key: string;
+  keys?: string[];
   types: string[];
   hostId?: string;
+  hostIds?: string[];
+  dockerScope?: DockerMutationScope;
   matches: (row: any) => boolean;
   conflictMessage: string;
 };
 
+const CROSS_TARGET_JOB_TYPES = [
+  ...RECONCILABLE_DOCKER_MUTATION_TYPES,
+  "compose.deploy",
+  "compose.stop",
+  "compose.remove",
+  "deploy.analyze",
+  "deploy.execute"
+] as const;
+
 function normalizedRegistry(value: unknown) {
   return String(value ?? "").trim().replace(/^https?:\/\//i, "").replace(/\/+$/, "").toLowerCase();
+}
+
+function normalizedJobTargetPath(value: unknown) {
+  const target = String(value ?? "").trim();
+  return target ? path.posix.normalize(target) : target;
+}
+
+function normalizedJobProject(value: unknown) {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function isAmbiguousRemoteOutcome(row: any) {
+  return row?.status === "failed"
+    && (
+      String(row.error ?? "").startsWith("WORKER_LOST")
+      || String(row.error ?? "").startsWith("REMOTE_OUTCOME_UNKNOWN:")
+    );
+}
+
+function isUnreconciledRemoteOutcome(row: any) {
+  return isAmbiguousRemoteOutcome(row) && !hasReconciledRemoteOutcome(row.result);
+}
+
+export async function resolveDockerMutationScopeForJob(
+  client: PoolClient,
+  input: DockerActionRequest | any
+) {
+  const direct = dockerMutationScope(input);
+  if (direct) return direct;
+  const type = String(input?.type ?? "");
+  const hostId = String(input?.hostId ?? input?.host_id ?? "");
+  const payload = input?.payload && typeof input.payload === "object"
+    ? input.payload as Record<string, unknown>
+    : {};
+  if (
+    type === "compose.deploy"
+    || type === "compose.stop"
+    || type === "compose.remove"
+  ) {
+    const stackId = String(payload.stackId ?? "");
+    if (!stackId || !hostId) return null;
+    const selected = await client.query<{
+      id: string;
+      host_id: string;
+      project_name: string;
+      source_working_dir: string | null;
+    }>(
+      `SELECT id, host_id, project_name, source_working_dir
+       FROM compose_stacks
+       WHERE id = $1 AND host_id = $2`,
+      [stackId, hostId]
+    );
+    const stack = selected.rows[0];
+    if (!stack) return null;
+    return dockerMutationScope({
+      type: "compose.deployPath",
+      host_id: stack.host_id,
+      payload: {
+        workingDir: stack.source_working_dir || stackRemoteDirectory(stack.id),
+        projectName: stack.project_name,
+        _scopeKnown: true
+      }
+    });
+  }
+  if (type === "deploy.analyze" && hostId) {
+    // Analysis can clone Git state, write an isolated staging tree, and pull
+    // images. Until its exact remote primitive is terminal, conservatively
+    // serialize it against every mutable Docker/path domain on this host.
+    return dockerMutationScope({
+      type: "compose.deployPath",
+      host_id: hostId,
+      payload: {
+        workingDir: "*",
+        projectName: "*"
+      }
+    });
+  }
+  if (type === "deploy.execute") {
+    const analysisId = String(payload.analysisId ?? "");
+    if (!analysisId || !hostId) return null;
+    const selected = await client.query<{
+      host_id: string;
+      working_dir: string | null;
+      project_name: string | null;
+    }>(
+      `SELECT host_id, working_dir, project_name
+       FROM deployment_analyses
+       WHERE id = $1 AND host_id = $2`,
+      [analysisId, hostId]
+    );
+    const analysis = selected.rows[0];
+    if (!analysis?.working_dir || !analysis.project_name) return null;
+    return dockerMutationScope({
+      type: "compose.deployPath",
+      host_id: analysis.host_id,
+      payload: {
+        workingDir: analysis.working_dir,
+        projectName: analysis.project_name,
+        _scopeKnown: true
+      }
+    });
+  }
+  return null;
 }
 
 function singleFlightScope(action: DockerActionRequest): SingleFlightScope | null {
@@ -127,25 +329,98 @@ function singleFlightScope(action: DockerActionRequest): SingleFlightScope | nul
       conflictMessage: "Registry trust configuration for this host and registry is already queued or running."
     };
   }
+  if (
+    action.type === "compose.deploy"
+    || action.type === "compose.stop"
+    || action.type === "compose.remove"
+  ) {
+    const stackId = action.payload.stackId;
+    return {
+      key: `compose-stack:${action.hostId}:${stackId}`,
+      types: ["compose.deploy", "compose.stop", "compose.remove"],
+      hostId: action.hostId,
+      matches: (row) => row.payload?.stackId === stackId,
+      conflictMessage: "This Compose stack already has a deployment, stop, or removal job queued or running."
+    };
+  }
+  const mutationScope = dockerMutationScope(action);
+  if (mutationScope) {
+    const keys = dockerMutationAdmissionKeys(mutationScope);
+    return {
+      key: keys[0]!,
+      keys,
+      types: [...RECONCILABLE_DOCKER_MUTATION_TYPES],
+      hostIds: mutationScope.hostIds,
+      dockerScope: mutationScope,
+      matches: (row) => {
+        const candidate = dockerMutationScope(row);
+        return Boolean(candidate)
+          && dockerMutationScopesConflict(mutationScope, candidate!);
+      },
+      conflictMessage: "Another remote mutation for the same Docker resource, host path, or Compose project is already queued or running."
+    };
+  }
   return null;
 }
 
 async function findActiveSingleFlightJob(
   client: PoolClient,
   action: DockerActionRequest,
-  idempotencyKey?: string | null
+  idempotencyKey?: string | null,
+  revivedJobId?: string | null
 ) {
   const scope = singleFlightScope(action);
   if (!scope) return null;
 
-  await client.query(
-    "SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))",
-    [scope.key]
+  const initiallyResolvedDockerScope = await resolveDockerMutationScopeForJob(
+    client,
+    action
   );
+  if (initiallyResolvedDockerScope) {
+    scope.dockerScope = initiallyResolvedDockerScope;
+    scope.hostIds = initiallyResolvedDockerScope.hostIds;
+    scope.keys = [...new Set([
+      ...(scope.keys ?? [scope.key]),
+      ...dockerMutationAdmissionKeys(initiallyResolvedDockerScope)
+    ])].sort();
+    scope.key = scope.keys[0]!;
+    scope.types = [...new Set([
+      ...scope.types,
+      ...CROSS_TARGET_JOB_TYPES
+    ])];
+  }
+  for (const key of scope.keys ?? [scope.key]) {
+    await client.query(
+      "SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))",
+      [key]
+    );
+  }
   const values: unknown[] = [scope.types];
   const hostPredicate = scope.hostId
     ? ` AND host_id = $${values.push(scope.hostId)}`
-    : "";
+    : scope.hostIds?.length
+      ? ` AND (
+            host_id = ANY($${values.push(scope.hostIds)}::uuid[])
+            OR payload->>'targetHostId' = ANY($${values.length}::text[])
+          )`
+      : "";
+  const requestedDockerScope = scope.dockerScope
+    ? await canonicalizeDockerMutationScope(client, scope.dockerScope)
+    : null;
+  if (requestedDockerScope) {
+    await assertDockerMutationDoesNotConflictWithRecovery(
+      client,
+      requestedDockerScope
+    );
+  }
+  const matches = async (row: any) => {
+    if (scope.matches(row)) return true;
+    if (!requestedDockerScope) return false;
+    const candidate = await resolveDockerMutationScopeForJob(client, row);
+    if (!candidate) return false;
+    const canonicalCandidate = await canonicalizeDockerMutationScope(client, candidate);
+    return dockerMutationScopesConflict(requestedDockerScope, canonicalCandidate);
+  };
   const active = await client.query(
     `SELECT *
      FROM operation_jobs
@@ -154,13 +429,239 @@ async function findActiveSingleFlightJob(
      FOR UPDATE`,
     values
   );
-  const row = active.rows.find(scope.matches);
-  if (!row) return null;
-  if (idempotencyKey && row.idempotency_key === idempotencyKey) return row;
-  throw Object.assign(new Error(scope.conflictMessage), {
-    statusCode: 409,
-    activeJobId: row.id
+  let row: any = null;
+  for (const candidate of active.rows) {
+    if (await matches(candidate)) {
+      row = candidate;
+      break;
+    }
+  }
+  if (row) {
+    if (revivedJobId && row.id === revivedJobId) return row;
+    if (idempotencyKey && row.idempotency_key === idempotencyKey) return row;
+    throw Object.assign(new Error(scope.conflictMessage), {
+      statusCode: 409,
+      activeJobId: row.id
+    });
+  }
+
+  const ambiguous = await client.query(
+    `SELECT *
+     FROM operation_jobs
+     WHERE status = 'failed'
+       AND type = ANY($1::text[])${hostPredicate}
+       AND (
+         error LIKE 'WORKER_LOST%'
+         OR error LIKE 'REMOTE_OUTCOME_UNKNOWN:%'
+       )
+     ORDER BY completed_at DESC`,
+    values
+  );
+  let unresolved: any = null;
+  for (const candidate of ambiguous.rows) {
+    if (
+      isUnreconciledRemoteOutcome(candidate)
+      && await matches(candidate)
+    ) {
+      unresolved = candidate;
+      break;
+    }
+  }
+  if (unresolved) {
+    throw conflictError(
+      "A prior remote operation on this target has an unknown outcome. ComposeBastion will unlock it only after bounded quiescence and authoritative target reconciliation.",
+      unresolved.id
+    );
+  }
+  return null;
+}
+
+/**
+ * Hold the same host rows and advisory domains used by queued Docker work
+ * while a synchronous external mutation runs. Active or unresolved jobs are
+ * rejected before the callback, and enqueues that arrive afterward wait until
+ * the callback finishes. This is intentionally conservative for host paths:
+ * remote symlinks make lexical path disjointness non-authoritative.
+ */
+export async function withSynchronousDockerMutationAdmission<T>(
+  action: DockerActionRequest,
+  operation: (client: PoolClient) => Promise<T>
+) {
+  const parsed = dockerActionSchema.parse(action);
+  return withTransaction(async (client) => {
+    await lockJobHostsForEnqueue(client, parsed);
+    await findActiveSingleFlightJob(client, parsed);
+    return operation(client);
   });
+}
+
+function conflictError(message: string, activeJobId?: string) {
+  return Object.assign(new Error(message), {
+    statusCode: 409,
+    ...(activeJobId ? { activeJobId } : {})
+  });
+}
+
+/**
+ * Serialize a user-visible stack mutation with compose job enqueueing.
+ *
+ * Callers must perform the mutation through the same transaction/client after
+ * this returns. The stack row lock protects its identity while the advisory
+ * lock establishes an ordering against enqueueJobInTransaction.
+ */
+export async function lockComposeStackForMutation<T = any>(
+  client: PoolClient,
+  stackId: string
+): Promise<T | null> {
+  const selected = await client.query(
+    "SELECT * FROM compose_stacks WHERE id = $1 FOR UPDATE",
+    [stackId]
+  );
+  const stack = selected.rows[0] as (
+    T & { host_id: string; project_name: string }
+  ) | undefined;
+  if (!stack) return null;
+
+  await client.query(
+    "SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))",
+    [`compose-stack:${stack.host_id}:${stackId}`]
+  );
+  const operations = await client.query(
+    `SELECT id, status, error, result
+     FROM operation_jobs
+     WHERE type IN ('compose.deploy', 'compose.stop', 'compose.remove')
+       AND host_id = $2
+       AND payload->>'stackId' = $1
+       AND (
+         status IN ('queued', 'running')
+         OR (
+           status = 'failed'
+           AND (
+             error LIKE 'WORKER_LOST%'
+             OR error LIKE 'REMOTE_OUTCOME_UNKNOWN:%'
+           )
+         )
+       )
+     ORDER BY created_at ASC`,
+    [stackId, stack.host_id]
+  );
+  const active = operations.rows.find((row) =>
+    row.status === "queued" || row.status === "running"
+  );
+  if (active) {
+    throw conflictError(
+      "This Compose stack cannot be changed while a deployment, stop, or removal job is queued or running.",
+      active.id
+    );
+  }
+  const unresolved = operations.rows.find(isUnreconciledRemoteOutcome);
+  if (unresolved) {
+    throw conflictError(
+      "This Compose stack cannot be changed until its prior unknown remote outcome has been authoritatively reconciled.",
+      unresolved.id
+    );
+  }
+
+  // Bindings are normally paired with a queued/running compose.deploy row.
+  // Check independently so a damaged or manually altered queue cannot make a
+  // still-authoritative deployment snapshot mutable.
+  const binding = await client.query<{ operation_job_id: string }>(
+    `SELECT operation_job_id
+     FROM (
+       SELECT operation_job_id, created_at
+       FROM github_deployment_jobs
+       WHERE stack_id = $1
+       UNION ALL
+       SELECT operation_job_id, created_at
+       FROM github_clone_deployment_jobs
+       WHERE stack_id = $1
+          OR (host_id = $2 AND project_name = $3)
+     ) AS bindings
+     ORDER BY created_at ASC
+     LIMIT 1`,
+    [stackId, stack.host_id, stack.project_name]
+  );
+  if (binding.rows[0]) {
+    throw conflictError(
+      "This Compose stack cannot be changed while its GitHub deployment outcome is unresolved.",
+      binding.rows[0].operation_job_id
+    );
+  }
+  return stack;
+}
+
+/**
+ * Lock a repository and reject edits, deletion, or a second deployment while
+ * an API-mode binding or host-clone deployment still owns its outcome.
+ */
+export async function lockGithubRepositoryForMutation<T = any>(
+  client: PoolClient,
+  repositoryId: string
+): Promise<T | null> {
+  const selected = await client.query(
+    "SELECT * FROM github_repositories WHERE id = $1 FOR UPDATE",
+    [repositoryId]
+  );
+  const repository = selected.rows[0] as T | undefined;
+  if (!repository) return null;
+
+  const binding = await client.query<{ operation_job_id: string }>(
+    `SELECT operation_job_id
+     FROM (
+       SELECT operation_job_id, created_at
+       FROM github_deployment_jobs
+       WHERE repository_id = $1
+       UNION ALL
+       SELECT operation_job_id, created_at
+       FROM github_clone_deployment_jobs
+       WHERE repository_id = $1
+     ) AS bindings
+     ORDER BY created_at ASC
+     LIMIT 1`,
+    [repositoryId]
+  );
+  if (binding.rows[0]) {
+    throw conflictError(
+      "This GitHub repository cannot be changed while its deployment outcome is unresolved.",
+      binding.rows[0].operation_job_id
+    );
+  }
+
+  const cloneDeploy = await client.query(
+    `SELECT id, status, error, result
+     FROM operation_jobs
+     WHERE type = 'git.cloneDeploy'
+       AND payload->>'repositoryId' = $1
+       AND (
+         status IN ('queued', 'running')
+         OR (
+           status = 'failed'
+           AND (
+             error LIKE 'WORKER_LOST%'
+             OR error LIKE 'REMOTE_OUTCOME_UNKNOWN:%'
+           )
+         )
+       )
+     ORDER BY created_at ASC`,
+    [repositoryId]
+  );
+  const activeClone = cloneDeploy.rows.find((row) =>
+    row.status === "queued" || row.status === "running"
+  );
+  if (activeClone) {
+    throw conflictError(
+      "This GitHub repository cannot be changed while a clone/build deployment is queued or running.",
+      activeClone.id
+    );
+  }
+  const unresolvedClone = cloneDeploy.rows.find(isUnreconciledRemoteOutcome);
+  if (unresolvedClone) {
+    throw conflictError(
+      "This GitHub repository cannot be changed until its prior clone/build outcome has been authoritatively reconciled.",
+      unresolvedClone.id
+    );
+  }
+  return repository;
 }
 
 export async function notifyJobQueued(jobId: string) {
@@ -194,13 +695,14 @@ export async function enqueueJobInTransaction(
   idempotencyKey?: string | null
 ) {
   const parsed = dockerActionSchema.parse(action);
+  await lockJobHostsForEnqueue(client, parsed);
   const active = await findActiveSingleFlightJob(client, parsed, idempotencyKey);
   if (active) return mapJob(active);
   const insert = jobInsert(parsed, createdBy, idempotencyKey);
   const result = await client.query(insert.text, insert.values);
   const row = result.rows[0];
   if (!row) throw new Error("Failed to enqueue job");
-  return mapJob(row);
+  return sanitizeOperationJobForRead(mapJob(row));
 }
 
 export async function enqueueJob(
@@ -209,23 +711,11 @@ export async function enqueueJob(
   idempotencyKey?: string | null
 ) {
   const parsed = dockerActionSchema.parse(action);
-  if (singleFlightScope(parsed)) {
-    const job = await withTransaction((client) => (
-      enqueueJobInTransaction(client, parsed, createdBy, idempotencyKey)
-    ));
-    await notifyJobQueued(job.id);
-    return job;
-  }
-
-  const insert = jobInsert(parsed, createdBy, idempotencyKey);
-  const result = await query(insert.text, insert.values);
-
-  const row = result.rows[0];
-  if (!row) throw new Error("Failed to enqueue job");
-
-  await notifyJobQueued(row.id);
-
-  return mapJob(row);
+  const job = await withTransaction((client) => (
+    enqueueJobInTransaction(client, parsed, createdBy, idempotencyKey)
+  ));
+  await notifyJobQueued(job.id);
+  return sanitizeOperationJobForRead(job);
 }
 
 export async function listJobs(queryInput: unknown) {
@@ -293,7 +783,9 @@ export function buildJobProgress(type: string, phase: "running" | "completed" | 
 }
 
 export async function updateJobProgress(id: string, steps: JobProgressStep[], lease: JobLease) {
-  const parsed = steps.map((step) => jobProgressStepSchema.parse(step));
+  const parsed = sanitizeGitRepositoryUrlFields(
+    steps.map((step) => jobProgressStepSchema.parse(step))
+  );
   const predicate = leasePredicate(lease);
   const result = await query(
     `UPDATE operation_jobs
@@ -310,74 +802,516 @@ export async function markJobProgressStep(jobId: string, type: string, activeSte
   return updateJobProgress(jobId, buildJobProgress(type, "running", activeStepId, detail), lease);
 }
 
-export async function cancelQueuedJob(id: string) {
-  const result = await query(
-    `UPDATE operation_jobs
-     SET status = 'canceled',
-         error = 'Canceled before start',
-         completed_at = now(),
-         updated_at = now()
-     WHERE id = $1 AND status = 'queued'
-     RETURNING *`,
-    [id]
-  );
-  if (result.rows[0]) return { job: mapJob(result.rows[0]), canceled: true };
-  return { job: await getJob(id), canceled: false };
-}
-
-export async function retryJob(id: string, createdBy?: string | null) {
-  const result = await withTransaction(async (client) => {
-    const selected = await client.query("SELECT * FROM operation_jobs WHERE id = $1 FOR UPDATE", [id]);
-    const row = selected.rows[0];
-    if (!row) return { original: null, retried: null };
-    const original = mapJob(row);
-    const ambiguousWorkerLoss = NON_IDEMPOTENT_WORKER_LOSS_RETRY_TYPES.has(original.type)
-      && original.error?.startsWith("WORKER_LOST");
-    if (
-      (original.status !== "failed" && original.status !== "canceled")
-      || !original.hostId
-      || !MANUAL_RETRY_JOB_TYPES.has(original.type)
-      || Number(row.attempt_count ?? 0) >= MAX_AUTO_ATTEMPTS
-      // The expired worker may still be mutating Docker or deployment state.
-      // Reconciliation must establish the remote outcome before a new
-      // dedicated operation is allowed; replaying this row is unsafe.
-      || ambiguousWorkerLoss
-    ) {
-      return { original, retried: null };
-    }
-
-    // Manual retry is another enqueue path. Apply the same advisory-lock
-    // single-flight policy before reviving the existing row so it cannot race a
-    // newly queued deployment or registry-trust operation.
-    const retryAction = dockerActionSchema.parse({
-      type: original.type,
-      hostId: original.hostId,
-      payload: original.payload
-    });
-    await findActiveSingleFlightJob(client, retryAction);
-
-    const retriedResult = await client.query(
+export async function cancelQueuedJob(
+  id: string,
+  onCanceled?: (
+    client: PoolClient,
+    result: { job: OperationJob; canceled: true }
+  ) => Promise<void>
+) {
+  const cancellationMessage = "Canceled before start";
+  return withTransaction(async (client) => {
+    // Claim and cancellation both transition the same queued row under its
+    // PostgreSQL row lock. Whichever transition commits first wins, and linked
+    // domain state is finalized in the same transaction as cancellation.
+    const result = await client.query(
       `UPDATE operation_jobs
-       SET status = 'queued', result = NULL, error = NULL, progress = '[]'::jsonb,
-           created_by = COALESCE($2, created_by), started_at = NULL, completed_at = NULL,
-           lease_owner = NULL, lease_expires_at = NULL, updated_at = now()
-       WHERE id = $1
-         AND status IN ('failed', 'canceled')
-         AND attempt_count < $3
+       SET status = 'canceled',
+           error = $2,
+           completed_at = now(),
+           lease_owner = NULL,
+           lease_expires_at = NULL,
+           updated_at = now()
+       WHERE id = $1 AND status = 'queued'
        RETURNING *`,
-      [id, createdBy ?? null, MAX_AUTO_ATTEMPTS]
+      [id, cancellationMessage]
+    );
+    if (result.rows[0]) {
+      await finalizeLinkedOperationFailure(client, result.rows[0], cancellationMessage);
+      await discardGithubDeploymentBinding(client, id);
+      await discardGithubCloneDeploymentBinding(client, id);
+      const canceled = {
+        job: mapJob(result.rows[0]),
+        canceled: true as const
+      };
+      await onCanceled?.(client, canceled);
+      return canceled;
+    }
+    const selected = await client.query(
+      "SELECT * FROM operation_jobs WHERE id = $1",
+      [id]
     );
     return {
-      original,
-      retried: retriedResult.rows[0] ? mapJob(retriedResult.rows[0]) : null
+      job: selected.rows[0] ? mapJob(selected.rows[0]) : null,
+      canceled: false
     };
   });
+}
+
+async function lockRetryAdmissionResource(
+  client: PoolClient,
+  action: DockerActionRequest
+) {
+  const reference = action.type === "backup.verify"
+    ? {
+      table: "backups",
+      id: action.payload.backupId
+    }
+    : action.type === "recovery.verify"
+      ? {
+        table: "recovery_points",
+        id: action.payload.recoveryPointId
+      }
+      : null;
+  if (!reference) return true;
+  const selected = await client.query(
+    `SELECT metadata
+     FROM ${reference.table}
+     WHERE id = $1
+     FOR UPDATE`,
+    [reference.id]
+  );
+  const metadata = selected.rows[0]?.metadata;
+  return Boolean(selected.rows[0])
+    && !(
+      typeof metadata === "object"
+      && metadata !== null
+      && typeof metadata.deletionClaimToken === "string"
+      && metadata.deletionClaimToken.length > 0
+    );
+}
+
+function canRetryJob(original: OperationJob, row: any) {
+  const ambiguousWorkerLoss = NON_IDEMPOTENT_WORKER_LOSS_RETRY_TYPES.has(original.type)
+    && (
+      original.error?.startsWith("WORKER_LOST")
+      || original.error?.startsWith("REMOTE_OUTCOME_UNKNOWN:")
+    );
+  return (
+    (original.status === "failed" || original.status === "canceled")
+    && Boolean(original.hostId)
+    && MANUAL_RETRY_JOB_TYPES.has(original.type)
+    && Number(row.attempt_count ?? 0) < MAX_AUTO_ATTEMPTS
+    // The expired worker may still be mutating Docker or deployment state.
+    // Reconciliation must establish the remote outcome before a new
+    // dedicated operation is allowed; replaying this row is unsafe.
+    && !ambiguousWorkerLoss
+  );
+}
+
+function deploymentAnalysisAllowsRetry(action: DockerActionRequest, row: any) {
+  if (
+    (action.type !== "deploy.analyze" && action.type !== "deploy.execute")
+    || !row
+    || row.unexpired !== true
+    || row.host_id !== action.hostId
+  ) {
+    return false;
+  }
+  return action.type === "deploy.analyze"
+    ? row.status === "queued" || row.status === "failed"
+    : row.status === "deploying" || row.status === "failed";
+}
+
+async function lockDeploymentRetryTargets(
+  client: PoolClient,
+  action: DockerActionRequest,
+  analysis: {
+    id: string;
+    host_id: string;
+    working_dir: string | null;
+    project_name: string | null;
+  }
+) {
+  if (action.type !== "deploy.execute") return;
+  const normalizedPath = normalizedJobTargetPath(analysis.working_dir);
+  const normalizedProject = String(analysis.project_name ?? "").trim().toLowerCase();
+  if (!normalizedPath || !normalizedProject) {
+    throw conflictError(
+      "This deployment cannot be retried until its working directory and project name are resolved."
+    );
+  }
+  const keys = [...new Set([
+    `deployment-target:path:${analysis.host_id}:${normalizedPath}`,
+    `deployment-target:project:${analysis.host_id}:${normalizedProject}`
+  ])].sort();
+  for (const key of keys) {
+    await client.query(
+      "SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))",
+      [key]
+    );
+  }
+
+  const conflict = await client.query<{ id: string }>(
+    `SELECT jobs.id
+     FROM deployment_analyses AS analyses
+     JOIN operation_jobs AS jobs
+       ON jobs.type = 'deploy.execute'
+      AND jobs.payload->>'analysisId' = analyses.id::text
+     WHERE analyses.id <> $1
+       AND analyses.host_id = $2
+       AND (
+         jobs.status IN ('queued', 'running')
+         OR (
+           (
+             jobs.status = 'failed'
+             OR analyses.error LIKE 'WORKER_LOST:%'
+             OR analyses.error LIKE 'REMOTE_OUTCOME_UNKNOWN:%'
+           )
+           AND (
+             jobs.error LIKE 'WORKER_LOST%'
+             OR jobs.error LIKE 'REMOTE_OUTCOME_UNKNOWN:%'
+             OR analyses.error LIKE 'WORKER_LOST:%'
+             OR analyses.error LIKE 'REMOTE_OUTCOME_UNKNOWN:%'
+           )
+           AND COALESCE(jobs.result-> $5 ->> 'status', '') <> 'reconciled'
+         )
+       )
+       AND (
+         analyses.working_dir = $3
+         OR lower(analyses.project_name) = $4
+       )
+     ORDER BY jobs.created_at ASC
+     LIMIT 1
+     FOR UPDATE OF jobs`,
+    [
+      analysis.id,
+      analysis.host_id,
+      normalizedPath,
+      normalizedProject,
+      REMOTE_OUTCOME_RECONCILIATION_KEY
+    ]
+  );
+  if (conflict.rows[0]) {
+    throw conflictError(
+      "Another deployment for this host directory or Compose project is already queued or running.",
+      conflict.rows[0].id
+    );
+  }
+}
+
+async function requeueJob(
+  client: PoolClient,
+  id: string,
+  createdBy?: string | null
+) {
+  return client.query(
+    `UPDATE operation_jobs
+     SET status = 'queued', result = NULL, error = NULL, progress = '[]'::jsonb,
+         created_by = COALESCE($2, created_by), started_at = NULL, completed_at = NULL,
+         lease_owner = NULL, lease_expires_at = NULL, updated_at = now()
+     WHERE id = $1
+       AND status IN ('failed', 'canceled')
+       AND attempt_count < $3
+     RETURNING *`,
+    [id, createdBy ?? null, MAX_AUTO_ATTEMPTS]
+  );
+}
+
+function registryAuthorityForRetry(row: {
+  url: string;
+  insecure: boolean;
+}) {
+  const origin = normalizeSavedRegistryOrigin(String(row.url), {
+    defaultProtocol: row.insecure ? "http" : "https"
+  });
+  return canonicalizeDockerRegistryAuthority(new URL(origin).host);
+}
+
+async function deploymentRegistryCredentialWasDeleted(
+  client: PoolClient,
+  authorities: Set<string>,
+  originalCreatedAt: unknown
+) {
+  const deletedSinceOriginal = await client.query<{
+    authority: string | null;
+  }>(
+    `SELECT details->>'authority' AS authority
+     FROM audit_events
+     WHERE action = 'registry.delete'
+       AND created_at >= $1::timestamptz
+     ORDER BY created_at ASC`,
+    [new Date(String(originalCreatedAt)).toISOString()]
+  );
+  return deletedSinceOriginal.rows.some((row) => {
+    if (!row.authority) return true;
+    try {
+      return authorities.has(
+        canonicalizeDockerRegistryAuthority(row.authority)
+      );
+    } catch {
+      return true;
+    }
+  });
+}
+
+function deletedDeploymentRegistryCredentialError() {
+  return Object.assign(
+    new Error(
+      "Registry credentials used by this deployment may have been deleted. Analyze the deployment again before retrying."
+    ),
+    { statusCode: 409 }
+  );
+}
+
+async function lockDeploymentRetryRegistryCredentials(
+  client: PoolClient,
+  composeYaml: unknown,
+  encryptedEnvironment: unknown,
+  originalCreatedAt: unknown
+) {
+  if (typeof composeYaml !== "string" || !composeYaml.trim()) return;
+  let authorities: Set<string>;
+  try {
+    const environment = typeof encryptedEnvironment === "string"
+      && encryptedEnvironment
+      ? decryptSecret(encryptedEnvironment)
+      : "";
+    authorities = new Set(
+      extractImagesFromCompose(composeYaml, environment).map((image) =>
+        canonicalizeDockerRegistryAuthority(
+          parseImageReference(image).registry
+        )
+      )
+    );
+  } catch {
+    throw Object.assign(
+      new Error(
+        "The saved deployment definition is no longer valid. Analyze the deployment again before retrying."
+      ),
+      { statusCode: 409 }
+    );
+  }
+  if (!authorities.size) return;
+
+  if (await deploymentRegistryCredentialWasDeleted(
+    client,
+    authorities,
+    originalCreatedAt
+  )) {
+    throw deletedDeploymentRegistryCredentialError();
+  }
+
+  const available = await client.query<{
+    id: string;
+    url: string;
+    insecure: boolean;
+  }>(
+    "SELECT id, url, insecure FROM registries ORDER BY id ASC"
+  );
+  const relevantIds = available.rows
+    .filter((row) => authorities.has(registryAuthorityForRetry(row)))
+    .map((row) => row.id)
+    .sort();
+  for (const registryId of relevantIds) {
+    try {
+      const locked = await client.query(
+        "SELECT id FROM registries WHERE id = $1 FOR UPDATE NOWAIT",
+        [registryId]
+      );
+      if (!locked.rows[0]) {
+        throw Object.assign(
+          new Error(
+            "Registry credentials changed while this deployment retry was being prepared. Analyze again."
+          ),
+          { statusCode: 409 }
+        );
+      }
+    } catch (error) {
+      if ((error as { statusCode?: number }).statusCode === 409) throw error;
+      throw Object.assign(
+        new Error(
+          "Registry credentials are being changed. Retry the deployment after that change finishes."
+        ),
+        { statusCode: 409 }
+      );
+    }
+  }
+  // Registry mutation transactions write registry.delete audit evidence
+  // atomically with deletion. Re-read it after the relevant row locks: a
+  // deletion that committed between the first audit snapshot and the unlocked
+  // registry enumeration must not silently turn a credentialed retry into an
+  // anonymous pull. Any deletion that starts after this point is blocked by
+  // the held registry row until the retry job is durably queued.
+  if (await deploymentRegistryCredentialWasDeleted(
+    client,
+    authorities,
+    originalCreatedAt
+  )) {
+    throw deletedDeploymentRegistryCredentialError();
+  }
+}
+
+export async function retryJob(
+  id: string,
+  createdBy?: string | null,
+  onRetried?: (
+    client: PoolClient,
+    result: { original: OperationJob; retried: OperationJob }
+  ) => Promise<void>
+) {
+  // Determine whether this retry must participate in deployment-analysis
+  // admission before taking any operation_jobs lock. The row is re-read under
+  // lock before mutation, so this read is only a lock-order routing hint.
+  const preliminarySelected = await query("SELECT * FROM operation_jobs WHERE id = $1", [id]);
+  const preliminaryRow = preliminarySelected.rows[0];
+  if (!preliminaryRow) return { original: null, retried: null };
+  const preliminaryOriginal = mapJob(preliminaryRow);
+  if (!canRetryJob(preliminaryOriginal, preliminaryRow)) {
+    return { original: preliminaryOriginal, retried: null };
+  }
+  const preliminaryAction = dockerActionSchema.parse({
+    type: preliminaryOriginal.type,
+    hostId: preliminaryOriginal.hostId,
+    payload: preliminaryOriginal.payload
+  });
+
+  const deploymentRetry = preliminaryAction.type === "deploy.analyze"
+    || preliminaryAction.type === "deploy.execute";
+  const preliminaryAnalysis = deploymentRetry
+    ? (
+        await query(
+          `SELECT id,
+                  host_id,
+                  status,
+                  working_dir,
+                  project_name,
+                  compose_yaml,
+                  env_encrypted,
+                  expires_at,
+                  expires_at > clock_timestamp() AS unexpired
+           FROM deployment_analyses
+           WHERE id = $1`,
+          [preliminaryAction.payload.analysisId]
+        )
+      ).rows[0]
+    : null;
+  const result = deploymentRetry
+    ? await withTransaction(async (client) => {
+      // All deployment producers use one global order: host row/admission
+      // advisory, registry rows, analysis row, target advisories, then job rows.
+      // The unlocked analysis read above is only a routing snapshot. Any change
+      // to the Compose definition while these earlier locks are acquired makes
+      // this retry fail closed after the analysis row is locked.
+      const analysisId = preliminaryAction.payload.analysisId;
+      await lockJobHostsForEnqueue(client, preliminaryAction);
+      if (preliminaryAction.type === "deploy.execute") {
+        await lockDeploymentRetryRegistryCredentials(
+          client,
+          preliminaryAnalysis?.compose_yaml,
+          preliminaryAnalysis?.env_encrypted,
+          preliminaryRow.created_at
+        );
+      }
+      const analysisSelected = await client.query(
+        `SELECT id,
+                host_id,
+                status,
+                working_dir,
+                project_name,
+                compose_yaml,
+                env_encrypted,
+                expires_at,
+                expires_at > clock_timestamp() AS unexpired
+         FROM deployment_analyses
+         WHERE id = $1
+         FOR UPDATE`,
+        [analysisId]
+      );
+      if (!deploymentAnalysisAllowsRetry(preliminaryAction, analysisSelected.rows[0])) {
+        return { original: preliminaryOriginal, retried: null };
+      }
+      if (
+        preliminaryAction.type === "deploy.execute"
+        && (
+          analysisSelected.rows[0]?.compose_yaml !== preliminaryAnalysis?.compose_yaml
+          || analysisSelected.rows[0]?.env_encrypted !== preliminaryAnalysis?.env_encrypted
+        )
+      ) {
+        return { original: preliminaryOriginal, retried: null };
+      }
+
+      await lockDeploymentRetryTargets(client, preliminaryAction, analysisSelected.rows[0]);
+      await findActiveSingleFlightJob(client, preliminaryAction, null, id);
+
+      const selected = await client.query(
+        "SELECT * FROM operation_jobs WHERE id = $1 FOR UPDATE",
+        [id]
+      );
+      const row = selected.rows[0];
+      if (!row) return { original: null, retried: null };
+      const original = mapJob(row);
+      if (!canRetryJob(original, row)) return { original, retried: null };
+      const retryAction = dockerActionSchema.parse({
+        type: original.type,
+        hostId: original.hostId,
+        payload: original.payload
+      });
+      if (
+        retryAction.type !== preliminaryAction.type
+        || (
+          retryAction.type !== "deploy.analyze"
+          && retryAction.type !== "deploy.execute"
+        )
+        || retryAction.payload.analysisId !== analysisId
+        || retryAction.hostId !== preliminaryAction.hostId
+      ) {
+        return { original, retried: null };
+      }
+
+      const retriedResult = await requeueJob(client, id, createdBy);
+      const retried = retriedResult.rows[0]
+        ? mapJob(retriedResult.rows[0])
+        : null;
+      if (retried) {
+        await onRetried?.(client, { original, retried });
+      }
+      return {
+        original,
+        retried
+      };
+    })
+    : await withTransaction(async (client) => {
+      await lockJobHostsForEnqueue(client, preliminaryAction);
+      const selected = await client.query("SELECT * FROM operation_jobs WHERE id = $1 FOR UPDATE", [id]);
+      const row = selected.rows[0];
+      if (!row) return { original: null, retried: null };
+      const original = mapJob(row);
+      if (!canRetryJob(original, row)) {
+        return { original, retried: null };
+      }
+
+      // Manual retry is another enqueue path. Apply the same advisory-lock
+      // single-flight policy before reviving the existing row so it cannot race a
+      // newly queued deployment or registry-trust operation.
+      const retryAction = dockerActionSchema.parse({
+        type: original.type,
+        hostId: original.hostId,
+        payload: original.payload
+      });
+      if (!(await lockRetryAdmissionResource(client, retryAction))) {
+        return { original, retried: null };
+      }
+      await findActiveSingleFlightJob(client, retryAction);
+
+      const retriedResult = await requeueJob(client, id, createdBy);
+      const retried = retriedResult.rows[0]
+        ? mapJob(retriedResult.rows[0])
+        : null;
+      if (retried) {
+        await onRetried?.(client, { original, retried });
+      }
+      return {
+        original,
+        retried
+      };
+    });
   if (result.retried) await notifyJobQueued(result.retried.id);
   return result;
 }
 
 export async function getWorkerStatus() {
-  const [result, queued, running, workers] = await Promise.all([
+  const [result, queued, running, workers, pendingSelfUpdateHandoffs] = await Promise.all([
     query<{ completed_at: Date | string | null }>(
       `SELECT completed_at
        FROM operation_jobs
@@ -409,6 +1343,13 @@ export async function getWorkerStatus() {
          ) AS heartbeat_fresh
        FROM worker_instances`,
       [WORKER_ACTIVE_WINDOW_SECONDS]
+    ),
+    query<{ count: string }>(
+      `SELECT count(*)::text AS count
+       FROM operation_jobs
+       WHERE type = 'system.self_update'
+         AND status = 'running'
+         AND result @> '{"handoffPending":true}'::jsonb`
     )
   ]);
   const last = result.rows[0]?.completed_at;
@@ -418,20 +1359,28 @@ export async function getWorkerStatus() {
   const lastHeartbeat = workerRow?.last_heartbeat_at;
   const lastHeartbeatAt = lastHeartbeat ? new Date(lastHeartbeat).toISOString() : null;
   const lastHeartbeatIsFresh = workerRow?.heartbeat_fresh ?? false;
+  // A pending self-update handoff is a durable, global claim-admission gate:
+  // every worker intentionally refuses new jobs until one reconciles the
+  // authoritative outcome. Fresh process heartbeats must not make readiness
+  // claim that this blocked worker pool is available.
+  const claimsBlockedBySelfUpdate = Number(pendingSelfUpdateHandoffs.rows[0]?.count ?? 0) > 0;
+  const available = activeWorkers > 0 && !claimsBlockedBySelfUpdate;
   return {
     queued: Number(queued.rows[0]?.count ?? 0),
     running: Number(running.rows[0]?.count ?? 0),
     lastJobCompletedAt: last ? new Date(last).toISOString() : null,
-    available: activeWorkers > 0,
+    available,
     activeWorkers,
     lastHeartbeatAt,
-    state: activeWorkers > 0
-      ? "active" as const
-      : recentDrainingWorkers > 0
-        ? "draining" as const
-        : lastHeartbeatIsFresh || !lastHeartbeatAt
-          ? "absent" as const
-          : "stale" as const
+    state: claimsBlockedBySelfUpdate && activeWorkers > 0
+      ? "draining" as const
+      : activeWorkers > 0
+        ? "active" as const
+        : recentDrainingWorkers > 0
+          ? "draining" as const
+          : lastHeartbeatIsFresh || !lastHeartbeatAt
+            ? "absent" as const
+            : "stale" as const
   };
 }
 
@@ -572,15 +1521,21 @@ export async function withActiveJobLeaseTransaction<T>(
 
 export async function completeJob(id: string, resultValue: Record<string, unknown>, lease: JobLease) {
   const predicate = leasePredicate(lease);
-  const result = await query(
-    `UPDATE operation_jobs
-     SET status = 'completed', result = $2, error = null, completed_at = now(),
-         lease_owner = NULL, lease_expires_at = NULL, updated_at = now()
-     WHERE id = $1${predicate.sql}
-     RETURNING id`,
-    [id, resultValue, ...predicate.values]
-  );
-  return result.rowCount === 1;
+  const safeResult = sanitizeGitRepositoryUrlFields(resultValue);
+  return withTransaction(async (client) => {
+    const result = await client.query(
+      `UPDATE operation_jobs
+       SET status = 'completed', result = $2, error = null, completed_at = now(),
+           lease_owner = NULL, lease_expires_at = NULL, updated_at = now()
+       WHERE id = $1${predicate.sql}
+       RETURNING id`,
+      [id, safeResult, ...predicate.values]
+    );
+    if (result.rowCount !== 1) return false;
+    await applyGithubDeploymentBinding(client, id);
+    await applyGithubCloneDeploymentBinding(client, id);
+    return true;
+  });
 }
 
 export async function markSelfUpdateHandoffPending(id: string, handoff: SelfUpdateHandoff, lease: JobLease) {
@@ -647,7 +1602,15 @@ async function finalizeLinkedOperationFailure(client: PoolClient, row: any, mess
 
   if ((row.type === "recovery.create" || row.type === "recovery.capture") && typeof payload.recoveryPointId === "string") {
     await client.query(
-      `UPDATE recovery_points SET status = 'failed', error = $2, completed_at = now()
+      `UPDATE recovery_points
+       SET status = 'failed',
+           error = CASE
+             WHEN metadata->>'sourceLeftStopped' = 'true'
+               AND NULLIF(error, '') IS NOT NULL
+               THEN error || '; ' || $2
+             ELSE $2
+           END,
+           completed_at = now()
        WHERE id = $1 AND status IN ('queued', 'running')`,
       [payload.recoveryPointId, message]
     );
@@ -689,7 +1652,17 @@ async function finalizeLinkedOperationFailure(client: PoolClient, row: any, mess
       [payload.migrationRunId]
     );
     await client.query(
-      `UPDATE migration_runs SET status = 'failed', error = $2, completed_at = now()
+      `UPDATE migration_runs
+       SET status = 'failed',
+           error = CASE
+             WHEN position(
+               'Automatic migration compensation remains armed. Reconciliation evidence:'
+               IN COALESCE(error, '')
+             ) > 0
+               THEN error || E'\\n' || $2
+             ELSE $2
+           END,
+           completed_at = now()
        WHERE id = $1 AND status IN ('queued', 'running')`,
       [payload.migrationRunId, message]
     );
@@ -715,10 +1688,36 @@ async function finalizeLinkedOperationFailure(client: PoolClient, row: any, mess
   }
 }
 
+function completedDeploymentProofNeedsReconciliation(row: any) {
+  const proof = remoteMutationProofFromResult(row?.result);
+  if (
+    !proof
+    || proof.jobId !== row?.id
+    || proof.attemptCount !== Number(row?.attempt_count)
+    || proof.status !== "terminal"
+    || proof.terminalState !== "completed"
+  ) {
+    return false;
+  }
+  return (
+    row.type === "compose.deploy"
+    && proof.phase === "compose.deploy"
+  ) || (
+    (
+      row.type === "compose.deployPath"
+      || row.type === "compose.writeDeployPath"
+      || row.type === "deploy.execute"
+      || row.type === "git.cloneDeploy"
+    )
+    && proof.phase === "compose.deployPath.up"
+  );
+}
+
 export async function failJob(id: string, error: unknown, lease: JobLease) {
-  const message = error instanceof Error ? error.message : String(error);
+  const rawMessage = error instanceof Error ? error.message : String(error);
+  const sanitizedMessage = String(sanitizeUrlDiagnosticText(rawMessage));
   return withTransaction(async (client) => {
-    const values: unknown[] = [id, message];
+    const values: unknown[] = [id, sanitizedMessage];
     const predicate = " AND status = 'running' AND lease_owner = $3 AND attempt_count = $4 AND lease_expires_at > clock_timestamp()";
     values.push(lease.workerId, lease.attemptCount);
     const result = await client.query(
@@ -731,7 +1730,28 @@ export async function failJob(id: string, error: unknown, lease: JobLease) {
     );
     const row = result.rows[0];
     if (!row) return false;
+    const message = (
+      !githubDeploymentFailureNeedsReconciliation(sanitizedMessage)
+      && completedDeploymentProofNeedsReconciliation(row)
+    )
+      ? `REMOTE_OUTCOME_UNKNOWN: The remote Compose deployment completed, but local finalization failed: ${sanitizedMessage}`
+      : sanitizedMessage;
+    if (message !== sanitizedMessage) {
+      await client.query(
+        `UPDATE operation_jobs
+         SET error = $2, updated_at = now()
+         WHERE id = $1 AND status = 'failed'`,
+        [id, message]
+      );
+    }
     await finalizeLinkedOperationFailure(client, row, message);
+    if (githubDeploymentFailureNeedsReconciliation(message)) {
+      await retainGithubDeploymentBinding(client, id, message);
+      await retainGithubCloneDeploymentBinding(client, id, message);
+    } else {
+      await failGithubDeploymentBinding(client, id, message);
+      await failGithubCloneDeploymentBinding(client, id, message);
+    }
     return true;
   });
 }
@@ -780,6 +1800,8 @@ export async function recoverExpiredJobs() {
           [row.id, message]
         );
         await finalizeLinkedOperationFailure(client, row, message);
+        await retainGithubDeploymentBinding(client, row.id, message);
+        await retainGithubCloneDeploymentBinding(client, row.id, message);
         failed += 1;
       }
     }

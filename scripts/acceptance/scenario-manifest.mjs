@@ -21,6 +21,9 @@ export const acceptanceScenarioManifest = Object.freeze([
     name: "Fresh production-image installation and recovery",
     requiredEvidence: [
       "productionImageCompose",
+      "imageBindings.app.id",
+      "imageBindings.worker.id",
+      "imageBindings.agent.id",
       "firstRunSetup",
       "loginSession",
       "operationsReadiness",
@@ -28,6 +31,17 @@ export const acceptanceScenarioManifest = Object.freeze([
       "liveBrowser.database",
       "liveBrowser.redis",
       "liveBrowser.worker",
+      "liveBrowser.readOnlyQualificationSmoke",
+      "liveBrowser.projectCount",
+      "liveBrowser.matrix.chromiumDesktop.passed",
+      "liveBrowser.matrix.chromiumMobile.passed",
+      "liveBrowser.matrix.firefoxDesktop.passed",
+      "liveBrowser.matrix.firefoxMobile.passed",
+      "liveBrowser.matrix.webkitDesktop.passed",
+      "liveBrowser.matrix.webkitMobile.passed",
+      "liveBrowser.rawSecretBearingArtifactsExcluded",
+      "liveBrowser.evidenceFile",
+      "liveBrowser.evidenceSha256",
       "about.aboutBundle",
       "mail.testNotification",
       "mail.workerNotification",
@@ -40,6 +54,7 @@ export const acceptanceScenarioManifest = Object.freeze([
       "workerReliability.redisDatabasePollingCompleted",
       "workerReliability.redisDiagnosticRecovered",
       "leaseRecovery.recoveredAttempt",
+      "leaseRecovery.candidateImageRebound",
       "workload.namedVolumes",
       "workload.allowedBindMount",
       "workload.database",
@@ -54,7 +69,9 @@ export const acceptanceScenarioManifest = Object.freeze([
       "recovery.restoredDataVerified",
       "recovery.exactVolumeMarkerRestored",
       "recovery.restoredNetworkBehaviorVerified",
-      "recovery.cleanupVerified"
+      "recovery.cleanupVerified",
+      "storageCleanup.minioObjectsAbsent",
+      "storageCleanup.smbFilesAbsent"
     ]
   },
   {
@@ -64,8 +81,15 @@ export const acceptanceScenarioManifest = Object.freeze([
       "productionSourceCompose",
       "exactGitContext",
       "treeSha",
+      "sourceImages.app.id",
+      "sourceImages.app.revision",
+      "sourceImages.app.created",
+      "sourceImages.worker.id",
+      "sourceImages.worker.revision",
+      "sourceImages.worker.created",
       "runtimeVersion",
       "firstRunSetup",
+      "demoDataSeeded",
       "loginSession",
       "configurationWrite",
       "backupWrite"
@@ -76,6 +100,12 @@ export const acceptanceScenarioManifest = Object.freeze([
     name: "Hardened manager and agent overlays",
     requiredEvidence: [
       "productionImageCompose",
+      "imageBindings.app.id",
+      "imageBindings.worker.id",
+      "imageBindings.agent.id",
+      "imageBindings.recreatedApp.id",
+      "imageBindings.recreatedWorker.id",
+      "imageBindings.recreatedAgent.id",
       "managerIdentity",
       "managerRootfs",
       "managerCapabilitiesDropped",
@@ -105,12 +135,20 @@ export const acceptanceScenarioManifest = Object.freeze([
       "to",
       "publicImage.id",
       "publicImage.repoDigest",
+      "imageBindings.publicApp.id",
+      "imageBindings.publicWorker.id",
+      "imageBindings.candidateApp.id",
+      "imageBindings.candidateWorker.id",
       "preservedConfiguration",
       "preservedEncryptedConfiguration",
       "preservedDatabase",
       "preservedCompletedJob",
       "preservedQueuedJob",
-      "workerMigrationHealthy"
+      "workerMigrationHealthy",
+      "recoveryRestoreAttemptMigrationHealthy",
+      "deploymentAnalysisBindingMigrationHealthy",
+      "stackSourceEnvironmentBindingMigrationHealthy",
+      "githubCloneDeploymentBindingMigrationHealthy"
     ]
   }
 ]);

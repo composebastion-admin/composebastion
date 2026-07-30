@@ -75,7 +75,11 @@ function point() {
         checksum: null,
         status: "completed",
         error: null,
-        metadata: {},
+        metadata: {
+          orphanRemoteObjectKey: "stored/orphan/from-failed-verification.tar.gz",
+          remoteVerificationError: "checksum verification failed",
+          remoteVerified: false
+        },
         createdAt: "2026-06-15T12:00:00.000Z",
         completedAt: "2026-06-15T12:00:00.000Z"
       }
@@ -101,24 +105,26 @@ describe("recovery artifact remote deletion", () => {
     deleteRecoveryArtifactFromS3.mockResolvedValue(undefined);
   });
 
-  it("deletes only stored remote object keys", async () => {
+  it("deletes canonical and retained orphan object keys without reconstructing paths", async () => {
     const { deleteRecoveryPointRemoteArtifacts } = await import("../src/services/recoveryArtifactDelete.js");
     const result = await deleteRecoveryPointRemoteArtifacts(point() as never);
 
     expect(result.deletedObjectKeys).toEqual([
       "stored/key/from-db/manifest.json",
-      "other-target/exact-volume-key.tar.gz"
+      "other-target/exact-volume-key.tar.gz",
+      "stored/orphan/from-failed-verification.tar.gz"
     ]);
     expect(deleteRecoveryArtifactFromS3.mock.calls.map((call) => call[2])).toEqual([
       "stored/key/from-db/manifest.json",
-      "other-target/exact-volume-key.tar.gz"
+      "other-target/exact-volume-key.tar.gz",
+      "stored/orphan/from-failed-verification.tar.gz"
     ]);
     expect(deleteRecoveryArtifactFromS3).not.toHaveBeenCalledWith(
       expect.anything(),
       expect.any(String),
       expect.stringContaining("volumes/data.tar.gz")
     );
-    expect(destroyS3Client).toHaveBeenCalledTimes(2);
+    expect(destroyS3Client).toHaveBeenCalledTimes(3);
   });
 
   it("fails rather than reconstructing a key when the backup target is missing", async () => {

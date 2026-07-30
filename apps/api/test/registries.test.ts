@@ -6,7 +6,9 @@ const query = vi.hoisted(() => vi.fn());
 const writeAuditEvent = vi.hoisted(() => vi.fn());
 
 vi.mock("../src/db/pool.js", () => ({
-  query: (...args: unknown[]) => query(...args)
+  query: (...args: unknown[]) => query(...args),
+  withTransaction: async (handler: (client: { query: typeof query }) => Promise<unknown>) =>
+    handler({ query })
 }));
 
 vi.mock("../src/services/crypto.js", () => ({
@@ -20,7 +22,10 @@ vi.mock("../src/services/auth.js", () => ({
   })
 }));
 
-vi.mock("../src/services/audit.js", () => ({ writeAuditEvent }));
+vi.mock("../src/services/audit.js", () => ({
+  auditContextFromRequest: () => ({}),
+  writeAuditEvent
+}));
 vi.mock("../src/services/jobs.js", () => ({ enqueueJob: vi.fn() }));
 
 const { registerRegistryRoutes } = await import("../src/routes/registries.js");

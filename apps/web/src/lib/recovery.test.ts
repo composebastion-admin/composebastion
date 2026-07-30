@@ -157,6 +157,19 @@ describe("recovery helpers", () => {
     };
     expect(recoveryRemoteState(verifiedRemote)).toBe("synced");
 
+    const restartFailureAfterVerifiedUpload = {
+      ...verifiedRemote,
+      status: "partial" as const,
+      error: "Recovery artifacts were captured, but one or more source containers could not be restarted."
+    };
+    expect(recoveryRemoteState(restartFailureAfterVerifiedUpload)).toBe("synced");
+
+    const remoteUploadFailure = {
+      ...restartFailureAfterVerifiedUpload,
+      remoteUploadFailureCount: 1
+    };
+    expect(recoveryRemoteState(remoteUploadFailure)).toBe("partial");
+
     const remoteOnly = {
       ...verifiedRemote,
       localRetainedArtifactCount: 0,

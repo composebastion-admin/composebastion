@@ -80,7 +80,9 @@ export function HostSettingsPanel({ host, onChanged }: { host: DockerHost; onCha
           Agent compatibility: {agentCompatibility.label}
         </div>
       )}
-      <form className="composeForm" onSubmit={save}>
+      <form className="composeForm" onSubmit={(event) => {
+        void save(event).catch(() => undefined);
+      }}>
         <div className="two">
           <input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required />
           <select value={form.connectionMode} onChange={(event) => setForm({ ...form, connectionMode: event.target.value as DockerHost["connectionMode"] })}>
@@ -156,10 +158,10 @@ export function HostSettingsPanel({ host, onChanged }: { host: DockerHost; onCha
             />
           </div>
         )}
-        {action.error && <div className="notice error">{action.error}</div>}
+        {action.error && <div className="notice error" role="alert">{action.error}</div>}
         <ButtonRow>
           <button className="primary" disabled={action.busy}><Settings size={18} />{action.busy ? "Saving..." : "Save Host"}</button>
-          <button type="button" className="danger" disabled={action.busy} onClick={() => void remove()}><Trash2 size={18} />Delete Host</button>
+          <button type="button" className="danger" disabled={action.busy} onClick={() => void remove().catch(() => undefined)}><Trash2 size={18} />Delete Host</button>
         </ButtonRow>
       </form>
       {canAdminister && <ConfigBackupPanel onImported={onChanged} />}

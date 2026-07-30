@@ -30,23 +30,32 @@ export function StackVersionsPanel({
   const [diff, setDiff] = useState<VersionDiff | null>(null);
   const [compareFrom, setCompareFrom] = useState("");
   const [compareTo, setCompareTo] = useState("");
+  const [loadError, setLoadError] = useState<string | null>(null);
   const folderBacked = Boolean(stack.sourceWorkingDir || stack.sourceComposePath);
 
   const load = useCallback(async () => {
-    const result = await api<{ versions: ComposeStackVersion[] }>(`/api/compose/${stack.id}/versions`);
-    setVersions(result.versions);
-    if (!compareFrom && result.versions[1]) setCompareFrom(result.versions[1].id);
-    if (!compareTo && result.versions[0]) setCompareTo(result.versions[0].id);
+    setLoadError(null);
+    try {
+      const result = await api<{ versions: ComposeStackVersion[] }>(`/api/compose/${stack.id}/versions`);
+      setVersions(result.versions);
+      if (!compareFrom && result.versions[1]) setCompareFrom(result.versions[1].id);
+      if (!compareTo && result.versions[0]) setCompareTo(result.versions[0].id);
+    } catch (caught) {
+      setLoadError(caught instanceof Error ? caught.message : String(caught));
+      throw caught;
+    }
   }, [stack.id]);
 
   useEffect(() => {
-    void load();
+    void load().catch(() => undefined);
   }, [load]);
 
   async function showDiff() {
     if (!compareFrom || !compareTo) return;
-    const result = await api<VersionDiff>(`/api/compose/${stack.id}/versions/diff?from=${encodeURIComponent(compareFrom)}&to=${encodeURIComponent(compareTo)}`);
-    setDiff(result);
+    await action.run(async () => {
+      const result = await api<VersionDiff>(`/api/compose/${stack.id}/versions/diff?from=${encodeURIComponent(compareFrom)}&to=${encodeURIComponent(compareTo)}`);
+      setDiff(result);
+    });
   }
 
   async function rollback(versionId: string, versionNumber: number) {
@@ -90,7 +99,7 @@ export function StackVersionsPanel({
               className="danger"
               disabled={action.busy || folderBacked}
               title={folderBacked ? "Restore this version in the source folder or Git repository, then redeploy." : undefined}
-              onClick={() => void rollback(version.id, version.versionNumber)}
+              onClick={() => void rollback(version.id, version.versionNumber).catch(() => undefined)}
             >
               <RotateCcw size={16} />
             </button>
@@ -104,7 +113,7 @@ export function StackVersionsPanel({
         <select value={compareTo} onChange={(event) => setCompareTo(event.target.value)}>
           {versions.map((version) => <option key={version.id} value={version.id}>To v{version.versionNumber}</option>)}
         </select>
-        <button type="button" onClick={() => void showDiff()}><GitCompare size={16} />Diff</button>
+        <button type="button" disabled={action.busy} onClick={() => void showDiff().catch(() => undefined)}><GitCompare size={16} />Diff</button>
       </div>
       {diff && (
         <Panel title={`Diff v${diff.fromVersionNumber} → v${diff.toVersionNumber}`}>
@@ -112,7 +121,8 @@ export function StackVersionsPanel({
           <pre className="monoTextarea">{diff.composeChanges.map((change) => `${change.type} ${change.line}: ${change.text}`).join("\n") || "No compose changes."}</pre>
         </Panel>
       )}
-      {action.error && <div className="notice error">{action.error}</div>}
+      {loadError && <div className="notice error" role="alert">{loadError}</div>}
+      {action.error && <div className="notice error" role="alert">{action.error}</div>}
     </div>
   );
 }

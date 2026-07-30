@@ -10,10 +10,12 @@ ARG GO_TEXT_VERSION=0.39.0
 
 FROM node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a AS deps
 WORKDIR /app
+COPY scripts/bootstrap-npm.mjs scripts/bootstrap-npm.mjs
+RUN node scripts/bootstrap-npm.mjs
 COPY package.json package-lock.json ./
 COPY apps/agent/package.json apps/agent/package.json
 COPY packages/shared/package.json packages/shared/package.json
-RUN npm ci --workspace @composebastion/agent --include-workspace-root=false --ignore-scripts
+RUN npm ci --workspace @composebastion/agent --include-workspace-root=false --engine-strict --dangerously-allow-all-scripts=false --ignore-scripts
 
 FROM deps AS build
 WORKDIR /app
@@ -162,5 +164,8 @@ RUN set -eux; \
       --inventory docker-cli=/licenses/third-party/go-buildinfo/docker-cli.modules.tsv \
       --inventory docker-compose=/licenses/third-party/go-buildinfo/docker-compose.modules.tsv; \
     rm /tmp/go-attribution.mjs /tmp/go-attribution-review.mjs
+# Intentional trust boundary: the default agent mounts a root-owned Docker
+# socket. Docker API access is host-root-equivalent regardless of this UID.
+USER root
 EXPOSE 8090
 CMD ["node", "apps/agent/dist/server.js"]

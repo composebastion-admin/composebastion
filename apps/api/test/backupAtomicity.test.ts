@@ -54,7 +54,7 @@ describe("backup record and job atomicity", () => {
           }]
         };
       }
-      return { rows: [] };
+      return { rows: [], rowCount: 1 };
     });
     mocks.withTransaction.mockImplementation(async (handler: (transactionClient: typeof client) => Promise<unknown>) => handler(client));
     mocks.transactionQuery.mockImplementation(async (sql: string, values: unknown[]) => {
@@ -81,7 +81,7 @@ describe("backup record and job atomicity", () => {
           }]
         };
       }
-      return { rows: [] };
+      return { rows: [], rowCount: 1 };
     });
     mocks.enqueueJobInTransaction.mockResolvedValue({ id: "00000000-0000-4000-8000-000000000013" });
     mocks.notifyJobQueued.mockResolvedValue(undefined);
@@ -112,6 +112,36 @@ describe("backup record and job atomicity", () => {
     const { createBackupWithJob } = await import("../src/services/backups.js");
 
     await expect(createBackupWithJob(hostId, "app-data", {}, userId)).rejects.toThrow("job insert failed");
+    expect(mocks.notifyJobQueued).not.toHaveBeenCalled();
+  });
+
+  it("does not publish container volume backup jobs when their transactional audit fails", async () => {
+    const { createVolumeBackupsWithJobs } = await import("../src/services/backups.js");
+    const auditFailure = new Error("audit insert failed");
+    const onCreated = vi.fn(async () => {
+      throw auditFailure;
+    });
+
+    await expect(createVolumeBackupsWithJobs(
+      hostId,
+      ["app-data", "database-data"],
+      userId,
+      onCreated
+    )).rejects.toBe(auditFailure);
+
+    expect(onCreated).toHaveBeenCalledWith(
+      client,
+      expect.objectContaining({
+        backups: [
+          expect.objectContaining({ volumeName: "app-data" }),
+          expect.objectContaining({ volumeName: "database-data" })
+        ],
+        jobs: [
+          expect.objectContaining({ id: "00000000-0000-4000-8000-000000000013" }),
+          expect.objectContaining({ id: "00000000-0000-4000-8000-000000000013" })
+        ]
+      })
+    );
     expect(mocks.notifyJobQueued).not.toHaveBeenCalled();
   });
 

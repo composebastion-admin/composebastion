@@ -114,7 +114,7 @@ export function recoveryRemoteState(point: RecoveryPointListItem) {
   const failureCount = point.remoteUploadFailureCount
     ?? (typeof point.metadata.remoteUploadFailureCount === "number" ? point.metadata.remoteUploadFailureCount : 0);
   const remoteArtifactCount = point.remoteArtifactCount ?? 0;
-  if (failureCount > 0 || point.status === "partial") return "partial";
+  if (failureCount > 0) return "partial";
   if (point.status === "failed") return "failed";
   const objectKeys = Array.isArray(point.metadata.remoteObjectKeys)
     ? point.metadata.remoteObjectKeys.filter((value): value is string => typeof value === "string" && value.length > 0)
@@ -131,7 +131,9 @@ export function recoveryRemoteState(point: RecoveryPointListItem) {
     && verifiedCount === expectedCount
     && objectKeys.length === expectedCount;
   const hasCompleteUploadEvidence = hasAggregateEvidence || hasMetadataEvidence;
-  if (point.status === "completed") return hasCompleteUploadEvidence ? "synced" : "pending";
+  if (point.status === "completed" || point.status === "partial") {
+    return hasCompleteUploadEvidence ? "synced" : "pending";
+  }
   if (point.status === "running") return "uploading";
   return "pending";
 }

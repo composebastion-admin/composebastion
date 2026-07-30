@@ -1,7 +1,23 @@
-import { timingSafeEqual } from "node:crypto";
-import { execFile, spawn } from "node:child_process";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
+import {
+  execFile,
+  spawn,
+  type ChildProcess,
+  type ExecFileException,
+  type ExecFileOptionsWithStringEncoding
+} from "node:child_process";
 import { createRequire } from "node:module";
-import { mkdir, open, readFile, stat, statfs, writeFile } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import {
+  lstat,
+  mkdir,
+  open,
+  readFile,
+  realpath,
+  rename,
+  statfs,
+  unlink
+} from "node:fs/promises";
 import path from "node:path";
 import rateLimit from "@fastify/rate-limit";
 import Fastify from "fastify";
@@ -9,7 +25,7 @@ import { z } from "zod";
 import { isDockerStatsLifecycleTombstone, isDockerStatsRecord } from "@composebastion/shared";
 import { parseAgentEnvironment, resolveAgentVersion } from "./config.js";
 import { isPermittedDockerCommand, parsePermittedDockerCommand, type ParsedDockerCommand } from "./security.js";
-import { validateAgentFilePath } from "./paths.js";
+import { AGENT_STACK_ROOT, validateAgentFilePath } from "./paths.js";
 
 const require = createRequire(import.meta.url);
 const packageJson = require("../package.json") as { version?: string };
@@ -18,7 +34,13 @@ const AGENT_VERSION = resolveAgentVersion(process.env.COMPOSEBASTION_AGENT_VERSI
 const runSchema = z.object({
   command: z.string().min(1).max(8000)
     .refine((command) => !/[\0\r]/.test(command), "Command contains invalid control characters")
-    .refine((command) => isPermittedDockerCommand(command), "Agent only accepts ComposeBastion Docker commands")
+    .refine((command) => isPermittedDockerCommand(command), "Agent only accepts ComposeBastion Docker commands"),
+  timeoutMs: z.number().int().min(1_000).max(10 * 60_000).default(120_000),
+  operationId: z.string().regex(/^[0-9a-f]{64}$/).optional()
+});
+
+const operationParamsSchema = z.object({
+  id: z.string().regex(/^[0-9a-f]{64}$/)
 });
 
 const containerLogParamsSchema = z.object({
@@ -30,6 +52,49 @@ const containerLogQuerySchema = z.object({
 });
 
 const MAX_CONCURRENT_USAGE_STREAMS = 4;
+const AGENT_OPERATION_RETENTION_MS = 24 * 60 * 60_000;
+
+type DockerCommandResult = {
+  stdout: string;
+  stderr: string;
+  code: number;
+  outcome: "completed" | "failed" | "timed_out";
+};
+
+type AgentOperation = {
+  operationId: string;
+  kind: "docker-command" | "file-write";
+  commandSha256: string;
+  timeoutMs: number;
+  status: "running" | "completed" | "failed" | "timed_out";
+  startedAt: string;
+  completedAt: string | null;
+  result: DockerCommandResult | null;
+  promise: Promise<DockerCommandResult>;
+};
+
+const agentOperations = new Map<string, AgentOperation>();
+
+export function signalDetachedProcessGroup(
+  child: Pick<ChildProcess, "pid" | "exitCode" | "signalCode" | "kill">,
+  signal: NodeJS.Signals,
+  includeExitedLeader = false
+) {
+  const leaderExited = child.exitCode != null || child.signalCode != null;
+  if (leaderExited && !includeExitedLeader) return;
+  if (typeof child.pid === "number") {
+    try {
+      // A Docker/Compose plugin descendant may retain stdout after its direct
+      // leader exits. The process group remains addressable by the leader PID,
+      // so forced teardown must still target it.
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // Fall back to the direct child when process groups are unavailable.
+    }
+  }
+  if (!leaderExited) child.kill?.(signal);
+}
 
 function safeEqual(left: string, right: string) {
   const leftBuffer = Buffer.from(left);
@@ -55,31 +120,330 @@ function streamLinesFromBuffer(buffer: { value: string }, chunk: Buffer, onLine:
 }
 
 async function execDocker(parsed: ParsedDockerCommand, timeout: number) {
-  return new Promise<{ stdout: string; stderr: string; code: number }>((resolve) => {
-    const child = execFile("docker", parsed.args, {
+  return new Promise<DockerCommandResult>((resolve) => {
+    let timedOutByWatchdog = false;
+    let watchdog: ReturnType<typeof setTimeout>;
+    let forceKill: ReturnType<typeof setTimeout> | undefined;
+    const options: ExecFileOptionsWithStringEncoding & { detached: boolean } = {
       cwd: parsed.cwd,
       env: parsed.env ? { ...process.env, ...parsed.env } : process.env,
+      encoding: "utf8",
       timeout,
+      killSignal: "SIGTERM",
+      detached: true,
       maxBuffer: 10 * 1024 * 1024
-    }, (error, stdout, stderr) => {
+    };
+    const child = execFile("docker", parsed.args, options, (error: ExecFileException | null, stdout: string, stderr: string) => {
+      clearTimeout(watchdog);
+      if (forceKill) clearTimeout(forceKill);
+      // A completed CLI must not leave a plugin/helper from this exact
+      // invocation running. This is especially important after maxBuffer or
+      // built-in timeout termination, where the direct leader may exit before
+      // descendants release inherited pipes.
+      signalDetachedProcessGroup(child, "SIGKILL", true);
       if (!error) {
-        resolve({ stdout, stderr, code: 0 });
+        resolve({ stdout, stderr, code: 0, outcome: "completed" });
         return;
       }
+      const timedOut = timedOutByWatchdog || Boolean(
+        "killed" in error
+        && error.killed
+        && "signal" in error
+        && error.signal
+      ) || ("code" in error && error.code === "ETIMEDOUT");
       resolve({
         stdout,
         stderr: stderr || error.message,
-        code: typeof error.code === "number" ? error.code : 1
+        code: typeof error.code === "number" ? error.code : timedOut ? 124 : 1,
+        outcome: timedOut ? "timed_out" : "failed"
       });
     });
+    watchdog = setTimeout(() => {
+      timedOutByWatchdog = true;
+      signalDetachedProcessGroup(child, "SIGTERM");
+      forceKill = setTimeout(
+        () => signalDetachedProcessGroup(child, "SIGKILL", true),
+        5_000
+      );
+    }, timeout);
     if (parsed.stdin !== undefined) child.stdin?.end(parsed.stdin);
   });
 }
 
 async function run(command: string, timeout = 120_000) {
   const parsed = parsePermittedDockerCommand(command);
-  if (!parsed) return { stdout: "", stderr: "Agent only accepts ComposeBastion Docker commands", code: 1 };
+  if (!parsed) {
+    return {
+      stdout: "",
+      stderr: "Agent only accepts ComposeBastion Docker commands",
+      code: 1,
+      outcome: "failed" as const
+    };
+  }
   return execDocker(parsed, timeout);
+}
+
+function cleanupAgentOperations(now = Date.now()) {
+  for (const [operationId, operation] of agentOperations) {
+    if (
+      operation.status !== "running"
+      && operation.completedAt
+      && now - Date.parse(operation.completedAt) > AGENT_OPERATION_RETENTION_MS
+    ) {
+      agentOperations.delete(operationId);
+    }
+  }
+}
+
+function publicAgentOperation(operation: AgentOperation) {
+  return {
+    operationId: operation.operationId,
+    status: operation.status,
+    timeoutMs: operation.timeoutMs,
+    startedAt: operation.startedAt,
+    completedAt: operation.completedAt
+  };
+}
+
+async function runTrackedAgentOperation(
+  operationId: string,
+  command: string,
+  timeoutMs: number
+) {
+  cleanupAgentOperations();
+  const commandSha256 = createHash("sha256").update(command, "utf8").digest("hex");
+  const existing = agentOperations.get(operationId);
+  if (existing) {
+    if (
+      existing.kind !== "docker-command"
+      || existing.commandSha256 !== commandSha256
+      || existing.timeoutMs !== timeoutMs
+    ) {
+      throw Object.assign(
+        new Error("Remote operation identity was reused with different command parameters"),
+        { statusCode: 409, code: "REMOTE_OPERATION_IDENTITY_MISMATCH" }
+      );
+    }
+    return existing.promise;
+  }
+
+  let operation!: AgentOperation;
+  const promise = run(command, timeoutMs).then((result) => {
+    operation.status = result.outcome;
+    operation.completedAt = new Date().toISOString();
+    operation.result = result;
+    return result;
+  });
+  operation = {
+    operationId,
+    kind: "docker-command",
+    commandSha256,
+    timeoutMs,
+    status: "running",
+    startedAt: new Date().toISOString(),
+    completedAt: null,
+    result: null,
+    promise
+  };
+  agentOperations.set(operationId, operation);
+  return promise;
+}
+
+async function writeAgentFileAtomically(target: string, content: string) {
+  const parent = path.dirname(target);
+  await assertAgentParentPath(parent, true);
+  const temporaryPath = path.join(
+    parent,
+    `.${path.basename(target)}.composebastion-${randomUUID()}.tmp`
+  );
+  let file: Awaited<ReturnType<typeof open>> | null = null;
+  try {
+    file = await open(temporaryPath, "wx", 0o600);
+    await file.writeFile(content, "utf8");
+    await file.sync();
+    await file.close();
+    file = null;
+    await rename(temporaryPath, target);
+    const directory = await open(
+      parent,
+      fsConstants.O_RDONLY
+        | fsConstants.O_DIRECTORY
+        | fsConstants.O_NOFOLLOW
+    );
+    try {
+      await directory.sync();
+    } finally {
+      await directory.close();
+    }
+  } finally {
+    if (file) {
+      await file.close().catch(() => undefined);
+    }
+    await unlink(temporaryPath).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "ENOENT") throw error;
+    });
+  }
+}
+
+function agentPathConfinementError() {
+  return Object.assign(
+    new Error(
+      `Agent file access is limited to real directories below ${AGENT_STACK_ROOT}`
+    ),
+    {
+      statusCode: 400,
+      code: "AGENT_PATH_CONFINEMENT"
+    }
+  );
+}
+
+async function agentDirectoryInfo(
+  directory: string,
+  create: boolean
+) {
+  let info;
+  try {
+    info = await lstat(directory);
+  } catch (error) {
+    if (
+      !create
+      || (error as NodeJS.ErrnoException).code !== "ENOENT"
+    ) {
+      throw error;
+    }
+    try {
+      await mkdir(directory, { mode: 0o700 });
+    } catch (mkdirError) {
+      if ((mkdirError as NodeJS.ErrnoException).code !== "EEXIST") {
+        throw mkdirError;
+      }
+    }
+    info = await lstat(directory);
+  }
+  if (info.isSymbolicLink() || !info.isDirectory()) {
+    throw agentPathConfinementError();
+  }
+}
+
+async function assertAgentParentPath(
+  parent: string,
+  create: boolean
+) {
+  const relative = path.relative(AGENT_STACK_ROOT, parent);
+  if (
+    relative === ".."
+    || relative.startsWith(`..${path.sep}`)
+    || path.isAbsolute(relative)
+  ) {
+    throw agentPathConfinementError();
+  }
+
+  await agentDirectoryInfo(AGENT_STACK_ROOT, create);
+  let current = AGENT_STACK_ROOT;
+  for (const component of relative.split(path.sep).filter(Boolean)) {
+    current = path.join(current, component);
+    await agentDirectoryInfo(current, create);
+  }
+
+  // Resolve once more after the component walk. This detects an exchanged
+  // parent or an intermediate alias before the file operation begins.
+  const [resolvedRoot, resolvedParent] = await Promise.all([
+    realpath(AGENT_STACK_ROOT),
+    realpath(parent)
+  ]);
+  const expectedParent = path.resolve(resolvedRoot, relative);
+  if (resolvedParent !== expectedParent) {
+    throw agentPathConfinementError();
+  }
+}
+
+async function openAgentFileForRead(target: string) {
+  await assertAgentParentPath(path.dirname(target), false);
+  const info = await lstat(target);
+  if (info.isSymbolicLink() || !info.isFile()) {
+    throw agentPathConfinementError();
+  }
+  return open(
+    target,
+    fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW
+  );
+}
+
+async function runTrackedAgentFileWrite(
+  operationId: string,
+  target: string,
+  content: string
+) {
+  cleanupAgentOperations();
+  const timeoutMs = 30_000;
+  const commandSha256 = createHash("sha256")
+    .update("file-write\0", "utf8")
+    .update(target, "utf8")
+    .update("\0", "utf8")
+    .update(content, "utf8")
+    .digest("hex");
+  const existing = agentOperations.get(operationId);
+  if (existing) {
+    if (
+      existing.kind !== "file-write"
+      || existing.commandSha256 !== commandSha256
+      || existing.timeoutMs !== timeoutMs
+    ) {
+      throw Object.assign(
+        new Error(
+          "Remote operation identity was reused with different file parameters"
+        ),
+        {
+          statusCode: 409,
+          code: "REMOTE_OPERATION_IDENTITY_MISMATCH"
+        }
+      );
+    }
+    return existing.promise;
+  }
+
+  let operation!: AgentOperation;
+  const promise = writeAgentFileAtomically(target, content).then(
+    () => {
+      const result: DockerCommandResult = {
+        stdout: "",
+        stderr: "",
+        code: 0,
+        outcome: "completed"
+      };
+      operation.status = "completed";
+      operation.completedAt = new Date().toISOString();
+      operation.result = result;
+      return result;
+    },
+    (error: unknown) => {
+      const result: DockerCommandResult = {
+        stdout: "",
+        stderr: error instanceof Error
+          ? error.message
+          : "Agent file write failed",
+        code: 1,
+        outcome: "failed"
+      };
+      operation.status = "failed";
+      operation.completedAt = new Date().toISOString();
+      operation.result = result;
+      throw error;
+    }
+  );
+  operation = {
+    operationId,
+    kind: "file-write",
+    commandSha256,
+    timeoutMs,
+    status: "running",
+    startedAt: new Date().toISOString(),
+    completedAt: null,
+    result: null,
+    promise
+  };
+  agentOperations.set(operationId, operation);
+  return promise;
 }
 
 export function parseDockerStatsLine(line: string) {
@@ -254,9 +618,54 @@ export async function createAgentApp(source: NodeJS.ProcessEnv = process.env) {
 
   app.post("/api/run", { config: { rateLimit: agentRunRateLimit } }, async (request, reply) => {
     const body = runSchema.parse(request.body);
-    const result = await run(body.command);
-    if (result.code !== 0) reply.code(500);
-    return result;
+    let result: DockerCommandResult;
+    try {
+      result = body.operationId
+        ? await runTrackedAgentOperation(
+          body.operationId,
+          body.command,
+          body.timeoutMs
+        )
+        : await run(body.command, body.timeoutMs);
+    } catch (error) {
+      const statusCode = error
+        && typeof error === "object"
+        && "statusCode" in error
+        && typeof error.statusCode === "number"
+        ? error.statusCode
+        : 500;
+      reply.code(statusCode);
+      return {
+        error: error instanceof Error ? error.message : "Agent operation failed",
+        code: error
+          && typeof error === "object"
+          && "code" in error
+          ? String(error.code)
+          : "AGENT_OPERATION_FAILED"
+      };
+    }
+    if (result.outcome === "timed_out") reply.code(504);
+    else if (result.code !== 0) reply.code(500);
+    return {
+      ...result,
+      ...(body.operationId
+        ? { operation: publicAgentOperation(agentOperations.get(body.operationId)!) }
+        : {})
+    };
+  });
+
+  app.get("/api/operations/:id", { config: { rateLimit: agentReadRateLimit } }, async (request, reply) => {
+    const { id } = operationParamsSchema.parse(request.params);
+    cleanupAgentOperations();
+    const operation = agentOperations.get(id);
+    if (!operation) {
+      reply.code(404);
+      return {
+        operationId: id,
+        status: "missing"
+      };
+    }
+    return publicAgentOperation(operation);
   });
 
   app.get("/api/containers/usage", { config: { rateLimit: agentReadRateLimit } }, async (_request, reply) => {
@@ -360,22 +769,74 @@ export async function createAgentApp(source: NodeJS.ProcessEnv = process.env) {
     });
   });
 
-  app.post("/api/files/write", { bodyLimit: 1024 * 1024, config: { rateLimit: agentFileRateLimit } }, async (request) => {
+  app.post("/api/files/write", { bodyLimit: 1024 * 1024, config: { rateLimit: agentFileRateLimit } }, async (request, reply) => {
     const body = z.object({
       path: z.string().min(1).max(1024),
-      content: z.string().max(512 * 1024)
+      content: z.string().max(512 * 1024),
+      operationId: z.string().regex(/^[0-9a-f]{64}$/).optional()
     }).parse(request.body);
     const target = validateAgentFilePath(body.path);
-    await mkdir(path.dirname(target), { recursive: true });
-    await writeFile(target, body.content, { mode: 0o600 });
-    return { ok: true, path: target };
+    try {
+      if (body.operationId) {
+        await runTrackedAgentFileWrite(
+          body.operationId,
+          target,
+          body.content
+        );
+      } else {
+        await writeAgentFileAtomically(target, body.content);
+      }
+    } catch (error) {
+      const statusCode = error
+        && typeof error === "object"
+        && "statusCode" in error
+        && typeof error.statusCode === "number"
+        ? error.statusCode
+        : 500;
+      const code = error
+        && typeof error === "object"
+        && "code" in error
+        ? String(error.code)
+        : "AGENT_FILE_WRITE_FAILED";
+      reply.code(statusCode);
+      return {
+        error: error instanceof Error
+          ? error.message
+          : "Agent file write failed",
+        code,
+        ...(
+          body.operationId
+          && code !== "REMOTE_OPERATION_IDENTITY_MISMATCH"
+          && agentOperations.has(body.operationId)
+            ? {
+                operation: publicAgentOperation(
+                  agentOperations.get(body.operationId)!
+                )
+              }
+            : {}
+        )
+      };
+    }
+    return {
+      ok: true,
+      path: target,
+      ...(body.operationId
+        ? {
+            operation: publicAgentOperation(
+              agentOperations.get(body.operationId)!
+            )
+          }
+        : {})
+    };
   });
 
   app.get("/api/files/stat", { config: { rateLimit: agentFileRateLimit } }, async (request) => {
     const query = z.object({ path: z.string().min(1).max(1024) }).parse(request.query);
     const target = validateAgentFilePath(query.path);
     try {
-      const info = await stat(target);
+      await assertAgentParentPath(path.dirname(target), false);
+      const info = await lstat(target);
+      if (info.isSymbolicLink()) throw agentPathConfinementError();
       return {
         exists: true,
         path: target,
@@ -391,7 +852,7 @@ export async function createAgentApp(source: NodeJS.ProcessEnv = process.env) {
   app.get("/api/files/read", { config: { rateLimit: agentFileRateLimit } }, async (request, reply) => {
     const query = z.object({ path: z.string().min(1).max(1024) }).parse(request.query);
     const target = validateAgentFilePath(query.path);
-    const file = await open(target, "r");
+    const file = await openAgentFileForRead(target);
     try {
       const info = await file.stat();
       if (info.size > 512 * 1024) {

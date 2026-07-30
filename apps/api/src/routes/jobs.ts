@@ -44,24 +44,38 @@ export async function registerJobRoutes(app: FastifyInstance) {
 
   app.post("/api/jobs/:id/cancel", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request, reply) => {
     const id = idSchema.parse((request.params as { id: string }).id);
-    const result = await cancelQueuedJob(id);
+    const result = await cancelQueuedJob(id, async (client, canceled) => {
+      await writeAuditEvent({
+        userId: request.user?.id,
+        hostId: canceled.job.hostId,
+        action: "job.cancel",
+        targetKind: "operation_job",
+        targetId: canceled.job.id,
+        details: { type: canceled.job.type },
+        ...auditContextFromRequest(request)
+      }, client);
+    });
     if (!result.job) return sendApiError(reply, 404, "NOT_FOUND", "Job not found");
     if (!result.canceled) return sendApiError(reply, 409, "CONFLICT", "Only queued jobs can be canceled");
-    await writeAuditEvent({
-      userId: request.user?.id,
-      hostId: result.job.hostId,
-      action: "job.cancel",
-      targetKind: "operation_job",
-      targetId: result.job.id,
-      details: { type: result.job.type },
-      ...auditContextFromRequest(request)
-    });
     return { job: sanitizeOperationJobForRead(result.job) };
   });
 
   app.post("/api/jobs/:id/retry", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request, reply) => {
     const id = idSchema.parse((request.params as { id: string }).id);
-    const result = await retryJob(id, request.user?.id);
+    const result = await retryJob(id, request.user?.id, async (client, retried) => {
+      await writeAuditEvent({
+        userId: request.user?.id,
+        hostId: retried.original.hostId,
+        action: "job.retry",
+        targetKind: "operation_job",
+        targetId: retried.original.id,
+        details: {
+          retriedJobId: retried.retried.id,
+          type: retried.original.type
+        },
+        ...auditContextFromRequest(request)
+      }, client);
+    });
     if (!result.original) return sendApiError(reply, 404, "NOT_FOUND", "Job not found");
     if (!result.retried) {
       const ambiguousWorkerLoss = nonIdempotentWorkerLossTypes.has(result.original.type)
@@ -75,15 +89,6 @@ export async function registerJobRoutes(app: FastifyInstance) {
           : "This job is not eligible for retry because its status, operation type, host assignment, or attempt limit does not permit replay."
       );
     }
-    await writeAuditEvent({
-      userId: request.user?.id,
-      hostId: result.original.hostId,
-      action: "job.retry",
-      targetKind: "operation_job",
-      targetId: result.original.id,
-      details: { retriedJobId: result.retried.id, type: result.original.type },
-      ...auditContextFromRequest(request)
-    });
     return {
       job: sanitizeOperationJobForRead(result.retried),
       original: sanitizeOperationJobForRead(result.original)

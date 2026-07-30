@@ -88,37 +88,138 @@ describe("app updates for tracked GitHub host clones", () => {
     });
   });
 
-  it("uses git pull plus deploy path instead of API deploy for clone-built tracked repos", async () => {
+  it("uses one fenced pull-and-deploy job without rewriting the configured Git origin", async () => {
     const { updateApp } = await import("../src/services/apps.js");
 
     await updateApp(`git:${repoId}`, "00000000-0000-4000-8000-000000000222");
 
-    expect(enqueueJob).toHaveBeenCalledTimes(2);
+    expect(enqueueJob).toHaveBeenCalledTimes(1);
     expect(enqueueJob.mock.calls[0]?.[0]).toMatchObject({
-      type: "git.pull",
-      hostId,
-      payload: { directory: "/srv/apps/private-app", branch: "main" }
-    });
-    expect(enqueueJob.mock.calls[1]?.[0]).toMatchObject({
       type: "compose.deployPath",
       hostId,
       payload: {
         projectName: "private-app",
         workingDir: "/srv/apps/private-app",
-        composePath: "docker-compose.yml"
+        composePath: "docker-compose.yml",
+        gitPullBeforeDeploy: true,
+        branch: "main"
       }
     });
-    expect(notifyJobQueued).toHaveBeenCalledTimes(2);
+    expect(notifyJobQueued).toHaveBeenCalledTimes(1);
   });
 
-  it("does not publish wakeups when a later insert aborts the batch transaction", async () => {
-    enqueueJob
-      .mockResolvedValueOnce({ id: "first-job", status: "queued", type: "git.pull" })
-      .mockRejectedValueOnce(new Error("second insert failed"));
+  it("updates a linked Git checkout when no repository URL is stored", async () => {
+    query.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM docker_hosts")) return { rows: [{ id: hostId, name: "Host", hostname: "host.local" }] };
+      if (sql.includes("FROM resource_snapshots")) return { rows: [] };
+      if (sql.includes("FROM compose_stacks")) {
+        return { rows: [{ ...stackRow, source_repository_url: null }] };
+      }
+      if (sql.includes("FROM github_repositories")) return { rows: [repoRow] };
+      if (sql.includes("FROM app_source_links")) return { rows: [] };
+      return { rows: [] };
+    });
     const { updateApp } = await import("../src/services/apps.js");
 
-    await expect(updateApp(`git:${repoId}`)).rejects.toThrow("second insert failed");
-    expect(enqueueJob).toHaveBeenCalledTimes(2);
+    await expect(updateApp(`git:${repoId}`)).resolves.toMatchObject({
+      jobs: [expect.objectContaining({ type: "compose.deployPath" })]
+    });
+    expect(enqueueJob).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "compose.deployPath",
+        payload: expect.objectContaining({
+          workingDir: "/srv/apps/private-app",
+          gitPullBeforeDeploy: true
+        })
+      }),
+      undefined
+    );
+  });
+
+  it("does not publish wakeups when the composite insert aborts", async () => {
+    enqueueJob.mockRejectedValueOnce(new Error("insert failed"));
+    const { updateApp } = await import("../src/services/apps.js");
+
+    await expect(updateApp(`git:${repoId}`)).rejects.toThrow("insert failed");
+    expect(enqueueJob).toHaveBeenCalledTimes(1);
+    expect(notifyJobQueued).not.toHaveBeenCalled();
+  });
+
+  it("does not publish any app update job when its transactional audit fails", async () => {
+    const auditFailure = new Error("audit insert failed");
+    const onQueued = vi.fn(async () => {
+      throw auditFailure;
+    });
+    const { updateApp } = await import("../src/services/apps.js");
+
+    await expect(updateApp(
+      `git:${repoId}`,
+      "00000000-0000-4000-8000-000000000222",
+      onQueued
+    )).rejects.toBe(auditFailure);
+
+    expect(onQueued).toHaveBeenCalledWith(
+      expect.objectContaining({ query }),
+      {
+        jobs: [
+          expect.objectContaining({ type: "compose.deployPath" })
+        ]
+      }
+    );
+    expect(notifyJobQueued).not.toHaveBeenCalled();
+  });
+
+  it("does not publish a standalone container update when its transactional audit fails", async () => {
+    const resourceId = "00000000-0000-4000-8000-000000000777";
+    const containerId = "container-external-id";
+    query.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM docker_hosts")) {
+        return { rows: [{ id: hostId, name: "Host", hostname: "host.local" }] };
+      }
+      if (sql.includes("FROM resource_snapshots")) {
+        return {
+          rows: [{
+            id: resourceId,
+            host_id: hostId,
+            kind: "container",
+            external_id: containerId,
+            name: "standalone",
+            data: {
+              Names: "/standalone",
+              Image: "nginx:alpine",
+              State: "running"
+            },
+            updated_at: now
+          }]
+        };
+      }
+      if (sql.includes("FROM compose_stacks")) return { rows: [] };
+      if (sql.includes("FROM github_repositories")) return { rows: [] };
+      if (sql.includes("FROM app_source_links")) return { rows: [] };
+      return { rows: [] };
+    });
+    const auditFailure = new Error("audit insert failed");
+    const { updateApp } = await import("../src/services/apps.js");
+
+    await expect(updateApp(
+      `container:${resourceId}`,
+      "00000000-0000-4000-8000-000000000222",
+      async () => {
+        throw auditFailure;
+      }
+    )).rejects.toBe(auditFailure);
+
+    expect(enqueueJob).toHaveBeenCalledWith(
+      {
+        type: "container.update",
+        hostId,
+        payload: {
+          containerId,
+          targetImage: "nginx:alpine"
+        }
+      },
+      "00000000-0000-4000-8000-000000000222"
+    );
     expect(notifyJobQueued).not.toHaveBeenCalled();
   });
 });

@@ -9,6 +9,7 @@ import { pool } from "../../src/db/pool.js";
 import { checkDockerHost } from "../../src/services/docker.js";
 import {
   assertJobLeaseActive,
+  cancelQueuedJob,
   claimNextJob,
   completeJob,
   enqueueJob,
@@ -115,6 +116,63 @@ describe.skipIf(!integrationEnabled)("worker reliability integration", () => {
     const active = await app.inject({ method: "GET", url: "/api/health/ready" });
     expect(active.statusCode).toBe(200);
     expect(active.json().checks.worker).toMatchObject({ ok: true, available: true, state: "active" });
+  });
+
+  it("makes readiness fail closed for every fresh worker while a self-update handoff blocks claims", async () => {
+    const hostId = await insertHost();
+    const handoffJobId = await insertJob("system.self_update", {
+      status: "running",
+      attemptCount: 1,
+      hostId,
+      payload: {
+        workingDir: "/srv/composebastion",
+        composeFile: "docker-compose.image.yml",
+        versionMode: "latest",
+        targetVersion: "latest"
+      }
+    });
+    await pool.query(
+      `UPDATE operation_jobs
+       SET result = $2::jsonb
+       WHERE id = $1`,
+      [handoffJobId, JSON.stringify({ handoffPending: true, handedOffAt: new Date().toISOString() })]
+    );
+    await registerWorkerInstance({
+      id: randomUUID(),
+      version: "1.2.0-beta.1",
+      hostname: "integration-worker-a"
+    });
+    await registerWorkerInstance({
+      id: randomUUID(),
+      version: "1.2.0-beta.1",
+      hostname: "integration-worker-b"
+    });
+
+    const blocked = await app.inject({ method: "GET", url: "/api/health/ready" });
+    expect(blocked.statusCode).toBe(503);
+    expect(blocked.json().checks.worker).toMatchObject({
+      ok: false,
+      available: false,
+      activeWorkers: 2,
+      state: "draining"
+    });
+
+    await pool.query(
+      `UPDATE operation_jobs
+       SET status = 'completed',
+           result = result || '{"handoffPending":false}'::jsonb,
+           completed_at = now()
+       WHERE id = $1`,
+      [handoffJobId]
+    );
+    const resolved = await app.inject({ method: "GET", url: "/api/health/ready" });
+    expect(resolved.statusCode).toBe(200);
+    expect(resolved.json().checks.worker).toMatchObject({
+      ok: true,
+      available: true,
+      activeWorkers: 2,
+      state: "active"
+    });
   });
 
   it("keeps Redis diagnostic and non-required when PostgreSQL and the worker are healthy", async () => {
@@ -285,6 +343,53 @@ describe.skipIf(!integrationEnabled)("worker reliability integration", () => {
 
     const exhaustedId = await insertJob("host.sync", { status: "failed", attemptCount: 3, hostId });
     await expect(retryJob(exhaustedId)).resolves.toMatchObject({ retried: null });
+  });
+
+  it("serializes queued cancellation against worker claim and finalizes linked state only when cancellation wins", async () => {
+    const hostId = await insertHost();
+    const workerId = randomUUID();
+
+    for (let iteration = 0; iteration < 12; iteration += 1) {
+      const backupId = randomUUID();
+      await pool.query(
+        `INSERT INTO backups
+           (id, host_id, kind, volume_name, file_name, status, metadata)
+         VALUES ($1, $2, 'volume', $3, $4, 'queued', '{}'::jsonb)`,
+        [backupId, hostId, `cancel-race-${iteration}`, `cancel-race-${iteration}.tar.gz`]
+      );
+      const jobId = await insertJob("volume.backup", {
+        status: "queued",
+        hostId,
+        payload: { backupId, volumeName: `cancel-race-${iteration}` }
+      });
+
+      const [cancellation, claimed] = await Promise.all([
+        cancelQueuedJob(jobId),
+        claimNextJob(workerId)
+      ]);
+      const cancellationWon = cancellation.canceled;
+      const claimWon = claimed?.id === jobId;
+      expect(Number(cancellationWon) + Number(claimWon)).toBe(1);
+
+      const job = await pool.query(
+        "SELECT status FROM operation_jobs WHERE id = $1",
+        [jobId]
+      );
+      const backup = await pool.query(
+        "SELECT status, error FROM backups WHERE id = $1",
+        [backupId]
+      );
+      if (cancellationWon) {
+        expect(job.rows[0]).toMatchObject({ status: "canceled" });
+        expect(backup.rows[0]).toMatchObject({
+          status: "failed",
+          error: "Canceled before start"
+        });
+      } else {
+        expect(job.rows[0]).toMatchObject({ status: "running" });
+        expect(backup.rows[0]).toMatchObject({ status: "queued", error: null });
+      }
+    }
   });
 
   it("requeues safe expired work but fails an abandoned mutation", async () => {

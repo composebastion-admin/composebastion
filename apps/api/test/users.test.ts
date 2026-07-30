@@ -13,7 +13,7 @@ vi.mock("bcryptjs", () => ({
   default: { hash: vi.fn(async () => "new-password-hash") }
 }));
 
-const { deleteUser, updateUser } = await import("../src/services/users.js");
+const { createUser, deleteUser, updateUser } = await import("../src/services/users.js");
 
 const ownerId = "00000000-0000-4000-8000-000000000001";
 const otherId = "00000000-0000-4000-8000-000000000002";
@@ -39,6 +39,37 @@ beforeEach(() => {
 });
 
 describe("account owner invariants", () => {
+  it("runs the required audit callback on the same transaction client", async () => {
+    const auditFailure = new Error("audit insert failed");
+    transactionQuery
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [{
+          ...ownerRow,
+          id: otherId,
+          username: "operator",
+          email: "operator@example.test",
+          role: "operator"
+        }]
+      });
+    const onChanged = vi.fn(async (client: { query: typeof transactionQuery }) => {
+      expect(client.query).toBe(transactionQuery);
+      throw auditFailure;
+    });
+
+    await expect(createUser({
+      username: "operator",
+      email: "operator@example.test",
+      password: "Very-Secure-Pass1",
+      role: "operator"
+    }, onChanged)).rejects.toBe(auditFailure);
+
+    expect(onChanged).toHaveBeenCalledWith(
+      expect.objectContaining({ query: transactionQuery }),
+      expect.objectContaining({ id: otherId, role: "operator" })
+    );
+  });
+
   it("prevents an actor from changing their own role", async () => {
     transactionQuery
       .mockResolvedValueOnce({ rows: [] })

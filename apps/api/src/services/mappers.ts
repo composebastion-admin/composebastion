@@ -8,6 +8,7 @@ import type {
   OperationJob,
   RecoveryAppIdentity,
   RecoveryArtifact,
+  RecoveryPointDetail,
   RecoveryPointListItem,
   RecoverySchedule,
   ResourceSnapshot
@@ -57,7 +58,7 @@ export function mapHost(row: any): DockerHost {
     tags: row.tags ?? [],
     lastStatus: row.last_status,
     lastSeenAt: iso(row.last_seen_at),
-    lastError: row.last_error,
+    lastError: sanitizeUrlDiagnosticText(row.last_error ?? null) as string | null,
     dockerVersion: row.docker_version,
     composeVersion: row.compose_version,
     agentVersion: row.agent_version ?? null,
@@ -147,10 +148,20 @@ export function mapBackup(row: any): Backup {
     lastDrillAt: iso(row.last_drill_at),
     lastDrillStatus: row.last_drill_status ?? null,
     status: row.status,
-    error: row.error,
+    error: sanitizeUrlDiagnosticText(row.error ?? null) as string | null,
     createdAt: iso(row.created_at)!,
     completedAt: iso(row.completed_at),
+    // This mapper is also used by restore, verify, retention, and deletion.
+    // Keep authoritative object locators byte-for-byte intact internally.
     metadata: row.metadata ?? {}
+  };
+}
+
+export function sanitizeBackupForRead(backup: Backup): Backup {
+  return {
+    ...backup,
+    remoteObjectKey: sanitizeUrlDiagnosticText(backup.remoteObjectKey) as string | null,
+    metadata: sanitizeGitRepositoryUrlFields(backup.metadata)
   };
 }
 
@@ -238,10 +249,63 @@ export function mapRecoveryArtifact(row: any): RecoveryArtifact {
     sizeBytes: toNullableNumber(row.size_bytes),
     checksum: row.checksum ?? null,
     status: row.status,
-    error: row.error ?? null,
+    error: sanitizeUrlDiagnosticText(row.error ?? null) as string | null,
+    // Restore, verify, and deletion consume this metadata. Redaction belongs
+    // at the API boundary so valid URL-shaped storage keys are never mutated.
     metadata: row.metadata ?? {},
     createdAt: iso(row.created_at)!,
     completedAt: iso(row.completed_at)
+  };
+}
+
+export function sanitizeRecoveryArtifactForRead(artifact: RecoveryArtifact): RecoveryArtifact {
+  return {
+    ...artifact,
+    storageKey: sanitizeUrlDiagnosticText(artifact.storageKey) as string,
+    metadata: sanitizeGitRepositoryUrlFields(artifact.metadata)
+  };
+}
+
+export function recoveryArtifactEvidenceCounts(artifacts: RecoveryArtifact[]) {
+  let remoteArtifactCount = 0;
+  let remoteUploadFailureCount = 0;
+  let localRetainedArtifactCount = 0;
+  let localRemovedArtifactCount = 0;
+
+  for (const artifact of artifacts) {
+    const metadata = artifact.metadata;
+    const remoteObjectKey = typeof metadata.remoteObjectKey === "string"
+      ? metadata.remoteObjectKey
+      : "";
+    if (remoteObjectKey) remoteArtifactCount += 1;
+    if (
+      Object.prototype.hasOwnProperty.call(metadata, "remoteUploadError")
+      || Object.prototype.hasOwnProperty.call(metadata, "remoteVerificationError")
+    ) {
+      remoteUploadFailureCount += 1;
+    }
+    if (metadata.localCacheRemoved === true) localRemovedArtifactCount += 1;
+
+    if (artifact.status !== "completed" && artifact.status !== "partial") continue;
+    const localRetained = (
+      metadata.localCacheRemoved === false
+      && (
+        metadata.localCachePolicy !== "remote_only"
+        || metadata.localCacheCleanupAttempted === true
+        || !remoteObjectKey
+      )
+    ) || (
+      metadata.localCacheRemoved == null
+      && metadata.localCachePolicy !== "remote_only"
+    );
+    if (localRetained) localRetainedArtifactCount += 1;
+  }
+
+  return {
+    remoteArtifactCount,
+    remoteUploadFailureCount,
+    localRetainedArtifactCount,
+    localRemovedArtifactCount
   };
 }
 
@@ -263,16 +327,30 @@ export function mapRecoveryPoint(row: any): RecoveryPointListItem {
     localRetainedArtifactCount: toCount(row.local_retained_artifact_count),
     localRemovedArtifactCount: toCount(row.local_removed_artifact_count),
     totalBytes: toNullableNumber(row.total_bytes),
-    error: row.error ?? null,
+    error: sanitizeUrlDiagnosticText(row.error ?? null) as string | null,
     metadata: row.metadata ?? {},
     lastDrillAt: iso(row.last_drill_at),
     lastDrillStatus: row.last_drill_status ?? null,
-    lastDrillError: row.last_drill_error ?? null,
+    lastDrillError: sanitizeUrlDiagnosticText(row.last_drill_error ?? null) as string | null,
     lastSuccessfulDrillAt: iso(row.last_successful_drill_at),
     createdAt: iso(row.created_at)!,
     startedAt: iso(row.started_at),
     completedAt: iso(row.completed_at)
   };
+}
+
+export function sanitizeRecoveryPointForRead<
+  T extends RecoveryPointListItem | RecoveryPointDetail
+>(point: T): T {
+  const outward = {
+    ...point,
+    metadata: sanitizeGitRepositoryUrlFields(point.metadata)
+  };
+  if (!("artifacts" in point)) return outward as T;
+  return {
+    ...outward,
+    artifacts: point.artifacts.map(sanitizeRecoveryArtifactForRead)
+  } as T;
 }
 
 export function mapRecoverySchedule(row: any): RecoverySchedule {
@@ -292,7 +370,7 @@ export function mapRecoverySchedule(row: any): RecoverySchedule {
     lastRunAt: iso(row.last_run_at),
     lastDrillAt: iso(row.last_drill_at),
     lastDrillStatus: row.last_drill_status ?? null,
-    lastDrillError: row.last_drill_error ?? null,
+    lastDrillError: sanitizeUrlDiagnosticText(row.last_drill_error ?? null) as string | null,
     lastSuccessfulDrillAt: iso(row.last_successful_drill_at),
     nextRunAt: iso(row.next_run_at)!,
     createdAt: iso(row.created_at)!,
@@ -311,9 +389,124 @@ export function mapMigrationRun(row: any): MigrationRun {
     status: row.status,
     recoveryPointId: row.recovery_point_id ?? null,
     plan: parseMigrationPlan(row.plan),
-    error: row.error ?? null,
+    error: sanitizeUrlDiagnosticText(row.error ?? null) as string | null,
     createdAt: iso(row.created_at)!,
     startedAt: iso(row.started_at),
     completedAt: iso(row.completed_at)
+  };
+}
+
+export function sanitizeMigrationRunForRead(run: MigrationRun): MigrationRun {
+  const outward = sanitizeGitRepositoryUrlFields(run);
+  return {
+    ...outward,
+    error: sanitizeUrlDiagnosticText(outward.error) as string | null
+  };
+}
+
+const VIEWER_MIGRATION_ERROR =
+  "Migration operation details are available to operators and administrators.";
+
+function viewerDiagnosticEntries(values: readonly unknown[], label: string) {
+  return values.map((_, index) =>
+    `${label} ${index + 1}; details require operator access.`
+  );
+}
+
+function redactMigrationAppIdentityForViewer(
+  identity: RecoveryAppIdentity
+): RecoveryAppIdentity {
+  if (identity.kind === "stack") {
+    return { kind: identity.kind, stackId: identity.stackId };
+  }
+  if (identity.kind === "compose") {
+    return {
+      kind: identity.kind,
+      projectName: "redacted-compose-app",
+      ...(identity.stackId ? { stackId: identity.stackId } : {})
+    };
+  }
+  if (identity.kind === "git") {
+    return { kind: identity.kind, repositoryId: identity.repositoryId };
+  }
+  return { kind: identity.kind, containerIds: ["redacted-container"] };
+}
+
+/**
+ * Migration plans can contain host paths and Docker resource names in
+ * diagnostics and collision lists. Preserve the status, strategy, checks, and
+ * counts a viewer needs while failing closed on arbitrary persisted strings.
+ */
+export function redactMigrationRunForViewer(run: MigrationRun): MigrationRun {
+  const sanitized = sanitizeMigrationRunForRead(run);
+  const plan = sanitized.plan;
+  const sourceAppIdentity = redactMigrationAppIdentityForViewer(
+    sanitized.sourceAppIdentity
+  );
+  return {
+    id: sanitized.id,
+    planRunId: sanitized.planRunId,
+    sourceHostId: sanitized.sourceHostId,
+    targetHostId: sanitized.targetHostId,
+    sourceAppIdentity,
+    mode: sanitized.mode,
+    status: sanitized.status,
+    recoveryPointId: sanitized.recoveryPointId,
+    error: sanitized.error ? VIEWER_MIGRATION_ERROR : null,
+    plan: plan
+      ? {
+        // Use the already-authorized run scope rather than reflecting a
+        // potentially stale or contaminated identity embedded in plan JSON.
+        sourceHostId: sanitized.sourceHostId,
+        targetHostId: sanitized.targetHostId,
+        sourceAppIdentity,
+        intent: plan.intent
+          ? {
+            strategy: plan.intent.strategy,
+            options: {
+              stopSource: plan.intent.options.stopSource,
+              remapPorts: plan.intent.options.remapPorts,
+              networkMode: plan.intent.options.networkMode
+            }
+          }
+          : null,
+        sourceFingerprint: null,
+        targetFingerprint: null,
+        steps: plan.steps.map((step, index) => ({
+          id: `step-${index + 1}`,
+          title: `Migration step ${index + 1}`,
+          description: "Migration step details require operator access.",
+          kind: step.kind,
+          required: step.required
+        })),
+        warnings: viewerDiagnosticEntries(plan.warnings, "Migration warning"),
+        estimatedArtifacts: plan.estimatedArtifacts,
+        estimatedVolumes: plan.estimatedVolumes,
+        estimatedHostFolders: plan.estimatedHostFolders,
+        checks: {
+          sourceHostAvailable: plan.checks.sourceHostAvailable,
+          targetHostAvailable: plan.checks.targetHostAvailable,
+          sourceDockerAvailable: plan.checks.sourceDockerAvailable,
+          targetDockerAvailable: plan.checks.targetDockerAvailable,
+          sourceComposeAvailable: plan.checks.sourceComposeAvailable,
+          targetComposeAvailable: plan.checks.targetComposeAvailable
+        },
+        portConflicts: plan.portConflicts.map((_, index) => ({
+          hostPort: `redacted-${index + 1}`,
+          protocol: "redacted",
+          sourceContainer: null,
+          reason: `Port conflict ${index + 1}; details require operator access.`
+        })),
+        volumeCollisions: viewerDiagnosticEntries(plan.volumeCollisions, "Volume collision"),
+        nameCollisions: viewerDiagnosticEntries(plan.nameCollisions, "Name collision"),
+        missingNetworks: viewerDiagnosticEntries(plan.missingNetworks, "Missing network"),
+        networkConflicts: viewerDiagnosticEntries(plan.networkConflicts, "Network conflict"),
+        estimatedDataBytes: plan.estimatedDataBytes,
+        blockingIssues: viewerDiagnosticEntries(plan.blockingIssues, "Migration blocking issue")
+      }
+      : null,
+    createdAt: sanitized.createdAt,
+    startedAt: sanitized.startedAt,
+    completedAt: sanitized.completedAt
   };
 }

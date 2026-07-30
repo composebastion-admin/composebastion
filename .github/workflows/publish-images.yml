@@ -41,6 +41,12 @@ jobs:
         with:
           node-version: "24"
 
+      - name: Install integrity-pinned npm
+        run: node scripts/bootstrap-npm.mjs
+
+      - name: Enforce container configuration policy
+        run: npm run check:container-config
+
       - name: Validate aligned release metadata
         run: node scripts/check-release-version.mjs
 
@@ -79,7 +85,7 @@ jobs:
 
       - name: Install attribution policy dependencies
         if: steps.stable-tag.outputs.stable == 'true'
-        run: npm ci --ignore-scripts
+        run: npm ci --engine-strict --dangerously-allow-all-scripts=false --ignore-scripts
 
       - name: Require approved Go attribution for stable release
         if: steps.stable-tag.outputs.stable == 'true'
@@ -185,13 +191,26 @@ jobs:
             layer_blob="blobs/sha256/${layer_digest#sha256:}"
             test "${layer_digest}" = "sha256:$(tar -xOf "${archive}" "${layer_blob}" | sha256sum | cut -d' ' -f1)"
           done
+          if [ "${{ matrix.component }}" = app ]; then
+            expected_title="ComposeBastion"
+          else
+            expected_title="ComposeBastion Agent"
+          fi
           jq -e \
             --arg arch "${{ matrix.arch }}" \
+            --arg title "${expected_title}" \
+            --arg source "https://github.com/composebastion-admin/composebastion" \
+            --arg license "LicenseRef-ComposeBastion-SourceAvailable-PrivateUse-1.0" \
             --arg version "${EXPECTED_VERSION}" \
             --arg revision "${EXPECTED_REVISION}" \
             --arg created "${EXPECTED_CREATED}" \
             '.os == "linux"
              and .architecture == $arch
+             and .config.Labels["org.opencontainers.image.title"] == $title
+             and .config.Labels["org.opencontainers.image.url"] == $source
+             and .config.Labels["org.opencontainers.image.source"] == $source
+             and .config.Labels["org.opencontainers.image.vendor"] == "ComposeBastion Admin"
+             and .config.Labels["org.opencontainers.image.licenses"] == $license
              and .config.Labels["org.opencontainers.image.version"] == $version
              and .config.Labels["org.opencontainers.image.revision"] == $revision
              and .config.Labels["org.opencontainers.image.created"] == $created' \
@@ -436,9 +455,68 @@ jobs:
         run: |
           set -euo pipefail
           docker pull --platform "linux/${{ matrix.arch }}" "${IMAGE_REFERENCE}"
+          if [ "${{ matrix.component }}" = app ]; then
+            expected_title="ComposeBastion"
+          else
+            expected_title="ComposeBastion Agent"
+          fi
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.title" }}' "${IMAGE_REFERENCE}")" = "${expected_title}"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.url" }}' "${IMAGE_REFERENCE}")" = "https://github.com/composebastion-admin/composebastion"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.source" }}' "${IMAGE_REFERENCE}")" = "https://github.com/composebastion-admin/composebastion"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.vendor" }}' "${IMAGE_REFERENCE}")" = "ComposeBastion Admin"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.licenses" }}' "${IMAGE_REFERENCE}")" = "LicenseRef-ComposeBastion-SourceAvailable-PrivateUse-1.0"
           test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "${IMAGE_REFERENCE}")" = "${VERSION}"
           test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "${IMAGE_REFERENCE}")" = "${GITHUB_SHA}"
           test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.created" }}' "${IMAGE_REFERENCE}")" = "${CREATED}"
+          legal_dir="$(mktemp -d)"
+          container_id=""
+          cleanup() {
+            if [ -n "${container_id}" ]; then docker rm -f "${container_id}" >/dev/null 2>&1 || true; fi
+            rm -rf "${legal_dir}"
+          }
+          trap cleanup EXIT
+          container_id="$(docker create "${IMAGE_REFERENCE}")"
+          docker cp "${container_id}:/licenses/." "${legal_dir}/"
+          for artifact in \
+            LICENSE.md \
+            LICENSING_SUMMARY.md \
+            COMMERCIAL-LICENSE.md \
+            NOTICE.md \
+            THIRD-PARTY-NOTICES.md \
+            TRADEMARKS.md; do
+            cmp "${artifact}" "${legal_dir}/${artifact}"
+          done
+          cmp LICENSES/go-modules/manifest.json "${legal_dir}/LICENSES/go-modules/manifest.json"
+          cmp LICENSES/go-modules/manifest.json "${legal_dir}/third-party/go-modules/manifest.json"
+          if [ "${{ matrix.component }}" = app ]; then
+            required_third_party=(
+              trivy-LICENSE.txt
+              trivy-NOTICE.txt
+              oras-go-LICENSE.txt
+              rclone-LICENSE.txt
+              go-LICENSE.txt
+              go-PATENTS.txt
+              go-buildinfo/trivy.modules.tsv
+              go-buildinfo/trivy.artifacts.sha256
+              go-buildinfo/rclone.modules.tsv
+              go-buildinfo/rclone.artifacts.sha256
+            )
+          else
+            required_third_party=(
+              docker-cli-LICENSE.txt
+              docker-cli-NOTICE.txt
+              docker-compose-LICENSE.txt
+              docker-compose-NOTICE.txt
+              go-LICENSE.txt
+              go-PATENTS.txt
+              go-buildinfo/docker-cli.modules.tsv
+              go-buildinfo/docker-compose.modules.tsv
+              go-buildinfo/agent.artifacts.sha256
+            )
+          fi
+          for artifact in "${required_third_party[@]}"; do
+            test -s "${legal_dir}/third-party/${artifact}"
+          done
 
       - name: Scan immutable published digest
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0

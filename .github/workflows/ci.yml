@@ -22,7 +22,11 @@ jobs:
         with:
           node-version: "24"
           cache: npm
-      - run: npm ci
+      - name: Install integrity-pinned npm
+        run: node scripts/bootstrap-npm.mjs
+      - run: npm ci --engine-strict --strict-allow-scripts --dangerously-allow-all-scripts=false --ignore-scripts=false
+      - name: Dependency install-script policy
+        run: npm run check:npm-install-policy
       - name: Typecheck
         run: npm run typecheck
       - name: Migration naming
@@ -37,6 +41,10 @@ jobs:
         run: npm run check:go-attribution
       - name: Go attribution release policy
         run: npm run test:go-attribution-policy
+      - name: Container configuration policy tests
+        run: npm run test:container-config-policy
+      - name: Acceptance qualification policy tests
+        run: npm run test:acceptance-policy
       - name: Third-party notices
         run: npm run notices:check
       - name: Immutable workflow actions
@@ -88,7 +96,9 @@ jobs:
         with:
           node-version: "24"
           cache: npm
-      - run: npm ci
+      - name: Install integrity-pinned npm
+        run: node scripts/bootstrap-npm.mjs
+      - run: npm ci --engine-strict --strict-allow-scripts --dangerously-allow-all-scripts=false --ignore-scripts=false
       - name: Build shared package
         run: npm run build --workspace @composebastion/shared
       # The API integration tests share one database, so the test files must run
@@ -105,11 +115,13 @@ jobs:
         with:
           node-version: "24"
           cache: npm
-      - run: npm ci
-      - name: Install Playwright browser
-        run: npx playwright install --with-deps chromium
-      - name: Run web smoke tests
-        run: npm run smoke:web
+      - name: Install integrity-pinned npm
+        run: node scripts/bootstrap-npm.mjs
+      - run: npm ci --engine-strict --strict-allow-scripts --dangerously-allow-all-scripts=false --ignore-scripts=false
+      - name: Install qualification Playwright browsers
+        run: npx playwright install --with-deps chromium firefox webkit
+      - name: Run qualification web smoke matrix
+        run: npm run smoke:web:qualification
 
   production-build:
     name: Production image smoke
@@ -124,8 +136,12 @@ jobs:
         with:
           node-version: "24"
           cache: npm
+      - name: Install integrity-pinned npm
+        run: node scripts/bootstrap-npm.mjs
       - name: Materialize exact Git build context
         run: node scripts/materialize-git-context.mjs "${RUNNER_TEMP}/composebastion-git-context" "${GITHUB_SHA}"
+      - name: Enforce container configuration policy
+        run: npm run check:container-config
       - name: Validate production compose config
         run: docker compose -f docker-compose.yml -f docker-compose.prod.example.yml config
       - name: Validate Compose environment contracts
@@ -150,7 +166,9 @@ jobs:
         with:
           node-version: "24"
           cache: npm
-      - run: npm ci
+      - name: Install integrity-pinned npm
+        run: node scripts/bootstrap-npm.mjs
+      - run: npm ci --engine-strict --strict-allow-scripts --dangerously-allow-all-scripts=false --ignore-scripts=false
       - name: Start SSH Docker host fixture
         run: |
           set -euo pipefail
@@ -216,7 +234,9 @@ jobs:
         with:
           node-version: "24"
           cache: npm
-      - run: npm ci
+      - name: Install integrity-pinned npm
+        run: node scripts/bootstrap-npm.mjs
+      - run: npm ci --engine-strict --strict-allow-scripts --dangerously-allow-all-scripts=false --ignore-scripts=false
       - name: Validate SSH secrets
         run: |
           set -euo pipefail
@@ -241,9 +261,11 @@ jobs:
         with:
           node-version: "24"
           cache: npm
-      - run: npm ci
-      - name: Install Playwright browser
-        run: npx playwright install --with-deps chromium
+      - name: Install integrity-pinned npm
+        run: node scripts/bootstrap-npm.mjs
+      - run: npm ci --engine-strict --strict-allow-scripts --dangerously-allow-all-scripts=false --ignore-scripts=false
+      - name: Install qualification Playwright browsers
+        run: npx playwright install --with-deps chromium firefox webkit
       - name: Run full local-stack acceptance including public upgrade
         run: npm run acceptance:local
       - name: Assert release-qualifying acceptance report

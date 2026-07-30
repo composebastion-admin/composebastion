@@ -1,6 +1,7 @@
 import bcrypt from "bcryptjs";
 import { v4 as uuid } from "uuid";
 import { userCreateSchema, userUpdateSchema } from "@composebastion/shared";
+import type { PoolClient } from "pg";
 import { query, withTransaction } from "../db/pool.js";
 import { OWNER_INVARIANT_LOCK_KEY } from "./auth.js";
 import { mapAdmin } from "./mappers.js";
@@ -28,7 +29,13 @@ export async function countActiveOwners(excludeUserId?: string) {
   return Number(result.rows[0]?.count ?? 0);
 }
 
-export async function createUser(input: unknown) {
+export async function createUser(
+  input: unknown,
+  onChanged?: (
+    client: PoolClient,
+    user: ReturnType<typeof mapAdmin>
+  ) => Promise<void>
+) {
   const body = userCreateSchema.parse(input);
   const passwordHash = await bcrypt.hash(body.password, 12);
   return withTransaction(async (client) => {
@@ -39,11 +46,21 @@ export async function createUser(input: unknown) {
        RETURNING id, name, username, email, role, is_active, last_login_at, created_at`,
       [uuid(), body.name ?? null, body.username?.toLowerCase() ?? null, body.email.toLowerCase(), passwordHash, body.role]
     );
-    return mapAdmin(result.rows[0]);
+    const user = mapAdmin(result.rows[0]);
+    await onChanged?.(client, user);
+    return user;
   });
 }
 
-export async function updateUser(id: string, input: unknown, actorId?: string | null) {
+export async function updateUser(
+  id: string,
+  input: unknown,
+  actorId?: string | null,
+  onChanged?: (
+    client: PoolClient,
+    user: ReturnType<typeof mapAdmin>
+  ) => Promise<void>
+) {
   const body = userUpdateSchema.parse(input);
   const passwordHash = body.password ? await bcrypt.hash(body.password, 12) : null;
   return withTransaction(async (client) => {
@@ -88,11 +105,17 @@ export async function updateUser(id: string, input: unknown, actorId?: string | 
     if (body.password || (row.is_active === true && nextActive === false)) {
       await client.query("DELETE FROM sessions WHERE user_id = $1", [id]);
     }
-    return mapAdmin(result.rows[0]);
+    const user = mapAdmin(result.rows[0]);
+    await onChanged?.(client, user);
+    return user;
   });
 }
 
-export async function deleteUser(id: string, actorId?: string | null) {
+export async function deleteUser(
+  id: string,
+  actorId?: string | null,
+  onChanged?: (client: PoolClient) => Promise<void>
+) {
   return withTransaction(async (client) => {
     await client.query("SELECT pg_advisory_xact_lock($1)", [OWNER_INVARIANT_LOCK_KEY]);
     const current = await client.query<{ id: string; role: string; is_active: boolean }>(
@@ -112,6 +135,7 @@ export async function deleteUser(id: string, actorId?: string | null) {
       }
     }
     await client.query("DELETE FROM admin_users WHERE id = $1", [id]);
+    await onChanged?.(client);
     return true;
   });
 }

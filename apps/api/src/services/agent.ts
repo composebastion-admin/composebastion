@@ -10,6 +10,16 @@ import {
 } from "@composebastion/shared";
 import { env } from "../config/env.js";
 import { createAgentLookup, shouldAllowPrivateAgentUrls } from "./ssrf.js";
+import {
+  currentRemoteMutationContext,
+  normalizeRemoteMutationTimeoutMs,
+  recordRemoteMutationDispatch,
+  recordRemoteMutationTerminal,
+  REMOTE_MUTATION_COMPLETION_GRACE_MS,
+  RemoteMutationOutcomeUnknownError,
+  type RemoteMutationRuntimeState,
+  type RemoteMutationRuntimeStatus
+} from "./remoteMutationProof.js";
 
 export interface AgentTarget {
   url: string;
@@ -93,33 +103,257 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-export async function runAgentDockerCommand(target: AgentTarget, command: string, timeoutMs = 120_000) {
-  const response = await agentRequest(target, "api/run", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${target.token}`
-    },
-    body: JSON.stringify({ command }),
-    timeoutMs
-  });
-  const data = parseAgentJson<{ stdout?: string; stderr?: string; code?: number; error?: string }>(response.body);
-  if (!response.ok || data.code) {
-    throw new Error(data.error ?? data.stderr ?? `Agent command failed with code ${data.code}`);
+export async function runAgentDockerCommandResult(
+  target: AgentTarget,
+  command: string,
+  timeoutMs = 120_000
+) {
+  const boundedTimeoutMs = normalizeRemoteMutationTimeoutMs(timeoutMs);
+  const context = currentRemoteMutationContext();
+  if (context) {
+    await recordRemoteMutationDispatch(context, "agent", boundedTimeoutMs);
   }
-  return { stdout: data.stdout ?? "", stderr: data.stderr ?? "", code: data.code ?? 0 };
+  let response: Awaited<ReturnType<typeof agentRequest>>;
+  try {
+    response = await agentRequest(target, "api/run", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${target.token}`
+      },
+      body: JSON.stringify({
+        command,
+        timeoutMs: boundedTimeoutMs,
+        ...(context ? { operationId: context.operationId } : {})
+      }),
+      timeoutMs: boundedTimeoutMs + REMOTE_MUTATION_COMPLETION_GRACE_MS
+    });
+  } catch (error) {
+    if (!context) throw error;
+    throw new RemoteMutationOutcomeUnknownError(
+      context.operationId,
+      context.phase,
+      "agent",
+      "transport_lost",
+      error
+    );
+  }
+  let data: {
+    stdout?: string;
+    stderr?: string;
+    code?: number;
+    error?: string;
+    outcome?: "completed" | "failed" | "timed_out";
+    operation?: {
+      operationId?: string;
+      status?: RemoteMutationRuntimeState;
+    };
+  };
+  try {
+    data = parseAgentJson(response.body);
+  } catch (error) {
+    if (!context) throw error;
+    throw new RemoteMutationOutcomeUnknownError(
+      context.operationId,
+      context.phase,
+      "agent",
+      "proof_unavailable",
+      error
+    );
+  }
+  if (context) {
+    const operationMatches = data.operation?.operationId === context.operationId;
+    const state = operationMatches
+      ? data.operation?.status
+      : data.outcome;
+    if (state === "completed" || state === "failed" || state === "timed_out") {
+      await recordRemoteMutationTerminal(context, state);
+      if (state === "timed_out") {
+        throw new RemoteMutationOutcomeUnknownError(
+          context.operationId,
+          context.phase,
+          "agent",
+          state
+        );
+      }
+    } else if (response.ok) {
+      // A compatible older agent may not return operation metadata, but a
+      // complete successful response is still authoritative.
+      await recordRemoteMutationTerminal(context, "completed");
+    } else {
+      throw new RemoteMutationOutcomeUnknownError(
+        context.operationId,
+        context.phase,
+        "agent",
+        state === "running" || state === "missing" || state === "proof_unavailable"
+          ? state
+          : "proof_unavailable"
+      );
+    }
+  }
+  return {
+    stdout: data.stdout ?? "",
+    stderr: data.stderr ?? data.error ?? "",
+    code: data.code ?? (response.ok ? 0 : response.status || 1)
+  };
+}
+
+export async function runAgentDockerCommand(target: AgentTarget, command: string, timeoutMs = 120_000) {
+  const result = await runAgentDockerCommandResult(
+    target,
+    command,
+    timeoutMs
+  );
+  if (result.code) {
+    throw new Error(
+      result.stderr
+      || `Agent command failed with code ${result.code}`
+    );
+  }
+  return result;
+}
+
+export async function inspectAgentRemoteOperation(
+  target: AgentTarget,
+  operationId: string
+): Promise<RemoteMutationRuntimeStatus> {
+  if (!/^[0-9a-f]{64}$/.test(operationId)) {
+    throw new Error("Remote operation id must be a 64-character lowercase hexadecimal digest");
+  }
+  const response = await agentRequest(
+    target,
+    `api/operations/${operationId}`,
+    {
+      headers: {
+        Authorization: `Bearer ${target.token}`
+      },
+      timeoutMs: 30_000
+    }
+  );
+  const data = parseAgentJson<{
+    operationId?: string;
+    status?: RemoteMutationRuntimeState;
+    startedAt?: string | null;
+    completedAt?: string | null;
+  }>(response.body);
+  if (response.status === 404) {
+    return {
+      operationId,
+      state: "missing"
+    };
+  }
+  if (!response.ok) {
+    throw new AgentHttpError(
+      `Agent remote operation inspection failed with ${response.status}`,
+      response.status
+    );
+  }
+  if (
+    data.operationId !== operationId
+    || (
+      data.status !== "running"
+      && data.status !== "completed"
+      && data.status !== "failed"
+      && data.status !== "timed_out"
+    )
+  ) {
+    return {
+      operationId,
+      state: "proof_unavailable"
+    };
+  }
+  return {
+    operationId,
+    state: data.status,
+    startedAt: data.startedAt ?? null,
+    completedAt: data.completedAt ?? null
+  };
 }
 
 export async function writeAgentRemoteFile(target: AgentTarget, remotePath: string, content: string) {
-  const response = await agentRequest(target, "api/files/write", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${target.token}`
-    },
-    body: JSON.stringify({ path: remotePath, content })
-  });
-  const data = parseAgentJson<{ error?: string }>(response.body);
+  const context = currentRemoteMutationContext();
+  if (context) {
+    await recordRemoteMutationDispatch(context, "agent", 30_000);
+  }
+  let response: Awaited<ReturnType<typeof agentRequest>>;
+  try {
+    response = await agentRequest(target, "api/files/write", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${target.token}`
+      },
+      body: JSON.stringify({
+        path: remotePath,
+        content,
+        ...(context ? { operationId: context.operationId } : {})
+      }),
+      timeoutMs: 30_000 + REMOTE_MUTATION_COMPLETION_GRACE_MS
+    });
+  } catch (error) {
+    if (!context) throw error;
+    throw new RemoteMutationOutcomeUnknownError(
+      context.operationId,
+      context.phase,
+      "agent",
+      "transport_lost",
+      error
+    );
+  }
+  let data: {
+    error?: string;
+    operation?: {
+      operationId?: string;
+      status?: RemoteMutationRuntimeState;
+    };
+  };
+  try {
+    data = parseAgentJson(response.body);
+  } catch (error) {
+    if (!context) throw error;
+    throw new RemoteMutationOutcomeUnknownError(
+      context.operationId,
+      context.phase,
+      "agent",
+      "proof_unavailable",
+      error
+    );
+  }
+  if (context) {
+    if (data.operation) {
+      const operationMatches =
+        data.operation.operationId === context.operationId;
+      const state = operationMatches
+        ? data.operation.status
+        : "proof_unavailable";
+      if (
+        state === "completed"
+        || state === "failed"
+        || state === "timed_out"
+      ) {
+        await recordRemoteMutationTerminal(context, state);
+      } else {
+        throw new RemoteMutationOutcomeUnknownError(
+          context.operationId,
+          context.phase,
+          "agent",
+          state === "running" ? state : "proof_unavailable"
+        );
+      }
+    } else if (response.ok) {
+      // Preserve compatibility with an older agent when the synchronous
+      // response itself is authoritative. Lost responses require the new
+      // operation receipt and remain safely ambiguous.
+      await recordRemoteMutationTerminal(context, "completed");
+    } else {
+      throw new RemoteMutationOutcomeUnknownError(
+        context.operationId,
+        context.phase,
+        "agent",
+        "proof_unavailable"
+      );
+    }
+  }
   if (!response.ok) throw new Error(data.error ?? `Agent file write failed with ${response.status}`);
 }
 

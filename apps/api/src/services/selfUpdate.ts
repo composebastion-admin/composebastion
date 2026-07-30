@@ -9,10 +9,16 @@ import {
   selfUpdateConfigSchema,
   type DockerActionRequest
 } from "@composebastion/shared";
-import { query } from "../db/pool.js";
+import type pg from "pg";
+import { query, withTransaction } from "../db/pool.js";
 import { shQuote } from "./commands.js";
-import { getHost, getHostForWorker } from "./hosts.js";
-import { buildJobProgress, enqueueJob } from "./jobs.js";
+import { getHostForWorker } from "./hosts.js";
+import {
+  buildJobProgress,
+  enqueueJob,
+  enqueueJobInTransaction,
+  notifyJobQueued
+} from "./jobs.js";
 import { mapJob } from "./mappers.js";
 import { runSshCommand, writeRemoteFile } from "./ssh.js";
 import { runtimeVersionMetadata } from "./version.js";
@@ -56,13 +62,18 @@ function isStableVersion(value: string | null | undefined) {
   return isStableReleaseVersion(value);
 }
 
-async function readSetting<T>(key: string) {
-  const result = await query<{ value: T }>("SELECT value FROM system_settings WHERE key = $1", [key]);
+async function readSetting<T>(key: string, client?: pg.PoolClient) {
+  const execute = client ? client.query.bind(client) : query;
+  const result = await execute<{ value: T }>(
+    "SELECT value FROM system_settings WHERE key = $1",
+    [key]
+  );
   return result.rows[0]?.value ?? null;
 }
 
-async function writeSetting(key: string, value: unknown) {
-  await query(
+async function writeSetting(key: string, value: unknown, client?: pg.PoolClient) {
+  const execute = client ? client.query.bind(client) : query;
+  await execute(
     `INSERT INTO system_settings (key, value, updated_at)
      VALUES ($1, $2, now())
      ON CONFLICT (key)
@@ -90,21 +101,42 @@ export async function getSelfUpdateConfig() {
   });
 }
 
-export async function saveSelfUpdateConfig(input: unknown) {
-  const current = await getSelfUpdateConfig();
+export async function saveSelfUpdateConfig(
+  input: unknown,
+  onChanged?: (
+    client: pg.PoolClient,
+    config: ReturnType<typeof selfUpdateConfigSchema.parse>
+  ) => Promise<void>
+) {
   const patch = selfUpdateConfigInputSchema.parse(input);
-  const next = selfUpdateConfigSchema.parse({
-    ...current,
-    ...patch
+  return withTransaction(async (client) => {
+    const stored = await readSetting<unknown>(SELF_UPDATE_CONFIG_KEY, client);
+    const current = selfUpdateConfigSchema.parse({
+      ...defaultSelfUpdateConfig,
+      ...(stored && typeof stored === "object" ? stored : {})
+    });
+    const next = selfUpdateConfigSchema.parse({
+      ...current,
+      ...patch
+    });
+
+    if (next.hostId) {
+      const host = await client.query(
+        "SELECT id FROM docker_hosts WHERE id = $1 AND deleted_at IS NULL",
+        [next.hostId]
+      );
+      if (!host.rows[0]) {
+        throw Object.assign(
+          new Error("Selected manager host was not found"),
+          { statusCode: 404 }
+        );
+      }
+    }
+
+    await writeSetting(SELF_UPDATE_CONFIG_KEY, next, client);
+    await onChanged?.(client, next);
+    return next;
   });
-
-  if (next.hostId) {
-    const host = await getHost(next.hostId);
-    if (!host) throw Object.assign(new Error("Selected manager host was not found"), { statusCode: 404 });
-  }
-
-  await writeSetting(SELF_UPDATE_CONFIG_KEY, next);
-  return next;
 }
 
 async function fetchGithubJson<T>(url: string): Promise<T> {
@@ -148,20 +180,27 @@ async function fetchLatestRelease(): Promise<LatestRelease> {
   };
 }
 
-export async function checkSelfUpdateLatest() {
+export async function checkSelfUpdateLatest(
+  onChanged?: (
+    client: pg.PoolClient,
+    latest: LatestRelease
+  ) => Promise<void>
+) {
+  let latest: LatestRelease;
   try {
-    const latest = await fetchLatestRelease();
-    await writeSetting(SELF_UPDATE_LATEST_KEY, latest);
-    return latest;
+    latest = await fetchLatestRelease();
   } catch (caught) {
-    const latest = {
+    latest = {
       version: null,
       checkedAt: new Date().toISOString(),
       error: caught instanceof Error ? caught.message : String(caught)
     };
-    await writeSetting(SELF_UPDATE_LATEST_KEY, latest);
-    return latest;
   }
+  return withTransaction(async (client) => {
+    await writeSetting(SELF_UPDATE_LATEST_KEY, latest, client);
+    await onChanged?.(client, latest);
+    return latest;
+  });
 }
 
 export async function getSelfUpdateStatus() {
@@ -181,7 +220,14 @@ export async function getSelfUpdateStatus() {
   };
 }
 
-export async function enqueueSelfUpdate(input: { targetVersion?: string }, createdBy?: string | null) {
+export async function enqueueSelfUpdate(
+  input: { targetVersion?: string },
+  createdBy?: string | null,
+  onQueued?: (
+    client: pg.PoolClient,
+    job: Awaited<ReturnType<typeof enqueueJobInTransaction>>
+  ) => Promise<void>
+) {
   const config = await getSelfUpdateConfig();
   if (!config.hostId) {
     throw Object.assign(new Error("Choose the manager host before starting a self-update"), { statusCode: 400 });
@@ -207,7 +253,15 @@ export async function enqueueSelfUpdate(input: { targetVersion?: string }, creat
       targetVersion
     }
   };
-  return enqueueJob(action, createdBy ?? null);
+  if (!onQueued) return enqueueJob(action, createdBy ?? null);
+
+  const job = await withTransaction(async (client) => {
+    const queued = await enqueueJobInTransaction(client, action, createdBy ?? null);
+    await onQueued(client, queued);
+    return queued;
+  });
+  await notifyJobQueued(job.id);
+  return job;
 }
 
 function dockerShellExports(socketPath: string) {

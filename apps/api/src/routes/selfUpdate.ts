@@ -38,15 +38,19 @@ export async function registerSelfUpdateRoutes(app: FastifyInstance) {
 
   app.put("/api/self-update/config", { preHandler: admin, config: { rateLimit: sensitiveMutationRateLimit } }, async (request, reply) => {
     try {
-      const config = await saveSelfUpdateConfig(selfUpdateConfigInputSchema.parse(request.body));
-      await writeAuditEvent({
-        userId: request.user?.id,
-        hostId: config.hostId,
-        action: "system.self_update.config",
-        targetKind: "system_setting",
-        targetId: "self_update.config",
-        ...auditContextFromRequest(request)
-      });
+      const config = await saveSelfUpdateConfig(
+        selfUpdateConfigInputSchema.parse(request.body),
+        async (client, saved) => {
+          await writeAuditEvent({
+            userId: request.user?.id,
+            hostId: saved.hostId,
+            action: "system.self_update.config",
+            targetKind: "system_setting",
+            targetId: "self_update.config",
+            ...auditContextFromRequest(request)
+          }, client);
+        }
+      );
       return { config };
     } catch (error) {
       const statusCode = Number((error as { statusCode?: number }).statusCode ?? 500);
@@ -57,24 +61,41 @@ export async function registerSelfUpdateRoutes(app: FastifyInstance) {
     }
   });
 
-  app.post("/api/self-update/check", { preHandler: admin, config: { rateLimit: sensitiveMutationRateLimit } }, async () => {
-    const latest = await checkSelfUpdateLatest();
+  app.post("/api/self-update/check", { preHandler: admin, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
+    const latest = await checkSelfUpdateLatest(async (client, checked) => {
+      await writeAuditEvent({
+        userId: request.user?.id,
+        action: "system.self_update.check",
+        targetKind: "system_setting",
+        targetId: "self_update.latest",
+        details: {
+          version: checked.version,
+          succeeded: checked.error === null
+        },
+        ...auditContextFromRequest(request)
+      }, client);
+    });
     const status = await getSelfUpdateStatus();
     return sanitizeSelfUpdateStatusForRead({ ...status, latest });
   });
 
   app.post("/api/self-update/start", { preHandler: admin, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
     const body = selfUpdateStartSchema.parse(request.body);
-    const job = await enqueueSelfUpdate(body, request.user?.id);
-    await writeAuditEvent({
-      userId: request.user?.id,
-      hostId: job.hostId,
-      action: "system.self_update.start",
-      targetKind: "operation_job",
-      targetId: job.id,
-      details: { targetVersion: body.targetVersion ?? null },
-      ...auditContextFromRequest(request)
-    });
+    const job = await enqueueSelfUpdate(
+      body,
+      request.user?.id,
+      async (client, queued) => {
+        await writeAuditEvent({
+          userId: request.user?.id,
+          hostId: queued.hostId,
+          action: "system.self_update.start",
+          targetKind: "operation_job",
+          targetId: queued.id,
+          details: { targetVersion: body.targetVersion ?? null },
+          ...auditContextFromRequest(request)
+        }, client);
+      }
+    );
     return { job: sanitizeOperationJobForRead(job) };
   });
 }

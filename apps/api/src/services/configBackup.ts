@@ -18,6 +18,7 @@ import {
   sanitizePlaintextHttpSourceUrl,
   registryCreateSchema
 } from "@composebastion/shared";
+import type { PoolClient } from "pg";
 import { env } from "../config/env.js";
 import { query, withTransaction } from "../db/pool.js";
 import {
@@ -33,8 +34,16 @@ import {
 } from "./recoveryBackupTargets.js";
 import { APP_VERSION } from "./version.js";
 import { validateAgentUrl } from "./ssrf.js";
-import { normalizeHostCreateCredentials } from "./hosts.js";
+import {
+  lockHostForMutation,
+  normalizeHostCreateCredentials
+} from "./hosts.js";
 import { lockHostIdentityScope } from "./hostIdentity.js";
+import {
+  lockComposeStackForMutation,
+  lockGithubRepositoryForMutation
+} from "./jobs.js";
+import { lockRegistryForMutation } from "./registries.js";
 
 const CONFIG_BACKUP_APP_NAME = "ComposeBastion";
 
@@ -212,6 +221,14 @@ async function normalizeImportedBackupTargets(
       );
     }
     const importedKind = target.type ?? target.kind;
+    const rcloneConfig = target.config
+      && typeof target.config === "object"
+      && !Array.isArray(target.config)
+      ? {
+          ...target.config,
+          rcloneConfig: target.config.rcloneConfig ?? undefined
+        }
+      : target.config;
     const schemaInput = importedKind === "local"
       ? {
         ...target,
@@ -219,7 +236,13 @@ async function normalizeImportedBackupTargets(
         config: {},
         localCachePolicy: "keep"
       }
-      : target;
+      : importedKind === "rclone"
+        ? {
+            ...target,
+            config: rcloneConfig,
+            rcloneConfig: target.rcloneConfig ?? undefined
+          }
+        : target;
     const parsed = backupTargetCreateSchema.safeParse(schemaInput);
     if (!parsed.success) {
       throw indexedConfigError(
@@ -510,6 +533,205 @@ function assertUniqueImportedHosts(hosts: Array<{
   }
 }
 
+function importedGithubRepositoryIdentity(repository: Record<string, any>) {
+  return `${repository.owner}/${repository.repo}:${repository.branch ?? "main"}:${repository.composePath ?? "docker-compose.yml"}`;
+}
+
+function importedComposeStackIdentity(stack: Record<string, any>) {
+  return `${stack.hostId}:${stack.projectName}`;
+}
+
+function configMutationConflict(message: string) {
+  return Object.assign(new Error(message), { statusCode: 409 });
+}
+
+async function preflightImportedMutationTargets(
+  client: PoolClient,
+  hosts: Array<Record<string, any>>,
+  registries: Array<Record<string, any>>,
+  repositories: Array<Record<string, any>>,
+  stacks: Array<Record<string, any>>,
+  deploymentSources: Array<Record<string, any>>
+) {
+  const repositoryByIdentity = new Map<string, Record<string, any>>();
+  for (const repository of repositories) {
+    repositoryByIdentity.set(importedGithubRepositoryIdentity(repository), repository);
+  }
+  const stackByIdentity = new Map<string, Record<string, any>>();
+  for (const stack of stacks) {
+    stackByIdentity.set(importedComposeStackIdentity(stack), stack);
+  }
+  const registryById = new Map<string, Record<string, any>>();
+  for (const registry of registries) {
+    registryById.set(String(registry.id), registry);
+  }
+  const deploymentSourceById = new Map<string, Record<string, any>>();
+  for (const source of deploymentSources) {
+    deploymentSourceById.set(String(source.id), source);
+  }
+
+  // Acquire every identity key before any row or mutation lock. Sorting the
+  // combined set gives concurrent bulk imports the same global lock order.
+  const identityLockKeys = [
+    ...[...repositoryByIdentity.entries()].map(([identity]) => `github-repository:${identity}`),
+    ...[...stackByIdentity.entries()].map(([identity]) => `compose-stack-identity:${identity}`)
+  ].sort();
+  for (const key of identityLockKeys) {
+    await client.query(
+      "SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))",
+      [key]
+    );
+  }
+
+  const repositoryTargetIds = new Map<string, string>();
+  for (const [identity, repository] of [...repositoryByIdentity.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    const existing = await client.query<{ id: string }>(
+      `SELECT id
+       FROM github_repositories
+       WHERE owner = $1 AND repo = $2 AND branch = $3 AND compose_path = $4`,
+      [
+        repository.owner,
+        repository.repo,
+        repository.branch ?? "main",
+        repository.composePath ?? "docker-compose.yml"
+      ]
+    );
+    if (existing.rows[0]) repositoryTargetIds.set(identity, existing.rows[0].id);
+  }
+
+  const stackTargetIds = new Map<string, string>();
+  for (const [identity, stack] of [...stackByIdentity.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    const existing = await client.query<{ id: string }>(
+      `SELECT id
+       FROM compose_stacks
+       WHERE host_id = $1 AND project_name = $2`,
+      [stack.hostId, stack.projectName]
+    );
+    if (existing.rows[0]) stackTargetIds.set(identity, existing.rows[0].id);
+  }
+
+  const registryTargetIds = new Set<string>();
+  for (const id of [...registryById.keys()].sort()) {
+    const existing = await client.query<{ id: string }>(
+      "SELECT id FROM registries WHERE id = $1",
+      [id]
+    );
+    if (existing.rows[0]) registryTargetIds.add(existing.rows[0].id);
+  }
+  const deploymentSourceTargetIds = new Set<string>();
+  for (const id of [...deploymentSourceById.keys()].sort()) {
+    const existing = await client.query<{ id: string }>(
+      "SELECT id FROM deployment_sources WHERE id = $1",
+      [id]
+    );
+    if (existing.rows[0]) deploymentSourceTargetIds.add(existing.rows[0].id);
+  }
+
+  // Deployment queueing locks registry credentials before target mutation
+  // scopes. GitHub deploy admission then uses repository -> stack ordering.
+  // Match that order here and sort ids within each class so two overlapping
+  // imports cannot deadlock.
+  for (const registryId of [...registryTargetIds].sort()) {
+    const imported = registryById.get(registryId);
+    const registry = await lockRegistryForMutation(client, registryId, {
+      additionalAuthorities: imported
+        ? [new URL(imported.url).host]
+        : []
+    });
+    if (!registry) {
+      throw configMutationConflict(
+        "A registry credential changed while the configuration import was being prepared. Retry the import."
+      );
+    }
+  }
+  for (const repositoryId of [...new Set(repositoryTargetIds.values())].sort()) {
+    const repository = await lockGithubRepositoryForMutation(client, repositoryId);
+    if (!repository) {
+      throw configMutationConflict(
+        "A GitHub repository changed while the configuration import was being prepared. Retry the import."
+      );
+    }
+  }
+  for (const stackId of [...new Set(stackTargetIds.values())].sort()) {
+    const stack = await lockComposeStackForMutation(client, stackId);
+    if (!stack) {
+      throw configMutationConflict(
+        "A Compose stack changed while the configuration import was being prepared. Retry the import."
+      );
+    }
+  }
+  for (const sourceId of [...deploymentSourceTargetIds].sort()) {
+    const source = await client.query(
+      "SELECT id FROM deployment_sources WHERE id = $1 FOR UPDATE",
+      [sourceId]
+    );
+    if (!source.rows[0]) {
+      throw configMutationConflict(
+        "A deployment source changed while the configuration import was being prepared. Retry the import."
+      );
+    }
+    const analyses = await client.query(
+      `SELECT analyses.id, analyses.status, analyses.error,
+              jobs.id AS operation_job_id, jobs.status AS job_status,
+              jobs.error AS job_error, jobs.result AS job_result
+       FROM deployment_analyses AS analyses
+       LEFT JOIN operation_jobs AS jobs
+         ON jobs.payload->>'analysisId' = analyses.id::text
+        AND jobs.type IN ('deploy.analyze', 'deploy.execute')
+       WHERE analyses.source_id = $1
+         AND (
+           (
+             analyses.expires_at > clock_timestamp()
+             AND analyses.status IN ('queued', 'analyzing', 'ready', 'deploying', 'failed')
+           )
+           OR (
+             jobs.status = 'failed'
+             AND (
+               jobs.error LIKE 'WORKER_LOST%'
+               OR jobs.error LIKE 'REMOTE_OUTCOME_UNKNOWN:%'
+               OR analyses.error LIKE 'WORKER_LOST:%'
+               OR analyses.error LIKE 'REMOTE_OUTCOME_UNKNOWN:%'
+             )
+           )
+         )
+       ORDER BY analyses.created_at ASC
+       FOR UPDATE OF analyses`,
+      [sourceId]
+    );
+    if (analyses.rows[0]) {
+      throw Object.assign(
+        new Error(
+          "A deployment source cannot be imported over while one of its analyses is active, deployable, retryable, or awaiting remote-outcome reconciliation."
+        ),
+        {
+          statusCode: 409,
+          analysisId: analyses.rows[0].id,
+          ...(analyses.rows[0].operation_job_id
+            ? { activeJobId: analyses.rows[0].operation_job_id }
+            : {})
+        }
+      );
+    }
+  }
+  const hostTargetIds = new Set<string>();
+  for (const host of [...hosts].sort((a, b) => String(a.id).localeCompare(String(b.id)))) {
+    const locked = await lockHostForMutation(
+      client,
+      String(host.id),
+      { includeDeleted: true }
+    );
+    if (locked) hostTargetIds.add(String(host.id));
+  }
+
+  return {
+    hostTargetIds,
+    registryTargetIds,
+    repositoryTargetIds,
+    stackTargetIds,
+    deploymentSourceTargetIds
+  };
+}
+
 export async function exportConfigBackup(passphrase: string) {
   const [hosts, composeStacks, registries, notificationChannels, alertRules, favoriteImages, githubRepositories, appSourceLinks, backupTargets, deploymentSources] = await Promise.all([
     query("SELECT * FROM docker_hosts WHERE deleted_at IS NULL ORDER BY name ASC"),
@@ -692,7 +914,29 @@ export async function exportConfigBackup(passphrase: string) {
   return encryptConfigPayload(payload, passphrase);
 }
 
-export async function importConfigBackup(backup: Record<string, unknown>, passphrase: string) {
+export async function importConfigBackup(
+  backup: Record<string, unknown>,
+  passphrase: string,
+  onImported?: (
+    client: PoolClient,
+    result: {
+      imported: {
+        hosts: number;
+        composeStacks: number;
+        registries: number;
+        notificationChannels: number;
+        alertRules: number;
+        favoriteImages: number;
+        githubRepositories: number;
+        deploymentSources: number;
+        appSourceLinks: number;
+        backupTargets: number;
+      };
+      exportedAt: string;
+      version: string;
+    }
+  ) => Promise<void>
+) {
   const payload = decryptConfigBackupPayload(backup, passphrase);
   validateConfigBackupPayload(payload);
   const normalizedHosts = await normalizeImportedHosts(payload.hosts);
@@ -705,7 +949,7 @@ export async function importConfigBackup(backup: Record<string, unknown>, passph
   const normalizedBackupTargets = await normalizeImportedBackupTargets(payload.backupTargets ?? []);
   assertUniqueImportedHosts(normalizedHosts);
 
-  const summary = await withTransaction(async (client) => {
+  return withTransaction(async (client) => {
     await lockHostIdentityScope(client);
     const activeHosts = await client.query(
       `SELECT id, name, hostname, username, port
@@ -730,6 +974,14 @@ export async function importConfigBackup(backup: Record<string, unknown>, passph
         );
       }
     }
+    const mutationTargets = await preflightImportedMutationTargets(
+      client,
+      normalizedHosts,
+      normalizedRegistries,
+      normalizedGithubRepositories,
+      normalizedComposeStacks,
+      normalizedDeploymentSources
+    );
 
     const counts = {
       hosts: 0,
@@ -804,18 +1056,41 @@ export async function importConfigBackup(backup: Record<string, unknown>, passph
     }
 
     for (const registry of normalizedRegistries) {
-      await client.query(
-        `INSERT INTO registries (id, name, url, username, password_encrypted, insecure)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         ON CONFLICT (id)
-         DO UPDATE SET name = EXCLUDED.name,
-                       url = EXCLUDED.url,
-                       username = EXCLUDED.username,
-                       password_encrypted = EXCLUDED.password_encrypted,
-                       insecure = EXCLUDED.insecure,
-                       updated_at = now()`,
-        [registry.id, registry.name, registry.url, registry.username ?? null, encryptNullable(registry.password), registry.insecure ?? false]
-      );
+      const values = [
+        registry.id,
+        registry.name,
+        registry.url,
+        registry.username ?? null,
+        encryptNullable(registry.password),
+        registry.insecure ?? false
+      ];
+      if (mutationTargets.registryTargetIds.has(String(registry.id))) {
+        await client.query(
+          `UPDATE registries
+           SET name = $2,
+               url = $3,
+               username = $4,
+               password_encrypted = $5,
+               insecure = $6,
+               updated_at = now()
+           WHERE id = $1`,
+          values
+        );
+      } else {
+        const inserted = await client.query(
+          `INSERT INTO registries (id, name, url, username, password_encrypted, insecure)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           ON CONFLICT (id) DO NOTHING
+           RETURNING id`,
+          values
+        );
+        if (inserted.rowCount === 0) {
+          throw configMutationConflict(
+            "A registry credential changed while the configuration import was being prepared. Retry the import."
+          );
+        }
+        mutationTargets.registryTargetIds.add(String(registry.id));
+      }
       counts.registries += 1;
     }
 
@@ -837,139 +1112,222 @@ export async function importConfigBackup(backup: Record<string, unknown>, passph
     }
 
     for (const repo of normalizedGithubRepositories) {
-      await client.query(
-        `INSERT INTO github_repositories
-          (id, name, repository_url, owner, repo, branch, compose_path, project_name, env, default_host_id,
-           host_clone_url, host_clone_directory, github_token_encrypted)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-         ON CONFLICT (owner, repo, branch, compose_path)
-         DO UPDATE SET name = EXCLUDED.name,
-                       repository_url = EXCLUDED.repository_url,
-                       project_name = EXCLUDED.project_name,
-                       env = EXCLUDED.env,
-                       default_host_id = EXCLUDED.default_host_id,
-                       host_clone_url = EXCLUDED.host_clone_url,
-                       host_clone_directory = EXCLUDED.host_clone_directory,
-                       github_token_encrypted = EXCLUDED.github_token_encrypted,
-                       updated_at = now()`,
-        [
-          repo.id,
-          repo.name,
-          repo.repositoryUrl,
-          repo.owner,
-          repo.repo,
-          repo.branch ?? "main",
-          repo.composePath ?? "docker-compose.yml",
-          repo.projectName,
-          repo.env ?? "",
-          repo.defaultHostId ?? null,
-          repo.hostCloneUrl ?? null,
-          repo.hostCloneDirectory ?? null,
-          encryptNullable(repo.githubToken)
-        ]
-      );
+      const identity = importedGithubRepositoryIdentity(repo);
+      const existingId = mutationTargets.repositoryTargetIds.get(identity);
+      const values = [
+        repo.id,
+        repo.name,
+        repo.repositoryUrl,
+        repo.owner,
+        repo.repo,
+        repo.branch ?? "main",
+        repo.composePath ?? "docker-compose.yml",
+        repo.projectName,
+        repo.env ?? "",
+        repo.defaultHostId ?? null,
+        repo.hostCloneUrl ?? null,
+        repo.hostCloneDirectory ?? null,
+        encryptNullable(repo.githubToken)
+      ];
+      if (existingId) {
+        await client.query(
+          `UPDATE github_repositories
+           SET name = $2,
+               repository_url = $3,
+               project_name = $4,
+               env = $5,
+               default_host_id = $6,
+               host_clone_url = $7,
+               host_clone_directory = $8,
+               github_token_encrypted = $9,
+               updated_at = now()
+           WHERE id = $1`,
+          [
+            existingId,
+            repo.name,
+            repo.repositoryUrl,
+            repo.projectName,
+            repo.env ?? "",
+            repo.defaultHostId ?? null,
+            repo.hostCloneUrl ?? null,
+            repo.hostCloneDirectory ?? null,
+            encryptNullable(repo.githubToken)
+          ]
+        );
+      } else {
+        const inserted = await client.query(
+          `INSERT INTO github_repositories
+            (id, name, repository_url, owner, repo, branch, compose_path, project_name, env, default_host_id,
+             host_clone_url, host_clone_directory, github_token_encrypted)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+           ON CONFLICT (owner, repo, branch, compose_path) DO NOTHING
+           RETURNING id`,
+          values
+        );
+        if (inserted.rowCount === 0) {
+          throw configMutationConflict(
+            "A GitHub repository changed while the configuration import was being prepared. Retry the import."
+          );
+        }
+        // Preserve the historical last-entry-wins behavior for duplicate
+        // identities within one backup without re-entering admission.
+        mutationTargets.repositoryTargetIds.set(identity, repo.id);
+      }
       counts.githubRepositories += 1;
     }
 
     for (const source of normalizedDeploymentSources) {
-      await client.query(
-        `INSERT INTO deployment_sources (
-           id, source_type, name, source_locator, branch, compose_path, project_name,
-           working_dir, compose_yaml, env_encrypted, credential_username, credential_secret_encrypted,
-           default_host_id, metadata, last_deployed_at
-         )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-         ON CONFLICT (id)
-         DO UPDATE SET source_type = EXCLUDED.source_type,
-                       name = EXCLUDED.name,
-                       source_locator = EXCLUDED.source_locator,
-                       branch = EXCLUDED.branch,
-                       compose_path = EXCLUDED.compose_path,
-                       working_dir = EXCLUDED.working_dir,
-                       project_name = EXCLUDED.project_name,
-                       compose_yaml = EXCLUDED.compose_yaml,
-                       env_encrypted = EXCLUDED.env_encrypted,
-                       credential_username = EXCLUDED.credential_username,
-                       credential_secret_encrypted = EXCLUDED.credential_secret_encrypted,
-                       default_host_id = EXCLUDED.default_host_id,
-                       metadata = EXCLUDED.metadata,
-                       last_deployed_at = EXCLUDED.last_deployed_at,
-                       updated_at = now()`,
-        [
-          source.id,
-          source.sourceType,
-          source.name,
-          source.sourceLocator,
-          source.branch ?? null,
-          source.composePath ?? null,
-          source.projectName,
-          source.workingDir ?? null,
-          source.composeYaml ?? null,
-          encryptNullable(source.env),
-          source.credentialUsername ?? null,
-          encryptNullable(source.credentialSecret),
-          source.defaultHostId ?? null,
-          source.metadata ?? {},
-          source.lastDeployedAt ?? null
-        ]
-      );
+      const values = [
+        source.id,
+        source.sourceType,
+        source.name,
+        source.sourceLocator,
+        source.branch ?? null,
+        source.composePath ?? null,
+        source.projectName,
+        source.workingDir ?? null,
+        source.composeYaml ?? null,
+        encryptNullable(source.env),
+        source.credentialUsername ?? null,
+        encryptNullable(source.credentialSecret),
+        source.defaultHostId ?? null,
+        source.metadata ?? {},
+        source.lastDeployedAt ?? null
+      ];
+      if (mutationTargets.deploymentSourceTargetIds.has(String(source.id))) {
+        await client.query(
+          `UPDATE deployment_sources
+           SET source_type = $2,
+               name = $3,
+               source_locator = $4,
+               branch = $5,
+               compose_path = $6,
+               project_name = $7,
+               working_dir = $8,
+               compose_yaml = $9,
+               env_encrypted = $10,
+               credential_username = $11,
+               credential_secret_encrypted = $12,
+               default_host_id = $13,
+               metadata = $14,
+               last_deployed_at = $15,
+               updated_at = now()
+           WHERE id = $1`,
+          values
+        );
+      } else {
+        const inserted = await client.query(
+          `INSERT INTO deployment_sources (
+             id, source_type, name, source_locator, branch, compose_path, project_name,
+             working_dir, compose_yaml, env_encrypted, credential_username, credential_secret_encrypted,
+             default_host_id, metadata, last_deployed_at
+           )
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+           ON CONFLICT (id) DO NOTHING
+           RETURNING id`,
+          values
+        );
+        if (inserted.rowCount === 0) {
+          throw configMutationConflict(
+            "A deployment source changed while the configuration import was being prepared. Retry the import."
+          );
+        }
+        mutationTargets.deploymentSourceTargetIds.add(String(source.id));
+      }
       counts.deploymentSources += 1;
     }
 
     for (const stack of normalizedComposeStacks) {
-      await client.query(
-        `INSERT INTO compose_stacks (
-           id, host_id, name, project_name, compose_yaml, env, status,
-           source_type, source_repository_url, source_branch, source_working_dir, source_compose_path,
-           source_current_commit_sha, source_latest_commit_sha, deployment_source_id,
-           domains, exposed_service, exposed_port, tls_desired, update_policy_enabled, update_policy_channel
-         )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-                 $16, $17, $18, $19, $20, $21)
-         ON CONFLICT (host_id, project_name)
-         DO UPDATE SET name = EXCLUDED.name,
-                       compose_yaml = EXCLUDED.compose_yaml,
-                       env = EXCLUDED.env,
-                       status = EXCLUDED.status,
-                       source_type = EXCLUDED.source_type,
-                       source_repository_url = EXCLUDED.source_repository_url,
-                       source_branch = EXCLUDED.source_branch,
-                       source_working_dir = EXCLUDED.source_working_dir,
-                       source_compose_path = EXCLUDED.source_compose_path,
-                       source_current_commit_sha = EXCLUDED.source_current_commit_sha,
-                       source_latest_commit_sha = EXCLUDED.source_latest_commit_sha,
-                       deployment_source_id = EXCLUDED.deployment_source_id,
-                       domains = EXCLUDED.domains,
-                       exposed_service = EXCLUDED.exposed_service,
-                       exposed_port = EXCLUDED.exposed_port,
-                       tls_desired = EXCLUDED.tls_desired,
-                       update_policy_enabled = EXCLUDED.update_policy_enabled,
-                       update_policy_channel = EXCLUDED.update_policy_channel,
-                       updated_at = now()`,
-        [
-          stack.id,
-          stack.hostId,
-          stack.name,
-          stack.projectName,
-          stack.composeYaml,
-          stack.env ?? "",
-          stack.status ?? "created",
-          stack.sourceType ?? "ui",
-          stack.sourceRepositoryUrl ?? null,
-          stack.sourceBranch ?? null,
-          stack.sourceWorkingDir ?? null,
-          stack.sourceComposePath ?? null,
-          stack.sourceCurrentCommitSha ?? null,
-          stack.sourceLatestCommitSha ?? null,
-          stack.deploymentSourceId ?? null,
-          stack.domains,
-          stack.exposedService,
-          stack.exposedPort,
-          stack.tlsDesired,
-          stack.updatePolicyEnabled,
-          stack.updatePolicyChannel
-        ]
-      );
+      const identity = importedComposeStackIdentity(stack);
+      const existingId = mutationTargets.stackTargetIds.get(identity);
+      if (existingId) {
+        await client.query(
+          `UPDATE compose_stacks
+           SET name = $2,
+               compose_yaml = $3,
+               env = $4,
+               status = $5,
+               source_type = $6,
+               source_repository_url = $7,
+               source_branch = $8,
+               source_working_dir = $9,
+               source_compose_path = $10,
+               source_current_commit_sha = $11,
+               source_latest_commit_sha = $12,
+               deployment_source_id = $13,
+               domains = $14,
+               exposed_service = $15,
+               exposed_port = $16,
+               tls_desired = $17,
+               update_policy_enabled = $18,
+               update_policy_channel = $19,
+               updated_at = now()
+           WHERE id = $1`,
+          [
+            existingId,
+            stack.name,
+            stack.composeYaml,
+            stack.env ?? "",
+            stack.status ?? "created",
+            stack.sourceType ?? "ui",
+            stack.sourceRepositoryUrl ?? null,
+            stack.sourceBranch ?? null,
+            stack.sourceWorkingDir ?? null,
+            stack.sourceComposePath ?? null,
+            stack.sourceCurrentCommitSha ?? null,
+            stack.sourceLatestCommitSha ?? null,
+            stack.deploymentSourceId ?? null,
+            stack.domains,
+            stack.exposedService,
+            stack.exposedPort,
+            stack.tlsDesired,
+            stack.updatePolicyEnabled,
+            stack.updatePolicyChannel
+          ]
+        );
+      } else {
+        const inserted = await client.query(
+          `INSERT INTO compose_stacks (
+             id, host_id, name, project_name, compose_yaml, env, status,
+             source_type, source_repository_url, source_branch, source_working_dir, source_compose_path,
+             source_current_commit_sha, source_latest_commit_sha, deployment_source_id,
+             domains, exposed_service, exposed_port, tls_desired, update_policy_enabled, update_policy_channel
+           )
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+                   $16, $17, $18, $19, $20, $21)
+           ON CONFLICT (host_id, project_name) DO NOTHING
+           RETURNING id`,
+          [
+            stack.id,
+            stack.hostId,
+            stack.name,
+            stack.projectName,
+            stack.composeYaml,
+            stack.env ?? "",
+            stack.status ?? "created",
+            stack.sourceType ?? "ui",
+            stack.sourceRepositoryUrl ?? null,
+            stack.sourceBranch ?? null,
+            stack.sourceWorkingDir ?? null,
+            stack.sourceComposePath ?? null,
+            stack.sourceCurrentCommitSha ?? null,
+            stack.sourceLatestCommitSha ?? null,
+            stack.deploymentSourceId ?? null,
+            stack.domains,
+            stack.exposedService,
+            stack.exposedPort,
+            stack.tlsDesired,
+            stack.updatePolicyEnabled,
+            stack.updatePolicyChannel
+          ]
+        );
+        if (inserted.rowCount === 0) {
+          throw configMutationConflict(
+            "A Compose stack changed while the configuration import was being prepared. Retry the import."
+          );
+        }
+        mutationTargets.stackTargetIds.set(identity, stack.id);
+      }
       counts.composeStacks += 1;
     }
 
@@ -1088,8 +1446,12 @@ export async function importConfigBackup(backup: Record<string, unknown>, passph
       counts.backupTargets += 1;
     }
 
-    return counts;
+    const result = {
+      imported: counts,
+      exportedAt: payload.exportedAt,
+      version: payload.version
+    };
+    await onImported?.(client, result);
+    return result;
   });
-
-  return { imported: summary, exportedAt: payload.exportedAt, version: payload.version };
 }

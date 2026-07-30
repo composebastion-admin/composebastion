@@ -29,6 +29,9 @@ describe("deployment URL validation boundaries", () => {
     query.mockReset();
     withTransaction.mockReset();
     enqueueJobInTransaction.mockReset();
+    withTransaction.mockImplementation(async (
+      callback: (client: { query: typeof query }) => Promise<unknown>
+    ) => callback({ query }));
   });
 
   it.each([
@@ -61,6 +64,48 @@ describe("deployment URL validation boundaries", () => {
 
     expect(query).not.toHaveBeenCalled();
     expect(withTransaction).not.toHaveBeenCalled();
+  });
+
+  it("runs deployment-library persistence and audit on one transaction client", async () => {
+    const auditFailure = new Error("audit insert failed");
+    query.mockResolvedValueOnce({
+      rows: [{
+        id: "00000000-0000-4000-8000-000000000002",
+        source_type: "git",
+        name: "Safe source",
+        source_locator: "https://git.example.test/team/app.git",
+        branch: "main",
+        compose_path: "compose.yml",
+        working_dir: null,
+        project_name: "safe-source",
+        default_host_id: null,
+        target_host_ids: [],
+        env_encrypted: null,
+        credential_secret_encrypted: null,
+        metadata: {},
+        last_deployed_at: null,
+        created_at: new Date(0),
+        updated_at: new Date(0)
+      }]
+    });
+    const onChanged = vi.fn(async (client: { query: typeof query }) => {
+      expect(client.query).toBe(query);
+      throw auditFailure;
+    });
+
+    await expect(createDeploymentSource({
+      sourceType: "git",
+      name: "Safe source",
+      sourceLocator: "https://git.example.test/team/app.git",
+      branch: "main",
+      composePath: "compose.yml",
+      projectName: "safe-source"
+    }, onChanged)).rejects.toBe(auditFailure);
+
+    expect(onChanged).toHaveBeenCalledWith(
+      expect.objectContaining({ query }),
+      expect.objectContaining({ name: "Safe source" })
+    );
   });
 
   it.each([

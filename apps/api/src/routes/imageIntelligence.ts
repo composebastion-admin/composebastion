@@ -43,6 +43,15 @@ export async function registerImageIntelligenceRoutes(app: FastifyInstance) {
   app.get("/api/image-tags", { preHandler: operator, config: { rateLimit: expensiveReadRateLimit } }, async (request, reply) => {
     const { image } = z.object({ image: z.string().trim().min(1).max(512) }).parse(request.query);
     try {
+      // Tag discovery can use a stored registry credential. Require a durable
+      // audit record before decrypting it or making the authenticated request.
+      await writeAuditEvent({
+        userId: request.user?.id,
+        action: "image.tags_read",
+        targetKind: "image",
+        targetId: image,
+        ...auditContextFromRequest(request)
+      });
       const auth = await findRegistryAuthForReference(image);
       const tags = await fetchRegistryTags(
         image,
@@ -78,15 +87,18 @@ export async function registerImageIntelligenceRoutes(app: FastifyInstance) {
 
   app.post("/api/image-updates/check", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
     const { hostId } = request.body as { hostId: string };
-    const updates = await checkImageUpdatesForHost(hostId);
+    // Registry checks span remote reads plus several cache writes. Record the
+    // intent before starting so partial remote/cache outcomes remain audited.
     await writeAuditEvent({
       userId: request.user?.id,
       hostId,
       action: "image.update_check",
       targetKind: "host",
       targetId: hostId,
+      details: { phase: "intent" },
       ...auditContextFromRequest(request)
     });
+    const updates = await checkImageUpdatesForHost(hostId);
     return { updates };
   });
 
@@ -97,6 +109,17 @@ export async function registerImageIntelligenceRoutes(app: FastifyInstance) {
 
   app.post("/api/image-scans", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request, reply) => {
     const body = imageScanRequestSchema.parse(request.body);
+    // Scanning invokes an external provider before persisting its report. The
+    // attempted action must be durable before either side effect begins.
+    await writeAuditEvent({
+      userId: request.user?.id,
+      hostId: body.hostId,
+      action: "image.scan",
+      targetKind: "image",
+      targetId: body.imageReference,
+      details: { phase: "intent" },
+      ...auditContextFromRequest(request)
+    });
     const demoHost = await isDemoHostId(body.hostId);
     const preferred = (env.IMAGE_SCANNER_PROVIDER || "auto") as "auto" | "mock" | "trivy";
     if (demoHost && preferred !== "trivy") {
@@ -112,15 +135,6 @@ export async function registerImageIntelligenceRoutes(app: FastifyInstance) {
     }
     const provider = createImageScannerProvider(preferred);
     const scan = await scanImageReference(body.hostId, body.imageReference, provider);
-    await writeAuditEvent({
-      userId: request.user?.id,
-      hostId: body.hostId,
-      action: "image.scan",
-      targetKind: "image",
-      targetId: body.imageReference,
-      details: { scanner: scan.scanner, severityCounts: scan.severityCounts },
-      ...auditContextFromRequest(request)
-    });
     return { scan };
   });
 }

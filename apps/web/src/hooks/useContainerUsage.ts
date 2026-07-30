@@ -45,6 +45,13 @@ export function isContainerUsageSnapshotRequestCurrent(
   return activeGeneration === requestGeneration;
 }
 
+export function shouldApplyContainerUsageSnapshot(
+  streamSequenceAtRequestStart: number,
+  currentStreamSequence: number
+) {
+  return streamSequenceAtRequestStart === currentStreamSequence;
+}
+
 export function reduceContainerUsageRows(rows: DockerStatsRecord[], stats: unknown) {
   if (!isDockerStatsRecord(stats)) return rows;
   return [...rows.filter((row) => !dockerStatsRecordsMatch(row, stats)), stats];
@@ -69,6 +76,7 @@ export function useContainerUsage(hosts: DockerHost[]) {
   const streams = useRef(new Map<string, EventSource>());
   const streamStartedAt = useRef(new Map<string, number>());
   const streamLastMessageAt = useRef(new Map<string, number>());
+  const streamMessageSequences = useRef(new Map<string, number>());
   const lastSuccessfulSnapshotAt = useRef(new Map<string, number>());
   const retryTimers = useRef(new Map<string, number>());
   const onlineHostIds = useMemo(
@@ -84,6 +92,7 @@ export function useContainerUsage(hosts: DockerHost[]) {
       inFlightGenerations.current.get(hostId)
     );
     if (requestGeneration === null) return;
+    const streamSequenceAtRequestStart = streamMessageSequences.current.get(hostId) ?? 0;
     inFlightGenerations.current.set(hostId, requestGeneration);
     const requestIsCurrent = () => isContainerUsageSnapshotRequestCurrent(
       activeHostGenerations.current.get(hostId),
@@ -95,6 +104,10 @@ export function useContainerUsage(hosts: DockerHost[]) {
       if (!snapshot) throw new Error("Container usage snapshot is malformed");
       if (!requestIsCurrent()) return;
       lastSuccessfulSnapshotAt.current.set(hostId, Date.now());
+      if (!shouldApplyContainerUsageSnapshot(
+        streamSequenceAtRequestStart,
+        streamMessageSequences.current.get(hostId) ?? 0
+      )) return;
       setUsage((current) => requestIsCurrent()
         ? { ...current, [hostId]: snapshot }
         : current);
@@ -145,6 +158,10 @@ export function useContainerUsage(hosts: DockerHost[]) {
           const payload = JSON.parse(event.data) as { stats?: unknown };
           if (!isDockerStatsRecord(payload.stats)) return;
           streamLastMessageAt.current.set(hostId, Date.now());
+          streamMessageSequences.current.set(
+            hostId,
+            (streamMessageSequences.current.get(hostId) ?? 0) + 1
+          );
           setUsage((current) => (
             isContainerUsageSnapshotRequestCurrent(activeHostGenerations.current.get(hostId), generation)
               ? {
@@ -206,6 +223,7 @@ export function useContainerUsage(hosts: DockerHost[]) {
         if (inFlightGenerations.current.get(hostId) === generation) {
           inFlightGenerations.current.delete(hostId);
         }
+        streamMessageSequences.current.delete(hostId);
       }
       stop();
     };

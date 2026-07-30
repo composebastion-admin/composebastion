@@ -13,12 +13,14 @@ ARG APP_VERSION=source
 FROM node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a AS deps
 WORKDIR /app
 RUN apk add --no-cache python3 make g++
+COPY scripts/bootstrap-npm.mjs scripts/bootstrap-npm.mjs
+RUN node scripts/bootstrap-npm.mjs
 COPY package.json package-lock.json ./
 COPY apps/api/package.json apps/api/package.json
 COPY apps/agent/package.json apps/agent/package.json
 COPY apps/web/package.json apps/web/package.json
 COPY packages/shared/package.json packages/shared/package.json
-RUN npm ci
+RUN npm ci --engine-strict --strict-allow-scripts --dangerously-allow-all-scripts=false --ignore-scripts=false
 
 FROM deps AS build
 WORKDIR /app
@@ -178,5 +180,6 @@ RUN set -eux; \
       --inventory trivy=/licenses/third-party/go-buildinfo/trivy.modules.tsv \
       --inventory rclone=/licenses/third-party/go-buildinfo/rclone.modules.tsv; \
     rm /tmp/go-attribution.mjs /tmp/go-attribution-review.mjs
+USER 1000:1000
 EXPOSE 8080
 CMD ["node", "apps/api/dist/server.js"]

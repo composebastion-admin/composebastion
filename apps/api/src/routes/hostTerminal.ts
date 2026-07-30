@@ -2,11 +2,15 @@ import websocket from "@fastify/websocket";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { env } from "../config/env.js";
 import { auditContextFromRequest, writeAuditEvent } from "../services/audit.js";
-import { requireRole } from "../services/auth.js";
+import { readSession, requireRole } from "../services/auth.js";
 import { assertHostTerminalAccess, assertHostTerminalOrigin, parseTerminalControlMessage } from "../services/hostTerminal.js";
 import { getHostForWorker } from "../services/hosts.js";
 import { terminalRateLimit } from "../services/rateLimits.js";
+import { SESSION_REAUTHORIZATION_INTERVAL_MS } from "../services/sessionReauthorization.js";
 import { openSshShell, type SshShellSession } from "../services/ssh.js";
+
+export const HOST_TERMINAL_REAUTH_INTERVAL_MS =
+  SESSION_REAUTHORIZATION_INTERVAL_MS;
 
 function asBuffer(raw: Buffer | ArrayBuffer | Buffer[]) {
   if (Buffer.isBuffer(raw)) return raw;
@@ -28,7 +32,7 @@ export async function registerHostTerminalRoutes(app: FastifyInstance) {
   }
 }
 
-async function handleHostTerminal(
+export async function handleHostTerminal(
   socket: { send: (data: string | Buffer) => void; close: () => void; on: (event: string, handler: (...args: any[]) => void) => void },
   request: FastifyRequest
 ) {
@@ -45,11 +49,17 @@ async function handleHostTerminal(
   let shell: SshShellSession | null = null;
   let ended = false;
   let started = false;
+  let authorizationTimer: NodeJS.Timeout | null = null;
+  let authorizationCheckInFlight = false;
   const auditContext = auditContextFromRequest(request);
 
   const finish = async (reason: string) => {
     if (ended) return;
     ended = true;
+    if (authorizationTimer) {
+      clearInterval(authorizationTimer);
+      authorizationTimer = null;
+    }
     shell?.close();
     shell = null;
     if (!started) return;
@@ -83,17 +93,54 @@ async function handleHostTerminal(
     }
   };
 
+  socket.on("close", () => {
+    void finish("client_closed");
+  });
+
+  socket.on("error", (error: Error) => {
+    request.log.error({ err: error }, "Host terminal websocket error");
+    void finish("websocket_error");
+    socket.close();
+  });
+
+  const reauthorize = async () => {
+    if (ended || authorizationCheckInFlight) return;
+    authorizationCheckInFlight = true;
+    try {
+      const currentUser = await readSession(request, { touch: false });
+      if (
+        !currentUser
+        || (currentUser.role !== "owner" && currentUser.role !== "admin")
+      ) {
+        sendError("Host terminal authorization expired");
+        await finish("authorization_revoked");
+        socket.close();
+      }
+    } catch (error) {
+      request.log.error({ err: error }, "Host terminal authorization check failed");
+      sendError("Host terminal authorization could not be verified");
+      await finish("authorization_check_failed");
+      socket.close();
+    } finally {
+      authorizationCheckInFlight = false;
+    }
+  };
+
   try {
     assertHostTerminalOrigin(request.headers.origin, request.headers.host, env.CORS_ORIGINS, env.NODE_ENV);
+    const currentUser = await readSession(request, { touch: false });
+    if (!currentUser) {
+      throw new Error("Authentication required");
+    }
     const host = await getHostForWorker(hostId);
-    assertHostTerminalAccess(user, host.public);
+    if (ended) return;
+    assertHostTerminalAccess(currentUser, host.public);
     if (host.connectionMode !== "ssh") {
       throw new Error("Host terminal requires SSH connection mode");
     }
 
-    shell = await openSshShell(host.ssh);
-    started = true;
-
+    // Opening an interactive shell is an external effect. Persist the intent
+    // before opening it so an audit-store failure prevents the connection.
     await writeAuditEvent({
       userId: user.id,
       hostId,
@@ -103,11 +150,24 @@ async function handleHostTerminal(
       details: {
         hostname: host.public.hostname,
         username: host.public.username,
-        startedAt: new Date(startedAt).toISOString()
+        startedAt: new Date(startedAt).toISOString(),
+        phase: "intent"
       },
       ...auditContext
     });
+    if (ended) return;
 
+    const openedShell = await openSshShell(host.ssh);
+    if (ended) {
+      openedShell.close();
+      return;
+    }
+    shell = openedShell;
+    started = true;
+    authorizationTimer = setInterval(() => {
+      void reauthorize();
+    }, HOST_TERMINAL_REAUTH_INTERVAL_MS);
+    authorizationTimer.unref?.();
     socket.send(JSON.stringify({ type: "ready" }));
 
     shell.onData((chunk) => {
@@ -156,14 +216,6 @@ async function handleHostTerminal(
       shell.write(chunk);
     });
 
-    socket.on("close", () => {
-      void finish("client_closed");
-    });
-
-    socket.on("error", (error: Error) => {
-      request.log.error({ err: error }, "Host terminal websocket error");
-      void finish("websocket_error");
-    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to open host terminal";
     request.log.error({ err: error }, "Host terminal setup failed");

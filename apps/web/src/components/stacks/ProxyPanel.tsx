@@ -47,16 +47,20 @@ export function ProxyPanel({ stack, onChanged }: { stack: ComposeStack; onChange
     });
   }
 
-  async function loadSnippets() {
+  async function fetchSnippets() {
     const result = await api<ProxySnippet>(`/api/compose/${stack.id}/proxy/snippets`);
     setSnippets(result);
+  }
+
+  async function loadSnippets() {
+    await action.run(fetchSnippets);
   }
 
   async function applyTraefikLabels() {
     await action.run(async () => {
       await postJson(`/api/compose/${stack.id}/proxy/apply-labels`, {});
       await onChanged();
-      await loadSnippets();
+      await fetchSnippets();
     });
   }
 
@@ -64,9 +68,9 @@ export function ProxyPanel({ stack, onChanged }: { stack: ComposeStack; onChange
     <div className="subPanel composeForm">
       <div className="panelHeader">
         <h3>Proxy & update policy</h3>
-        <button type="button" onClick={() => void loadSnippets()}><Copy size={16} />Preview snippets</button>
+        <button type="button" disabled={action.busy} onClick={() => void loadSnippets().catch(() => undefined)}><Copy size={16} />Preview snippets</button>
       </div>
-      <form onSubmit={save}>
+      <form onSubmit={(event) => void save(event).catch(() => undefined)}>
         <input placeholder="Domains, comma separated" value={domains} onChange={(event) => setDomains(event.target.value)} />
         <div className="two">
           <input placeholder="Exposed service" value={exposedService} onChange={(event) => setExposedService(event.target.value)} />
@@ -81,10 +85,10 @@ export function ProxyPanel({ stack, onChanged }: { stack: ComposeStack; onChange
             <option value="minor">Minor channel</option>
           </select>
         )}
-        {action.error && <div className="notice error">{action.error}</div>}
+        {action.error && <div className="notice error" role="alert">{action.error}</div>}
         <ButtonRow>
           <button className="primary" disabled={action.busy}><Save size={16} />Save proxy metadata</button>
-          <button type="button" disabled={action.busy} onClick={() => void applyTraefikLabels()}><Wand2 size={16} />Apply Traefik labels</button>
+          <button type="button" disabled={action.busy} onClick={() => void applyTraefikLabels().catch(() => undefined)}><Wand2 size={16} />Apply Traefik labels</button>
         </ButtonRow>
       </form>
       {snippets && (

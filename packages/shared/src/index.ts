@@ -609,7 +609,9 @@ export const dockerActionSchema = z.discriminatedUnion("type", [
     branch: z.string().min(1).max(255).optional(),
     composePath: z.string().min(1).max(1024).default("docker-compose.yml"),
     projectName: z.string().regex(/^[a-z0-9][a-z0-9_-]*$/, "Project name must be lowercase and contain only letters, numbers, hyphens, and underscores"),
-    repositoryId: idSchema.optional()
+    repositoryId: idSchema.optional(),
+    sourceCommitSha: z.string().regex(/^[0-9a-f]{40}([0-9a-f]{24})?$/).optional(),
+    composeSha256: z.string().regex(/^[0-9a-f]{64}$/).optional()
   }),
   withHost("deploy.analyze", {
     analysisId: idSchema
@@ -666,7 +668,10 @@ export const dockerActionSchema = z.discriminatedUnion("type", [
   withHost("hostPath.backup", { backupId: idSchema, sourcePath: hostPathSchema }),
   withHost("hostPath.restore", { backupId: idSchema, targetPath: hostPathSchema, overwrite: z.boolean().default(false) }),
   withHost("backup.verify", { backupId: idSchema, testArchive: z.boolean().default(false) }),
-  withHost("backup.drill", { backupId: idSchema }),
+  withHost("backup.drill", {
+    backupId: idSchema,
+    drillId: idSchema.optional()
+  }),
   withHost("recovery.create", { recoveryPointId: idSchema, stopFirst: z.boolean().default(false) }),
   withHost("recovery.capture", { recoveryPointId: idSchema, stopFirst: z.boolean().default(false) }),
   withHost("recovery.verify", { recoveryPointId: idSchema }),
@@ -692,7 +697,9 @@ export const dockerActionSchema = z.discriminatedUnion("type", [
   withHost("compose.deployPath", {
     projectName: composeProjectNameSchema,
     workingDir: hostPathSchema,
-    composePath: composePathSchema
+    composePath: composePathSchema,
+    gitPullBeforeDeploy: z.boolean().optional(),
+    branch: z.string().min(1).max(255).optional()
   }),
   withHost("compose.writeDeployPath", {
     projectName: composeProjectNameSchema,
@@ -703,7 +710,10 @@ export const dockerActionSchema = z.discriminatedUnion("type", [
     overwrite: z.boolean().default(false),
     pullBeforeDeploy: z.boolean().default(false)
   }),
-  withHost("compose.deploy", { stackId: idSchema }),
+  withHost("compose.deploy", {
+    stackId: idSchema,
+    pullBeforeDeploy: z.boolean().default(false)
+  }),
   withHost("compose.stop", { stackId: idSchema }),
   withHost("compose.remove", { stackId: idSchema, removeVolumes: z.boolean().default(false) }),
   withHost("registry.login", { registryId: idSchema }),
@@ -1132,6 +1142,11 @@ export const userUpdateSchema = z.object({
   role: z.enum(["owner", "admin", "operator", "viewer"]).optional(),
   isActive: z.boolean().optional(),
   password: z.string().min(12).optional()
+}).superRefine((value, ctx) => {
+  if (!value.password) return;
+  for (const message of validatePasswordStrength(value.password)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message, path: ["password"] });
+  }
 });
 
 export const notificationChannelCreateSchema = z.object({

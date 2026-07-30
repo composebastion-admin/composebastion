@@ -931,7 +931,7 @@ describe("config backup product identity", () => {
     expect(hostInsertIndex).toBeGreaterThan(lockIndex);
   });
 
-  it("exports rclone backup target secrets", async () => {
+  it("exports supported SMB backup target settings without an imported config", async () => {
     query
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] })
@@ -947,13 +947,23 @@ describe("config backup product identity", () => {
           name: "NAS",
           kind: "rclone",
           enabled: true,
-          config: { provider: "smb", remoteName: "composebastion", remotePath: "Backups/docker" },
+          config: {
+            provider: "smb",
+            remoteName: "composebastion",
+            remotePath: "Backups/docker",
+            smb: {
+              server: "nas.internal",
+              share: "Backups",
+              subPath: "docker",
+              username: "backup"
+            }
+          },
           access_key_id: null,
           secret_access_key_encrypted: null,
           provider: "smb",
           remote_path: "Backups/docker",
           local_cache_policy: "remote_only",
-          generic_config_encrypted: encryptSecret("[nas]\ntype = smb\n"),
+          generic_config_encrypted: null,
           generic_credentials_encrypted: encryptSecret(JSON.stringify({ password: "plain-password" }))
         }]
       });
@@ -966,8 +976,19 @@ describe("config backup product identity", () => {
       provider: "smb",
       remotePath: "Backups/docker",
       localCachePolicy: "remote_only",
-      rcloneConfig: "[nas]\ntype = smb\n",
+      rcloneConfig: null,
       rcloneCredentials: { password: "plain-password" }
+    });
+    expect(payload.backupTargets[0]?.config).toMatchObject({
+      provider: "smb",
+      remoteName: "composebastion",
+      remotePath: "Backups/docker",
+      smb: {
+        server: "nas.internal",
+        share: "Backups",
+        subPath: "docker",
+        username: "backup"
+      }
     });
   });
 
@@ -1051,7 +1072,7 @@ describe("config backup product identity", () => {
     expect(values.slice(10, 12)).toEqual(["git@github-private-app:owner/private-app.git", "/srv/apps/private-app"]);
   });
 
-  it("imports backup target rclone fields", async () => {
+  it("imports canonical SMB target fields while keeping generated config authoritative", async () => {
     const encrypted = encryptConfigPayload({
       ...emptyConfigPayload("ComposeBastion"),
       backupTargets: [{
@@ -1059,11 +1080,21 @@ describe("config backup product identity", () => {
         name: "NAS",
         kind: "rclone",
         enabled: true,
-        config: { provider: "smb", remoteName: "composebastion", remotePath: "Backups/docker" },
+        config: {
+          provider: "smb",
+          remoteName: "composebastion",
+          remotePath: "Backups/docker",
+          smb: {
+            server: "nas.internal",
+            share: "Backups",
+            subPath: "docker",
+            username: "backup"
+          }
+        },
         provider: "smb",
         remotePath: "Backups/docker",
         localCachePolicy: "remote_only",
-        rcloneConfig: "[nas]\ntype = smb\n",
+        rcloneConfig: null,
         rcloneCredentials: { password: "plain-password" }
       }]
     }, "long-test-passphrase");
@@ -1076,7 +1107,18 @@ describe("config backup product identity", () => {
     expect(backupTargetQuery).toBeTruthy();
     const values = backupTargetQuery?.[1] as unknown[];
     expect(values.slice(7, 10)).toEqual(["smb", "Backups/docker", "remote_only"]);
-    expect(decryptSecret(values[10] as string)).toBe("[nas]\ntype = smb\n");
+    expect(values[4]).toMatchObject({
+      provider: "smb",
+      remoteName: "composebastion",
+      remotePath: "Backups/docker",
+      smb: {
+        server: "nas.internal",
+        share: "Backups",
+        subPath: "docker",
+        username: "backup"
+      }
+    });
+    expect(values[10]).toBeNull();
     expect(JSON.parse(decryptSecret(values[11] as string))).toEqual({ password: "plain-password" });
   });
 

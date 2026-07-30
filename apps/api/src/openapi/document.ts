@@ -103,9 +103,9 @@ export const openApiRoutes: OpenApiPath[] = [
     notes: ["Returns an attachment stream on success.", "Validation, authorization, missing-file, and unsupported-remote failures use the standard JSON error envelope with `requestId`."]
   },
   { method: "get", path: "/api/v1/recovery/targets", summary: "List recovery backup targets", tags: ["Recovery"], auth: "viewer", responseSchema: schemaRef("BackupTargetsResponse") },
-  { method: "post", path: "/api/v1/recovery/targets", summary: "Create a recovery backup target", tags: ["Recovery"], auth: "operator", responseSchema: schemaRef("BackupTargetResponse") },
+  { method: "post", path: "/api/v1/recovery/targets", summary: "Create a recovery backup target", tags: ["Recovery"], auth: "operator", requestSchema: schemaRef("BackupTargetCreateRequest"), responseSchema: schemaRef("BackupTargetResponse") },
   { method: "get", path: "/api/v1/recovery/targets/{id}", summary: "Read one recovery backup target", tags: ["Recovery"], auth: "viewer", responseSchema: schemaRef("BackupTargetResponse") },
-  { method: "patch", path: "/api/v1/recovery/targets/{id}", summary: "Update a recovery backup target", tags: ["Recovery"], auth: "operator", responseSchema: schemaRef("BackupTargetResponse") },
+  { method: "patch", path: "/api/v1/recovery/targets/{id}", summary: "Update a recovery backup target", tags: ["Recovery"], auth: "operator", requestSchema: schemaRef("BackupTargetUpdateRequest"), responseSchema: schemaRef("BackupTargetResponse") },
   { method: "delete", path: "/api/v1/recovery/targets/{id}", summary: "Delete a recovery backup target", tags: ["Recovery"], auth: "operator", responseSchema: schemaRef("OkResponse") },
   { method: "post", path: "/api/v1/recovery/targets/{id}/test", summary: "Test a recovery backup target connection", tags: ["Recovery"], auth: "operator", responseSchema: schemaRef("BackupTargetTestResponse") },
   { method: "post", path: "/api/v1/recovery/analyze", summary: "Analyze app recovery data locations", tags: ["Recovery"], auth: "viewer", responseSchema: schemaRef("RecoveryAnalysisResponse") },
@@ -180,6 +180,31 @@ const errorSchema = {
 const idSchema = { type: "string", format: "uuid" };
 const dateTimeSchema = { type: "string", format: "date-time" };
 const stringOrNullSchema = { type: ["string", "null"] };
+const rcloneRemoteNamePattern = "^(?![- ])(?!.* $)[\\p{L}\\p{N}_.+@ \\-]+$";
+const rcloneRemoteNameSchema = {
+  type: "string",
+  minLength: 1,
+  maxLength: 120,
+  pattern: rcloneRemoteNamePattern,
+  description: "Rclone remote name using Unicode letters and numbers, spaces, _, -, ., +, and @; it cannot start with a hyphen or space or end with a space."
+};
+const rcloneRemoteNameOrNullSchema = {
+  ...rcloneRemoteNameSchema,
+  type: ["string", "null"]
+};
+const smbShareSchema = {
+  type: "string",
+  minLength: 1,
+  maxLength: 255,
+  pattern: "^(?!\\.{1,2}$)(?!\\s)(?!.*\\s$)[^\\u0000-\\u001F\\u007F:/\\\\]+$",
+  description: "One SMB share name without path separators, a drive prefix, control characters, or leading/trailing whitespace."
+};
+const smbSubPathSchema = {
+  type: "string",
+  maxLength: 512,
+  pattern: "^(?!/)(?!.*\\/$)(?!.*(?:^|/)(?:\\.{1,2})(?:/|$))(?!.*(?:^|/)\\s)(?!.*\\s(?:/|$))(?!.*//)[^\\u0000-\\u001F\\u007F:\\\\]*$",
+  description: "Optional relative SMB path made of non-empty segments; '.', '..', control characters, colons, backslashes, and segment-edge whitespace are rejected."
+};
 const idOrNullSchema = { anyOf: [idSchema, { type: "null" }] };
 const objectSchema = { type: "object", additionalProperties: true };
 const recordSchema = { type: "object", additionalProperties: true };
@@ -200,6 +225,261 @@ const namedArrayResponse = (key: string, itemSchema: Record<string, unknown>, ex
   object([key, ...Object.keys(extra)], { [key]: arrayOf(itemSchema), ...extra });
 const namedItemResponse = (key: string, itemSchema: Record<string, unknown>, extra: Record<string, unknown> = {}) =>
   object([key, ...Object.keys(extra)], { [key]: itemSchema, ...extra });
+
+const rcloneProviderValues = ["smb", "drive", "onedrive", "iclouddrive", "webdav", "sftp", "custom"];
+const importedRcloneProviderValues = rcloneProviderValues.filter((provider) => provider !== "smb");
+const localCachePolicyRequestSchema = {
+  ...enumSchema(["keep", "remote_only"]),
+  default: "keep"
+};
+const portRequestSchema = {
+  anyOf: [
+    { type: "integer", minimum: 1, maximum: 65535 },
+    {
+      type: "string",
+      pattern: "^(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$"
+    }
+  ],
+  description: "TCP port from 1 through 65535. Numeric strings are accepted for form/API compatibility."
+};
+const backupTargetCommonCreateProperties = {
+  name: { type: "string", minLength: 1, maxLength: 80 },
+  enabled: { type: "boolean", default: true },
+  localCachePolicy: localCachePolicyRequestSchema
+};
+const s3EndpointRequestSchema = {
+  type: "string",
+  format: "uri",
+  pattern: "^[Hh][Tt][Tt][Pp][Ss]?://",
+  description: "HTTP(S) S3-compatible endpoint with a hostname and without credentials, query parameters, or a fragment."
+};
+const backupTargetS3ConfigRequestSchema = object(["endpoint", "bucket"], {
+  endpoint: s3EndpointRequestSchema,
+  bucket: { type: "string", minLength: 1, maxLength: 255 },
+  region: { type: "string", maxLength: 64 },
+  prefix: { type: "string", maxLength: 512 },
+  pathStyle: { type: "boolean", default: false },
+  forcePathStyle: { type: "boolean", default: false }
+});
+const backupTargetSmbConnectionRequestSchema = object(["server", "share"], {
+  server: { type: "string", minLength: 1, maxLength: 255 },
+  share: smbShareSchema,
+  subPath: smbSubPathSchema,
+  domain: { type: "string", maxLength: 255 },
+  username: { type: "string", maxLength: 255 },
+  password: { type: "string", writeOnly: true },
+  port: portRequestSchema
+});
+const backupTargetSmbConfigRequestSchema = object(["provider"], {
+  provider: { type: "string", const: "smb" },
+  remotePath: {
+    type: "string",
+    minLength: 1,
+    maxLength: 1024,
+    description: "Accepted for input compatibility; the server derives the authoritative SMB path from share and subPath."
+  },
+  remoteName: rcloneRemoteNameSchema,
+  smb: backupTargetSmbConnectionRequestSchema
+});
+const backupTargetSmbConfigWithConnectionRequestSchema = {
+  allOf: [
+    backupTargetSmbConfigRequestSchema,
+    { type: "object", required: ["smb"] }
+  ]
+};
+const importedRcloneConfigRequestSchema = (
+  provider: string,
+  requireConfig: boolean
+) => object(["provider", ...(requireConfig ? ["rcloneConfig"] : [])], {
+  provider: { type: "string", const: provider },
+  remotePath: { type: "string", minLength: 1, maxLength: 1024 },
+  remoteName: rcloneRemoteNameSchema,
+  rcloneConfig: {
+    type: "string",
+    minLength: 1,
+    writeOnly: true,
+    description: "Imported rclone configuration text. Experimental providers require this value."
+  }
+});
+const backupTargetGenericRcloneConfigRequestSchema = object(["provider"], {
+  provider: enumSchema(rcloneProviderValues),
+  remotePath: { type: "string", minLength: 1, maxLength: 1024 },
+  remoteName: rcloneRemoteNameSchema,
+  rcloneConfig: { type: "string", minLength: 1, writeOnly: true },
+  smb: backupTargetSmbConnectionRequestSchema
+});
+const backupTargetLocalCreateRequestSchema = {
+  anyOf: [
+    object(["name", "type"], {
+      ...backupTargetCommonCreateProperties,
+      localCachePolicy: {
+        type: "string",
+        const: "keep",
+        default: "keep"
+      },
+      type: { type: "string", const: "local" },
+      kind: { type: "string", const: "local" },
+      config: object([], {})
+    }),
+    object(["name", "kind"], {
+      ...backupTargetCommonCreateProperties,
+      type: { type: "string", const: "local" },
+      kind: { type: "string", const: "local" },
+      config: object([], {})
+    })
+  ]
+};
+const backupTargetS3CreateRequestSchema = {
+  ...object(["name", "accessKeyId", "secretAccessKey"], {
+    ...backupTargetCommonCreateProperties,
+    type: { type: "string", const: "s3" },
+    kind: { type: "string", const: "s3" },
+    endpoint: s3EndpointRequestSchema,
+    bucket: { type: "string", minLength: 1, maxLength: 255 },
+    region: { type: "string", maxLength: 64 },
+    prefix: { type: "string", maxLength: 512 },
+    forcePathStyle: { type: "boolean", default: false },
+    accessKeyId: { type: "string", minLength: 1, maxLength: 255 },
+    secretAccessKey: { type: "string", minLength: 1, writeOnly: true },
+    config: backupTargetS3ConfigRequestSchema
+  }),
+  anyOf: [
+    { required: ["type", "endpoint", "bucket"] },
+    { required: ["kind", "config"] }
+  ]
+};
+const backupTargetSmbCreateFlatRequestSchema = {
+  ...object(["name", "type", "provider"], {
+    ...backupTargetCommonCreateProperties,
+    type: { type: "string", const: "rclone" },
+    kind: { type: "string", const: "rclone" },
+    provider: { type: "string", const: "smb" },
+    remotePath: {
+      type: "string",
+      minLength: 1,
+      maxLength: 1024,
+      description: "Accepted for compatibility; SMB storage is confined to share/subPath."
+    },
+    remoteName: rcloneRemoteNameSchema,
+    server: { type: "string", minLength: 1, maxLength: 255 },
+    share: smbShareSchema,
+    subPath: smbSubPathSchema,
+    domain: { type: "string", maxLength: 255 },
+    username: { type: "string", maxLength: 255 },
+    password: { type: "string", writeOnly: true },
+    port: portRequestSchema,
+    config: backupTargetSmbConfigRequestSchema
+  }),
+  anyOf: [
+    { required: ["server", "share"] },
+    {
+      required: ["config"],
+      properties: { config: backupTargetSmbConfigWithConnectionRequestSchema }
+    }
+  ]
+};
+const backupTargetSmbCreateNestedRequestSchema = object(["name", "kind", "config"], {
+  ...backupTargetCommonCreateProperties,
+  type: { type: "string", const: "rclone" },
+  kind: { type: "string", const: "rclone" },
+  provider: { type: "string", const: "smb" },
+  remotePath: {
+    type: "string",
+    minLength: 1,
+    maxLength: 1024,
+    description: "Accepted for compatibility; SMB storage is confined to config.smb.share/subPath."
+  },
+  config: backupTargetSmbConfigWithConnectionRequestSchema
+});
+const backupTargetImportedCreateFlatRequestSchema = {
+  oneOf: importedRcloneProviderValues.map((provider) => ({
+    ...object(["name", "type", "provider"], {
+      ...backupTargetCommonCreateProperties,
+      type: { type: "string", const: "rclone" },
+      kind: { type: "string", const: "rclone" },
+      provider: { type: "string", const: provider },
+      remotePath: { type: "string", minLength: 1, maxLength: 1024 },
+      remoteName: rcloneRemoteNameSchema,
+      rcloneConfig: { type: "string", minLength: 1, writeOnly: true },
+      config: importedRcloneConfigRequestSchema(provider, false)
+    }),
+    anyOf: [
+      { required: ["rcloneConfig"] },
+      {
+        required: ["config"],
+        properties: { config: importedRcloneConfigRequestSchema(provider, true) }
+      }
+    ]
+  }))
+};
+const backupTargetImportedCreateNestedRequestSchema = {
+  oneOf: importedRcloneProviderValues.map((provider) => ({
+    ...object(["name", "kind", "config"], {
+      ...backupTargetCommonCreateProperties,
+      type: { type: "string", const: "rclone" },
+      kind: { type: "string", const: "rclone" },
+      provider: { type: "string", const: provider },
+      remotePath: { type: "string", minLength: 1, maxLength: 1024 },
+      rcloneConfig: { type: "string", minLength: 1, writeOnly: true },
+      config: importedRcloneConfigRequestSchema(provider, false)
+    }),
+    anyOf: [
+      { required: ["rcloneConfig"] },
+      {
+        properties: { config: importedRcloneConfigRequestSchema(provider, true) }
+      }
+    ]
+  }))
+};
+const backupTargetUpdateRequestSchema = {
+  ...object([], {
+    name: { type: "string", minLength: 1, maxLength: 80 },
+    enabled: { type: "boolean" },
+    type: {
+      ...enumSchema(["local", "s3", "rclone"]),
+      description: "Accepted as a compatibility hint and ignored; a target's stored kind is immutable."
+    },
+    kind: {
+      ...enumSchema(["local", "s3", "rclone"]),
+      description: "Accepted as a compatibility hint and ignored; a target's stored kind is immutable."
+    },
+    endpoint: s3EndpointRequestSchema,
+    bucket: { type: "string", minLength: 1, maxLength: 255 },
+    region: { type: ["string", "null"], maxLength: 64 },
+    prefix: { type: ["string", "null"], maxLength: 512 },
+    forcePathStyle: { type: "boolean" },
+    config: {
+      anyOf: [
+        backupTargetS3ConfigRequestSchema,
+        backupTargetGenericRcloneConfigRequestSchema,
+        object([], {})
+      ]
+    },
+    accessKeyId: { type: ["string", "null"], minLength: 1, maxLength: 255 },
+    secretAccessKey: { type: ["string", "null"], minLength: 1, writeOnly: true },
+    provider: {
+      type: ["string", "null"],
+      enum: [...rcloneProviderValues, null]
+    },
+    remotePath: { type: ["string", "null"], minLength: 1, maxLength: 1024 },
+    remoteName: rcloneRemoteNameOrNullSchema,
+    rcloneConfig: { type: ["string", "null"], minLength: 1, writeOnly: true },
+    localCachePolicy: enumSchema(["keep", "remote_only"]),
+    server: { type: ["string", "null"], minLength: 1, maxLength: 255 },
+    share: { ...smbShareSchema, type: ["string", "null"] },
+    subPath: { ...smbSubPathSchema, type: ["string", "null"] },
+    domain: { type: ["string", "null"], maxLength: 255 },
+    username: { type: ["string", "null"], maxLength: 255 },
+    password: { type: ["string", "null"], writeOnly: true },
+    port: {
+      anyOf: [
+        portRequestSchema,
+        { type: "null" }
+      ]
+    }
+  }),
+  description: "Partial update. Fields incompatible with the target's stored kind are rejected. Switching to SMB requires a valid server/share and removes imported config; switching to an experimental imported provider requires a new non-empty rcloneConfig. A supplied top-level provider must match config.provider."
+};
 
 const nonEmptyString = (maxLength?: number) => ({
   type: "string",
@@ -393,7 +673,9 @@ const directHostActionPayloadSchemas = {
   "compose.deployPath": object(["projectName", "workingDir", "composePath"], {
     projectName: composeProjectNameRequestSchema,
     workingDir: hostPathRequestSchema,
-    composePath: composePathRequestSchema
+    composePath: composePathRequestSchema,
+    gitPullBeforeDeploy: { type: "boolean" },
+    branch: { type: "string", minLength: 1, maxLength: 255 }
   })
 } satisfies Record<DirectHostActionType, Record<string, unknown>>;
 
@@ -714,7 +996,7 @@ const componentSchemas = {
     provider: { type: ["string", "null"], enum: ["smb", "drive", "onedrive", "iclouddrive", "webdav", "sftp", "custom", null] },
     rcloneProvider: { type: ["string", "null"], enum: ["smb", "drive", "onedrive", "iclouddrive", "webdav", "sftp", "custom", null] },
     remotePath: stringOrNullSchema,
-    remoteName: stringOrNullSchema,
+    remoteName: rcloneRemoteNameOrNullSchema,
     localCachePolicy: enumSchema(["keep", "remote_only"]),
     healthStatus: enumSchema(["unknown", "healthy", "failed"]),
     healthCheckedAt: stringOrNullSchema,
@@ -727,6 +1009,27 @@ const componentSchemas = {
     createdAt: dateTimeSchema,
     updatedAt: dateTimeSchema
   }),
+  BackupTargetS3ConfigRequest: backupTargetS3ConfigRequestSchema,
+  BackupTargetSmbConnectionRequest: backupTargetSmbConnectionRequestSchema,
+  BackupTargetRcloneConfigRequest: backupTargetGenericRcloneConfigRequestSchema,
+  BackupTargetLocalCreateRequest: backupTargetLocalCreateRequestSchema,
+  BackupTargetS3CreateRequest: backupTargetS3CreateRequestSchema,
+  BackupTargetSmbCreateFlatRequest: backupTargetSmbCreateFlatRequestSchema,
+  BackupTargetSmbCreateNestedRequest: backupTargetSmbCreateNestedRequestSchema,
+  BackupTargetImportedCreateFlatRequest: backupTargetImportedCreateFlatRequestSchema,
+  BackupTargetImportedCreateNestedRequest: backupTargetImportedCreateNestedRequestSchema,
+  BackupTargetCreateRequest: {
+    anyOf: [
+      schemaRef("BackupTargetLocalCreateRequest"),
+      schemaRef("BackupTargetS3CreateRequest"),
+      schemaRef("BackupTargetSmbCreateFlatRequest"),
+      schemaRef("BackupTargetSmbCreateNestedRequest"),
+      schemaRef("BackupTargetImportedCreateFlatRequest"),
+      schemaRef("BackupTargetImportedCreateNestedRequest")
+    ],
+    description: "Creates a local, S3-compatible, supported SMB, or experimental imported-rclone target. Both the flat `type` compatibility shape and nested `kind`/`config` shape are accepted."
+  },
+  BackupTargetUpdateRequest: backupTargetUpdateRequestSchema,
   BackupTargetsResponse: namedArrayResponse("targets", schemaRef("BackupTarget")),
   BackupTargetResponse: namedItemResponse("target", schemaRef("BackupTarget")),
   BackupTargetTestResponse: object(["target", "ok"], {
@@ -745,6 +1048,7 @@ const componentSchemas = {
     restorePaths: recordSchema,
     preCaptureCommand: stringOrNullSchema,
     postCaptureCommand: stringOrNullSchema,
+    sensitiveFieldsRedacted: { type: "boolean" },
     captureMode: enumSchema(["hot", "stop_first"]),
     createdAt: dateTimeSchema,
     updatedAt: dateTimeSchema

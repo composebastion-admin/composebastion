@@ -7,13 +7,18 @@ import type {
   RecoveryReadiness,
   RecoveryReadinessReason
 } from "@composebastion/shared";
-import { recoveryReadinessSchema } from "@composebastion/shared";
+import {
+  recoveryAnalysisSchema,
+  recoveryReadinessSchema,
+  sanitizeUrlDiagnosticText
+} from "@composebastion/shared";
 import { listApps } from "./apps.js";
 import { assertHostBackupPathAllowed } from "./backupHostPaths.js";
 import { getContainerInspects, syncDockerInventory, type ContainerInspectDetails } from "./docker.js";
 import { analyzeRecovery } from "./recoveryAnalysis.js";
 import { getBackupTarget, getRecoveryPoint, listRecoveryPoints } from "./recoveryCenter.js";
 import { isAllowedBindMountPath } from "./recoveryManifest.js";
+import { redactRecoveryProfileForViewer } from "./recoveryProfiles.js";
 
 type ReadinessInput = {
   hostId: string;
@@ -28,6 +33,208 @@ type PointUsability = {
   remoteUsable: boolean;
   combinedUsable: boolean;
 };
+
+function sanitizeDiagnostic(value: string | null | undefined) {
+  if (value == null) return null;
+  return String(sanitizeUrlDiagnosticText(value));
+}
+
+function redactKnownValues(value: string, sensitiveValues: ReadonlySet<string>) {
+  let redacted = value;
+  for (const sensitive of sensitiveValues) {
+    if (sensitive) redacted = redacted.replaceAll(sensitive, "[redacted-path]");
+  }
+  return redacted;
+}
+
+function manualSources(dataMounts: RecoveryAnalysis["dataMounts"]) {
+  return new Set(
+    dataMounts
+      .filter((mount) => mount.type === "manual" && mount.source)
+      .map((mount) => mount.source!)
+  );
+}
+
+function profileSensitiveValues(profile: RecoveryAnalysis["profile"]) {
+  const values = new Set<string>();
+  if (!profile) return values;
+  for (const value of profile.includePaths) values.add(value);
+  for (const value of profile.excludePatterns) values.add(value);
+  for (const [source, destination] of Object.entries(profile.restorePaths)) {
+    values.add(source);
+    values.add(destination);
+  }
+  if (profile.preCaptureCommand) values.add(profile.preCaptureCommand);
+  if (profile.postCaptureCommand) values.add(profile.postCaptureCommand);
+  return values;
+}
+
+function recoverySensitiveValues(
+  profile: RecoveryAnalysis["profile"],
+  dataMounts: RecoveryAnalysis["dataMounts"]
+) {
+  return new Set([...profileSensitiveValues(profile), ...manualSources(dataMounts)]);
+}
+
+function redactManualMountSources(dataMounts: RecoveryAnalysis["dataMounts"]) {
+  return dataMounts.map((mount) => (
+    mount.type === "manual"
+      ? { ...mount, source: null }
+      : mount
+  ));
+}
+
+const VIEWER_RECOVERY_ERROR =
+  "Recovery operation details are available to operators and administrators.";
+const VIEWER_TARGET_HEALTH_ERROR =
+  "Backup target health details are available to operators and administrators.";
+
+const viewerReasonText: Record<string, Pick<RecoveryReadinessReason, "message" | "action">> = {
+  no_containers: {
+    message: "No running or stopped containers are currently associated with this app.",
+    action: "Ask an operator to deploy or relink the app before relying on recovery captures."
+  },
+  analysis_blocked: {
+    message: "Recovery analysis is blocked; detailed diagnostics require operator access.",
+    action: "Ask an operator to review the recovery analysis and refresh readiness."
+  },
+  stateful_without_persistent_data: {
+    message: "This app appears stateful, but no persistent data location was detected.",
+    action: "Ask an operator to configure a supported persistent data location."
+  },
+  host_path_blocked: {
+    message: "A configured recovery source path is blocked by recovery path safety rules.",
+    action: "Ask an operator to review the configured recovery paths."
+  },
+  profile_stop_first_missing: {
+    message: "A stop-first capture profile is recommended, but no recovery profile is saved.",
+    action: "Ask an operator to configure a recovery profile for this app."
+  },
+  profile_database_missing: {
+    message: "Database-like containers should have an explicit recovery profile.",
+    action: "Ask an operator to configure a recovery profile for this app."
+  },
+  tmpfs_storage: {
+    message: "Memory-backed data cannot be captured as a persistent artifact.",
+    action: "Ask an operator to move important data to supported persistent storage."
+  },
+  writable_layer_storage: {
+    message: "Mutable data may be inside a container writable layer.",
+    action: "Ask an operator to configure supported persistent storage."
+  },
+  no_recovery_point: {
+    message: "No recovery point has completed for this app yet.",
+    action: "Ask an operator to create and verify a recovery point."
+  },
+  latest_point_failed: {
+    message: "The latest recovery point failed; detailed diagnostics require operator access.",
+    action: "Ask an operator to review the failed recovery point."
+  },
+  latest_point_incomplete: {
+    message: "The latest recovery point is incomplete.",
+    action: "Ask an operator to review or replace the incomplete recovery point."
+  },
+  artifact_capture_incomplete: {
+    message: "Not all recovery artifacts completed successfully.",
+    action: "Ask an operator to review the recovery point and rerun capture if needed."
+  },
+  no_usable_artifact: {
+    message: "The latest recovery point has no usable local or remote artifact.",
+    action: "Ask an operator to recreate the recovery point or repair its backup target."
+  },
+  not_verified: {
+    message: "The latest recovery point has not passed verification.",
+    action: "Ask an operator to verify the latest recovery point."
+  },
+  no_successful_drill: {
+    message: "No successful restore drill is recorded for the latest recovery point.",
+    action: "Ask an operator to run and verify a restore drill."
+  },
+  target_disabled: {
+    message: "The backup target for the latest recovery point is disabled.",
+    action: "Ask an operator to enable or replace the backup target."
+  },
+  target_health_failed: {
+    message: "The backup target health check failed; detailed diagnostics require operator access.",
+    action: "Ask an operator to test and repair the backup target."
+  },
+  target_health_unknown: {
+    message: "The backup target health has not been confirmed.",
+    action: "Ask an operator to test the backup target."
+  },
+  target_missing: {
+    message: "The backup target used by the latest recovery point no longer exists.",
+    action: "Ask an operator to recreate the target or capture a new recovery point."
+  },
+  analysis_unavailable: {
+    message: "Recovery readiness analysis is temporarily unavailable.",
+    action: "Ask an operator to review host inventory and Docker connectivity."
+  },
+  analysis_failed: {
+    message: "Recovery readiness analysis failed; detailed diagnostics require operator access.",
+    action: "Ask an operator to review host inventory and recovery configuration."
+  }
+};
+
+function redactReadinessReasonForViewer(
+  reason: RecoveryReadinessReason
+): RecoveryReadinessReason {
+  const safe = viewerReasonText[reason.code];
+  return {
+    code: reason.code,
+    severity: reason.severity,
+    message: safe?.message
+      ?? "Recovery readiness reported an issue; detailed diagnostics require operator access.",
+    ...(safe?.action
+      ? { action: safe.action }
+      : {})
+  };
+}
+
+export function redactRecoveryAnalysisForViewer(analysis: RecoveryAnalysis): RecoveryAnalysis {
+  const sensitivePaths = recoverySensitiveValues(analysis.profile, analysis.dataMounts);
+  return recoveryAnalysisSchema.parse({
+    ...analysis,
+    profile: redactRecoveryProfileForViewer(analysis.profile),
+    dataMounts: redactManualMountSources(analysis.dataMounts),
+    bindMounts: analysis.bindMounts.filter((mount) => !sensitivePaths.has(mount)),
+    warnings: analysis.warnings.map((warning) =>
+      redactKnownValues(sanitizeDiagnostic(warning) ?? "", sensitivePaths)
+    ),
+    blockingIssues: analysis.blockingIssues.map((issue) =>
+      redactKnownValues(sanitizeDiagnostic(issue) ?? "", sensitivePaths)
+    )
+  });
+}
+
+export function redactRecoveryReadinessForViewer(
+  readiness: RecoveryReadiness
+): RecoveryReadiness {
+  return recoveryReadinessSchema.parse({
+    ...readiness,
+    reasons: readiness.reasons.map(redactReadinessReasonForViewer),
+    lastRecoveryPoint: readiness.lastRecoveryPoint
+      ? {
+        ...readiness.lastRecoveryPoint,
+        error: readiness.lastRecoveryPoint.error ? VIEWER_RECOVERY_ERROR : null
+      }
+      : null,
+    lastDrill: readiness.lastDrill
+      ? {
+        ...readiness.lastDrill,
+        lastDrillError: readiness.lastDrill.lastDrillError ? VIEWER_RECOVERY_ERROR : null
+      }
+      : null,
+    profile: redactRecoveryProfileForViewer(readiness.profile),
+    targetHealth: readiness.targetHealth
+      ? {
+        ...readiness.targetHealth,
+        error: readiness.targetHealth.error ? VIEWER_TARGET_HEALTH_ERROR : null
+      }
+      : null,
+    dataMounts: redactManualMountSources(readiness.dataMounts)
+  });
+}
 
 const DATABASE_WARNING_HINTS = [
   "database container",
@@ -193,7 +400,7 @@ function latestPointSummary(detail: RecoveryPointDetail, usability: PointUsabili
     backupTargetId: detail.backupTargetId,
     localUsable: usability.localUsable,
     remoteUsable: usability.remoteUsable,
-    error: detail.error
+    error: sanitizeDiagnostic(detail.error)
   };
 }
 
@@ -202,7 +409,7 @@ function drillSummary(detail: RecoveryPointDetail | null) {
   return {
     lastDrillAt: detail.lastDrillAt,
     lastDrillStatus: detail.lastDrillStatus,
-    lastDrillError: detail.lastDrillError,
+    lastDrillError: sanitizeDiagnostic(detail.lastDrillError),
     lastSuccessfulDrillAt: detail.lastSuccessfulDrillAt,
     passed: Boolean(detail.lastSuccessfulDrillAt)
   };
@@ -215,7 +422,7 @@ function targetHealthSummary(target: BackupTarget | null) {
     targetName: target.name,
     status: target.healthStatus,
     checkedAt: target.healthCheckedAt,
-    error: target.healthError
+    error: sanitizeDiagnostic(target.healthError)
   };
 }
 
@@ -233,7 +440,7 @@ function analysisReasons(analysis: RecoveryAnalysis, matchingApp: DockerApp | nu
     reasons.push({
       code: "analysis_blocked",
       severity: "critical",
-      message: issue,
+      message: sanitizeDiagnostic(issue) ?? "Recovery analysis was blocked.",
       action: "Fix the inventory issue, then refresh readiness."
     });
   }
@@ -306,10 +513,11 @@ function pointReasons(detail: RecoveryPointDetail | null, target: BackupTarget |
 
   const reasons: RecoveryReadinessReason[] = [];
   if (detail.status === "failed") {
+    const pointError = sanitizeDiagnostic(detail.error);
     reasons.push({
       code: "latest_point_failed",
       severity: "warning",
-      message: detail.error ? `Latest recovery point failed: ${detail.error}` : "Latest recovery point failed.",
+      message: pointError ? `Latest recovery point failed: ${pointError}` : "Latest recovery point failed.",
       action: "Open the failed point, fix the capture issue, and run a new backup."
     });
   } else if (detail.status !== "completed") {
@@ -366,10 +574,11 @@ function pointReasons(detail: RecoveryPointDetail | null, target: BackupTarget |
         action: "Enable the target or capture to a healthy target."
       });
     } else if (target.healthStatus === "failed") {
+      const targetError = sanitizeDiagnostic(target.healthError);
       reasons.push({
         code: "target_health_failed",
         severity: "warning",
-        message: target.healthError ? `Backup target health check failed: ${target.healthError}` : "Backup target health check failed.",
+        message: targetError ? `Backup target health check failed: ${targetError}` : "Backup target health check failed.",
         action: "Test and repair the backup target connection."
       });
     } else if (target.healthStatus !== "healthy") {
@@ -397,10 +606,12 @@ function pointReasons(detail: RecoveryPointDetail | null, target: BackupTarget |
 export async function analyzeRecoveryReadiness(input: ReadinessInput): Promise<RecoveryReadiness> {
   const label = input.label ?? identityLabel(input.appIdentity);
   if (input.analysisUnavailableError) {
+    const unavailableError = sanitizeDiagnostic(input.analysisUnavailableError);
     const reasons: RecoveryReadinessReason[] = [{
       code: "analysis_unavailable",
       severity: "critical",
-      message: `Readiness analysis is temporarily unavailable after refreshing container inventory: ${input.analysisUnavailableError}`,
+      message: "Readiness analysis is temporarily unavailable after refreshing container inventory"
+        + (unavailableError ? `: ${unavailableError}` : "."),
       action: "Retry readiness after the host inventory and Docker connection are stable."
     }];
     return recoveryReadinessSchema.parse({
@@ -426,10 +637,13 @@ export async function analyzeRecoveryReadiness(input: ReadinessInput): Promise<R
       { containerInspects: input.containerInspects }
     );
   } catch (error) {
+    const analysisError = sanitizeDiagnostic(
+      error instanceof Error ? error.message : String(error)
+    );
     const reasons: RecoveryReadinessReason[] = [{
       code: "analysis_failed",
       severity: "critical",
-      message: error instanceof Error ? error.message : String(error),
+      message: analysisError ?? "Recovery analysis failed.",
       action: "Refresh host inventory, then retry readiness analysis."
     }];
     return recoveryReadinessSchema.parse({

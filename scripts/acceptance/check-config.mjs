@@ -69,6 +69,8 @@ assertPinnedImages("infra/dev/sshhost.Dockerfile");
 assertPinnedImages("scripts/acceptance/run.mjs");
 
 const runnerSource = readFileSync(new URL("./run.mjs", import.meta.url), "utf8");
+const qualificationPolicySource = readFileSync(new URL("./qualification-policy.mjs", import.meta.url), "utf8");
+const acceptanceContractSource = `${runnerSource}\n${qualificationPolicySource}`;
 for (const legacyValue of [
   "composebastion-acceptance-fresh",
   "composebastion-acceptance-source",
@@ -101,6 +103,11 @@ for (const fragment of [
   '--allow-nonqualifying',
   '!releaseQualifying && !allowedDeveloperDiagnostic',
   'Developer --allow-nonqualifying opt-out requested',
+  'Disposable acceptance infrastructure was retained with --keep',
+  'ownedCandidateImageTags({ revision: candidateRevision, portBase })',
+  'inspectComposeServiceImage',
+  'performFinalCleanup()',
+  'cleanupEvidenceFailures(report.cleanup)',
   'volumeMarkerSeededAfterDeploy: true',
   'exactVolumeMarkerRestored: true',
   '[acceptance] ${item.name}',
@@ -110,7 +117,14 @@ for (const fragment of [
   'operatorSavedPrivateRegistry: true',
   'agentRegistryLoginPersistence: true',
   'runLiveBrowserSuite()',
+  'run("npm", ["run", "smoke:web:live:qualification"]',
+  'COMPOSEBASTION_LIVE_JSON_REPORT',
+  'rawSecretBearingArtifactsExcluded: true',
+  'liveBrowserEvidencePath',
   'hardenedContainersScenario',
+  'includeDemoData: true',
+  'demoDataSeeded: true',
+  'host.tags.includes("demo")',
   'restoredDataVerified: true',
   'preservedQueuedJob: true',
   'repoDigest',
@@ -118,7 +132,16 @@ for (const fragment of [
   'real-cloud',
   'go-module-legal-review'
 ]) {
-  if (!runnerSource.includes(fragment)) throw new Error(`Acceptance runner is missing release evidence invariant: ${fragment}`);
+  if (!acceptanceContractSource.includes(fragment)) throw new Error(`Acceptance runner is missing release evidence invariant: ${fragment}`);
+}
+for (const line of runnerSource.split(/\r?\n/)) {
+  if (line.includes("down") && line.includes(".catch(() => undefined)")) {
+    throw new Error(`Acceptance runner swallows a Compose cleanup failure: ${line.trim()}`);
+  }
+  if (line.includes("cleanupManagedDockerState().catch")
+      || line.includes('prepareBackupOwnership("cleanup").catch')) {
+    throw new Error(`Acceptance runner swallows a disposable cleanup failure: ${line.trim()}`);
+  }
 }
 for (const fragment of [
   'api(`/api/hosts/${host.id}/files/write`',
@@ -199,6 +222,9 @@ const webPackageJson = JSON.parse(readFileSync(new URL("../../apps/web/package.j
 if (webPackageJson.scripts?.["smoke:live"] !== "playwright test --config playwright.live.config.ts") {
   throw new Error("web package is missing the separate real-stack Playwright configuration");
 }
+if (webPackageJson.scripts?.["smoke:live:qualification"] !== "playwright test --config playwright.live.qualification.config.ts") {
+  throw new Error("web package is missing the six-project real-stack qualification configuration");
+}
 const liveBrowserSource = readFileSync(new URL("../../apps/web/e2e-live/application.live.spec.ts", import.meta.url), "utf8");
 for (const fragment of ["checks:", "database:", "redis:", "worker:", "/api/jobs/status", "About ComposeBastion"]) {
   if (!liveBrowserSource.includes(fragment)) throw new Error(`Live browser suite is missing ${fragment}`);
@@ -207,6 +233,10 @@ const ciSource = readFileSync(new URL("../../.github/workflows/ci.yml", import.m
 if (!ciSource.includes("run: npm run acceptance:assert-report")) {
   throw new Error("Required CI does not explicitly assert the generated acceptance report");
 }
+if (!ciSource.includes("run: npm run smoke:web:qualification")
+    || !ciSource.includes("run: npx playwright install --with-deps chromium firefox webkit")) {
+  throw new Error("Required CI does not install and run the qualification browser matrix");
+}
 if (ciSource.includes("--allow-nonqualifying")) {
   throw new Error("Required CI must not use the developer-only nonqualifying acceptance opt-out");
 }
@@ -214,7 +244,9 @@ const reportAssertionSource = readFileSync(new URL("./assert-report.mjs", import
 for (const fragment of [
   'report.status !== "passed"',
   'automatedAcceptanceQualifying !== true',
-  'manifestComplete !== true'
+  'manifestComplete !== true',
+  '["skipBuild", "skipUpgrade", "allowNonqualifying", "keep"]',
+  'cleanupEvidenceFailures(report.cleanup)'
 ]) {
   if (!reportAssertionSource.includes(fragment)) throw new Error(`Acceptance report assertion is missing ${fragment}`);
 }
@@ -250,6 +282,9 @@ const env = {
   ACCEPTANCE_AGENT_PORT: "18090",
   ACCEPTANCE_HARDENED_AGENT_PORT: "18590",
   ACCEPTANCE_SOURCE_CONTEXT: "/tmp/composebastion-acceptance-git-context",
+  ACCEPTANCE_CANDIDATE_VERSION: candidateVersion,
+  ACCEPTANCE_CANDIDATE_REVISION: "0123456789abcdef0123456789abcdef01234567",
+  ACCEPTANCE_CANDIDATE_BUILD_DATE: "2026-01-01T00:00:00Z",
   COMPOSEBASTION_HTTP_BIND_ADDRESS: "127.0.0.1",
   COMPOSEBASTION_HTTP_PORT: "18080",
   ACCEPTANCE_SOURCE_HTTP_PORT: "18180",

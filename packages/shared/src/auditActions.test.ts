@@ -1,16 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { directHostActionTypes } from "./index.js";
 import { auditActions } from "./auditActions.js";
 
 describe("audit action catalog", () => {
-  it("includes every privileged action emitted by the API", () => {
-    expect(auditActions).toEqual(expect.arrayContaining([
-      "alert.channel.delete",
-      "alert.rule.delete",
-      "compose.forget",
-      "compose.proxy.update",
-      "container.clone",
-      "recovery.verify",
-      "volume.clone"
-    ]));
+  it("is unique, stable, and covers every direct host action", () => {
+    expect(auditActions).toHaveLength(142);
+    expect(new Set(auditActions).size).toBe(auditActions.length);
+    expect([...auditActions].sort()).toEqual(auditActions);
+    expect(auditActions).toEqual(expect.arrayContaining([...directHostActionTypes]));
   });
 });

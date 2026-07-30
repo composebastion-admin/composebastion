@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { extractImagesFromCompose } from "../src/services/composeImages.js";
+import {
+  extractImagesFromCompose,
+  inspectImagesFromCompose
+} from "../src/services/composeImages.js";
 
 describe("extractImagesFromCompose", () => {
   it("collects image references from compose yaml", () => {
@@ -34,5 +37,36 @@ describe("extractImagesFromCompose", () => {
     image: registry.example.com/dashboard:\${IMAGE_TAG}
 `;
     expect(extractImagesFromCompose(yaml)).toEqual([]);
+  });
+
+  it("resolves merged private-registry images from the bound environment", () => {
+    const yaml = `x-service: &service
+  image: \${REGISTRY}/team/app:\${TAG:-latest}
+services:
+  app:
+    <<: *service
+`;
+    expect(extractImagesFromCompose(
+      yaml,
+      "REGISTRY='registry.internal:5000'\nTAG='qualified'"
+    )).toEqual(["registry.internal:5000/team/app:qualified"]);
+  });
+
+  it("reports image authorities that cannot be resolved without the bound environment", () => {
+    const yaml = `services:
+  app:
+    image: \${REGISTRY}/team/app:\${TAG}
+`;
+    expect(inspectImagesFromCompose(yaml)).toEqual({
+      images: [],
+      unresolved: true
+    });
+    expect(inspectImagesFromCompose(
+      yaml,
+      "REGISTRY='registry.internal:5000'\nTAG='qualified'"
+    )).toEqual({
+      images: ["registry.internal:5000/team/app:qualified"],
+      unresolved: false
+    });
   });
 });

@@ -29,19 +29,26 @@
     "check:postgres-upgrade": "node scripts/check-postgres-upgrade.mjs",
     "check:actions-pinned": "node scripts/check-actions-pinned.mjs",
     "check:release-workflows": "node scripts/check-release-workflows.mjs",
+    "check:npm-install-policy": "node scripts/check-npm-install-policy.mjs",
+    "check:npm-version": "node scripts/bootstrap-npm.mjs --check",
     "check:release-version": "node scripts/check-release-version.mjs",
     "check:public-hygiene": "node scripts/check-public-hygiene.mjs",
     "check:go-attribution": "node scripts/go-attribution.mjs check --manifest LICENSES/go-modules/manifest.json",
     "check:go-attribution:release": "node scripts/go-attribution.mjs check --manifest LICENSES/go-modules/manifest.json --require-approved",
     "test:go-attribution-policy": "node --test scripts/go-attribution.test.mjs",
+    "test:container-config-policy": "node --test scripts/container-config-policy.test.mjs",
+    "test:acceptance-policy": "node --test scripts/acceptance/qualification-policy.test.mjs scripts/acceptance/assert-report.test.mjs",
     "check:docker-context": "node scripts/check-docker-context.mjs",
+    "check:container-config": "node scripts/check-container-config.mjs",
     "release:set-version": "node scripts/set-release-version.mjs",
     "release:verify-images": "node scripts/verify-release-images.mjs",
     "acceptance:local": "node scripts/acceptance/run.mjs",
     "acceptance:config": "node scripts/acceptance/check-config.mjs",
     "acceptance:assert-report": "node scripts/acceptance/assert-report.mjs",
     "smoke:web": "npm run build --workspace @composebastion/shared && npm run smoke --workspace @composebastion/web",
+    "smoke:web:qualification": "npm run build --workspace @composebastion/shared && npm run smoke:qualification --workspace @composebastion/web",
     "smoke:web:live": "npm run smoke:live --workspace @composebastion/web",
+    "smoke:web:live:qualification": "npm run smoke:live:qualification --workspace @composebastion/web",
     "test": "npm run build --workspace @composebastion/shared && npm run test --workspaces --if-present",
     "coverage": "npm run build --workspace @composebastion/shared && npm run test:coverage --workspace @composebastion/api && npm run test:coverage --workspace @composebastion/agent && npm run test:coverage --workspace @composebastion/web && npm run test:coverage --workspace @composebastion/shared",
     "typecheck": "npm run build --workspace @composebastion/shared && npm run typecheck --workspace @composebastion/api && npm run typecheck --workspace @composebastion/agent && npm run typecheck --workspace @composebastion/web",
@@ -54,8 +61,16 @@
     "spdx-expression-parse": "5.0.0",
     "yaml": "^2.9.0"
   },
+  "allowScripts": {
+    "cpu-features@0.0.10": true,
+    "esbuild@0.25.12": true,
+    "esbuild@0.28.1": true,
+    "fsevents": false,
+    "ssh2@1.17.0": true
+  },
+  "packageManager": "npm@11.19.0+sha512.SDd/hHg3KqHE5Ht2NHWxNYNtqCQ2pXAPLl6OtQhPyED5PHsRfrOtO199MZTIG2cQoQ1ZRI9t28shrD+2cr3AAw==",
   "engines": {
-    "node": ">=24.0.0",
-    "npm": ">=11.0.0"
+    "node": ">=24.0.0 <25",
+    "npm": ">=11.19.0 <12"
   }
 }

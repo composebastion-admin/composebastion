@@ -43,6 +43,7 @@ import {
   sanitizeUrlDiagnosticText,
   selfUpdateConfigSchema,
   setupRequestSchema,
+  userUpdateSchema,
   validatePasswordStrength,
   volumeCloneSchema
 } from "./index.js";
@@ -59,6 +60,14 @@ describe("shared schemas", () => {
     expect(setupRequestSchema.parse({ username: "admin", email: "admin@example.com", password: strongPassword, includeDemoData: true }).includeDemoData).toBe(true);
     expect(() => setupRequestSchema.parse({ password: strongPassword })).toThrow();
     expect(loginRequestSchema.parse({ identifier: "admin", password: "secret" }).identifier).toBe("admin");
+  });
+
+  it("enforces the same password policy for account password updates", () => {
+    expect(() => userUpdateSchema.parse({ password: "aaaaaaaaaaaa" }))
+      .toThrow("Include an uppercase letter");
+    expect(userUpdateSchema.parse({ password: strongPassword }).password)
+      .toBe(strongPassword);
+    expect(userUpdateSchema.parse({ role: "viewer" })).toEqual({ role: "viewer" });
   });
 
   it("applies Docker action defaults", () => {
@@ -343,6 +352,19 @@ describe("shared schemas", () => {
       payload: { projectName: "sampleapp", workingDir: "/home/user/app", composePath: "docker-compose.yml" }
     });
     expect(folderDeploy.payload.projectName).toBe("sampleapp");
+    const gitFolderDeploy = dockerActionSchema.parse({
+      type: "compose.deployPath",
+      hostId: "00000000-0000-4000-8000-000000000001",
+      payload: {
+        projectName: "sampleapp",
+        workingDir: "/home/user/app",
+        composePath: "docker-compose.yml",
+        gitPullBeforeDeploy: true,
+        branch: "main"
+      }
+    });
+    expect(gitFolderDeploy.payload.gitPullBeforeDeploy).toBe(true);
+    expect(gitFolderDeploy.payload.branch).toBe("main");
     const writeDeploy = dockerActionSchema.parse({
       type: "compose.writeDeployPath",
       hostId: "00000000-0000-4000-8000-000000000001",

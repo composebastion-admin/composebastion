@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { requireRole } from "../services/auth.js";
-import { writeAuditEvent } from "../services/audit.js";
+import { auditContextFromRequest, writeAuditEvent } from "../services/audit.js";
 import {
   checkRegistryTrust,
   createDeploymentSource,
@@ -14,8 +14,12 @@ import {
   queueDeployment,
   updateDeploymentSource
 } from "../services/deployments.js";
-import { enqueueJob } from "../services/jobs.js";
+import {
+  enqueueJobInTransaction,
+  notifyJobQueued
+} from "../services/jobs.js";
 import { authenticatedReadRateLimit, sensitiveMutationRateLimit } from "../services/rateLimits.js";
+import { withTransaction } from "../db/pool.js";
 
 const registryBodySchema = z.object({
   registry: z.string().trim().min(1).max(255),
@@ -30,14 +34,20 @@ export async function registerDeploymentRoutes(app: FastifyInstance) {
     preHandler: operator,
     config: { rateLimit: sensitiveMutationRateLimit }
   }, async (request, reply) => {
-    const result = await createDeploymentAnalysis(request.body, request.user?.id);
-    await writeAuditEvent({
-      userId: request.user?.id,
-      hostId: result.analysis.hostId,
-      action: "deploy.analyze",
-      targetKind: "deployment_analysis",
-      targetId: result.analysis.id
-    });
+    const result = await createDeploymentAnalysis(
+      request.body,
+      request.user?.id,
+      async (client, queued) => {
+        await writeAuditEvent({
+          userId: request.user?.id,
+          hostId: queued.analysis.hostId,
+          action: "deploy.analyze",
+          targetKind: "deployment_analysis",
+          targetId: queued.analysis.id,
+          ...auditContextFromRequest(request)
+        }, client);
+      }
+    );
     reply.code(202);
     return result;
   });
@@ -60,14 +70,21 @@ export async function registerDeploymentRoutes(app: FastifyInstance) {
     config: { rateLimit: sensitiveMutationRateLimit }
   }, async (request, reply) => {
     const { id } = request.params as { id: string };
-    const result = await queueDeployment(id, request.body, request.user?.id);
-    await writeAuditEvent({
-      userId: request.user?.id,
-      hostId: result.analysis.hostId,
-      action: "deploy.execute",
-      targetKind: "deployment_analysis",
-      targetId: id
-    });
+    const result = await queueDeployment(
+      id,
+      request.body,
+      request.user?.id,
+      async (client, queued) => {
+        await writeAuditEvent({
+          userId: request.user?.id,
+          hostId: queued.analysis.hostId,
+          action: "deploy.execute",
+          targetKind: "deployment_analysis",
+          targetId: id,
+          ...auditContextFromRequest(request)
+        }, client);
+      }
+    );
     reply.code(202);
     return result;
   });
@@ -81,13 +98,18 @@ export async function registerDeploymentRoutes(app: FastifyInstance) {
     preHandler: operator,
     config: { rateLimit: sensitiveMutationRateLimit }
   }, async (request) => {
-    const source = await createDeploymentSource(request.body);
-    await writeAuditEvent({
-      userId: request.user?.id,
-      action: "deployment_source.create",
-      targetKind: "deployment_source",
-      targetId: source.id
-    });
+    const source = await createDeploymentSource(
+      request.body,
+      async (client, created) => {
+        await writeAuditEvent({
+          userId: request.user?.id,
+          action: "deployment_source.create",
+          targetKind: "deployment_source",
+          targetId: created.id,
+          ...auditContextFromRequest(request)
+        }, client);
+      }
+    );
     return { source };
   });
 
@@ -109,17 +131,23 @@ export async function registerDeploymentRoutes(app: FastifyInstance) {
     config: { rateLimit: sensitiveMutationRateLimit }
   }, async (request, reply) => {
     const { id } = request.params as { id: string };
-    const source = await updateDeploymentSource(id, request.body);
+    const source = await updateDeploymentSource(
+      id,
+      request.body,
+      async (client) => {
+        await writeAuditEvent({
+          userId: request.user?.id,
+          action: "deployment_source.update",
+          targetKind: "deployment_source",
+          targetId: id,
+          ...auditContextFromRequest(request)
+        }, client);
+      }
+    );
     if (!source) {
       reply.code(404);
       return { error: "Deployment source not found" };
     }
-    await writeAuditEvent({
-      userId: request.user?.id,
-      action: "deployment_source.update",
-      targetKind: "deployment_source",
-      targetId: id
-    });
     return { source };
   });
 
@@ -128,15 +156,18 @@ export async function registerDeploymentRoutes(app: FastifyInstance) {
     config: { rateLimit: sensitiveMutationRateLimit }
   }, async (request) => {
     const { id } = request.params as { id: string };
-    const ok = await deleteDeploymentSource(id);
-    if (ok) {
-      await writeAuditEvent({
-        userId: request.user?.id,
-        action: "deployment_source.delete",
-        targetKind: "deployment_source",
-        targetId: id
-      });
-    }
+    const ok = await deleteDeploymentSource(
+      id,
+      async (client) => {
+        await writeAuditEvent({
+          userId: request.user?.id,
+          action: "deployment_source.delete",
+          targetKind: "deployment_source",
+          targetId: id,
+          ...auditContextFromRequest(request)
+        }, client);
+      }
+    );
     return { ok };
   });
 
@@ -147,6 +178,15 @@ export async function registerDeploymentRoutes(app: FastifyInstance) {
     const { hostId } = request.params as { hostId: string };
     const body = registryBodySchema.parse(request.body);
     const registry = normalizeRegistryTrustAuthority(body.registry);
+    await writeAuditEvent({
+      userId: request.user?.id,
+      hostId,
+      action: "host.registry_trust_check",
+      targetKind: "docker_host",
+      targetId: hostId,
+      details: { registry },
+      ...auditContextFromRequest(request)
+    });
     return { registryTrust: await checkRegistryTrust(hostId, registry, body.insecure) };
   });
 
@@ -158,18 +198,24 @@ export async function registerDeploymentRoutes(app: FastifyInstance) {
     const body = registryBodySchema.parse(request.body);
     if (!body.insecure) throw Object.assign(new Error("Only explicit HTTP registries require daemon trust configuration."), { statusCode: 400 });
     const registry = normalizeRegistryTrustAuthority(body.registry);
-    const job = await enqueueJob(
-      { type: "host.configureRegistryTrust", hostId, payload: { registry } },
-      request.user?.id
-    );
-    await writeAuditEvent({
-      userId: request.user?.id,
-      hostId,
-      action: "host.configure_registry_trust",
-      targetKind: "docker_host",
-      targetId: hostId,
-      details: { registry }
+    const job = await withTransaction(async (client) => {
+      const queued = await enqueueJobInTransaction(
+        client,
+        { type: "host.configureRegistryTrust", hostId, payload: { registry } },
+        request.user?.id
+      );
+      await writeAuditEvent({
+        userId: request.user?.id,
+        hostId,
+        action: "host.configure_registry_trust",
+        targetKind: "docker_host",
+        targetId: hostId,
+        details: { registry },
+        ...auditContextFromRequest(request)
+      }, client);
+      return queued;
     });
+    await notifyJobQueued(job.id);
     reply.code(202);
     return { job };
   });

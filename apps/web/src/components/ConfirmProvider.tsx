@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { captureFocusReturn, scheduleFocusRestoration, type FocusReturnContext } from "../lib/focusRestoration.js";
 
 type ConfirmOptions = {
   title: string;
@@ -12,7 +13,7 @@ type ConfirmOptions = {
 
 type ConfirmState = ConfirmOptions & {
   resolve: (confirmed: boolean) => void;
-  returnFocus: HTMLElement | null;
+  focusReturn: FocusReturnContext;
 };
 
 type ConfirmContextValue = {
@@ -41,7 +42,7 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
       ? recentPointerTrigger.element
       : activeElement;
     setVerificationValue("");
-    setState({ ...options, resolve, returnFocus });
+    setState({ ...options, resolve, focusReturn: captureFocusReturn(returnFocus) });
   }), []);
 
   const close = useCallback((confirmed: boolean) => {
@@ -109,10 +110,7 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
       else confirmButtonRef.current?.focus();
     });
     return () => {
-      const returnFocus = state.returnFocus;
-      window.setTimeout(() => {
-        if (returnFocus && document.contains(returnFocus)) returnFocus.focus({ preventScroll: true });
-      }, 0);
+      scheduleFocusRestoration(state.focusReturn);
     };
   }, [state]);
 

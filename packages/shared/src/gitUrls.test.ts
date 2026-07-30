@@ -30,6 +30,43 @@ describe("URL diagnostic sanitization", () => {
     }
   });
 
+  it("sanitizes credentials in common infrastructure URL schemes", () => {
+    for (const scheme of [
+      "postgres",
+      "postgresql",
+      "redis",
+      "rediss",
+      "sftp",
+      "ftp",
+      "ftps",
+      "mysql",
+      "mariadb",
+      "mongodb",
+      "mongodb+srv",
+      "amqp",
+      "amqps",
+      "smtp",
+      "smtps",
+      "nats"
+    ]) {
+      const secret = `${scheme}-diagnostic-secret`;
+      const input = `Failed ${scheme}://service:${secret}@infra.example.test:5432/database?token=${secret}`;
+      const sanitized = String(sanitizeUrlDiagnosticText(input));
+      expect(sanitized, scheme).toBe(`Failed ${scheme}://infra.example.test:5432/database`);
+      expect(sanitized, scheme).not.toContain(secret);
+    }
+  });
+
+  it("sanitizes credential-bearing custom hierarchical schemes without treating prose labels as URLs", () => {
+    const secret = "custom-scheme-secret";
+    expect(sanitizeUrlDiagnosticText(
+      `Connector: custom+driver://user:${secret}@connector.example.test/path#${secret}`
+    )).toBe("Connector: custom+driver://connector.example.test/path");
+    expect(sanitizeUrlDiagnosticText("Error: ordinary diagnostic text")).toBe(
+      "Error: ordinary diagnostic text"
+    );
+  });
+
   it.each([
     ["single quote", "https://u:'single-quote-secret@h.test/p", "single-quote-secret"],
     ["double quote", "https://u:\"double-quote-secret@h.test/p", "double-quote-secret"],

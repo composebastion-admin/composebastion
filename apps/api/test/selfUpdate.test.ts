@@ -5,7 +5,10 @@ const getHost = vi.fn();
 const runSshCommand = vi.fn();
 const writeRemoteFile = vi.fn();
 const query = vi.fn();
+const withTransaction = vi.fn();
 const enqueueJob = vi.fn();
+const enqueueJobInTransaction = vi.fn();
+const notifyJobQueued = vi.fn();
 
 vi.mock("../src/services/hosts.js", () => ({
   getHost: (...args: unknown[]) => getHost(...args),
@@ -18,7 +21,8 @@ vi.mock("../src/services/ssh.js", () => ({
 }));
 
 vi.mock("../src/db/pool.js", () => ({
-  query: (...args: unknown[]) => query(...args)
+  query: (...args: unknown[]) => query(...args),
+  withTransaction: (...args: unknown[]) => withTransaction(...args)
 }));
 
 vi.mock("../src/services/redis.js", () => ({
@@ -27,7 +31,9 @@ vi.mock("../src/services/redis.js", () => ({
 
 vi.mock("../src/services/jobs.js", () => ({
   buildJobProgress: (type: string, phase: string) => [{ id: "reconnect", label: "Reconnect", status: phase === "completed" ? "completed" : phase === "failed" ? "failed" : "running" }],
-  enqueueJob: (...args: unknown[]) => enqueueJob(...args)
+  enqueueJob: (...args: unknown[]) => enqueueJob(...args),
+  enqueueJobInTransaction: (...args: unknown[]) => enqueueJobInTransaction(...args),
+  notifyJobQueued: (...args: unknown[]) => notifyJobQueued(...args)
 }));
 
 const hostId = "11111111-1111-4111-8111-111111111111";
@@ -46,6 +52,9 @@ describe("self update service", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     enqueueJob.mockReset();
+    enqueueJobInTransaction.mockReset();
+    notifyJobQueued.mockReset();
+    withTransaction.mockReset();
     query.mockReset();
     getHost.mockReset();
     getHostForWorker.mockResolvedValue(sshHost());
@@ -54,6 +63,10 @@ describe("self update service", () => {
       .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
       .mockResolvedValueOnce({ code: 0, stdout: "4242\n", stderr: "" });
     writeRemoteFile.mockResolvedValue(undefined);
+    withTransaction.mockImplementation(async (callback: (client: unknown) => Promise<unknown>) => (
+      callback({ query })
+    ));
+    notifyJobQueued.mockResolvedValue(undefined);
   });
 
   it("writes and starts a detached host-side self-update script", async () => {
@@ -151,6 +164,94 @@ describe("self update service", () => {
     await expect(enqueueSelfUpdate({ targetVersion: "nightly" }, "user-1"))
       .rejects.toMatchObject({ statusCode: 400 });
     expect(enqueueJob).not.toHaveBeenCalled();
+  });
+
+  it("runs self-update configuration persistence and audit on one transaction client", async () => {
+    query
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+    const auditFailure = new Error("audit insert failed");
+    const onChanged = vi.fn(async (client: { query: typeof query }) => {
+      expect(client.query).toBe(query);
+      throw auditFailure;
+    });
+    const { saveSelfUpdateConfig } = await import("../src/services/selfUpdate.js");
+
+    await expect(saveSelfUpdateConfig({
+      workingDir: "/srv/composebastion",
+      composeFile: "docker-compose.image.yml"
+    }, onChanged)).rejects.toBe(auditFailure);
+
+    expect(query.mock.calls[1]?.[0]).toContain("INSERT INTO system_settings");
+    expect(onChanged).toHaveBeenCalledWith(
+      expect.objectContaining({ query }),
+      expect.objectContaining({ workingDir: "/srv/composebastion" })
+    );
+  });
+
+  it("commits the self-update job and audit callback in one transaction", async () => {
+    query.mockResolvedValueOnce({
+      rows: [{
+        value: {
+          hostId,
+          workingDir: "/srv/composebastion",
+          composeFile: "docker-compose.image.yml",
+          versionMode: "pinned",
+          targetVersion: "1.2.0"
+        }
+      }]
+    });
+    enqueueJobInTransaction.mockResolvedValueOnce({ id: jobId, hostId });
+    const onQueued = vi.fn(async () => undefined);
+    const { enqueueSelfUpdate } = await import("../src/services/selfUpdate.js");
+
+    await expect(enqueueSelfUpdate({ targetVersion: "1.2.0" }, "user-1", onQueued))
+      .resolves.toMatchObject({ id: jobId, hostId });
+
+    expect(withTransaction).toHaveBeenCalledTimes(1);
+    expect(enqueueJobInTransaction).toHaveBeenCalledWith(
+      expect.objectContaining({ query }),
+      expect.objectContaining({
+        type: "system.self_update",
+        hostId,
+        payload: expect.objectContaining({ targetVersion: "1.2.0" })
+      }),
+      "user-1"
+    );
+    expect(onQueued).toHaveBeenCalledWith(
+      expect.objectContaining({ query }),
+      expect.objectContaining({ id: jobId, hostId })
+    );
+    expect(notifyJobQueued).toHaveBeenCalledWith(jobId);
+    expect(enqueueJob).not.toHaveBeenCalled();
+  });
+
+  it("does not publish a self-update job when its transactional audit callback fails", async () => {
+    query.mockResolvedValueOnce({
+      rows: [{
+        value: {
+          hostId,
+          workingDir: "/srv/composebastion",
+          composeFile: "docker-compose.image.yml",
+          versionMode: "pinned",
+          targetVersion: "1.2.0"
+        }
+      }]
+    });
+    enqueueJobInTransaction.mockResolvedValueOnce({ id: jobId, hostId });
+    const auditFailure = new Error("audit insert failed");
+    const { enqueueSelfUpdate } = await import("../src/services/selfUpdate.js");
+
+    await expect(enqueueSelfUpdate(
+      { targetVersion: "1.2.0" },
+      "user-1",
+      async () => {
+        throw auditFailure;
+      }
+    )).rejects.toBe(auditFailure);
+
+    expect(withTransaction).toHaveBeenCalledTimes(1);
+    expect(notifyJobQueued).not.toHaveBeenCalled();
   });
 
   it("compares semantic versions without treating older releases as updates", async () => {

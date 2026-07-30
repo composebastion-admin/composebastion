@@ -198,26 +198,26 @@ export function HostFilesPanel({
       </div>
       <div className="formHint">Browse your Docker host, create project folders, clone repos, edit small text files, and deploy Compose files from their real folder. Folder deploys are tracked as compose stacks with version history. Private GitHub clones use read-only deploy keys configured on the host.</div>
       {!supported && (
-        <div className="notice error">File browsing requires an SSH host. Agent hosts cannot browse host files yet.</div>
+        <div className="notice error" role="alert">File browsing requires an SSH host. Agent hosts cannot browse host files yet.</div>
       )}
-      {loadError && <div className="notice error">{loadError}</div>}
+      {loadError && <div className="notice error" role="alert">{loadError}</div>}
       {supported && (
         <>
-      <form className="inlineForm" onSubmit={(event) => { event.preventDefault(); void action.run(() => loadDirectory(directoryPath)); }}>
+      <form className="inlineForm" onSubmit={(event) => { event.preventDefault(); void action.run(() => loadDirectory(directoryPath)).catch(() => undefined); }}>
         <input className="monoText" value={directoryPath} onChange={(event) => setDirectoryPath(event.target.value)} />
         <button className="primary"><RefreshCw size={18} />Open</button>
         <button type="button" onClick={newComposeFile}><FilePlus size={18} />New Compose File</button>
-        {directory?.parent && <button type="button" onClick={() => void action.run(() => loadDirectory(directory.parent!))}>Up</button>}
+        {directory?.parent && <button type="button" onClick={() => void action.run(() => loadDirectory(directory.parent!)).catch(() => undefined)}>Up</button>}
       </form>
 
       <div className="two">
-        <form className="subPanel composeForm" onSubmit={createFolder}>
+        <form className="subPanel composeForm" onSubmit={(event) => void createFolder(event).catch(() => undefined)}>
           <h3>Create Folder</h3>
           <input className="monoText" value={newFolderPath} onChange={(event) => setNewFolderPath(event.target.value)} />
           <button className="primary" disabled={action.busy}><Plus size={18} />Create Folder</button>
         </form>
 
-        <form className="subPanel composeForm" onSubmit={cloneRepository}>
+        <form className="subPanel composeForm" onSubmit={(event) => void cloneRepository(event).catch(() => undefined)}>
           <h3>Clone Repository</h3>
           <input placeholder="https://github.com/owner/repo.git or git@github.com:owner/repo.git" value={cloneForm.repositoryUrl} onChange={(event) => setCloneForm({ ...cloneForm, repositoryUrl: event.target.value })} required />
           <input className="monoText" placeholder="/home/user/app" value={cloneForm.directory} onChange={(event) => setCloneForm({ ...cloneForm, directory: event.target.value })} required />
@@ -229,7 +229,7 @@ export function HostFilesPanel({
         </form>
       </div>
 
-      <form className="subPanel composeForm" onSubmit={deployFromFolder}>
+      <form className="subPanel composeForm" onSubmit={(event) => void deployFromFolder(event).catch(() => undefined)}>
         <h3>Deploy Compose From Folder</h3>
         <div className="three">
           <input className="monoText" placeholder="/home/user/app" value={deployForm.workingDir} onChange={(event) => setDeployForm({ ...deployForm, workingDir: event.target.value })} required />
@@ -240,7 +240,7 @@ export function HostFilesPanel({
       </form>
 
       {editor && (
-        <form className="subPanel composeForm" onSubmit={saveFile}>
+        <form className="subPanel composeForm" onSubmit={(event) => void saveFile(event).catch(() => undefined)}>
           <div className="panelHeader">
             <h3>Edit {remoteBaseName(editor.path)}</h3>
             <button type="button" onClick={() => setEditor(null)}><X size={16} />Close</button>
@@ -250,23 +250,23 @@ export function HostFilesPanel({
           <ButtonRow>
             <button className="primary" disabled={action.busy}><Save size={18} />Save File</button>
             {isComposeFilePath(editor.path) && (
-              <button type="button" className="primary" disabled={action.busy} onClick={() => void saveAndDeployFile()}><Play size={18} />Save &amp; Deploy</button>
+              <button type="button" className="primary" disabled={action.busy} onClick={() => void saveAndDeployFile().catch(() => undefined)}><Play size={18} />Save &amp; Deploy</button>
             )}
           </ButtonRow>
         </form>
       )}
 
-      {action.error && <div className="notice error">{action.error}</div>}
+      {action.error && <div className="notice error" role="alert">{action.error}</div>}
       <DataTable
         rows={(directory?.entries ?? []).map((entry) => ({ ...entry, id: entry.path }))}
         columns={["Name", "Type", "Size", "Modified", "Actions"]}
         render={(entry) => [
-          entry.type === "directory" ? <button className="linkButton" onClick={() => void action.run(() => loadDirectory(entry.path))}>{entry.name}</button> : <code>{entry.name}</code>,
+          entry.type === "directory" ? <button className="linkButton" onClick={() => void action.run(() => loadDirectory(entry.path)).catch(() => undefined)}>{entry.name}</button> : <code>{entry.name}</code>,
           entry.type,
           entry.type === "directory" ? "" : formatBytes(entry.size),
           entry.modified,
           <ButtonRow key="actions">
-            {entry.type === "directory" ? <button onClick={() => void action.run(() => loadDirectory(entry.path))}>Open</button> : <button onClick={() => void openFile(entry.path)}><Pencil size={16} />Edit</button>}
+            {entry.type === "directory" ? <button onClick={() => void action.run(() => loadDirectory(entry.path)).catch(() => undefined)}>Open</button> : <button onClick={() => void openFile(entry.path).catch(() => undefined)}><Pencil size={16} />Edit</button>}
             {entry.type !== "directory" && isComposeFilePath(entry.path) && <button onClick={() => useAsCompose(entry.path)}><Database size={16} />Use Compose</button>}
           </ButtonRow>
         ]}

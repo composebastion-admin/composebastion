@@ -65,4 +65,26 @@ describe("demo host identity serialization", () => {
     expect(configSource.match(/await lockHostIdentityScope\(client\)/g)).toHaveLength(1);
     expect(demoSource.match(/await lockHostIdentityScope\(client\)/g)).toHaveLength(1);
   });
+
+  it("seeds the demo SMB target in the canonical confined worker shape", async () => {
+    const source = await readFile(
+      new URL("../src/services/demo.ts", import.meta.url),
+      "utf8"
+    );
+    const smbStart = source.indexOf('key: "smb"');
+    const smbEnd = source.indexOf('key: "s3"', smbStart);
+    const smbSource = source.slice(smbStart, smbEnd);
+
+    expect(smbStart).toBeGreaterThanOrEqual(0);
+    expect(smbEnd).toBeGreaterThan(smbStart);
+    expect(smbSource).toContain('remoteName: "demo-smb"');
+    expect(smbSource.match(/remotePath: "composebastion\/showcase"/g)).toHaveLength(2);
+    expect(smbSource).toContain('share: "composebastion"');
+    expect(smbSource).toContain('subPath: "showcase"');
+    expect(smbSource).toContain('username: "demo"');
+    expect(smbSource).toContain("genericConfig: null");
+    expect(smbSource).toContain('encryptSecret(JSON.stringify({ password: "demo" }))');
+    expect(smbSource).not.toContain("demo-smb:composebastion/showcase");
+    expect(smbSource).not.toContain("type = smb");
+  });
 });

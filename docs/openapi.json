@@ -1972,6 +1972,14 @@
                     "maxLength": 1024,
                     "pattern": "^(?=.*\\S)[^\\u0000-\\u001F\\u007F]+$",
                     "description": "Absolute or working-directory-relative Compose file path without control characters."
+                  },
+                  "gitPullBeforeDeploy": {
+                    "type": "boolean"
+                  },
+                  "branch": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 255
                   }
                 }
               }
@@ -2783,7 +2791,11 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "minLength": 1,
+            "maxLength": 120,
+            "pattern": "^(?![- ])(?!.* $)[\\p{L}\\p{N}_.+@ \\-]+$",
+            "description": "Rclone remote name using Unicode letters and numbers, spaces, _, -, ., +, and @; it cannot start with a hyphen or space or end with a space."
           },
           "localCachePolicy": {
             "type": "string",
@@ -2839,6 +2851,2725 @@
             "format": "date-time"
           }
         }
+      },
+      "BackupTargetS3ConfigRequest": {
+        "type": "object",
+        "required": [
+          "endpoint",
+          "bucket"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "endpoint": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://",
+            "description": "HTTP(S) S3-compatible endpoint with a hostname and without credentials, query parameters, or a fragment."
+          },
+          "bucket": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "region": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "prefix": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "pathStyle": {
+            "type": "boolean",
+            "default": false
+          },
+          "forcePathStyle": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
+      "BackupTargetSmbConnectionRequest": {
+        "type": "object",
+        "required": [
+          "server",
+          "share"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "server": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "share": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255,
+            "pattern": "^(?!\\.{1,2}$)(?!\\s)(?!.*\\s$)[^\\u0000-\\u001F\\u007F:/\\\\]+$",
+            "description": "One SMB share name without path separators, a drive prefix, control characters, or leading/trailing whitespace."
+          },
+          "subPath": {
+            "type": "string",
+            "maxLength": 512,
+            "pattern": "^(?!/)(?!.*\\/$)(?!.*(?:^|/)(?:\\.{1,2})(?:/|$))(?!.*(?:^|/)\\s)(?!.*\\s(?:/|$))(?!.*//)[^\\u0000-\\u001F\\u007F:\\\\]*$",
+            "description": "Optional relative SMB path made of non-empty segments; '.', '..', control characters, colons, backslashes, and segment-edge whitespace are rejected."
+          },
+          "domain": {
+            "type": "string",
+            "maxLength": 255
+          },
+          "username": {
+            "type": "string",
+            "maxLength": 255
+          },
+          "password": {
+            "type": "string",
+            "writeOnly": true
+          },
+          "port": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
+              },
+              {
+                "type": "string",
+                "pattern": "^(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$"
+              }
+            ],
+            "description": "TCP port from 1 through 65535. Numeric strings are accepted for form/API compatibility."
+          }
+        }
+      },
+      "BackupTargetRcloneConfigRequest": {
+        "type": "object",
+        "required": [
+          "provider"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "smb",
+              "drive",
+              "onedrive",
+              "iclouddrive",
+              "webdav",
+              "sftp",
+              "custom"
+            ]
+          },
+          "remotePath": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "remoteName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "pattern": "^(?![- ])(?!.* $)[\\p{L}\\p{N}_.+@ \\-]+$",
+            "description": "Rclone remote name using Unicode letters and numbers, spaces, _, -, ., +, and @; it cannot start with a hyphen or space or end with a space."
+          },
+          "rcloneConfig": {
+            "type": "string",
+            "minLength": 1,
+            "writeOnly": true
+          },
+          "smb": {
+            "type": "object",
+            "required": [
+              "server",
+              "share"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "server": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 255
+              },
+              "share": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 255,
+                "pattern": "^(?!\\.{1,2}$)(?!\\s)(?!.*\\s$)[^\\u0000-\\u001F\\u007F:/\\\\]+$",
+                "description": "One SMB share name without path separators, a drive prefix, control characters, or leading/trailing whitespace."
+              },
+              "subPath": {
+                "type": "string",
+                "maxLength": 512,
+                "pattern": "^(?!/)(?!.*\\/$)(?!.*(?:^|/)(?:\\.{1,2})(?:/|$))(?!.*(?:^|/)\\s)(?!.*\\s(?:/|$))(?!.*//)[^\\u0000-\\u001F\\u007F:\\\\]*$",
+                "description": "Optional relative SMB path made of non-empty segments; '.', '..', control characters, colons, backslashes, and segment-edge whitespace are rejected."
+              },
+              "domain": {
+                "type": "string",
+                "maxLength": 255
+              },
+              "username": {
+                "type": "string",
+                "maxLength": 255
+              },
+              "password": {
+                "type": "string",
+                "writeOnly": true
+              },
+              "port": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 65535
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$"
+                  }
+                ],
+                "description": "TCP port from 1 through 65535. Numeric strings are accepted for form/API compatibility."
+              }
+            }
+          }
+        }
+      },
+      "BackupTargetLocalCreateRequest": {
+        "anyOf": [
+          {
+            "type": "object",
+            "required": [
+              "name",
+              "type"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "localCachePolicy": {
+                "type": "string",
+                "const": "keep",
+                "default": "keep"
+              },
+              "type": {
+                "type": "string",
+                "const": "local"
+              },
+              "kind": {
+                "type": "string",
+                "const": "local"
+              },
+              "config": {
+                "type": "object",
+                "required": [],
+                "additionalProperties": false,
+                "properties": {}
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "name",
+              "kind"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "localCachePolicy": {
+                "type": "string",
+                "enum": [
+                  "keep",
+                  "remote_only"
+                ],
+                "default": "keep"
+              },
+              "type": {
+                "type": "string",
+                "const": "local"
+              },
+              "kind": {
+                "type": "string",
+                "const": "local"
+              },
+              "config": {
+                "type": "object",
+                "required": [],
+                "additionalProperties": false,
+                "properties": {}
+              }
+            }
+          }
+        ]
+      },
+      "BackupTargetS3CreateRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "accessKeyId",
+          "secretAccessKey"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "localCachePolicy": {
+            "type": "string",
+            "enum": [
+              "keep",
+              "remote_only"
+            ],
+            "default": "keep"
+          },
+          "type": {
+            "type": "string",
+            "const": "s3"
+          },
+          "kind": {
+            "type": "string",
+            "const": "s3"
+          },
+          "endpoint": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://",
+            "description": "HTTP(S) S3-compatible endpoint with a hostname and without credentials, query parameters, or a fragment."
+          },
+          "bucket": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "region": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "prefix": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "forcePathStyle": {
+            "type": "boolean",
+            "default": false
+          },
+          "accessKeyId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "secretAccessKey": {
+            "type": "string",
+            "minLength": 1,
+            "writeOnly": true
+          },
+          "config": {
+            "type": "object",
+            "required": [
+              "endpoint",
+              "bucket"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "endpoint": {
+                "type": "string",
+                "format": "uri",
+                "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://",
+                "description": "HTTP(S) S3-compatible endpoint with a hostname and without credentials, query parameters, or a fragment."
+              },
+              "bucket": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 255
+              },
+              "region": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "prefix": {
+                "type": "string",
+                "maxLength": 512
+              },
+              "pathStyle": {
+                "type": "boolean",
+                "default": false
+              },
+              "forcePathStyle": {
+                "type": "boolean",
+                "default": false
+              }
+            }
+          }
+        },
+        "anyOf": [
+          {
+            "required": [
+              "type",
+              "endpoint",
+              "bucket"
+            ]
+          },
+          {
+            "required": [
+              "kind",
+              "config"
+            ]
+          }
+        ]
+      },
+      "BackupTargetSmbCreateFlatRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "type",
+          "provider"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "localCachePolicy": {
+            "type": "string",
+            "enum": [
+              "keep",
+              "remote_only"
+            ],
+            "default": "keep"
+          },
+          "type": {
+            "type": "string",
+            "const": "rclone"
+          },
+          "kind": {
+            "type": "string",
+            "const": "rclone"
+          },
+          "provider": {
+            "type": "string",
+            "const": "smb"
+          },
+          "remotePath": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "description": "Accepted for compatibility; SMB storage is confined to share/subPath."
+          },
+          "remoteName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "pattern": "^(?![- ])(?!.* $)[\\p{L}\\p{N}_.+@ \\-]+$",
+            "description": "Rclone remote name using Unicode letters and numbers, spaces, _, -, ., +, and @; it cannot start with a hyphen or space or end with a space."
+          },
+          "server": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "share": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255,
+            "pattern": "^(?!\\.{1,2}$)(?!\\s)(?!.*\\s$)[^\\u0000-\\u001F\\u007F:/\\\\]+$",
+            "description": "One SMB share name without path separators, a drive prefix, control characters, or leading/trailing whitespace."
+          },
+          "subPath": {
+            "type": "string",
+            "maxLength": 512,
+            "pattern": "^(?!/)(?!.*\\/$)(?!.*(?:^|/)(?:\\.{1,2})(?:/|$))(?!.*(?:^|/)\\s)(?!.*\\s(?:/|$))(?!.*//)[^\\u0000-\\u001F\\u007F:\\\\]*$",
+            "description": "Optional relative SMB path made of non-empty segments; '.', '..', control characters, colons, backslashes, and segment-edge whitespace are rejected."
+          },
+          "domain": {
+            "type": "string",
+            "maxLength": 255
+          },
+          "username": {
+            "type": "string",
+            "maxLength": 255
+          },
+          "password": {
+            "type": "string",
+            "writeOnly": true
+          },
+          "port": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
+              },
+              {
+                "type": "string",
+                "pattern": "^(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$"
+              }
+            ],
+            "description": "TCP port from 1 through 65535. Numeric strings are accepted for form/API compatibility."
+          },
+          "config": {
+            "type": "object",
+            "required": [
+              "provider"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "provider": {
+                "type": "string",
+                "const": "smb"
+              },
+              "remotePath": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024,
+                "description": "Accepted for input compatibility; the server derives the authoritative SMB path from share and subPath."
+              },
+              "remoteName": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120,
+                "pattern": "^(?![- ])(?!.* $)[\\p{L}\\p{N}_.+@ \\-]+$",
+                "description": "Rclone remote name using Unicode letters and numbers, spaces, _, -, ., +, and @; it cannot start with a hyphen or space or end with a space."
+              },
+              "smb": {
+                "type": "object",
+                "required": [
+                  "server",
+                  "share"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "server": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 255
+                  },
+                  "share": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 255,
+                    "pattern": "^(?!\\.{1,2}$)(?!\\s)(?!.*\\s$)[^\\u0000-\\u001F\\u007F:/\\\\]+$",
+                    "description": "One SMB share name without path separators, a drive prefix, control characters, or leading/trailing whitespace."
+                  },
+                  "subPath": {
+                    "type": "string",
+                    "maxLength": 512,
+                    "pattern": "^(?!/)(?!.*\\/$)(?!.*(?:^|/)(?:\\.{1,2})(?:/|$))(?!.*(?:^|/)\\s)(?!.*\\s(?:/|$))(?!.*//)[^\\u0000-\\u001F\\u007F:\\\\]*$",
+                    "description": "Optional relative SMB path made of non-empty segments; '.', '..', control characters, colons, backslashes, and segment-edge whitespace are rejected."
+                  },
+                  "domain": {
+                    "type": "string",
+                    "maxLength": 255
+                  },
+                  "username": {
+                    "type": "string",
+                    "maxLength": 255
+                  },
+                  "password": {
+                    "type": "string",
+                    "writeOnly": true
+                  },
+                  "port": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 65535
+                      },
+                      {
+                        "type": "string",
+                        "pattern": "^(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$"
+                      }
+                    ],
+                    "description": "TCP port from 1 through 65535. Numeric strings are accepted for form/API compatibility."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "anyOf": [
+          {
+            "required": [
+              "server",
+              "share"
+            ]
+          },
+          {
+            "required": [
+              "config"
+            ],
+            "properties": {
+              "config": {
+                "allOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "provider"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "provider": {
+                        "type": "string",
+                        "const": "smb"
+                      },
+                      "remotePath": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1024,
+                        "description": "Accepted for input compatibility; the server derives the authoritative SMB path from share and subPath."
+                      },
+                      "remoteName": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 120,
+                        "pattern": "^(?![- ])(?!.* $)[\\p{L}\\p{N}_.+@ \\-]+$",
+                        "description": "Rclone remote name using Unicode letters and numbers, spaces, _, -, ., +, and @; it cannot start with a hyphen or space or end with a space."
+                      },
+                      "smb": {
+                        "type": "object",
+                        "required": [
+                          "server",
+                          "share"
+                        ],
+                        "additionalProperties": false,
+                        "properties": {
+                          "server": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 255
+                          },
+                          "share": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 255,
+                            "pattern": "^(?!\\.{1,2}$)(?!\\s)(?!.*\\s$)[^\\u0000-\\u001F\\u007F:/\\\\]+$",
+                            "description": "One SMB share name without path separators, a drive prefix, control characters, or leading/trailing whitespace."
+                          },
+                          "subPath": {
+                            "type": "string",
+                            "maxLength": 512,
+                            "pattern": "^(?!/)(?!.*\\/$)(?!.*(?:^|/)(?:\\.{1,2})(?:/|$))(?!.*(?:^|/)\\s)(?!.*\\s(?:/|$))(?!.*//)[^\\u0000-\\u001F\\u007F:\\\\]*$",
+                            "description": "Optional relative SMB path made of non-empty segments; '.', '..', control characters, colons, backslashes, and segment-edge whitespace are rejected."
+                          },
+                          "domain": {
+                            "type": "string",
+                            "maxLength": 255
+                          },
+                          "username": {
+                            "type": "string",
+                            "maxLength": 255
+                          },
+                          "password": {
+                            "type": "string",
+                            "writeOnly": true
+                          },
+                          "port": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 65535
+                              },
+                              {
+                                "type": "string",
+                                "pattern": "^(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$"
+                              }
+                            ],
+                            "description": "TCP port from 1 through 65535. Numeric strings are accepted for form/API compatibility."
+                          }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "smb"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "BackupTargetSmbCreateNestedRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "kind",
+          "config"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "localCachePolicy": {
+            "type": "string",
+            "enum": [
+              "keep",
+              "remote_only"
+            ],
+            "default": "keep"
+          },
+          "type": {
+            "type": "string",
+            "const": "rclone"
+          },
+          "kind": {
+            "type": "string",
+            "const": "rclone"
+          },
+          "provider": {
+            "type": "string",
+            "const": "smb"
+          },
+          "remotePath": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "description": "Accepted for compatibility; SMB storage is confined to config.smb.share/subPath."
+          },
+          "config": {
+            "allOf": [
+              {
+                "type": "object",
+                "required": [
+                  "provider"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "provider": {
+                    "type": "string",
+                    "const": "smb"
+                  },
+                  "remotePath": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024,
+                    "description": "Accepted for input compatibility; the server derives the authoritative SMB path from share and subPath."
+                  },
+                  "remoteName": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120,
+                    "pattern": "^(?![- ])(?!.* $)[\\p{L}\\p{N}_.+@ \\-]+$",
+                    "description": "Rclone remote name using Unicode letters and numbers, spaces, _, -, ., +, and @; it cannot start with a hyphen or space or end with a space."
+                  },
+                  "smb": {
+                    "type": "object",
+                    "required": [
+                      "server",
+                      "share"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "server": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 255
+                      },
+                      "share": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 255,
+                        "pattern": "^(?!\\.{1,2}$)(?!\\s)(?!.*\\s$)[^\\u0000-\\u001F\\u007F:/\\\\]+$",
+                        "description": "One SMB share name without path separators, a drive prefix, control characters, or leading/trailing whitespace."
+                      },
+                      "subPath": {
+                        "type": "string",
+                        "maxLength": 512,
+                        "pattern": "^(?!/)(?!.*\\/$)(?!.*(?:^|/)(?:\\.{1,2})(?:/|$))(?!.*(?:^|/)\\s)(?!.*\\s(?:/|$))(?!.*//)[^\\u0000-\\u001F\\u007F:\\\\]*$",
+                        "description": "Optional relative SMB path made of non-empty segments; '.', '..', control characters, colons, backslashes, and segment-edge whitespace are rejected."
+                      },
+                      "domain": {
+                        "type": "string",
+                        "maxLength": 255
+                      },
+                      "username": {
+                        "type": "string",
+                        "maxLength": 255
+                      },
+                      "password": {
+                        "type": "string",
+                        "writeOnly": true
+                      },
+                      "port": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 65535
+                          },
+                          {
+                            "type": "string",
+                            "pattern": "^(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$"
+                          }
+                        ],
+                        "description": "TCP port from 1 through 65535. Numeric strings are accepted for form/API compatibility."
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "required": [
+                  "smb"
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "BackupTargetImportedCreateFlatRequest": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "name",
+              "type",
+              "provider"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "localCachePolicy": {
+                "type": "string",
+                "enum": [
+                  "keep",
+                  "remote_only"
+                ],
+                "default": "keep"
+              },
+              "type": {
+                "type": "string",
+                "const": "rclone"
+              },
+              "kind": {
+                "type": "string",
+                "const": "rclone"
+              },
+              "provider": {
+                "type": "string",
+                "const": "drive"
+              },
+              "remotePath": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              "remoteName": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120,
+                "pattern": "^(?![- ])(?!.* $)[\\p{L}\\p{N}_.+@ \\-]+$",
+                "description": "Rclone remote name using Unicode letters and numbers, spaces, _, -, ., +, and @; it cannot start with a hyphen or space or end with a space."
+              },
+              "rcloneConfig": {
+                "type": "string",
+                "minLength": 1,
+                "writeOnly": true
+              },
+              "config": {
+                "type": "object",
+                "required": [
+                  "provider"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "provider": {
+                    "type": "string",
+                    "const": "drive"
+                  },
+                  "remotePath": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "remoteName": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120,
+                    "pattern": "^(?![- ])(?!.* $)[\\p{L}\\p{N}_.+@ \\-]+$",
+                    "description": "Rclone remote name using Unicode letters and numbers, spaces, _, -, ., +, and @; it cannot start with a hyphen or space or end with a space."
+                  },
+                  "rcloneConfig": {
+                    "type": "string",
+                    "minLength": 1,
+                    "writeOnly": true,
+                    "description": "Imported rclone configuration text. Experimental providers require this value."
+                  }
+                }
+              }
+            },
+            "anyOf": [
+              {
+                "required": [
+                  "rcloneConfig"
+                ]
+              },
+              {
+                "required": [
+                  "config"
+                ],
+                "properties": {
+                  "config": {
+                    "type": "object",
+                    "required": [
+                      "provider",
+                      "rcloneConfig"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "provider": {
+                        "type": "string",
+                        "const": "drive"
+                      },
+                      "remotePath": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1024
+                      },
+                      "remoteName": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 120,
+                        "pattern": "^(?![- ])(?!.* $)[\\p{L}\\p{N}_.+@ \\-]+$",
+                        "description": "Rclone remote name using Unicode letters and numbers, spaces, _, -, ., +, and @; it cannot start with a hyphen or space or end with a space."
+                      },
+                      "rcloneConfig": {
+                        "type": "string",
+                        "minLength": 1,
+                        "writeOnly": true,
+                        "description": "Imported rclone configuration text. Experimental providers require this value."
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "type": "object",
+            "required": [
+              "name",
+              "type",
+              "provider"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "localCachePolicy": {
+                "type": "string",
+                "enum": [
+                  "keep",
+                  "remote_only"
+                ],
+                "default": "keep"
+              },
+              "type": {
+                "type": "string",
+                "const": "rclone"
+              },
+              "kind": {
+                "type": "string",
+                "const": "rclone"
+              },
+              "provider": {
+                "type": "string",
+                "const": "onedrive"
+              },
+              "remotePath": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              "remoteName": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120,
+                "pattern": "^(?![- ])(?!.* $)[\\p{L}\\p{N}_.+@ \\-]+$",
+                "description": "Rclone remote name using Unicode letters and numbers, spaces, _, -, ., +, and @; it cannot start with a hyphen or space or end with a space."
+              },
+              "rcloneConfig": {
+                "type": "string",
+                "minLength": 1,
+                "writeOnly": true
+              },
+              "config": {
+                "type": "object",
+                "required": [
+                  "provider"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "provider": {
+                    "type": "string",
+                    "const": "onedrive"
+                  },
+                  "remotePath": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "remoteName": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120,
+                    "pattern": "^(?![- ])(?!.* $)[\\p{L}\\p{N}_.+@ \\-]+$",
+                    "description": "Rclone remote name using Unicode letters and numbers, spaces, _, -, ., +, and @; it cannot start with a hyphen or space or end with a space."
+                  },
+                  "rcloneConfig": {
+                    "type": "string",
+                    "minLength": 1,
+                    "writeOnly": true,
+                    "description": "Imported rclone configuration text. Experimental providers require this value."
+                  }
+                }
+              }
+            },
+            "anyOf": [
+              {
+                "required": [
+                  "rcloneConfig"
+                ]
+              },
+              {
+                "required": [
+                  "config"
+                ],
+                "properties": {
+                  "config": {
+                    "type": "object",
+                    "required": [
+                      "provider",
+                      "rcloneConfig"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "provider": {
+                        "type": "string",
+                        "const": "onedrive"
+                      },
+                      "remotePath": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1024
+                      },
+                      "remoteName": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 120,
+                        "pattern": "^(?![- ])(?!.* $)[\\p{L}\\p{N}_.+@ \\-]+$",
+                        "description": "Rclone remote name using Unicode letters and numbers, spaces, _, -, ., +, and @; it cannot start with a hyphen or space or end with a space."
+                      },
+                      "rcloneConfig": {
+                        "type": "string",
+                        "minLength": 1,
+                        "writeOnly": true,
+                        "description": "Imported rclone configuration text. Experimental providers require this value."
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "type": "object",
+            "required": [
+              "name",
+              "type",
+              "provider"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "localCachePolicy": {
+                "type": "string",
+                "enum": [
+                  "keep",
+                  "remote_only"
+                ],
+                "default": "keep"
+              },
+              "type": {
+                "type": "string",
+                "const": "rclone"
+              },
+              "kind": {
+                "type": "string",
+                "const": "rclone"
+              },
+              "provider": {
+                "type": "string",
+                "const": "iclouddrive"
+              },
+              "remotePath": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              "remoteName": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120,
+                "pattern": "^(?![- ])(?!.* $)[\\p{L}\\p{N}_.+@ \\-]+$",
+                "description": "Rclone remote name using Unicode letters and numbers, spaces, _, -, ., +, and @; it cannot start with a hyphen or space or end with a space."
+              },
+              "rcloneConfig": {
+                "type": "string",
+                "minLength": 1,
+                "writeOnly": true
+              },
+              "config": {
+                "type": "object",
+                "required": [
+                  "provider"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "provider": {
+                    "type": "string",
+                    "const": "iclouddrive"
+                  },
+                  "remotePath": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "remoteName": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120,
+                    "pattern": "^(?![- ])(?!.* $)[\\p{L}\\p{N}_.+@ \\-]+$",
+                    "description": "Rclone remote name using Unicode letters and numbers, spaces, _, -, ., +, and @; it cannot start with a hyphen or space or end with a space."
+                  },
+                  "rcloneConfig": {
+                    "type": "string",
+                    "minLength": 1,
+                    "writeOnly": true,
+                    "description": "Imported rclone configuration text. Experimental providers require this value."
+                  }
+                }
+              }
+            },
+            "anyOf": [
+              {
+                "required": [
+                  "rcloneConfig"
+                ]
+              },
+              {
+                "required": [
+                  "config"
+                ],
+                "properties": {
+                  "config": {
+                    "type": "object",
+                    "required": [
+                      "provider",
+                      "rcloneConfig"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "provider": {
+                        "type": "string",
+                        "const": "iclouddrive"
+                      },
+                      "remotePath": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1024
+                      },
+                      "remoteName": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 120,
+                        "pattern": "^(?![- ])(?!.* $)[\\p{L}\\p{N}_.+@ \\-]+$",
+                        "description": "Rclone remote name using Unicode letters and numbers, spaces, _, -, ., +, and @; it cannot start with a hyphen or space or end with a space."
+                      },
+                      "rcloneConfig": {
+                        "type": "string",
+                        "minLength": 1,
+                        "writeOnly": true,
+                        "description": "Imported rclone configuration text. Experimental providers require this value."
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "type": "object",
+            "required": [
+              "name",
+              "type",
+              "provider"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "localCachePolicy": {
+                "type": "string",
+                "enum": [
+                  "keep",
+                  "remote_only"
+                ],
+                "default": "keep"
+              },
+              "type": {
+                "type": "string",
+                "const": "rclone"
+              },
+              "kind": {
+                "type": "string",
+                "const": "rclone"
+              },
+              "provider": {
+                "type": "string",
+                "const": "webdav"
+              },
+              "remotePath": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              "remoteName": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120,
+                "pattern": "^(?![- ])(?!.* $)[\\p{L}\\p{N}_.+@ \\-]+$",
+                "description": "Rclone remote name using Unicode letters and numbers, spaces, _, -, ., +, and @; it cannot start with a hyphen or space or end with a space."
+              },
+              "rcloneConfig": {
+                "type": "string",
+                "minLength": 1,
+                "writeOnly": true
+              },
+              "config": {
+                "type": "object",
+                "required": [
+                  "provider"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "provider": {
+                    "type": "string",
+                    "const": "webdav"
+                  },
+                  "remotePath": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "remoteName": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120,
+                    "pattern": "^(?![- ])(?!.* $)[\\p{L}\\p{N}_.+@ \\-]+$",
+                    "description": "Rclone remote name using Unicode letters and numbers, spaces, _, -, ., +, and @; it cannot start with a hyphen or space or end with a space."
+                  },
+                  "rcloneConfig": {
+                    "type": "string",
+                    "minLength": 1,
+                    "writeOnly": true,
+                    "description": "Imported rclone configuration text. Experimental providers require this value."
+                  }
+                }
+              }
+            },
+            "anyOf": [
+              {
+                "required": [
+                  "rcloneConfig"
+                ]
+              },
+              {
+                "required": [
+                  "config"
+                ],
+                "properties": {
+                  "config": {
+                    "type": "object",
+                    "required": [
+                      "provider",
+                      "rcloneConfig"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "provider": {
+                        "type": "string",
+                        "const": "webdav"
+                      },
+                      "remotePath": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1024
+                      },
+                      "remoteName": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 120,
+                        "pattern": "^(?![- ])(?!.* $)[\\p{L}\\p{N}_.+@ \\-]+$",
+                        "description": "Rclone remote name using Unicode letters and numbers, spaces, _, -, ., +, and @; it cannot start with a hyphen or space or end with a space."
+                      },
+                      "rcloneConfig": {
+                        "type": "string",
+                        "minLength": 1,
+                        "writeOnly": true,
+                        "description": "Imported rclone configuration text. Experimental providers require this value."
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "type": "object",
+            "required": [
+              "name",
+              "type",
+              "provider"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "localCachePolicy": {
+                "type": "string",
+                "enum": [
+                  "keep",
+                  "remote_only"
+                ],
+                "default": "keep"
+              },
+              "type": {
+                "type": "string",
+                "const": "rclone"
+              },
+              "kind": {
+                "type": "string",
+                "const": "rclone"
+              },
+              "provider": {
+                "type": "string",
+                "const": "sftp"
+              },
+              "remotePath": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              "remoteName": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120,
+                "pattern": "^(?![- ])(?!.* $)[\\p{L}\\p{N}_.+@ \\-]+$",
+                "description": "Rclone remote name using Unicode letters and numbers, spaces, _, -, ., +, and @; it cannot start with a hyphen or space or end with a space."
+              },
+              "rcloneConfig": {
+                "type": "string",
+                "minLength": 1,
+                "writeOnly": true
+              },
+              "config": {
+                "type": "object",
+                "required": [
+                  "provider"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "provider": {
+                    "type": "string",
+                    "const": "sftp"
+                  },
+                  "remotePath": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "remoteName": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120,
+                    "pattern": "^(?![- ])(?!.* $)[\\p{L}\\p{N}_.+@ \\-]+$",
+                    "description": "Rclone remote name using Unicode letters and numbers, spaces, _, -, ., +, and @; it cannot start with a hyphen or space or end with a space."
+                  },
+                  "rcloneConfig": {
+                    "type": "string",
+                    "minLength": 1,
+                    "writeOnly": true,
+                    "description": "Imported rclone configuration text. Experimental providers require this value."
+                  }
+                }
+              }
+            },
+            "anyOf": [
+              {
+                "required": [
+                  "rcloneConfig"
+                ]
+              },
+              {
+                "required": [
+                  "config"
+                ],
+                "properties": {
+                  "config": {
+                    "type": "object",
+                    "required": [
+                      "provider",
+                      "rcloneConfig"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "provider": {
+                        "type": "string",
+                        "const": "sftp"
+                      },
+                      "remotePath": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1024
+                      },
+                      "remoteName": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 120,
+                        "pattern": "^(?![- ])(?!.* $)[\\p{L}\\p{N}_.+@ \\-]+$",
+                        "description": "Rclone remote name using Unicode letters and numbers, spaces, _, -, ., +, and @; it cannot start with a hyphen or space or end with a space."
+                      },
+                      "rcloneConfig": {
+                        "type": "string",
+                        "minLength": 1,
+                        "writeOnly": true,
+                        "description": "Imported rclone configuration text. Experimental providers require this value."
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "type": "object",
+            "required": [
+              "name",
+              "type",
+              "provider"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "localCachePolicy": {
+                "type": "string",
+                "enum": [
+                  "keep",
+                  "remote_only"
+                ],
+                "default": "keep"
+              },
+              "type": {
+                "type": "string",
+                "const": "rclone"
+              },
+              "kind": {
+                "type": "string",
+                "const": "rclone"
+              },
+              "provider": {
+                "type": "string",
+                "const": "custom"
+              },
+              "remotePath": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              "remoteName": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120,
+                "pattern": "^(?![- ])(?!.* $)[\\p{L}\\p{N}_.+@ \\-]+$",
+                "description": "Rclone remote name using Unicode letters and numbers, spaces, _, -, ., +, and @; it cannot start with a hyphen or space or end with a space."
+              },
+              "rcloneConfig": {
+                "type": "string",
+                "minLength": 1,
+                "writeOnly": true
+              },
+              "config": {
+                "type": "object",
+                "required": [
+                  "provider"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "provider": {
+                    "type": "string",
+                    "const": "custom"
+                  },
+                  "remotePath": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "remoteName": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120,
+                    "pattern": "^(?![- ])(?!.* $)[\\p{L}\\p{N}_.+@ \\-]+$",
+                    "description": "Rclone remote name using Unicode letters and numbers, spaces, _, -, ., +, and @; it cannot start with a hyphen or space or end with a space."
+                  },
+                  "rcloneConfig": {
+                    "type": "string",
+                    "minLength": 1,
+                    "writeOnly": true,
+                    "description": "Imported rclone configuration text. Experimental providers require this value."
+                  }
+                }
+              }
+            },
+            "anyOf": [
+              {
+                "required": [
+                  "rcloneConfig"
+                ]
+              },
+              {
+                "required": [
+                  "config"
+                ],
+                "properties": {
+                  "config": {
+                    "type": "object",
+                    "required": [
+                      "provider",
+                      "rcloneConfig"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "provider": {
+                        "type": "string",
+                        "const": "custom"
+                      },
+                      "remotePath": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1024
+                      },
+                      "remoteName": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 120,
+                        "pattern": "^(?![- ])(?!.* $)[\\p{L}\\p{N}_.+@ \\-]+$",
+                        "description": "Rclone remote name using Unicode letters and numbers, spaces, _, -, ., +, and @; it cannot start with a hyphen or space or end with a space."
+                      },
+                      "rcloneConfig": {
+                        "type": "string",
+                        "minLength": 1,
+                        "writeOnly": true,
+                        "description": "Imported rclone configuration text. Experimental providers require this value."
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "BackupTargetImportedCreateNestedRequest": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "name",
+              "kind",
+              "config"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "localCachePolicy": {
+                "type": "string",
+                "enum": [
+                  "keep",
+                  "remote_only"
+                ],
+                "default": "keep"
+              },
+              "type": {
+                "type": "string",
+                "const": "rclone"
+              },
+              "kind": {
+                "type": "string",
+                "const": "rclone"
+              },
+              "provider": {
+                "type": "string",
+                "const": "drive"
+              },
+              "remotePath": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              "rcloneConfig": {
+                "type": "string",
+                "minLength": 1,
+                "writeOnly": true
+              },
+              "config": {
+                "type": "object",
+                "required": [
+                  "provider"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "provider": {
+                    "type": "string",
+                    "const": "drive"
+                  },
+                  "remotePath": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "remoteName": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120,
+                    "pattern": "^(?![- ])(?!.* $)[\\p{L}\\p{N}_.+@ \\-]+$",
+                    "description": "Rclone remote name using Unicode letters and numbers, spaces, _, -, ., +, and @; it cannot start with a hyphen or space or end with a space."
+                  },
+                  "rcloneConfig": {
+                    "type": "string",
+                    "minLength": 1,
+                    "writeOnly": true,
+                    "description": "Imported rclone configuration text. Experimental providers require this value."
+                  }
+                }
+              }
+            },
+            "anyOf": [
+              {
+                "required": [
+                  "rcloneConfig"
+                ]
+              },
+              {
+                "properties": {
+                  "config": {
+                    "type": "object",
+                    "required": [
+                      "provider",
+                      "rcloneConfig"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "provider": {
+                        "type": "string",
+                        "const": "drive"
+                      },
+                      "remotePath": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1024
+                      },
+                      "remoteName": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 120,
+                        "pattern": "^(?![- ])(?!.* $)[\\p{L}\\p{N}_.+@ \\-]+$",
+                        "description": "Rclone remote name using Unicode letters and numbers, spaces, _, -, ., +, and @; it cannot start with a hyphen or space or end with a space."
+                      },
+                      "rcloneConfig": {
+                        "type": "string",
+                        "minLength": 1,
+                        "writeOnly": true,
+                        "description": "Imported rclone configuration text. Experimental providers require this value."
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "type": "object",
+            "required": [
+              "name",
+              "kind",
+              "config"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "localCachePolicy": {
+                "type": "string",
+                "enum": [
+                  "keep",
+                  "remote_only"
+                ],
+                "default": "keep"
+              },
+              "type": {
+                "type": "string",
+                "const": "rclone"
+              },
+              "kind": {
+                "type": "string",
+                "const": "rclone"
+              },
+              "provider": {
+                "type": "string",
+                "const": "onedrive"
+              },
+              "remotePath": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              "rcloneConfig": {
+                "type": "string",
+                "minLength": 1,
+                "writeOnly": true
+              },
+              "config": {
+                "type": "object",
+                "required": [
+                  "provider"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "provider": {
+                    "type": "string",
+                    "const": "onedrive"
+                  },
+                  "remotePath": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "remoteName": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120,
+                    "pattern": "^(?![- ])(?!.* $)[\\p{L}\\p{N}_.+@ \\-]+$",
+                    "description": "Rclone remote name using Unicode letters and numbers, spaces, _, -, ., +, and @; it cannot start with a hyphen or space or end with a space."
+                  },
+                  "rcloneConfig": {
+                    "type": "string",
+                    "minLength": 1,
+                    "writeOnly": true,
+                    "description": "Imported rclone configuration text. Experimental providers require this value."
+                  }
+                }
+              }
+            },
+            "anyOf": [
+              {
+                "required": [
+                  "rcloneConfig"
+                ]
+              },
+              {
+                "properties": {
+                  "config": {
+                    "type": "object",
+                    "required": [
+                      "provider",
+                      "rcloneConfig"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "provider": {
+                        "type": "string",
+                        "const": "onedrive"
+                      },
+                      "remotePath": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1024
+                      },
+                      "remoteName": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 120,
+                        "pattern": "^(?![- ])(?!.* $)[\\p{L}\\p{N}_.+@ \\-]+$",
+                        "description": "Rclone remote name using Unicode letters and numbers, spaces, _, -, ., +, and @; it cannot start with a hyphen or space or end with a space."
+                      },
+                      "rcloneConfig": {
+                        "type": "string",
+                        "minLength": 1,
+                        "writeOnly": true,
+                        "description": "Imported rclone configuration text. Experimental providers require this value."
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "type": "object",
+            "required": [
+              "name",
+              "kind",
+              "config"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "localCachePolicy": {
+                "type": "string",
+                "enum": [
+                  "keep",
+                  "remote_only"
+                ],
+                "default": "keep"
+              },
+              "type": {
+                "type": "string",
+                "const": "rclone"
+              },
+              "kind": {
+                "type": "string",
+                "const": "rclone"
+              },
+              "provider": {
+                "type": "string",
+                "const": "iclouddrive"
+              },
+              "remotePath": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              "rcloneConfig": {
+                "type": "string",
+                "minLength": 1,
+                "writeOnly": true
+              },
+              "config": {
+                "type": "object",
+                "required": [
+                  "provider"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "provider": {
+                    "type": "string",
+                    "const": "iclouddrive"
+                  },
+                  "remotePath": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "remoteName": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120,
+                    "pattern": "^(?![- ])(?!.* $)[\\p{L}\\p{N}_.+@ \\-]+$",
+                    "description": "Rclone remote name using Unicode letters and numbers, spaces, _, -, ., +, and @; it cannot start with a hyphen or space or end with a space."
+                  },
+                  "rcloneConfig": {
+                    "type": "string",
+                    "minLength": 1,
+                    "writeOnly": true,
+                    "description": "Imported rclone configuration text. Experimental providers require this value."
+                  }
+                }
+              }
+            },
+            "anyOf": [
+              {
+                "required": [
+                  "rcloneConfig"
+                ]
+              },
+              {
+                "properties": {
+                  "config": {
+                    "type": "object",
+                    "required": [
+                      "provider",
+                      "rcloneConfig"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "provider": {
+                        "type": "string",
+                        "const": "iclouddrive"
+                      },
+                      "remotePath": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1024
+                      },
+                      "remoteName": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 120,
+                        "pattern": "^(?![- ])(?!.* $)[\\p{L}\\p{N}_.+@ \\-]+$",
+                        "description": "Rclone remote name using Unicode letters and numbers, spaces, _, -, ., +, and @; it cannot start with a hyphen or space or end with a space."
+                      },
+                      "rcloneConfig": {
+                        "type": "string",
+                        "minLength": 1,
+                        "writeOnly": true,
+                        "description": "Imported rclone configuration text. Experimental providers require this value."
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "type": "object",
+            "required": [
+              "name",
+              "kind",
+              "config"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "localCachePolicy": {
+                "type": "string",
+                "enum": [
+                  "keep",
+                  "remote_only"
+                ],
+                "default": "keep"
+              },
+              "type": {
+                "type": "string",
+                "const": "rclone"
+              },
+              "kind": {
+                "type": "string",
+                "const": "rclone"
+              },
+              "provider": {
+                "type": "string",
+                "const": "webdav"
+              },
+              "remotePath": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              "rcloneConfig": {
+                "type": "string",
+                "minLength": 1,
+                "writeOnly": true
+              },
+              "config": {
+                "type": "object",
+                "required": [
+                  "provider"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "provider": {
+                    "type": "string",
+                    "const": "webdav"
+                  },
+                  "remotePath": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "remoteName": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120,
+                    "pattern": "^(?![- ])(?!.* $)[\\p{L}\\p{N}_.+@ \\-]+$",
+                    "description": "Rclone remote name using Unicode letters and numbers, spaces, _, -, ., +, and @; it cannot start with a hyphen or space or end with a space."
+                  },
+                  "rcloneConfig": {
+                    "type": "string",
+                    "minLength": 1,
+                    "writeOnly": true,
+                    "description": "Imported rclone configuration text. Experimental providers require this value."
+                  }
+                }
+              }
+            },
+            "anyOf": [
+              {
+                "required": [
+                  "rcloneConfig"
+                ]
+              },
+              {
+                "properties": {
+                  "config": {
+                    "type": "object",
+                    "required": [
+                      "provider",
+                      "rcloneConfig"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "provider": {
+                        "type": "string",
+                        "const": "webdav"
+                      },
+                      "remotePath": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1024
+                      },
+                      "remoteName": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 120,
+                        "pattern": "^(?![- ])(?!.* $)[\\p{L}\\p{N}_.+@ \\-]+$",
+                        "description": "Rclone remote name using Unicode letters and numbers, spaces, _, -, ., +, and @; it cannot start with a hyphen or space or end with a space."
+                      },
+                      "rcloneConfig": {
+                        "type": "string",
+                        "minLength": 1,
+                        "writeOnly": true,
+                        "description": "Imported rclone configuration text. Experimental providers require this value."
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "type": "object",
+            "required": [
+              "name",
+              "kind",
+              "config"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "localCachePolicy": {
+                "type": "string",
+                "enum": [
+                  "keep",
+                  "remote_only"
+                ],
+                "default": "keep"
+              },
+              "type": {
+                "type": "string",
+                "const": "rclone"
+              },
+              "kind": {
+                "type": "string",
+                "const": "rclone"
+              },
+              "provider": {
+                "type": "string",
+                "const": "sftp"
+              },
+              "remotePath": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              "rcloneConfig": {
+                "type": "string",
+                "minLength": 1,
+                "writeOnly": true
+              },
+              "config": {
+                "type": "object",
+                "required": [
+                  "provider"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "provider": {
+                    "type": "string",
+                    "const": "sftp"
+                  },
+                  "remotePath": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "remoteName": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120,
+                    "pattern": "^(?![- ])(?!.* $)[\\p{L}\\p{N}_.+@ \\-]+$",
+                    "description": "Rclone remote name using Unicode letters and numbers, spaces, _, -, ., +, and @; it cannot start with a hyphen or space or end with a space."
+                  },
+                  "rcloneConfig": {
+                    "type": "string",
+                    "minLength": 1,
+                    "writeOnly": true,
+                    "description": "Imported rclone configuration text. Experimental providers require this value."
+                  }
+                }
+              }
+            },
+            "anyOf": [
+              {
+                "required": [
+                  "rcloneConfig"
+                ]
+              },
+              {
+                "properties": {
+                  "config": {
+                    "type": "object",
+                    "required": [
+                      "provider",
+                      "rcloneConfig"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "provider": {
+                        "type": "string",
+                        "const": "sftp"
+                      },
+                      "remotePath": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1024
+                      },
+                      "remoteName": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 120,
+                        "pattern": "^(?![- ])(?!.* $)[\\p{L}\\p{N}_.+@ \\-]+$",
+                        "description": "Rclone remote name using Unicode letters and numbers, spaces, _, -, ., +, and @; it cannot start with a hyphen or space or end with a space."
+                      },
+                      "rcloneConfig": {
+                        "type": "string",
+                        "minLength": 1,
+                        "writeOnly": true,
+                        "description": "Imported rclone configuration text. Experimental providers require this value."
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "type": "object",
+            "required": [
+              "name",
+              "kind",
+              "config"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "localCachePolicy": {
+                "type": "string",
+                "enum": [
+                  "keep",
+                  "remote_only"
+                ],
+                "default": "keep"
+              },
+              "type": {
+                "type": "string",
+                "const": "rclone"
+              },
+              "kind": {
+                "type": "string",
+                "const": "rclone"
+              },
+              "provider": {
+                "type": "string",
+                "const": "custom"
+              },
+              "remotePath": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              "rcloneConfig": {
+                "type": "string",
+                "minLength": 1,
+                "writeOnly": true
+              },
+              "config": {
+                "type": "object",
+                "required": [
+                  "provider"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "provider": {
+                    "type": "string",
+                    "const": "custom"
+                  },
+                  "remotePath": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "remoteName": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120,
+                    "pattern": "^(?![- ])(?!.* $)[\\p{L}\\p{N}_.+@ \\-]+$",
+                    "description": "Rclone remote name using Unicode letters and numbers, spaces, _, -, ., +, and @; it cannot start with a hyphen or space or end with a space."
+                  },
+                  "rcloneConfig": {
+                    "type": "string",
+                    "minLength": 1,
+                    "writeOnly": true,
+                    "description": "Imported rclone configuration text. Experimental providers require this value."
+                  }
+                }
+              }
+            },
+            "anyOf": [
+              {
+                "required": [
+                  "rcloneConfig"
+                ]
+              },
+              {
+                "properties": {
+                  "config": {
+                    "type": "object",
+                    "required": [
+                      "provider",
+                      "rcloneConfig"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "provider": {
+                        "type": "string",
+                        "const": "custom"
+                      },
+                      "remotePath": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1024
+                      },
+                      "remoteName": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 120,
+                        "pattern": "^(?![- ])(?!.* $)[\\p{L}\\p{N}_.+@ \\-]+$",
+                        "description": "Rclone remote name using Unicode letters and numbers, spaces, _, -, ., +, and @; it cannot start with a hyphen or space or end with a space."
+                      },
+                      "rcloneConfig": {
+                        "type": "string",
+                        "minLength": 1,
+                        "writeOnly": true,
+                        "description": "Imported rclone configuration text. Experimental providers require this value."
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "BackupTargetCreateRequest": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/BackupTargetLocalCreateRequest"
+          },
+          {
+            "$ref": "#/components/schemas/BackupTargetS3CreateRequest"
+          },
+          {
+            "$ref": "#/components/schemas/BackupTargetSmbCreateFlatRequest"
+          },
+          {
+            "$ref": "#/components/schemas/BackupTargetSmbCreateNestedRequest"
+          },
+          {
+            "$ref": "#/components/schemas/BackupTargetImportedCreateFlatRequest"
+          },
+          {
+            "$ref": "#/components/schemas/BackupTargetImportedCreateNestedRequest"
+          }
+        ],
+        "description": "Creates a local, S3-compatible, supported SMB, or experimental imported-rclone target. Both the flat `type` compatibility shape and nested `kind`/`config` shape are accepted."
+      },
+      "BackupTargetUpdateRequest": {
+        "type": "object",
+        "required": [],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "local",
+              "s3",
+              "rclone"
+            ],
+            "description": "Accepted as a compatibility hint and ignored; a target's stored kind is immutable."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "local",
+              "s3",
+              "rclone"
+            ],
+            "description": "Accepted as a compatibility hint and ignored; a target's stored kind is immutable."
+          },
+          "endpoint": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://",
+            "description": "HTTP(S) S3-compatible endpoint with a hostname and without credentials, query parameters, or a fragment."
+          },
+          "bucket": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "region": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 64
+          },
+          "prefix": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 512
+          },
+          "forcePathStyle": {
+            "type": "boolean"
+          },
+          "config": {
+            "anyOf": [
+              {
+                "type": "object",
+                "required": [
+                  "endpoint",
+                  "bucket"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "endpoint": {
+                    "type": "string",
+                    "format": "uri",
+                    "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://",
+                    "description": "HTTP(S) S3-compatible endpoint with a hostname and without credentials, query parameters, or a fragment."
+                  },
+                  "bucket": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 255
+                  },
+                  "region": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "prefix": {
+                    "type": "string",
+                    "maxLength": 512
+                  },
+                  "pathStyle": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "forcePathStyle": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "required": [
+                  "provider"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "provider": {
+                    "type": "string",
+                    "enum": [
+                      "smb",
+                      "drive",
+                      "onedrive",
+                      "iclouddrive",
+                      "webdav",
+                      "sftp",
+                      "custom"
+                    ]
+                  },
+                  "remotePath": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "remoteName": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120,
+                    "pattern": "^(?![- ])(?!.* $)[\\p{L}\\p{N}_.+@ \\-]+$",
+                    "description": "Rclone remote name using Unicode letters and numbers, spaces, _, -, ., +, and @; it cannot start with a hyphen or space or end with a space."
+                  },
+                  "rcloneConfig": {
+                    "type": "string",
+                    "minLength": 1,
+                    "writeOnly": true
+                  },
+                  "smb": {
+                    "type": "object",
+                    "required": [
+                      "server",
+                      "share"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "server": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 255
+                      },
+                      "share": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 255,
+                        "pattern": "^(?!\\.{1,2}$)(?!\\s)(?!.*\\s$)[^\\u0000-\\u001F\\u007F:/\\\\]+$",
+                        "description": "One SMB share name without path separators, a drive prefix, control characters, or leading/trailing whitespace."
+                      },
+                      "subPath": {
+                        "type": "string",
+                        "maxLength": 512,
+                        "pattern": "^(?!/)(?!.*\\/$)(?!.*(?:^|/)(?:\\.{1,2})(?:/|$))(?!.*(?:^|/)\\s)(?!.*\\s(?:/|$))(?!.*//)[^\\u0000-\\u001F\\u007F:\\\\]*$",
+                        "description": "Optional relative SMB path made of non-empty segments; '.', '..', control characters, colons, backslashes, and segment-edge whitespace are rejected."
+                      },
+                      "domain": {
+                        "type": "string",
+                        "maxLength": 255
+                      },
+                      "username": {
+                        "type": "string",
+                        "maxLength": 255
+                      },
+                      "password": {
+                        "type": "string",
+                        "writeOnly": true
+                      },
+                      "port": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 65535
+                          },
+                          {
+                            "type": "string",
+                            "pattern": "^(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$"
+                          }
+                        ],
+                        "description": "TCP port from 1 through 65535. Numeric strings are accepted for form/API compatibility."
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "required": [],
+                "additionalProperties": false,
+                "properties": {}
+              }
+            ]
+          },
+          "accessKeyId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "secretAccessKey": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "writeOnly": true
+          },
+          "provider": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "smb",
+              "drive",
+              "onedrive",
+              "iclouddrive",
+              "webdav",
+              "sftp",
+              "custom",
+              null
+            ]
+          },
+          "remotePath": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "remoteName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 120,
+            "pattern": "^(?![- ])(?!.* $)[\\p{L}\\p{N}_.+@ \\-]+$",
+            "description": "Rclone remote name using Unicode letters and numbers, spaces, _, -, ., +, and @; it cannot start with a hyphen or space or end with a space."
+          },
+          "rcloneConfig": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "writeOnly": true
+          },
+          "localCachePolicy": {
+            "type": "string",
+            "enum": [
+              "keep",
+              "remote_only"
+            ]
+          },
+          "server": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "share": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 255,
+            "pattern": "^(?!\\.{1,2}$)(?!\\s)(?!.*\\s$)[^\\u0000-\\u001F\\u007F:/\\\\]+$",
+            "description": "One SMB share name without path separators, a drive prefix, control characters, or leading/trailing whitespace."
+          },
+          "subPath": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 512,
+            "pattern": "^(?!/)(?!.*\\/$)(?!.*(?:^|/)(?:\\.{1,2})(?:/|$))(?!.*(?:^|/)\\s)(?!.*\\s(?:/|$))(?!.*//)[^\\u0000-\\u001F\\u007F:\\\\]*$",
+            "description": "Optional relative SMB path made of non-empty segments; '.', '..', control characters, colons, backslashes, and segment-edge whitespace are rejected."
+          },
+          "domain": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 255
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 255
+          },
+          "password": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "writeOnly": true
+          },
+          "port": {
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 65535
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$"
+                  }
+                ],
+                "description": "TCP port from 1 through 65535. Numeric strings are accepted for form/API compatibility."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "description": "Partial update. Fields incompatible with the target's stored kind are rejected. Switching to SMB requires a valid server/share and removes imported config; switching to an experimental imported provider requires a new non-empty rcloneConfig. A supplied top-level provider must match config.provider."
       },
       "BackupTargetsResponse": {
         "type": "object",
@@ -2950,6 +5681,9 @@
               "string",
               "null"
             ]
+          },
+          "sensitiveFieldsRedacted": {
+            "type": "boolean"
           },
           "captureMode": {
             "type": "string",
@@ -8232,6 +10966,16 @@
             "cookieSession": []
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BackupTargetCreateRequest"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Successful response",
@@ -8360,6 +11104,16 @@
             "cookieSession": []
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BackupTargetUpdateRequest"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Successful response",

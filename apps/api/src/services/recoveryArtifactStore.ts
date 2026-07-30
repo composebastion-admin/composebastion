@@ -1,10 +1,13 @@
-import { randomUUID } from "node:crypto";
 import { readFile, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import type { RecoveryArtifact, RecoveryPointDetail } from "@composebastion/shared";
 import { loadWorkerBackupTarget } from "./recoveryBackupTargets.js";
 import { downloadRemoteArtifactAtomically } from "./recoveryRemoteStorage.js";
 import { hashFile, safeRecoveryPointFile } from "./recoveryStorage.js";
+import {
+  createRecoveryTemporaryDirectory,
+  removeTrackedRecoveryTemporaryDirectory
+} from "./recoveryTemporaryStorage.js";
 
 function isMissingFile(error: unknown) {
   return error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
@@ -85,28 +88,40 @@ async function prepareRecoveryArtifactLocalPath(
   if (remoteOnly && !allowScopedHydration) {
     throw new Error("Remote-only recovery artifacts require scoped local access");
   }
-  const hydratedPath = remoteOnly
-    ? safeRecoveryPointFile(
-      point.id,
-      path.posix.join(
-        ".hydrated",
-        `${artifact.id}-${randomUUID()}-${path.posix.basename(artifact.storageKey)}`
-      )
-    )
+  const hydrationDirectory = remoteOnly
+    ? await createRecoveryTemporaryDirectory(point.id, ".hydrated", artifact.id)
+    : null;
+  const hydratedPath = hydrationDirectory
+    ? path.join(hydrationDirectory, path.basename(artifact.storageKey))
     : localPath;
   try {
     await downloadRemoteArtifactAtomically(target, remoteObjectKey, hydratedPath);
     await verifyRecoveryArtifactFile(artifact, hydratedPath);
-  } catch (error) {
-    await rm(hydratedPath, { force: true }).catch(() => undefined);
-    throw error;
+  } catch (operationError) {
+    try {
+      if (hydrationDirectory) {
+        await removeTrackedRecoveryTemporaryDirectory(hydrationDirectory);
+      } else {
+        await rm(hydratedPath, { force: true });
+      }
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [operationError, cleanupError],
+        `Recovery artifact hydration failed (${errorMessage(operationError)}) and its temporary storage could not be removed (${errorMessage(cleanupError)})`
+      );
+    }
+    throw operationError;
   }
 
   return {
     localPath: hydratedPath,
     cleanup: remoteOnly
       ? async () => {
-        await rm(hydratedPath, { force: true });
+        if (hydrationDirectory) {
+          await removeTrackedRecoveryTemporaryDirectory(hydrationDirectory);
+        } else {
+          await rm(hydratedPath, { force: true });
+        }
         if (hydratedPath !== localPath) await rm(localPath, { force: true });
       }
       : null
@@ -135,6 +150,66 @@ export async function withRecoveryArtifactLocalPath<T>(
       });
     });
   }
+}
+
+export async function withRecoveryArtifactRemotePath<T>(
+  point: RecoveryPointDetail,
+  artifact: RecoveryArtifact,
+  useArtifact: (localPath: string) => Promise<T>
+) {
+  const remoteObjectKey = remoteObjectKeyForArtifact(artifact);
+  const backupTargetId = artifact.backupTargetId ?? point.backupTargetId;
+  if (!remoteObjectKey || !backupTargetId) {
+    throw new Error(`Recovery artifact ${artifact.storageKey} has no remote locator`);
+  }
+  const target = await loadWorkerBackupTarget(backupTargetId);
+  if (
+    (target.kind !== "s3" && target.kind !== "rclone")
+    || (target.kind === "s3" && !target.s3)
+    || (target.kind === "rclone" && !target.rclone)
+  ) {
+    throw new Error(`Recovery artifact ${artifact.storageKey} has an invalid remote target`);
+  }
+  const verificationDirectory = await createRecoveryTemporaryDirectory(
+    point.id,
+    ".remote-verify",
+    artifact.id
+  );
+  const verificationPath = path.join(verificationDirectory, "artifact");
+  let operationCompleted = false;
+  let operationResult!: T;
+  let operationError: unknown;
+  try {
+    await downloadRemoteArtifactAtomically(target, remoteObjectKey, verificationPath);
+    await verifyRecoveryArtifactFile(artifact, verificationPath);
+    operationResult = await useArtifact(verificationPath);
+    operationCompleted = true;
+  } catch (error) {
+    operationError = error;
+  }
+
+  let cleanupError: unknown;
+  try {
+    await removeTrackedRecoveryTemporaryDirectory(verificationDirectory);
+  } catch (error) {
+    cleanupError = error;
+  }
+  if (!operationCompleted) {
+    if (cleanupError) {
+      throw new AggregateError(
+        [operationError, cleanupError],
+        `Remote recovery verification failed (${errorMessage(operationError)}) and its temporary directory could not be removed (${errorMessage(cleanupError)})`
+      );
+    }
+    throw operationError;
+  }
+  if (cleanupError) {
+    throw new AggregateError(
+      [cleanupError],
+      `Remote recovery verification completed but its temporary directory could not be removed (${errorMessage(cleanupError)})`
+    );
+  }
+  return operationResult;
 }
 
 export async function readRecoveryArtifact(point: RecoveryPointDetail, artifact: RecoveryArtifact) {

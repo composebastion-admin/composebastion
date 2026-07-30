@@ -111,7 +111,11 @@ vi.mock("../src/services/jobs.js", () => ({
   getWorkerStatus: vi.fn(async () => ({ queued: 0, running: 0, lastJobCompletedAt: null })),
   listJobs: vi.fn(async () => ({ items: [], total: 0, limit: 20, offset: 0, hasMore: false })),
   notifyJobQueued: vi.fn(async () => undefined),
-  retryJob: vi.fn(async () => ({ original: { ...okJob, status: "failed" }, retried: okJob }))
+  retryJob: vi.fn(async () => ({ original: { ...okJob, status: "failed" }, retried: okJob })),
+  withSynchronousDockerMutationAdmission: (
+    _action: unknown,
+    operation: () => Promise<unknown>
+  ) => operation()
 }));
 
 vi.mock("../src/services/recoveryCenter.js", () => ({
@@ -125,8 +129,19 @@ vi.mock("../src/services/recoveryCenter.js", () => ({
   deleteRecoverySchedule: vi.fn(async () => undefined),
   enqueueRecoveryCreate: vi.fn(async () => okJob),
   enqueueRecoveryDrill: vi.fn(async () => ({ point: { id: "point", hostId }, job: okJob })),
-  enqueueRecoveryRestore: vi.fn(async () => okJob),
-  enqueueRecoveryVerify: vi.fn(async () => okJob),
+  enqueueRecoveryRestore: vi.fn(async () => ({ point: { id: "point", hostId }, job: okJob })),
+  enqueueRecoveryVerify: vi.fn(async (
+    _recoveryPointId: string,
+    _createdBy?: string | null,
+    onQueued?: (
+      client: { query: typeof transactionQuery },
+      result: { point: { id: string; hostId: string }; job: typeof okJob }
+    ) => Promise<void>
+  ) => {
+    const result = { point: { id: "point", hostId }, job: okJob };
+    await onQueued?.({ query: transactionQuery }, result);
+    return result;
+  }),
   getBackupTarget: vi.fn(async () => ({ id: "target" })),
   getMigrationRun: vi.fn(async () => ({ id: "migration" })),
   getRecoveryPoint: vi.fn(async () => ({ id: "point", hostId, appIdentity: {} })),
@@ -140,7 +155,9 @@ vi.mock("../src/services/recoveryCenter.js", () => ({
 
 vi.mock("../src/services/recoveryReadiness.js", () => ({
   analyzeRecoveryReadiness: vi.fn(async () => ({ id: "readiness" })),
-  listRecoveryReadiness: vi.fn(async () => [])
+  listRecoveryReadiness: vi.fn(async () => []),
+  redactRecoveryAnalysisForViewer: (value: unknown) => value,
+  redactRecoveryReadinessForViewer: (value: unknown) => value
 }));
 
 vi.mock("../src/services/files.js", () => ({
@@ -380,6 +397,44 @@ describe("RBAC matrix route behavior", () => {
         ipAddress: "127.0.0.1",
         userAgent: "test"
       }), expect.anything());
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("fails closed before returning sensitive administration indexes when audit persistence fails", async () => {
+    const alerts = await import("../src/services/alerts.js");
+    const registries = await import("../src/services/registries.js");
+    const users = await import("../src/services/users.js");
+    const cases = [
+      {
+        role: "operator" as const,
+        url: "/api/alerts/channels",
+        service: vi.mocked(alerts.listChannels)
+      },
+      {
+        role: "operator" as const,
+        url: "/api/registries",
+        service: vi.mocked(registries.listRegistries)
+      },
+      {
+        role: "admin" as const,
+        url: "/api/users",
+        service: vi.mocked(users.listUsers)
+      }
+    ];
+    const app = await buildApp();
+    try {
+      for (const testCase of cases) {
+        testCase.service.mockClear();
+        writeAuditEvent.mockRejectedValueOnce(new Error("audit insert failed"));
+        const response = await injectAs(app, testCase.role, {
+          method: "GET",
+          url: testCase.url
+        });
+        expect(response.statusCode, testCase.url).toBe(500);
+        expect(testCase.service, testCase.url).not.toHaveBeenCalled();
+      }
     } finally {
       await app.close();
     }

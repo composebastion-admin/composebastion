@@ -3,7 +3,32 @@ import { z } from "zod";
 const scpStyleRepositoryUrl =
   /^(?<user>[a-z0-9._-]+)@(?<host>[a-z0-9._-]+):(?<path>\/?[a-z0-9._~+@/-]+)$/i;
 const allowedUrlProtocols = new Set(["http:", "https:", "ssh:", "git:"]);
-const urlDiagnosticSchemePattern = /(?:https?|ssh|git):/gi;
+const credentialBearingDiagnosticSchemes = [
+  "http",
+  "https",
+  "ssh",
+  "git",
+  "postgres",
+  "postgresql",
+  "redis",
+  "rediss",
+  "sftp",
+  "ftp",
+  "ftps",
+  "mysql",
+  "mariadb",
+  "mongodb",
+  "mongodb+srv",
+  "amqp",
+  "amqps",
+  "smtp",
+  "smtps",
+  "nats"
+].join("|");
+const urlDiagnosticSchemePattern = new RegExp(
+  `(?:${credentialBearingDiagnosticSchemes}):|[a-z][a-z0-9+.-]*:[\\\\/]{2}`,
+  "gi"
+);
 const trailingDiagnosticPunctuationPattern = /[)\]},.;:!?'"`>]+$/u;
 
 function parseScpStyleRepositoryUrl(value: string) {
@@ -247,9 +272,24 @@ export function sanitizeDeploymentSourceLocator(
 }
 
 function normalizedDiagnosticUrlCandidate(value: string) {
-  const match = /^(https?|ssh|git):[\\/]*(.*)$/isu.exec(value);
+  const match = /^([a-z][a-z0-9+.-]*):[\\/]*(.*)$/isu.exec(value);
   if (!match?.[1]) return value;
   return `${match[1].toLowerCase()}://${match[2] ?? ""}`;
+}
+
+function sanitizeGenericDiagnosticUrl(value: string) {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return null;
+  }
+  if (!parsed.protocol || !parsed.hostname) return null;
+  parsed.username = "";
+  parsed.password = "";
+  parsed.search = "";
+  parsed.hash = "";
+  return parsed.toString();
 }
 
 function diagnosticTokenEnd(value: string, start: number) {
@@ -406,6 +446,7 @@ function sanitizeDiagnosticUrlCandidate(value: string) {
   }
   const sanitized = sanitizeGitRepositoryUrl(normalized)
     ?? sanitizePlaintextHttpSourceUrl(normalized)
+    ?? sanitizeGenericDiagnosticUrl(normalized)
     ?? "[redacted-url]";
   return `${sanitized}${trailing}`;
 }

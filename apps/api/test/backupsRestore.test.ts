@@ -12,6 +12,79 @@ const loadWorkerBackupTarget = vi.fn();
 const assertBackupTargetS3EndpointAllowed = vi.fn();
 const downloadRemoteArtifactAtomically = vi.fn();
 const createReadStream = vi.fn();
+const restoreAttemptLabel =
+  "com.composebastion.recovery.restore-attempt";
+const restoreScopeLabel =
+  "com.composebastion.recovery.restore-scope";
+
+function installFreshVolumeRestoreCommands() {
+  let ownership = "";
+  runSshCommand.mockImplementation(
+    async (_ssh: unknown, command: string) => {
+      if (
+        command.includes("restore_owner=")
+        && command.includes("docker volume rm")
+      ) {
+        return {
+          code: 0,
+          stdout: "",
+          stderr: ""
+        };
+      }
+      if (
+        command.includes(
+          "docker volume inspect --format"
+        )
+      ) {
+        return ownership
+          ? {
+              code: 0,
+              stdout: ownership,
+              stderr: ""
+            }
+          : {
+              code: 1,
+              stdout: "",
+              stderr: "missing"
+            };
+      }
+      if (
+        command.includes("docker volume inspect")
+      ) {
+        return {
+          code: 1,
+          stdout: "",
+          stderr: "missing"
+        };
+      }
+      if (
+        command.includes("docker volume create")
+      ) {
+        const attempt = new RegExp(
+          `${restoreAttemptLabel}=([^']+)'`
+        ).exec(command)?.[1];
+        const scope = new RegExp(
+          `${restoreScopeLabel}=([^']+)'`
+        ).exec(command)?.[1];
+        ownership = attempt && scope
+          ? `${attempt}|${scope}`
+          : "";
+        return {
+          code: ownership ? 0 : 1,
+          stdout: "restored_data",
+          stderr: ownership
+            ? ""
+            : "missing ownership labels"
+        };
+      }
+      return {
+        code: 1,
+        stdout: "",
+        stderr: `unexpected command: ${command}`
+      };
+    }
+  );
+}
 
 vi.mock("node:fs", () => ({
   createReadStream: (...args: unknown[]) => createReadStream(...args),
@@ -19,17 +92,23 @@ vi.mock("node:fs", () => ({
 }));
 
 vi.mock("node:fs/promises", () => ({
+  lstat: vi.fn(),
   mkdir: vi.fn(),
   mkdtemp: (...args: unknown[]) => mkdtemp(...args),
+  readdir: vi.fn(),
   rename: vi.fn(),
   rm: (...args: unknown[]) => rm(...args),
   stat: (...args: unknown[]) => stat(...args),
   unlink: vi.fn(),
+  utimes: vi.fn(),
   writeFile: vi.fn()
 }));
 
 vi.mock("../src/db/pool.js", () => ({
-  query: (...args: unknown[]) => query(...args)
+  query: (...args: unknown[]) => query(...args),
+  withTransaction: async (
+    handler: (client: { query: typeof query }) => Promise<unknown>
+  ) => handler({ query })
 }));
 
 vi.mock("../src/services/hosts.js", () => ({
@@ -135,14 +214,20 @@ describe("volume restore overwrite guard", () => {
     expect(pipeReadableToSshCommand).not.toHaveBeenCalled();
   });
 
-  it("allows restoring into an existing volume when overwrite is explicit", async () => {
-    runSshCommand
-      .mockResolvedValueOnce({ code: 0, stdout: "[]", stderr: "" })
-      .mockResolvedValueOnce({ code: 0, stdout: "existing_data", stderr: "" });
-    pipeReadableToSshCommand.mockResolvedValueOnce({ code: 0, stdout: "ok", stderr: "" });
-
-    await expect(runVolumeRestore(host.public.id, backupRow.id, "existing_data", true)).resolves.toMatchObject({ stdout: "ok" });
-    expect(pipeReadableToSshCommand).toHaveBeenCalledTimes(1);
+  it("rejects explicit overwrite because an in-place merge cannot be rolled back safely", async () => {
+    await expect(
+      runVolumeRestore(
+        host.public.id,
+        backupRow.id,
+        "existing_data",
+        true
+      )
+    ).rejects.toThrow(
+      "Overwrite restore is disabled"
+    );
+    expect(runSshCommand).not.toHaveBeenCalled();
+    expect(pipeReadableToSshCommand)
+      .not.toHaveBeenCalled();
   });
 
   it("removes a remote-only temporary hydration after a successful restore consumer", async () => {
@@ -156,9 +241,7 @@ describe("volume restore overwrite guard", () => {
     stat
       .mockResolvedValueOnce({ size: 99 })
       .mockResolvedValueOnce({ size: 100 });
-    runSshCommand
-      .mockResolvedValueOnce({ code: 1, stdout: "", stderr: "missing" })
-      .mockResolvedValueOnce({ code: 0, stdout: "restored_data", stderr: "" });
+    installFreshVolumeRestoreCommands();
     pipeReadableToSshCommand.mockResolvedValueOnce({ code: 0, stdout: "ok", stderr: "" });
 
     await expect(runVolumeRestore(host.public.id, backupRow.id, "restored_data")).resolves.toMatchObject({ stdout: "ok" });
@@ -178,7 +261,7 @@ describe("volume restore overwrite guard", () => {
     );
   });
 
-  it("preserves a successful restore result when temporary cleanup fails", async () => {
+  it("fails closed when a successful restore leaves its hydrated temporary artifact behind", async () => {
     const remoteBackupRow = {
       ...backupRow,
       backup_target_id: "00000000-0000-4000-8000-000000000003",
@@ -189,24 +272,14 @@ describe("volume restore overwrite guard", () => {
     stat
       .mockResolvedValueOnce({ size: 99 })
       .mockResolvedValueOnce({ size: 100 });
-    runSshCommand
-      .mockResolvedValueOnce({ code: 1, stdout: "", stderr: "missing" })
-      .mockResolvedValueOnce({ code: 0, stdout: "restored_data", stderr: "" });
+    installFreshVolumeRestoreCommands();
     pipeReadableToSshCommand.mockResolvedValueOnce({ code: 0, stdout: "ok", stderr: "" });
     rm.mockRejectedValueOnce(new Error("temporary cleanup failed"));
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
     await expect(runVolumeRestore(host.public.id, backupRow.id, "restored_data"))
-      .resolves.toMatchObject({ stdout: "ok" });
-
-    expect(warn).toHaveBeenCalledWith(
-      "Failed to clean a hydrated backup artifact",
-      {
-        backupId: backupRow.id,
-        error: "temporary cleanup failed"
-      }
-    );
-    warn.mockRestore();
+      .rejects.toThrow(
+        "Backup operation completed but its hydrated temporary artifact could not be removed (temporary cleanup failed)"
+      );
   });
 
   it("removes a remote-only temporary hydration when the restore consumer fails", async () => {
@@ -220,9 +293,7 @@ describe("volume restore overwrite guard", () => {
     stat
       .mockResolvedValueOnce({ size: 99 })
       .mockResolvedValueOnce({ size: 100 });
-    runSshCommand
-      .mockResolvedValueOnce({ code: 1, stdout: "", stderr: "missing" })
-      .mockResolvedValueOnce({ code: 0, stdout: "restored_data", stderr: "" });
+    installFreshVolumeRestoreCommands();
     pipeReadableToSshCommand.mockResolvedValueOnce({
       code: 1,
       stdout: "",
@@ -295,5 +366,27 @@ describe("volume restore overwrite guard", () => {
         force: true
       });
     });
+  });
+
+  it("persists the download authorization callback before opening any backup bytes", async () => {
+    const auditFailure = new Error("audit insert failed");
+    const onAuthorized = vi.fn().mockRejectedValue(auditFailure);
+
+    await expect(
+      getBackupDownloadStream(backupRow.id, onAuthorized)
+    ).rejects.toBe(auditFailure);
+
+    expect(query).toHaveBeenCalledWith(
+      "SELECT * FROM backups WHERE id = $1 FOR KEY SHARE",
+      [backupRow.id]
+    );
+    expect(onAuthorized).toHaveBeenCalledWith(
+      expect.objectContaining({ query }),
+      expect.objectContaining({ id: backupRow.id })
+    );
+    expect(stat).not.toHaveBeenCalled();
+    expect(mkdtemp).not.toHaveBeenCalled();
+    expect(downloadRemoteArtifactAtomically).not.toHaveBeenCalled();
+    expect(createReadStream).not.toHaveBeenCalled();
   });
 });
