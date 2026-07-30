@@ -25,6 +25,9 @@ describe("recovery manifest", () => {
     expect(isAllowedBindMountPath("/host_mnt/private/root/.ssh/id_rsa")).toBe(false);
     expect(isAllowedBindMountPath("/host_mnt/private/var/run/docker.sock")).toBe(false);
     expect(isAllowedBindMountPath("/host_mnt/private/var/lib/docker/volumes/app/_data")).toBe(false);
+    expect(isAllowedBindMountPath("/host_mnt")).toBe(false);
+    expect(isAllowedBindMountPath("/host_mnt/")).toBe(false);
+    expect(isAllowedBindMountPath("/host_mnt/.")).toBe(false);
     expect(isAllowedBindMountPath("/host_mnt/private/tmp/project")).toBe(true);
 
     const allowed = filterBindMounts([

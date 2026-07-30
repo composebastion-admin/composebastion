@@ -145,7 +145,9 @@ function dockerBindPathAliases(hostPath: string) {
 
 function bindMountPolicyPath(hostPath: string) {
   let normalized = normalizeBindMountPath(hostPath);
-  if (normalized.startsWith("/host_mnt/")) {
+  if (normalized === "/host_mnt") {
+    normalized = "/";
+  } else if (normalized.startsWith("/host_mnt/")) {
     normalized = normalizeBindMountPath(normalized.slice("/host_mnt".length));
   }
   if (/^\/private\/(?:etc|tmp|var)(?:\/|$)/.test(normalized)) {
