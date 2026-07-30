@@ -129,9 +129,34 @@ export function normalizeBindMountPath(hostPath: string) {
   return normalized.replace(/\/+$/, "") || "/";
 }
 
-export function isAllowedBindMountPath(hostPath: string) {
+function dockerBindPathAliases(hostPath: string) {
   const normalized = normalizeBindMountPath(hostPath);
-  if (!normalized || BLOCKED_BIND_MOUNT_EXACT.has(normalized)) return false;
+  const aliases = new Set([normalized]);
+  if (normalized.startsWith("/host_mnt/")) {
+    aliases.add(normalized.slice("/host_mnt".length));
+  }
+  for (const alias of [...aliases]) {
+    if (alias.startsWith("/private/")) {
+      aliases.add(alias.slice("/private".length));
+    }
+  }
+  return [...aliases];
+}
+
+function bindMountPolicyPath(hostPath: string) {
+  let normalized = normalizeBindMountPath(hostPath);
+  if (normalized.startsWith("/host_mnt/")) {
+    normalized = normalizeBindMountPath(normalized.slice("/host_mnt".length));
+  }
+  if (/^\/private\/(?:etc|tmp|var)(?:\/|$)/.test(normalized)) {
+    normalized = normalizeBindMountPath(normalized.slice("/private".length));
+  }
+  return normalized;
+}
+
+export function isAllowedBindMountPath(hostPath: string) {
+  const normalized = bindMountPolicyPath(hostPath);
+  if (!normalized || !normalized.startsWith("/") || BLOCKED_BIND_MOUNT_EXACT.has(normalized)) return false;
   if (normalized.includes("..")) return false;
   for (const prefix of BLOCKED_BIND_MOUNT_PREFIXES) {
     const bare = prefix.endsWith("/") ? prefix.slice(0, -1) : prefix;
@@ -144,10 +169,29 @@ export function filterBindMounts(mounts: BindMountRef[]) {
   return mounts.filter((mount) => isAllowedBindMountPath(mount.source));
 }
 
-export function isHostPathInside(parentPath: string, childPath: string) {
-  const parent = normalizeBindMountPath(parentPath).replace(/\/+$/, "") || "/";
-  const child = normalizeBindMountPath(childPath);
-  return child === parent || child.startsWith(`${parent}/`);
+export function isDockerDesktopOperatingSystem(operatingSystem: string) {
+  return /(?:^|\s)docker desktop(?:\s|$)/i.test(operatingSystem.trim());
+}
+
+export function isHostPathInside(
+  parentPath: string,
+  childPath: string,
+  options: { dockerDesktopAliases?: boolean } = {}
+) {
+  const parentAliases = options.dockerDesktopAliases
+    ? dockerBindPathAliases(parentPath)
+    : [normalizeBindMountPath(parentPath)];
+  const childAliases = options.dockerDesktopAliases
+    ? dockerBindPathAliases(childPath)
+    : [normalizeBindMountPath(childPath)];
+  for (const parentAlias of parentAliases) {
+    const parent = parentAlias.replace(/\/+$/, "") || "/";
+    const prefix = parent === "/" ? "/" : `${parent}/`;
+    for (const child of childAliases) {
+      if (child === parent || child.startsWith(prefix)) return true;
+    }
+  }
+  return false;
 }
 
 export function composeWorkingDirHostFolder(workingDir: string | null): HostFolderArtifactRef | null {

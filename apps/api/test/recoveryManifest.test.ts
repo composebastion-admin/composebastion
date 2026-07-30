@@ -8,6 +8,7 @@ import {
   containersToRestart,
   filterBindMounts,
   isAllowedBindMountPath,
+  isDockerDesktopOperatingSystem,
   isHostPathInside,
   recordRunningStates,
   wasAnyContainerRunning
@@ -20,6 +21,11 @@ describe("recovery manifest", () => {
     expect(isAllowedBindMountPath("/var/lib/docker/volumes/app/_data")).toBe(false);
     expect(isAllowedBindMountPath("/var/run/docker.sock")).toBe(false);
     expect(isAllowedBindMountPath("/../etc/passwd")).toBe(false);
+    expect(isAllowedBindMountPath("/host_mnt/private/etc/passwd")).toBe(false);
+    expect(isAllowedBindMountPath("/host_mnt/private/root/.ssh/id_rsa")).toBe(false);
+    expect(isAllowedBindMountPath("/host_mnt/private/var/run/docker.sock")).toBe(false);
+    expect(isAllowedBindMountPath("/host_mnt/private/var/lib/docker/volumes/app/_data")).toBe(false);
+    expect(isAllowedBindMountPath("/host_mnt/private/tmp/project")).toBe(true);
 
     const allowed = filterBindMounts([
       { source: "/srv/app/data", destination: "/data", readOnly: false },
@@ -38,6 +44,38 @@ describe("recovery manifest", () => {
     expect(composeWorkingDirHostFolder("/var/run/docker.sock")).toBeNull();
     expect(isHostPathInside("/home/docker/DemoApp", "/home/docker/DemoApp/data")).toBe(true);
     expect(isHostPathInside("/home/docker/DemoApp", "/home/docker/Other")).toBe(false);
+  });
+
+  it("recognizes Docker Desktop bind aliases beneath a Compose working directory", () => {
+    const workingDir = "/tmp/composebastion-acceptance/compose-workload";
+    const desktopOptions = { dockerDesktopAliases: true };
+    expect(isDockerDesktopOperatingSystem("Docker Desktop")).toBe(true);
+    expect(isDockerDesktopOperatingSystem("Docker Desktop 4.43.2")).toBe(true);
+    expect(isDockerDesktopOperatingSystem("Ubuntu 24.04.2 LTS")).toBe(false);
+    expect(isHostPathInside(
+      workingDir,
+      "/host_mnt/private/tmp/composebastion-acceptance/compose-workload/relative-data",
+      desktopOptions
+    )).toBe(true);
+    expect(isHostPathInside(
+      `/private${workingDir}`,
+      "/host_mnt/private/tmp/composebastion-acceptance/compose-workload/relative-data",
+      desktopOptions
+    )).toBe(true);
+    expect(isHostPathInside(
+      workingDir,
+      "/host_mnt/private/tmp/composebastion-acceptance/compose-workload-other/relative-data",
+      desktopOptions
+    )).toBe(false);
+    expect(isHostPathInside(
+      workingDir,
+      "/host_mnt/private/tmp/composebastion-acceptance/compose-workload/../escape",
+      desktopOptions
+    )).toBe(false);
+    expect(isHostPathInside(
+      workingDir,
+      "/host_mnt/private/tmp/composebastion-acceptance/compose-workload/relative-data"
+    )).toBe(false);
   });
 
   it("builds container manifests from docker inspect output", () => {

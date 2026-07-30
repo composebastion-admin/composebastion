@@ -9,6 +9,7 @@ const startContainersOneByOne = vi.fn();
 const writeRecoveryPointFile = vi.fn();
 const enforceScheduledRecoveryRetention = vi.fn();
 const loadWorkerBackupTarget = vi.fn();
+const runDocker = vi.fn();
 
 vi.mock("../src/db/pool.js", () => ({
   query: (...args: unknown[]) => query(...args),
@@ -79,7 +80,7 @@ vi.mock("../src/services/recoveryS3.js", () => ({
 }));
 
 vi.mock("../src/services/docker.js", () => ({
-  runDocker: vi.fn()
+  runDocker: (...args: unknown[]) => runDocker(...args)
 }));
 
 vi.mock("../src/services/ssh.js", () => ({
@@ -95,6 +96,7 @@ const hostId = "00000000-0000-4000-8000-000000000050";
 const recoveryPointId = "00000000-0000-4000-8000-000000000051";
 const now = new Date("2026-06-15T12:00:00.000Z");
 let backupTargetId: string | null = null;
+let resourceMounts: Array<Record<string, unknown>> = [];
 
 const pointRow = {
   id: recoveryPointId,
@@ -140,7 +142,7 @@ function installQueryMock() {
             State: "running",
             Image: "nginx:alpine",
             Labels: {},
-            Mounts: []
+            Mounts: resourceMounts
           }
         }]
       };
@@ -159,6 +161,8 @@ describe("runRecoveryCreate stop-first restart behavior", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     backupTargetId = null;
+    resourceMounts = [];
+    runDocker.mockResolvedValue({ code: 0, stdout: "Linux", stderr: "" });
     installQueryMock();
     getHostForWorker.mockResolvedValue({
       public: {
@@ -338,6 +342,80 @@ describe("runRecoveryCreate stop-first restart behavior", () => {
         })
       ])
     );
+  });
+
+  it("does not duplicate a relative bind reported through a Docker Desktop path alias", async () => {
+    const workingDir = "/tmp/composebastion-acceptance/compose-workload";
+    resourceMounts = [{
+      Type: "bind",
+      Source: "/host_mnt/private/tmp/composebastion-acceptance/compose-workload/relative-data",
+      Destination: "/relative-data",
+      RW: true
+    }];
+    resolveAppContext.mockResolvedValueOnce({
+      label: "DemoApp",
+      projectName: "demoapp",
+      stackId: null,
+      workingDir,
+      composePath: "compose.yml",
+      composeYaml: "services:\n  demoapp:\n    image: alpine\n    volumes:\n      - ./relative-data:/relative-data\n",
+      env: null,
+      containerIds: ["source-web"],
+      volumeNames: []
+    });
+    runDocker.mockResolvedValue({ code: 0, stdout: "Docker Desktop", stderr: "" });
+
+    const { runRecoveryCreate } = await import("../src/services/recoveryCapture.js");
+    await runRecoveryCreate(hostId, recoveryPointId, { stopFirst: false });
+
+    const plannedHostFolders = query.mock.calls
+      .filter(([sql, values]) =>
+        String(sql).includes("INSERT INTO recovery_artifacts")
+        && Array.isArray(values)
+        && values[2] === "host_folder"
+      )
+      .map(([, values]) => (values as unknown[])[4] as Record<string, unknown>);
+    expect(plannedHostFolders).toEqual([
+      expect.objectContaining({
+        sourcePath: workingDir,
+        role: "compose_working_dir"
+      })
+    ]);
+  });
+
+  it("keeps a distinct Linux /host_mnt bind as a separate recovery artifact", async () => {
+    const workingDir = "/tmp/composebastion-acceptance/compose-workload";
+    const linuxBind = "/host_mnt/private/tmp/composebastion-acceptance/compose-workload/relative-data";
+    resourceMounts = [{
+      Type: "bind",
+      Source: linuxBind,
+      Destination: "/relative-data",
+      RW: true
+    }];
+    resolveAppContext.mockResolvedValueOnce({
+      label: "DemoApp",
+      projectName: "demoapp",
+      stackId: null,
+      workingDir,
+      composePath: "compose.yml",
+      composeYaml: "services:\n  demoapp:\n    image: alpine\n",
+      env: null,
+      containerIds: ["source-web"],
+      volumeNames: []
+    });
+    runDocker.mockResolvedValue({ code: 0, stdout: "Ubuntu 24.04.2 LTS", stderr: "" });
+
+    const { runRecoveryCreate } = await import("../src/services/recoveryCapture.js");
+    await runRecoveryCreate(hostId, recoveryPointId, { stopFirst: false });
+
+    const plannedSources = query.mock.calls
+      .filter(([sql, values]) =>
+        String(sql).includes("INSERT INTO recovery_artifacts")
+        && Array.isArray(values)
+        && values[2] === "host_folder"
+      )
+      .map(([, values]) => String(((values as unknown[])[4] as Record<string, unknown>).sourcePath));
+    expect(plannedSources).toEqual([workingDir, linuxBind]);
   });
 
   it.each([

@@ -18,6 +18,7 @@ import {
   buildRecoveryManifest,
   composeWorkingDirHostFolder,
   containersToRestart,
+  isDockerDesktopOperatingSystem,
   isHostPathInside,
   recordRunningStates,
   sanitizeArtifactName,
@@ -99,6 +100,15 @@ async function getDockerVersions(hostId: string) {
     return { serverVersion: version.stdout.trim(), composeVersion: compose.stdout.trim() };
   } catch {
     return { serverVersion: host.public.dockerVersion, composeVersion: host.public.composeVersion };
+  }
+}
+
+async function dockerDesktopBindAliasesAvailable(hostId: string) {
+  try {
+    const result = await runDocker(hostId, "docker info --format '{{.OperatingSystem}}'", 30_000);
+    return isDockerDesktopOperatingSystem(result.stdout);
+  } catch {
+    return false;
   }
 }
 
@@ -468,6 +478,7 @@ async function ensurePlannedArtifacts(
   inspects: InspectRow[],
   context: Awaited<ReturnType<typeof resolveAppContext>>,
   profile: RecoveryProfile | null,
+  options: { dockerDesktopAliases?: boolean } = {},
   executionFence?: JobExecutionFence
 ) {
   const existingVolumes = new Set(
@@ -501,7 +512,11 @@ async function ensurePlannedArtifacts(
       existingVolumes.add(volume.name);
     }
     for (const bind of manifest.bindMounts) {
-      if (composeFolder && isHostPathInside(composeFolder.source, bind.source)) continue;
+      if (composeFolder && isHostPathInside(
+        composeFolder.source,
+        bind.source,
+        { dockerDesktopAliases: options.dockerDesktopAliases }
+      )) continue;
       if (existingBinds.has(bind.source)) continue;
       const storageKey = artifactRelativePath("host_folder", bindMountArtifactName(bind.source));
       await insertArtifact(point.id, "host_folder", storageKey, {
@@ -657,7 +672,22 @@ export async function runRecoveryCreate(
       );
     }
 
-    await ensurePlannedArtifacts(point, inspects, context, profile, executionFence);
+    const hasPotentialDesktopAlias = inspects.some(({ inspect }) =>
+      buildContainerManifest(inspect).bindMounts.some((bind) =>
+        bind.source.startsWith("/host_mnt/") || bind.source.startsWith("/private/")
+      )
+    );
+    const dockerDesktopAliases = hasPotentialDesktopAlias
+      ? await dockerDesktopBindAliasesAvailable(hostId)
+      : false;
+    await ensurePlannedArtifacts(
+      point,
+      inspects,
+      context,
+      profile,
+      { dockerDesktopAliases },
+      executionFence
+    );
     const refreshed = await loadRecoveryPoint(recoveryPointId);
     if (!refreshed) throw new Error("Recovery point not found after planning artifacts");
 
