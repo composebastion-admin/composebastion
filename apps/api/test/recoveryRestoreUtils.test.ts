@@ -311,6 +311,15 @@ describe("destination-aware Compose bind remapping", () => {
     })).toBe("/var/lib/composebastion/restores/rp-1/project/data");
   });
 
+  it("does not conflate nonstandard /private paths with distinct host paths", () => {
+    expect(resolveRestoredBindMountPath("/Users/acme/app/data", {
+      "/host_mnt/private/Users/acme/app/data": "/var/lib/composebastion/restores/rp-1/private-users-data"
+    })).toBeUndefined();
+    expect(resolveRestoredBindMountPath("/Users/acme/app/data", {
+      "/host_mnt/Users/acme/app": "/var/lib/composebastion/restores/rp-1/users-app"
+    })).toBe("/var/lib/composebastion/restores/rp-1/users-app/data");
+  });
+
   it("rewrites a relative Compose bind from its captured working-directory artifact", () => {
     const containers = [manifestContainer({
       id: "one",

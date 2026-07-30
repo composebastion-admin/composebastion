@@ -290,7 +290,9 @@ function bindMountPathAliases(source: string) {
     aliases.add(normalized.slice("/host_mnt".length));
   }
   for (const alias of [...aliases]) {
-    if (alias.startsWith("/private/")) aliases.add(alias.slice("/private".length));
+    if (/^\/private\/(?:etc|tmp|var)(?:\/|$)/.test(alias)) {
+      aliases.add(alias.slice("/private".length));
+    }
   }
   return [...aliases];
 }

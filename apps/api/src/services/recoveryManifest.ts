@@ -136,7 +136,7 @@ function dockerBindPathAliases(hostPath: string) {
     aliases.add(normalized.slice("/host_mnt".length));
   }
   for (const alias of [...aliases]) {
-    if (alias.startsWith("/private/")) {
+    if (/^\/private\/(?:etc|tmp|var)(?:\/|$)/.test(alias)) {
       aliases.add(alias.slice("/private".length));
     }
   }

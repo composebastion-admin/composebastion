@@ -79,6 +79,16 @@ describe("recovery manifest", () => {
       workingDir,
       "/host_mnt/private/tmp/composebastion-acceptance/compose-workload/relative-data"
     )).toBe(false);
+    expect(isHostPathInside(
+      "/Users/acme/app",
+      "/host_mnt/private/Users/acme/app/data",
+      desktopOptions
+    )).toBe(false);
+    expect(isHostPathInside(
+      "/Users/acme/app",
+      "/host_mnt/Users/acme/app/data",
+      desktopOptions
+    )).toBe(true);
   });
 
   it("builds container manifests from docker inspect output", () => {
