@@ -81,12 +81,22 @@ async function run(command: string, timeout = 120_000) {
   return execDocker(parsed, timeout);
 }
 
+export function parseDockerStatsLine(line: string) {
+  // Continuous `docker stats` output uses ANSI cursor-control sequences to
+  // repaint its table even when a custom JSON format is sent through a pipe.
+  // Strip only CSI sequences before parsing and ignore control-only rows.
+  const normalized = line
+    .replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, "")
+    .trim();
+  if (!normalized) return null;
+  return JSON.parse(normalized) as Record<string, unknown>;
+}
+
 function parseDockerStats(stdout: string) {
   return stdout
     .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as Record<string, unknown>);
+    .map(parseDockerStatsLine)
+    .filter((value): value is Record<string, unknown> => value !== null);
 }
 
 const pseudoMountTypes = new Set([
@@ -280,9 +290,9 @@ export async function createAgentApp(source: NodeJS.ProcessEnv = process.env) {
       if (!child.killed) child.kill("SIGTERM");
     };
     const emitStats = (line: string) => {
-      if (!line.trim()) return;
       try {
-        writeSseLine(reply, "message", { stats: JSON.parse(line) as Record<string, unknown> });
+        const stats = parseDockerStatsLine(line);
+        if (stats) writeSseLine(reply, "message", { stats });
       } catch {
         writeSseLine(reply, "error", { error: "Docker returned malformed container stats" });
       }

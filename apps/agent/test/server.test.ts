@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { EventEmitter } from "node:events";
 import packageJson from "../package.json";
 
 type ExecResult = {
@@ -14,7 +15,10 @@ const state = vi.hoisted(() => ({
   listen: vi.fn(async () => undefined),
   register: vi.fn(async () => undefined),
   stdinEnd: vi.fn(),
-  logInfo: vi.fn()
+  logInfo: vi.fn(),
+  spawn: vi.fn(() => {
+    throw new Error("Streaming spawn was not expected in this test");
+  })
 }));
 
 vi.mock("@fastify/rate-limit", () => ({ default: Symbol("rate-limit-plugin") }));
@@ -44,9 +48,7 @@ vi.mock("node:child_process", () => ({
     queueMicrotask(() => callback(result.error ?? null, result.stdout ?? "", result.stderr ?? ""));
     return { stdin: { end: state.stdinEnd } };
   }),
-  spawn: vi.fn(() => {
-    throw new Error("Streaming spawn was not expected in this test");
-  })
+  spawn: state.spawn
 }));
 
 const token = "agent-server-test-token-that-is-long-enough";
@@ -59,6 +61,7 @@ const originalEnvironment = {
   AGENT_FILE_RATE_LIMIT: process.env.AGENT_FILE_RATE_LIMIT,
   AGENT_STREAM_RATE_LIMIT: process.env.AGENT_STREAM_RATE_LIMIT
 };
+let parseDockerStatsLine: typeof import("../src/server.js").parseDockerStatsLine;
 
 function setExecResult(args: string[], result: ExecResult) {
   state.execResults.set(args.join("\0"), result);
@@ -97,14 +100,19 @@ beforeAll(async () => {
   process.env.AGENT_FILE_RATE_LIMIT = "90";
   process.env.AGENT_STREAM_RATE_LIMIT = "20";
 
-  const { main } = await import("../src/server.js");
-  await main();
+  const server = await import("../src/server.js");
+  parseDockerStatsLine = server.parseDockerStatsLine;
+  await server.main();
   await vi.waitFor(() => expect(state.routes.size).toBeGreaterThanOrEqual(9));
 });
 
 beforeEach(() => {
   state.execResults.clear();
   state.stdinEnd.mockClear();
+  state.spawn.mockReset();
+  state.spawn.mockImplementation(() => {
+    throw new Error("Streaming spawn was not expected in this test");
+  });
 });
 
 afterAll(() => {
@@ -207,5 +215,65 @@ describe("agent server", () => {
       error: "daemon unavailable"
     });
     expect(failedReply.statusCode).toBe(503);
+  });
+
+  it("parses continuous Docker stats rows after removing terminal repaint sequences", () => {
+    expect(
+      parseDockerStatsLine(
+        '\u001b[H{"ID":"abc123","Name":"web","CPUPerc":"1.2%","PIDs":"2"}\u001b[K'
+      )
+    ).toEqual({
+      ID: "abc123",
+      Name: "web",
+      CPUPerc: "1.2%",
+      PIDs: "2"
+    });
+    expect(
+      parseDockerStatsLine(
+        '{"ID":"def456","Name":"db","CPUPerc":"0.3%","PIDs":"4"}\u001b[K'
+      )
+    ).toMatchObject({ ID: "def456", Name: "db" });
+    expect(parseDockerStatsLine("\u001b[K")).toBeNull();
+    expect(() => parseDockerStatsLine("\u001b[Hnot-json\u001b[K")).toThrow();
+  });
+
+  it("streams ANSI-wrapped Docker stats as message events without error events", async () => {
+    const stdout = new EventEmitter();
+    const stderr = new EventEmitter();
+    const child = Object.assign(new EventEmitter(), {
+      stdout,
+      stderr,
+      killed: false,
+      kill: vi.fn(function (this: { killed: boolean }) {
+        this.killed = true;
+        return true;
+      })
+    });
+    state.spawn.mockReturnValueOnce(child);
+
+    const raw = Object.assign(new EventEmitter(), {
+      destroyed: false,
+      writeHead: vi.fn(),
+      write: vi.fn(),
+      end: vi.fn()
+    });
+    const reply = {
+      hijack: vi.fn(),
+      raw
+    };
+    await route("GET", "/api/containers/usage-stream")({ raw }, reply);
+
+    stdout.emit(
+      "data",
+      Buffer.from('\u001b[H{"ID":"abc123","Name":"web","CPUPerc":"1.2%","PIDs":"2"}\u001b[K\n')
+    );
+    const writes = raw.write.mock.calls.map(([chunk]) => String(chunk));
+    expect(writes).toContain(
+      'data: {"stats":{"ID":"abc123","Name":"web","CPUPerc":"1.2%","PIDs":"2"}}\n\n'
+    );
+    expect(writes.some((chunk) => chunk.startsWith("event: error"))).toBe(false);
+
+    raw.emit("close");
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
   });
 });
