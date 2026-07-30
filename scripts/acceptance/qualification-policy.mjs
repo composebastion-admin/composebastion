@@ -24,6 +24,24 @@ export const cleanupTrueFields = Object.freeze([
   "bindRemoved"
 ]);
 
+export const composeProjectImageListArguments = Object.freeze([
+  "image",
+  "ls",
+  "--no-trunc",
+  "--filter",
+  "label=com.docker.compose.project",
+  "--format",
+  "{{.ID}}\t{{.Repository}}:{{.Tag}}"
+]);
+
+export function requireImageComposeProject(image) {
+  const project = image?.Config?.Labels?.["com.docker.compose.project"];
+  if (typeof project !== "string" || project === "") {
+    throw new Error("A Docker image matched the Compose project label filter but its inspected project label is missing");
+  }
+  return project;
+}
+
 export function acceptanceNonqualifyingReasons({
   worktreeDirty,
   skipBuild,

@@ -8,7 +8,9 @@ import { dockerBindPathRelativeChild } from "./bind-paths.mjs";
 import {
   acceptanceNonqualifyingReasons,
   cleanupEvidenceFailures,
-  ownedCandidateImageTags
+  composeProjectImageListArguments,
+  ownedCandidateImageTags,
+  requireImageComposeProject
 } from "./qualification-policy.mjs";
 import { acceptanceScenarioManifest } from "./scenario-manifest.mjs";
 import { assertSafeTestResultsPath, digestGitBuildContext, materializeGitBuildContext } from "../materialize-git-context.mjs";
@@ -2844,8 +2846,7 @@ async function collectOwnedDockerResources() {
       '{{.ID}}\t{{.Name}}\t{{.Label "com.docker.compose.project"}}']),
     run("docker", ["volume", "ls", "--format",
       '{{.Name}}\t{{.Label "com.docker.compose.project"}}']),
-    run("docker", ["image", "ls", "--no-trunc", "--format",
-      '{{.ID}}\t{{.Repository}}:{{.Tag}}\t{{.Label "com.docker.compose.project"}}'])
+    run("docker", composeProjectImageListArguments)
   ]);
   const containers = parseDockerRows(containerResult.stdout, 3)
     .filter(([, , project]) => ownsDockerProject(project))
@@ -2856,9 +2857,19 @@ async function collectOwnedDockerResources() {
   const volumes = parseDockerRows(volumeResult.stdout, 2)
     .filter(([, project]) => ownsDockerProject(project))
     .map(([name, project]) => ({ name, project }));
-  const images = parseDockerRows(imageResult.stdout, 3)
-    .filter(([, , project]) => ownsDockerProject(project))
-    .map(([id, reference, project]) => ({ id, reference, project }));
+  const imageRows = parseDockerRows(imageResult.stdout, 2);
+  const imageProjects = new Map(await Promise.all(
+    [...new Set(imageRows.map(([id]) => id))].map(async (id) => {
+      const inspected = JSON.parse((await run(
+        "docker",
+        ["image", "inspect", id, "--format", "{{json .}}"]
+      )).stdout);
+      return [id, requireImageComposeProject(inspected)];
+    })
+  ));
+  const images = imageRows
+    .map(([id, reference]) => ({ id, reference, project: imageProjects.get(id) ?? "" }))
+    .filter(({ project }) => ownsDockerProject(project));
   return { containers, networks, volumes, images };
 }
 

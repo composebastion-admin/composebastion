@@ -5,7 +5,9 @@ import {
   cleanupEmptyFields,
   cleanupEvidenceFailures,
   cleanupTrueFields,
-  ownedCandidateImageTags
+  composeProjectImageListArguments,
+  ownedCandidateImageTags,
+  requireImageComposeProject
 } from "./qualification-policy.mjs";
 
 function passingCleanup() {
@@ -48,4 +50,27 @@ test("candidate tags bind both commit and isolated port", () => {
     app: `composebastion-pq-app:${revision}-19000`,
     agent: `composebastion-pq-agent:${revision}-19000`
   });
+});
+
+test("image ownership uses supported list fields and inspected Compose labels", () => {
+  assert.deepEqual(composeProjectImageListArguments, [
+    "image",
+    "ls",
+    "--no-trunc",
+    "--filter",
+    "label=com.docker.compose.project",
+    "--format",
+    "{{.ID}}\t{{.Repository}}:{{.Tag}}"
+  ]);
+  assert.equal(
+    requireImageComposeProject({
+      Config: { Labels: { "com.docker.compose.project": "composebastion-acceptance-41700-fresh" } }
+    }),
+    "composebastion-acceptance-41700-fresh"
+  );
+  assert.throws(
+    () => requireImageComposeProject({ Config: { Labels: {} } }),
+    /inspected project label is missing/
+  );
+  assert.throws(() => requireImageComposeProject(null), /inspected project label is missing/);
 });
