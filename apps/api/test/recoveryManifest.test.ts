@@ -80,13 +80,13 @@ describe("recovery manifest", () => {
       "/host_mnt/private/tmp/composebastion-acceptance/compose-workload/relative-data"
     )).toBe(false);
     expect(isHostPathInside(
-      "/Users/acme/app",
-      "/host_mnt/private/Users/acme/app/data",
+      "/Volumes/acme/app",
+      "/host_mnt/private/Volumes/acme/app/data",
       desktopOptions
     )).toBe(false);
     expect(isHostPathInside(
-      "/Users/acme/app",
-      "/host_mnt/Users/acme/app/data",
+      "/Volumes/acme/app",
+      "/host_mnt/Volumes/acme/app/data",
       desktopOptions
     )).toBe(true);
   });

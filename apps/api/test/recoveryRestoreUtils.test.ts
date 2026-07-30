@@ -312,12 +312,12 @@ describe("destination-aware Compose bind remapping", () => {
   });
 
   it("does not conflate nonstandard /private paths with distinct host paths", () => {
-    expect(resolveRestoredBindMountPath("/Users/acme/app/data", {
-      "/host_mnt/private/Users/acme/app/data": "/var/lib/composebastion/restores/rp-1/private-users-data"
+    expect(resolveRestoredBindMountPath("/Volumes/acme/app/data", {
+      "/host_mnt/private/Volumes/acme/app/data": "/var/lib/composebastion/restores/rp-1/private-volumes-data"
     })).toBeUndefined();
-    expect(resolveRestoredBindMountPath("/Users/acme/app/data", {
-      "/host_mnt/Users/acme/app": "/var/lib/composebastion/restores/rp-1/users-app"
-    })).toBe("/var/lib/composebastion/restores/rp-1/users-app/data");
+    expect(resolveRestoredBindMountPath("/Volumes/acme/app/data", {
+      "/host_mnt/Volumes/acme/app": "/var/lib/composebastion/restores/rp-1/volumes-app"
+    })).toBe("/var/lib/composebastion/restores/rp-1/volumes-app/data");
   });
 
   it("rewrites a relative Compose bind from its captured working-directory artifact", () => {
