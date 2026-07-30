@@ -141,6 +141,28 @@ for (const fragment of [
 ]) {
   if (!runnerSource.includes(fragment)) throw new Error(`Acceptance volume marker flow is missing ${fragment}`);
 }
+for (const fragment of [
+  "const bindChild = dockerBindPathRelativeChild(acceptanceBindDir, bindSourcePath)",
+  'assert(bindChild === "external"',
+  "const bindHostPath = path.posix.join(acceptanceBindDir, bindChild)",
+  "const relativeBindHostPath = path.posix.join(acceptanceComposeDir, relativeBindChild)",
+  "mkdir -p '${bindHostPath}' '${relativeBindHostPath}'",
+  "test ! -e '${relativeBindSourcePath}/proof.txt'",
+  "docker exec \"$workload_id\" cat /allowed/proof.txt",
+  "docker exec \"$workload_id\" cat /relative-allowed/proof.txt",
+  "bindHostPath,",
+  "relativeBindHostPath,"
+]) {
+  if (!runnerSource.includes(fragment)) throw new Error(`Acceptance relative-bind marker flow is missing ${fragment}`);
+}
+for (const unsafeFragment of [
+  'mkdir -p "$bind_source" "$relative_bind_source"',
+  '"$relative_bind_source/proof.txt"'
+]) {
+  if (runnerSource.includes(unsafeFragment)) {
+    throw new Error(`Acceptance relative-bind marker must not be seeded through a daemon-only path: ${unsafeFragment}`);
+  }
+}
 const expectedScenarioIds = ["candidate-images", "fresh-image-install", "source-production-install", "hardened-overlays", "public-upgrade"];
 if (JSON.stringify(acceptanceScenarioManifest.map((entry) => entry.id)) !== JSON.stringify(expectedScenarioIds)) {
   throw new Error("Acceptance scenario manifest IDs changed without updating the release contract");

@@ -4,10 +4,7 @@ import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  dockerBindPathRelativeChild,
-  isDockerBindPathStrictlyBeneath
-} from "./bind-paths.mjs";
+import { dockerBindPathRelativeChild } from "./bind-paths.mjs";
 import { acceptanceScenarioManifest } from "./scenario-manifest.mjs";
 import { assertSafeTestResultsPath, digestGitBuildContext, materializeGitBuildContext } from "../materialize-git-context.mjs";
 import { validateGoAttributionReview } from "../go-attribution-review.mjs";
@@ -1301,10 +1298,7 @@ database_id="$(docker ps -q --filter 'label=com.docker.compose.project=${workloa
 bind_source="$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/allowed"}}{{.Source}}{{end}}{{end}}' "$workload_id")"
 relative_bind_source="$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/relative-allowed"}}{{.Source}}{{end}}{{end}}' "$workload_id")"
 test -n "$bind_source" && test -n "$relative_bind_source"
-mkdir -p "$bind_source" "$relative_bind_source"
 docker exec "$workload_id" sh -c "printf '%s' '${workloadVolumeMarker}' > /data/proof.txt"
-printf '%s' '${workloadBindMarker}' > "$bind_source/proof.txt"
-printf '%s' '${workloadRelativeBindMarker}' > "$relative_bind_source/proof.txt"
 docker exec "$database_id" psql -U postgres -v ON_ERROR_STOP=1 -c "CREATE TABLE IF NOT EXISTS acceptance_proof (id integer PRIMARY KEY, value text NOT NULL); INSERT INTO acceptance_proof (id, value) VALUES (1, 'database-ok') ON CONFLICT (id) DO UPDATE SET value = EXCLUDED.value;" >/dev/null
 printf 'ACCEPTANCE_BIND_SOURCE=%s\n' "$bind_source"
 printf 'ACCEPTANCE_RELATIVE_BIND_SOURCE=%s\n' "$relative_bind_source"
@@ -1320,10 +1314,44 @@ printf 'ACCEPTANCE_RELATIVE_BIND_SOURCE=%s\n' "$relative_bind_source"
     ?.slice("ACCEPTANCE_RELATIVE_BIND_SOURCE=".length);
   assert(/^\/[A-Za-z0-9._/-]+$/.test(bindSourcePath ?? ""), `Docker reported an unsafe acceptance bind source: ${JSON.stringify(bindSourcePath)}`);
   assert(/^\/[A-Za-z0-9._/-]+$/.test(relativeBindSourcePath ?? ""), `Docker reported an unsafe relative bind source: ${JSON.stringify(relativeBindSourcePath)}`);
+  const bindChild = dockerBindPathRelativeChild(acceptanceBindDir, bindSourcePath);
+  assert(bindChild === "external", `external bind was not resolved to the configured fixture path: expected ${JSON.stringify(acceptanceExternalBindDir)}, got ${JSON.stringify(bindSourcePath)}`);
+  const bindHostPath = path.posix.join(acceptanceBindDir, bindChild);
+  assert(bindHostPath === acceptanceExternalBindDir, "external bind canonical host path changed unexpectedly");
+  const relativeBindChild = dockerBindPathRelativeChild(acceptanceComposeDir, relativeBindSourcePath);
+  assert(relativeBindChild, `relative bind was not resolved beneath the Compose working directory: expected beneath ${JSON.stringify(acceptanceComposeDir)}, got ${JSON.stringify(relativeBindSourcePath)}`);
+  const relativeBindHostPath = path.posix.join(acceptanceComposeDir, relativeBindChild);
   assert(
-    isDockerBindPathStrictlyBeneath(acceptanceComposeDir, relativeBindSourcePath),
-    `relative bind was not resolved beneath the Compose working directory: expected beneath ${JSON.stringify(acceptanceComposeDir)}, got ${JSON.stringify(relativeBindSourcePath)}`
+    /^\/[A-Za-z0-9._/-]+$/.test(bindHostPath)
+      && /^\/[A-Za-z0-9._/-]+$/.test(relativeBindHostPath)
+      && relativeBindHostPath.startsWith(`${acceptanceComposeDir}/`),
+    `canonical fixture bind path is unsafe: ${JSON.stringify({ bindHostPath, relativeBindHostPath })}`
   );
+
+  // Docker Desktop reports daemon-side paths through /host_mnt, while this
+  // disposable SSH container reaches the same host bind through the canonical
+  // paths mounted into the fixture. Seed the real host-visible paths and prove
+  // both workload mounts see their markers before recovery. The external bind
+  // is also mirrored to the daemon-reported path in the SSH overlay because it
+  // is intentionally captured as its own artifact; the relative bind is not.
+  const seedFixtureBinds = `
+set -eu
+workload_id="$(docker ps -q --filter 'label=com.docker.compose.project=${workloadProject}' --filter 'label=com.docker.compose.service=workload')"
+test -n "$workload_id"
+mkdir -p '${bindHostPath}' '${relativeBindHostPath}'
+if [ '${relativeBindSourcePath}' != '${relativeBindHostPath}' ]; then
+  test ! -e '${relativeBindSourcePath}/proof.txt'
+fi
+printf '%s' '${workloadBindMarker}' > '${bindHostPath}/proof.txt'
+if [ '${bindSourcePath}' != '${bindHostPath}' ]; then
+  mkdir -p '${bindSourcePath}'
+  printf '%s' '${workloadBindMarker}' > '${bindSourcePath}/proof.txt'
+fi
+printf '%s' '${workloadRelativeBindMarker}' > '${relativeBindHostPath}/proof.txt'
+test "$(docker exec "$workload_id" cat /allowed/proof.txt)" = '${workloadBindMarker}'
+test "$(docker exec "$workload_id" cat /relative-allowed/proof.txt)" = '${workloadRelativeBindMarker}'
+`;
+  await compose(activeProject, activeEnv, ["exec", "-T", "sshhost", "sh", "-lc", seedFixtureBinds]);
 
   const verifyRuntime = `
 set -eu
@@ -1331,7 +1359,13 @@ workload_id="$(docker ps -q --filter 'label=com.docker.compose.project=${workloa
 database_id="$(docker ps -q --filter 'label=com.docker.compose.project=${workloadProject}' --filter 'label=com.docker.compose.service=database')"
 test "$(docker exec "$workload_id" cat /data/proof.txt)" = '${workloadVolumeMarker}'
 test "$(cat '${bindSourcePath}/proof.txt')" = '${workloadBindMarker}'
-test "$(cat '${relativeBindSourcePath}/proof.txt')" = '${workloadRelativeBindMarker}'
+test "$(cat '${bindHostPath}/proof.txt')" = '${workloadBindMarker}'
+test "$(cat '${relativeBindHostPath}/proof.txt')" = '${workloadRelativeBindMarker}'
+if [ '${relativeBindSourcePath}' != '${relativeBindHostPath}' ]; then
+  test ! -e '${relativeBindSourcePath}/proof.txt'
+fi
+test "$(docker exec "$workload_id" cat /allowed/proof.txt)" = '${workloadBindMarker}'
+test "$(docker exec "$workload_id" cat /relative-allowed/proof.txt)" = '${workloadRelativeBindMarker}'
 test "$(docker exec "$database_id" psql -U postgres -Atc 'SELECT value FROM acceptance_proof WHERE id = 1')" = database-ok
 test "$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$workload_id")" = '${workloadAddressPrefix}.20'
 test "$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$database_id")" = '${workloadAddressPrefix}.10'
@@ -1356,8 +1390,10 @@ docker network inspect '${workloadProject}_acceptance-net' >/dev/null
       volumeMarkerSeededAfterDeploy: true,
       bindMarker: workloadBindMarker,
       bindSourcePath,
+      bindHostPath,
       relativeBindMarker: workloadRelativeBindMarker,
       relativeBindSourcePath,
+      relativeBindHostPath,
       composeWorkingDir: acceptanceComposeDir
     }
   };
@@ -1415,14 +1451,18 @@ async function exerciseRecovery(host, stack, targets) {
   const expectedVolumeMarker = stack.acceptanceEvidence?.volumeMarker;
   const expectedBindMarker = stack.acceptanceEvidence?.bindMarker;
   const expectedBindSourcePath = stack.acceptanceEvidence?.bindSourcePath;
+  const expectedBindHostPath = stack.acceptanceEvidence?.bindHostPath;
   const expectedRelativeBindMarker = stack.acceptanceEvidence?.relativeBindMarker;
   const expectedRelativeBindSourcePath = stack.acceptanceEvidence?.relativeBindSourcePath;
+  const expectedRelativeBindHostPath = stack.acceptanceEvidence?.relativeBindHostPath;
   const expectedComposeWorkingDir = stack.acceptanceEvidence?.composeWorkingDir;
   assert(/^volume-[0-9a-f-]{36}$/.test(expectedVolumeMarker ?? ""), "workload volume marker is missing or invalid");
   assert(/^bind-[0-9a-f-]{36}$/.test(expectedBindMarker ?? ""), "workload bind marker is missing or invalid");
   assert(/^\/[A-Za-z0-9._/-]+$/.test(expectedBindSourcePath ?? ""), "workload bind source path is missing or invalid");
+  assert(/^\/[A-Za-z0-9._/-]+$/.test(expectedBindHostPath ?? ""), "workload canonical bind host path is missing or invalid");
   assert(/^relative-bind-[0-9a-f-]{36}$/.test(expectedRelativeBindMarker ?? ""), "relative bind marker is missing or invalid");
   assert(/^\/[A-Za-z0-9._/-]+$/.test(expectedRelativeBindSourcePath ?? ""), "relative bind source path is missing or invalid");
+  assert(/^\/[A-Za-z0-9._/-]+$/.test(expectedRelativeBindHostPath ?? ""), "relative bind canonical host path is missing or invalid");
   assert(/^\/[A-Za-z0-9._/-]+$/.test(expectedComposeWorkingDir ?? ""), "Compose working directory is missing or invalid");
   const created = await api("/api/recovery/points", {
     method: "POST",
@@ -1583,7 +1623,15 @@ docker run --rm -v '${restoredRelativeBindPath}:/target' alpine:3.20.8@sha256:76
 rm -rf '${restoredBindPath}'
 rm -rf '${restoredWorkingDir}'
 test "$(cat '${expectedBindSourcePath}/proof.txt')" = '${expectedBindMarker}'
-test "$(cat '${expectedRelativeBindSourcePath}/proof.txt')" = '${expectedRelativeBindMarker}'
+test "$(cat '${expectedBindHostPath}/proof.txt')" = '${expectedBindMarker}'
+test "$(cat '${expectedRelativeBindHostPath}/proof.txt')" = '${expectedRelativeBindMarker}'
+if [ '${expectedRelativeBindSourcePath}' != '${expectedRelativeBindHostPath}' ]; then
+  test ! -e '${expectedRelativeBindSourcePath}/proof.txt'
+fi
+source_workload_id="$(docker ps -q --filter 'label=com.docker.compose.project=${workloadProject}' --filter 'label=com.docker.compose.service=workload')"
+test -n "$source_workload_id"
+test "$(docker exec "$source_workload_id" cat /allowed/proof.txt)" = '${expectedBindMarker}'
+test "$(docker exec "$source_workload_id" cat /relative-allowed/proof.txt)" = '${expectedRelativeBindMarker}'
 `;
   await compose(activeProject, activeEnv, ["exec", "-T", "sshhost", "sh", "-lc", cleanupRestoredBind]);
   await api(`/api/recovery/points/${pointId}`, { method: "DELETE" });
