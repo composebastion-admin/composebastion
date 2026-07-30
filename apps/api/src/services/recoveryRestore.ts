@@ -7,7 +7,7 @@ import { isDemoHost } from "./demo.js";
 import { runAgentDockerCommandResult } from "./agent.js";
 import { buildComposeCommand, shQuote, withDockerEnv } from "./commands.js";
 import { pipeFileToSshCommand, runSshCommand } from "./ssh.js";
-import { stackRemoteDirectory, writeHostStackFiles } from "./remoteFiles.js";
+import { writeHostStackFiles } from "./remoteFiles.js";
 import { readRecoveryArtifact, withRecoveryArtifactLocalPath } from "./recoveryArtifactStore.js";
 import type { RecoveryManifest } from "./recoveryManifest.js";
 import type { JobExecutionFence } from "./jobs.js";
@@ -1213,14 +1213,15 @@ function assertComposeCloneResourcesOwned(
 
 function composeRestoreFilePaths(
   manifest: RecoveryManifest | null,
-  recoveryPointId: string,
+  plannedStackDirectory: string,
   options: { restoredWorkingDir?: string | null } = {}
 ) {
   // Generated Compose and environment files are always written inside the
   // attempt-owned stack directory. A restored working tree is used only as the
   // Compose project directory, never as a file-write destination; this avoids
   // following a captured compose-path symlink outside the managed restore.
-  const remoteDir = stackRemoteDirectory(recoveryPointId);
+  const remoteDir =
+    assertAllowedHostFolderTargetPath(plannedStackDirectory);
   const projectDirectory = options.restoredWorkingDir
     ? assertAllowedHostFolderTargetPath(options.restoredWorkingDir)
     : remoteDir;
@@ -2089,9 +2090,14 @@ async function runRecoveryRestoreInternal(
         );
       }
     }
+    if (!plan.stackDirectory) {
+      throw new Error(
+        "Recovery plan is missing its generated Compose stack directory."
+      );
+    }
     const restoreFiles = composeRestoreFilePaths(
       manifest,
-      point.id,
+      plan.stackDirectory,
       { restoredWorkingDir }
     );
     if (isDemoHost(restoreHost.public)) {

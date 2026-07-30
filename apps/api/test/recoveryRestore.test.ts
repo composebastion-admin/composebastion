@@ -5,13 +5,13 @@ import {
   buildCloneContainerName,
   buildCloneRestoreProjectName,
   buildCloneVolumeName,
-  buildManagedRestoreBindPath
+  buildManagedRestoreBindPath,
+  buildManagedRestoreStackPath
 } from "../src/services/recoveryRestoreUtils.js";
 import {
   currentRemoteMutationContext,
   RemoteMutationOutcomeUnknownError
 } from "../src/services/remoteMutationProof.js";
-import { stackRemoteDirectory } from "../src/services/remoteFiles.js";
 
 const query = vi.fn();
 const getHostForWorker = vi.fn();
@@ -1298,7 +1298,10 @@ describe("recovery standalone restore cleanup", () => {
     );
     const targetFrontend = `${composeProjectName}_frontend`;
     const targetBackend = `${composeProjectName}_backend`;
-    const stackDirectory = `/tmp/composebastion/${recoveryPointId}`;
+    const stackDirectory = buildManagedRestoreStackPath(
+      "/var/lib/composebastion/restores",
+      recoveryPointId
+    );
     const composePath = `${stackDirectory}/compose.yml`;
     const envPath = `${stackDirectory}/.env`;
     const composeContainer = `${composeProjectName}-web-1`;
@@ -1615,7 +1618,10 @@ describe("recovery standalone restore cleanup", () => {
 
   it("refuses to clean a Compose container replaced by a successor after project startup", async () => {
     const composeProjectName = buildCloneRestoreProjectName("demoapp", recoveryPointId);
-    const stackDirectory = `/tmp/composebastion/${recoveryPointId}`;
+    const stackDirectory = buildManagedRestoreStackPath(
+      "/var/lib/composebastion/restores",
+      recoveryPointId
+    );
     const composeContainer = `${composeProjectName}-web-1`;
     const targetDefaultNetwork = `${composeProjectName}_default`;
     const composeManifest = {
@@ -1746,7 +1752,10 @@ describe("recovery standalone restore cleanup", () => {
 
   it("refuses to overwrite or clean a preexisting clone stack directory", async () => {
     const composeProjectName = buildCloneRestoreProjectName("demoapp", recoveryPointId);
-    const stackDirectory = `/tmp/composebastion/${recoveryPointId}`;
+    const stackDirectory = buildManagedRestoreStackPath(
+      "/var/lib/composebastion/restores",
+      recoveryPointId
+    );
     const composeManifest = {
       ...manifest,
       appIdentity: { kind: "compose" as const, projectName: "demoapp" },
@@ -1802,15 +1811,17 @@ describe("recovery standalone restore cleanup", () => {
   });
 
   it("isolates same-host Compose clones in the managed restored working directory", async () => {
+    const restoreRoot =
+      "/var/lib/composebastion/restores/qualification-tenant";
     const demoappProjectName = buildCloneRestoreProjectName("demoapp", recoveryPointId);
     const restoredDemoAppData = `${demoappProjectName}_data`;
     const restoredWorkingDirectory = buildManagedRestoreBindPath(
-      "/var/lib/composebastion/restores",
+      restoreRoot,
       recoveryPointId,
       "/home/docker/DemoApp"
     );
     const stackDirectory =
-      stackRemoteDirectory(recoveryPointId);
+      buildManagedRestoreStackPath(restoreRoot, recoveryPointId);
     let restoredVolumeOwner: string | null = null;
     const demoappVolumeArtifactRow = {
       ...volumeArtifactRow,
@@ -1894,7 +1905,11 @@ describe("recovery standalone restore cleanup", () => {
     const result = await runRecoveryRestore(hostId, {
       recoveryPointId,
       targetHostId: hostId,
-      options: { mode: "clone", remapPorts: true }
+      options: {
+        mode: "clone",
+        remapPorts: true,
+        restoreRoot
+      }
     });
 
     expect(result.composeRestored).toBe(true);
@@ -1916,7 +1931,7 @@ describe("recovery standalone restore cleanup", () => {
       expect.stringContaining(`name: ${restoredDemoAppData}`)
     );
     const restoredBindPath = buildManagedRestoreBindPath(
-      "/var/lib/composebastion/restores",
+      restoreRoot,
       recoveryPointId,
       "/srv/app/config"
     );
@@ -1941,12 +1956,24 @@ describe("recovery standalone restore cleanup", () => {
       "DATA_DIR=/srv/app/config\nUNRELATED_SETTING=retained\n"
     );
     const commands = runSshCommand.mock.calls.map((call) => String(call[1]));
+    expect(commands.some((command) => {
+      const acquisition =
+        directoryOwnershipFromAcquireCommand(command);
+      return acquisition?.markerPath ===
+        `${stackDirectory}${restoreOwnerMarkerSuffix}`;
+    })).toBe(true);
     expect(commands.some((command) =>
       command.includes(`cd '${stackDirectory}'`)
       && command.includes(
         `--project-directory '${restoredWorkingDirectory}'`
       )
+      && command.includes(
+        `-f '${stackDirectory}/docker-compose.release.yml'`
+      )
     )).toBe(true);
+    expect(commands.some((command) =>
+      command.includes(`/tmp/composebastion/${recoveryPointId}`)
+    )).toBe(false);
     expect(commands.some((command) => command.includes("cd '/home/docker/DemoApp'"))).toBe(false);
   });
 

@@ -18,11 +18,11 @@ import {
   buildCloneRestoreProjectName,
   buildCloneVolumeName,
   buildComposeProjectVolumeName,
+  buildManagedRestoreStackPath,
   composeVolumeNameFromEngineName,
   resolveHostFolderRestorePath,
   sanitizeDockerName
 } from "./recoveryRestoreUtils.js";
-import { stackRemoteDirectory } from "./remoteFiles.js";
 
 const BUILTIN_NETWORKS = new Set(["bridge", "host", "none"]);
 
@@ -280,7 +280,7 @@ export function buildRecoveryRestorePlan(
     ? predictedComposeContainerNames(manifest, projectName)
     : [];
   const stackDirectory = composeArtifact
-    ? stackRemoteDirectory(point.id)
+    ? buildManagedRestoreStackPath(restoreRoot, point.id)
     : null;
   const ownedNetworkNames = networkMode === "clone"
     ? unique(Object.values(networkMap))

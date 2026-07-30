@@ -5,6 +5,7 @@ import {
   buildCloneVolumeName,
   buildComposeProjectVolumeName,
   buildManagedRestoreBindPath,
+  buildManagedRestoreStackPath,
   composeVolumeNameFromEngineName,
   buildPortRemap,
   detectPortConflicts,
@@ -63,6 +64,25 @@ describe("recovery restore naming", () => {
   it("places bind mounts under a managed restore root", () => {
     expect(buildManagedRestoreBindPath("/var/lib/composebastion/restores", "rp-1", "/srv/app/data"))
       .toBe("/var/lib/composebastion/restores/rp-1/srv_app_data");
+  });
+
+  it("places generated restore stacks under the validated restore root", () => {
+    const recoveryPointId =
+      "00000000-0000-4000-8000-000000000001";
+    expect(buildManagedRestoreStackPath(
+      "/var/lib/composebastion/restores/tenant-a",
+      recoveryPointId
+    )).toBe(
+      `/var/lib/composebastion/restores/tenant-a/.composebastion-stacks/${recoveryPointId}`
+    );
+    expect(() => buildManagedRestoreStackPath(
+      "/var/lib/composebastion/restores",
+      "../escape"
+    )).toThrow("UUID recovery point id");
+    expect(() => buildManagedRestoreStackPath(
+      "/tmp/composebastion",
+      recoveryPointId
+    )).toThrow("not allowed");
   });
 
   it("restores compose working directory artifacts to their original path", () => {

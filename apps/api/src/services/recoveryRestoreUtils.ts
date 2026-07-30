@@ -64,6 +64,25 @@ export function buildManagedRestoreBindPath(restoreRoot: string, recoveryPointId
   return path.posix.join(restoreRoot.replace(/\/+$/, ""), recoveryPointId, relative);
 }
 
+export function buildManagedRestoreStackPath(
+  restoreRoot: string,
+  recoveryPointId: string
+) {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(recoveryPointId)) {
+    throw new Error("Recovery stack path requires a UUID recovery point id.");
+  }
+  const root = assertAllowedRestoreRoot(restoreRoot);
+  const target = path.posix.join(
+    root,
+    ".composebastion-stacks",
+    recoveryPointId
+  );
+  if (!target.startsWith(`${root.replace(/\/+$/, "")}/`)) {
+    throw new Error("Recovery stack path escaped the managed restore root.");
+  }
+  return target;
+}
+
 export function assertAllowedHostFolderTargetPath(targetPath: string) {
   const normalized = normalizeBindMountPath(targetPath);
   if (!normalized.startsWith("/") || !isAllowedBindMountPath(normalized)) {
