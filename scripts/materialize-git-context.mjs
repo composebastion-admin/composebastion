@@ -177,6 +177,15 @@ function samePathIdentity(left, right) {
     && left.ctimeMs === right.ctimeMs;
 }
 
+function sameDirectoryTraversalIdentity(left, right) {
+  // Directory ctime can advance when a host metadata service updates extended
+  // attributes without changing the directory's entries or build semantics.
+  // Entry names are snapshotted separately below; keep file reads strict.
+  return sameNodeIdentity(left, right)
+    && left.size === right.size
+    && left.mtimeMs === right.mtimeMs;
+}
+
 function pathIdentitySummary(stat) {
   return {
     dev: String(stat.dev),
@@ -185,6 +194,16 @@ function pathIdentitySummary(stat) {
     size: stat.size,
     mtimeMs: stat.mtimeMs,
     ctimeMs: stat.ctimeMs
+  };
+}
+
+function directoryTraversalIdentitySummary(stat) {
+  return {
+    dev: String(stat.dev),
+    ino: String(stat.ino),
+    mode: stat.mode,
+    size: stat.size,
+    mtimeMs: stat.mtimeMs
   };
 }
 
@@ -227,14 +246,29 @@ export function readStableRegularFile(absolute, testHooks = {}) {
   }
 }
 
-function contextEntries(root, current = root, expectedDirectoryStat = lstatSync(current)) {
+function contextEntries(
+  root,
+  current = root,
+  expectedDirectoryStat = lstatSync(current),
+  testHooks = {},
+  traversalState = { directoryCtimeChanged: false }
+) {
   if (!expectedDirectoryStat.isDirectory()) throw new Error(`Expected a Git context directory: ${current}`);
   const openedDirectoryStat = lstatSync(current);
-  if (!samePathIdentity(expectedDirectoryStat, openedDirectoryStat)) {
+  if (!sameDirectoryTraversalIdentity(expectedDirectoryStat, openedDirectoryStat)) {
     throw new Error(`Git context directory changed before traversal: ${current}`);
   }
+  if (expectedDirectoryStat.ctimeMs !== openedDirectoryStat.ctimeMs) {
+    traversalState.directoryCtimeChanged = true;
+  }
   const entries = [];
-  for (const name of readdirSync(current).sort()) {
+  const openedNames = readdirSync(current).sort();
+  testHooks.afterDirectorySnapshot?.({
+    root,
+    current,
+    names: [...openedNames]
+  });
+  for (const name of openedNames) {
     const absolute = path.join(current, name);
     const relative = path.relative(root, absolute).split(path.sep).join("/");
     let descriptor;
@@ -251,30 +285,54 @@ function contextEntries(root, current = root, expectedDirectoryStat = lstatSync(
       if (!samePathIdentity(stat, finalStat)) {
         throw new Error(`Git context symlink changed during traversal: ${relative}`);
       }
-      entries.push({ relative, type: "symlink", mode: stat.mode & 0o777, target });
+      entries.push({
+        relative,
+        type: "symlink",
+        mode: stat.mode & 0o777,
+        target,
+        identity: pathIdentitySummary(stat)
+      });
       continue;
     }
     try {
       const openedStat = fstatSync(descriptor);
       if (openedStat.isDirectory()) {
         const pathStat = lstatSync(absolute);
-        if (!samePathIdentity(openedStat, pathStat)) {
+        if (!sameDirectoryTraversalIdentity(openedStat, pathStat)) {
           throw new Error(`Git context directory changed while it was being opened: ${relative}`);
+        }
+        if (openedStat.ctimeMs !== pathStat.ctimeMs) {
+          traversalState.directoryCtimeChanged = true;
         }
         closeSync(descriptor);
         descriptor = undefined;
-        entries.push({ relative, type: "directory", mode: openedStat.mode & 0o777 });
-        entries.push(...contextEntries(root, absolute, openedStat));
+        entries.push({
+          relative,
+          type: "directory",
+          mode: openedStat.mode & 0o777,
+          identity: directoryTraversalIdentitySummary(openedStat)
+        });
+        entries.push(...contextEntries(
+          root,
+          absolute,
+          openedStat,
+          testHooks,
+          traversalState
+        ));
         const finalStat = lstatSync(absolute);
-        if (!samePathIdentity(openedStat, finalStat)) {
+        if (!sameDirectoryTraversalIdentity(openedStat, finalStat)) {
           throw new Error(`Git context directory changed during traversal: ${relative}`);
+        }
+        if (openedStat.ctimeMs !== finalStat.ctimeMs) {
+          traversalState.directoryCtimeChanged = true;
         }
       } else if (openedStat.isFile()) {
         entries.push({
           relative,
           type: "file",
           mode: openedStat.mode & 0o777,
-          contents: readStableFileDescriptor(absolute, descriptor, openedStat)
+          contents: readStableFileDescriptor(absolute, descriptor, openedStat),
+          identity: pathIdentitySummary(openedStat)
         });
       } else {
         throw new Error(`Unsupported entry in Git build context: ${relative}`);
@@ -283,43 +341,169 @@ function contextEntries(root, current = root, expectedDirectoryStat = lstatSync(
       if (descriptor !== undefined) closeSync(descriptor);
     }
   }
+  const finalNames = readdirSync(current).sort();
+  if (JSON.stringify(openedNames) !== JSON.stringify(finalNames)) {
+    throw new Error(`Git context directory entries changed during traversal: ${current}`);
+  }
   const finalDirectoryStat = lstatSync(current);
-  if (!samePathIdentity(openedDirectoryStat, finalDirectoryStat)) {
+  if (!sameDirectoryTraversalIdentity(openedDirectoryStat, finalDirectoryStat)) {
     throw new Error(`Git context directory changed during traversal: ${current}; before=${JSON.stringify(pathIdentitySummary(openedDirectoryStat))}; after=${JSON.stringify(pathIdentitySummary(finalDirectoryStat))}`);
+  }
+  if (openedDirectoryStat.ctimeMs !== finalDirectoryStat.ctimeMs) {
+    traversalState.directoryCtimeChanged = true;
   }
   return entries;
 }
 
-export function digestGitBuildContext(destination) {
-  const root = path.resolve(destination);
-  if (!existsSync(root)) throw new Error(`Git build context does not exist: ${root}`);
+function updateLengthPrefixedHash(hash, value) {
+  const bytes = Buffer.isBuffer(value) ? value : Buffer.from(String(value));
+  const length = Buffer.alloc(8);
+  length.writeBigUInt64BE(BigInt(bytes.length));
+  hash.update(length);
+  hash.update(bytes);
+}
+
+function contextTraversalSnapshot(root, testHooks = {}) {
+  const rootStat = lstatSync(root);
+  const traversalState = { directoryCtimeChanged: false };
+  const entries = contextEntries(
+    root,
+    root,
+    rootStat,
+    testHooks,
+    traversalState
+  );
   const hash = createHash("sha256");
-  const hashField = (value) => {
-    const bytes = Buffer.isBuffer(value) ? value : Buffer.from(String(value));
-    const length = Buffer.alloc(8);
-    length.writeBigUInt64BE(BigInt(bytes.length));
-    hash.update(length);
-    hash.update(bytes);
+  updateLengthPrefixedHash(
+    hash,
+    "ComposeBastion exact Git context traversal snapshot v1"
+  );
+  updateLengthPrefixedHash(
+    hash,
+    JSON.stringify(directoryTraversalIdentitySummary(rootStat))
+  );
+  for (const entry of entries) {
+    updateLengthPrefixedHash(hash, entry.type);
+    updateLengthPrefixedHash(hash, entry.relative);
+    updateLengthPrefixedHash(hash, String(entry.mode));
+    updateLengthPrefixedHash(hash, JSON.stringify(entry.identity));
+    if (entry.type === "file") {
+      updateLengthPrefixedHash(hash, entry.contents);
+    } else if (entry.type === "symlink") {
+      updateLengthPrefixedHash(hash, entry.target);
+    } else {
+      updateLengthPrefixedHash(hash, "");
+    }
+  }
+  return {
+    entries,
+    directoryCtimeChanged: traversalState.directoryCtimeChanged,
+    snapshotDigest: `sha256:${hash.digest("hex")}`
   };
-  hashField("ComposeBastion exact Git context digest v1");
+}
+
+function stableContextTraversal(root, testHooks = {}) {
+  const first = contextTraversalSnapshot(root, testHooks);
+  if (!first.directoryCtimeChanged) return first;
+  testHooks.beforeDirectoryMetadataRetry?.({
+    root,
+    firstSnapshotDigest: first.snapshotDigest
+  });
+  const second = contextTraversalSnapshot(root, testHooks);
+  if (first.snapshotDigest !== second.snapshotDigest) {
+    throw new Error(
+      `Git context entries changed across a directory metadata retry: ${root}`
+    );
+  }
+  return second;
+}
+
+function digestContextEntries(entries) {
+  const hash = createHash("sha256");
+  updateLengthPrefixedHash(hash, "ComposeBastion exact Git context digest v1");
   let fileCount = 0;
-  for (const entry of contextEntries(root)) {
+  for (const entry of entries) {
     const logicalMode = entry.type === "file"
       ? ((entry.mode & 0o111) !== 0 ? "100755" : "100644")
       : (entry.type === "symlink" ? "120000" : "040000");
-    hashField(entry.type);
-    hashField(entry.relative);
-    hashField(logicalMode);
+    updateLengthPrefixedHash(hash, entry.type);
+    updateLengthPrefixedHash(hash, entry.relative);
+    updateLengthPrefixedHash(hash, logicalMode);
     if (entry.type === "file") {
-      hashField(entry.contents);
+      updateLengthPrefixedHash(hash, entry.contents);
       fileCount += 1;
     } else if (entry.type === "symlink") {
-      hashField(entry.target);
+      updateLengthPrefixedHash(hash, entry.target);
     } else {
-      hashField("");
+      updateLengthPrefixedHash(hash, "");
     }
   }
   return { digest: `sha256:${hash.digest("hex")}`, fileCount };
+}
+
+function expectedGitContextEntries(materializedEntries) {
+  const tree = { type: "directory", children: new Map() };
+  for (const entry of materializedEntries) {
+    const segments = entry.relative.split("/");
+    let directory = tree;
+    for (const segment of segments.slice(0, -1)) {
+      const existing = directory.children.get(segment);
+      if (existing && existing.type !== "directory") {
+        throw new Error(`Git tree path conflicts with a file: ${entry.relative}`);
+      }
+      if (!existing) {
+        directory.children.set(segment, {
+          type: "directory",
+          children: new Map()
+        });
+      }
+      directory = directory.children.get(segment);
+    }
+    const leafName = segments.at(-1);
+    if (!leafName || directory.children.has(leafName)) {
+      throw new Error(`Git tree contains a duplicate or invalid path: ${entry.relative}`);
+    }
+    directory.children.set(leafName, entry.mode === "120000"
+      ? {
+          type: "symlink",
+          mode: 0o777,
+          target: entry.contents.toString("utf8")
+        }
+      : {
+          type: "file",
+          mode: entry.mode === "100755" ? 0o755 : 0o644,
+          contents: entry.contents
+        });
+  }
+
+  const expected = [];
+  const walk = (directory, prefix = "") => {
+    for (const name of [...directory.children.keys()].sort()) {
+      const child = directory.children.get(name);
+      const relative = prefix ? `${prefix}/${name}` : name;
+      if (child.type === "directory") {
+        expected.push({
+          relative,
+          type: "directory",
+          mode: 0o755
+        });
+        walk(child, relative);
+      } else {
+        expected.push({
+          relative,
+          ...child
+        });
+      }
+    }
+  };
+  walk(tree);
+  return expected;
+}
+
+export function digestGitBuildContext(destination, testHooks = {}) {
+  const root = path.resolve(destination);
+  if (!existsSync(root)) throw new Error(`Git build context does not exist: ${root}`);
+  return digestContextEntries(stableContextTraversal(root, testHooks).entries);
 }
 
 export function materializeGitBuildContext({ repositoryRoot, revision, destination, testHooks = {} }) {
@@ -365,7 +549,7 @@ export function materializeGitBuildContext({ repositoryRoot, revision, destinati
       }
     }
 
-    const actualLeafPaths = contextEntries(stagingDestination)
+    const actualLeafPaths = stableContextTraversal(stagingDestination).entries
       .filter((entry) => entry.type !== "directory")
       .map((entry) => entry.relative)
       .sort();
@@ -388,7 +572,7 @@ export function materializeGitBuildContext({ repositoryRoot, revision, destinati
         }
       }
     }
-    for (const entry of contextEntries(stagingDestination)) {
+    for (const entry of stableContextTraversal(stagingDestination).entries) {
       if (entry.type === "directory") {
         chmodSync(path.join(stagingDestination, ...entry.relative.split("/")), 0o755);
       }
@@ -401,7 +585,22 @@ export function materializeGitBuildContext({ repositoryRoot, revision, destinati
       }
     }
 
+    const expectedContext = digestContextEntries(
+      expectedGitContextEntries(materializedEntries)
+    );
+    testHooks.beforeStagedDigest?.({
+      destinationParent,
+      resolvedDestination,
+      stagingDestination,
+      expectedContext
+    });
     const stagedContext = digestGitBuildContext(stagingDestination);
+    if (stagedContext.digest !== expectedContext.digest
+        || stagedContext.fileCount !== expectedContext.fileCount) {
+      throw new Error(
+        "Materialized Git context digest does not exactly match the commit tree"
+      );
+    }
     testHooks.afterStagingVerified?.({ destinationParent, resolvedDestination, stagingDestination });
     assertStableDirectoryNode(destinationParent, destinationParentStat, "Git context destination parent");
     if (existsSync(resolvedDestination)) {
