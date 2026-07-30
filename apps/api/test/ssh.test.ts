@@ -93,6 +93,19 @@ describe("SSH command completion", () => {
     ssh2Mock.clients.length = 0;
   });
 
+  it("rejects once and absorbs repeated transport errors during a failed handshake", async () => {
+    const result = runSshCommand(target, "docker info");
+    expect(ssh2Mock.clients).toHaveLength(1);
+    const client = ssh2Mock.clients[0]!;
+    const failure = new Error("connection lost before handshake");
+
+    client.emit("error", failure);
+
+    expect(() => client.emit("error", new Error("late socket close error"))).not.toThrow();
+    await expect(result).rejects.toBe(failure);
+    expect(client.exec).not.toHaveBeenCalled();
+  });
+
   it("rejects a channel close that has no authoritative exit status", async () => {
     const result = runSshCommand(target, "docker info");
     const client = await connectedClient();

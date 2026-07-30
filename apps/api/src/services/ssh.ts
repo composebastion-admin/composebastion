@@ -51,6 +51,11 @@ function execValidatedSshCommand(
 function connect(target: SshTarget) {
   return new Promise<Client>((resolve, reject) => {
     const client = new Client();
+    // ssh2 can emit more than one socket/protocol error while a failed
+    // handshake is closing. Keep a sink attached for the client's full
+    // lifetime; the phase-specific listener below still rejects the
+    // connection with the first actionable failure.
+    client.on("error", () => undefined);
     const config: ConnectConfig = {
       host: target.hostname,
       port: target.port,
@@ -68,11 +73,6 @@ function connect(target: SshTarget) {
     };
     const onReady = () => {
       client.removeListener("error", onError);
-      // ssh2 may report more than one late socket/protocol/keepalive error
-      // while a client is closing. Operation-specific listeners handle the
-      // first actionable failure; this persistent sink prevents any later
-      // EventEmitter "error" from becoming an uncaught process exception.
-      client.on("error", () => undefined);
       resolve(client);
     };
     client.once("ready", onReady);
