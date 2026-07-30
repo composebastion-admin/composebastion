@@ -1,3 +1,5 @@
+import http from "node:http";
+import https from "node:https";
 import { createReadStream, createWriteStream } from "node:fs";
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -11,7 +13,9 @@ import {
   S3Client,
   type S3ClientConfig
 } from "@aws-sdk/client-s3";
-import { isPrivateIp, resolveAgentHostname, type LookupAll } from "./ssrf.js";
+import { NodeHttpHandler } from "@smithy/node-http-handler";
+import { env } from "../config/env.js";
+import { createAgentLookup, isPrivateIp, resolveAgentHostname, type LookupAll } from "./ssrf.js";
 
 export type S3TargetConfig = {
   endpoint: string;
@@ -56,7 +60,12 @@ export function buildS3ObjectKey(prefix: string | null | undefined, recoveryPoin
   return parts.join("/").replace(/\/+/g, "/");
 }
 
-export function createS3Client(config: S3TargetConfig, credentials: S3TargetCredentials) {
+export function createS3Client(
+  config: S3TargetConfig,
+  credentials: S3TargetCredentials,
+  options: { blockPrivateEndpoints?: boolean; resolve?: LookupAll } = {}
+) {
+  const blockPrivateEndpoints = options.blockPrivateEndpoints ?? env.BLOCK_PRIVATE_S3_ENDPOINTS;
   const clientConfig: S3ClientConfig = {
     endpoint: config.endpoint,
     region: config.region || "us-east-1",
@@ -66,6 +75,16 @@ export function createS3Client(config: S3TargetConfig, credentials: S3TargetCred
       secretAccessKey: credentials.secretAccessKey
     }
   };
+  if (blockPrivateEndpoints) {
+    // The policy preflight catches literal private endpoints. The custom
+    // transport lookup repeats the all-address check for every socket
+    // connection, preventing DNS rebinding between validation and S3 I/O.
+    const lookup = createAgentLookup(false, options.resolve, "S3 endpoint");
+    clientConfig.requestHandler = new NodeHttpHandler({
+      httpAgent: new http.Agent({ keepAlive: true, lookup }),
+      httpsAgent: new https.Agent({ keepAlive: true, lookup })
+    });
+  }
   return new S3Client(clientConfig);
 }
 

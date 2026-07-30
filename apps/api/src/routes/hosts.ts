@@ -1,5 +1,9 @@
 import type { FastifyInstance } from "fastify";
-import { dockerActionSchema, resourceKindSchema } from "@composebastion/shared";
+import {
+  directHostActionTypeSchema,
+  dockerActionSchema,
+  resourceKindSchema
+} from "@composebastion/shared";
 import { createHostWithSync, deleteHost, getHost, listHosts, restoreHost, updateHost } from "../services/hosts.js";
 import { auditContextFromRequest } from "../services/audit.js";
 import { sendApiError } from "../services/apiError.js";
@@ -79,7 +83,16 @@ export async function registerHostRoutes(app: FastifyInstance) {
 
   app.post("/api/hosts/:id/restore", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request, reply) => {
     const { id } = request.params as { id: string };
-    const host = await restoreHost(id);
+    let host: Awaited<ReturnType<typeof restoreHost>>;
+    try {
+      host = await restoreHost(id);
+    } catch (error) {
+      const statusCode = Number((error as { statusCode?: number }).statusCode ?? 500);
+      if (statusCode === 409) {
+        return sendApiError(reply, 409, "CONFLICT", error instanceof Error ? error.message : "Conflict");
+      }
+      throw error;
+    }
     if (!host) {
       return sendApiError(reply, 404, "NOT_FOUND", "Host not found or not deleted");
     }
@@ -118,10 +131,32 @@ export async function registerHostRoutes(app: FastifyInstance) {
     return { candidates: await listImageCleanupCandidates(id) };
   });
 
-  app.post("/api/hosts/:id/actions", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
+  app.post("/api/hosts/:id/actions", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request, reply) => {
     const { id } = request.params as { id: string };
-    const incoming = request.body as Record<string, unknown>;
-    const action = dockerActionSchema.parse({ ...incoming, hostId: id });
+    const incoming = request.body;
+    if (!incoming || typeof incoming !== "object" || Array.isArray(incoming)) {
+      return sendApiError(
+        reply,
+        400,
+        "VALIDATION_FAILED",
+        "Request body must be a JSON object."
+      );
+    }
+    const incomingAction = incoming as Record<string, unknown>;
+    // Jobs that depend on a durable domain record, reviewed plan, state
+    // transition, credential lookup, or dedicated audit contract must enter
+    // through that feature's route.
+    if (!directHostActionTypeSchema.safeParse(incomingAction.type).success) {
+      return sendApiError(
+        reply,
+        400,
+        "VALIDATION_FAILED",
+        typeof incomingAction.type === "string"
+          ? "This orchestrated action can only be started through its dedicated API endpoint."
+          : "Request body must include a supported direct action type."
+      );
+    }
+    const action = dockerActionSchema.parse({ ...incomingAction, hostId: id });
     const idempotencyKey = typeof request.headers["idempotency-key"] === "string"
       ? request.headers["idempotency-key"]
       : undefined;

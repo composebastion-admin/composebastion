@@ -7,7 +7,7 @@ import { isDemoHost } from "./demo.js";
 import { buildComposeCommand, shQuote, withDockerEnv } from "./commands.js";
 import { pipeFileToSshCommand, runSshCommand } from "./ssh.js";
 import { stackRemoteDirectory, writeHostStackFiles } from "./remoteFiles.js";
-import { ensureRecoveryArtifactLocalPath, readRecoveryArtifact } from "./recoveryArtifactStore.js";
+import { readRecoveryArtifact, withRecoveryArtifactLocalPath } from "./recoveryArtifactStore.js";
 import type { RecoveryManifest } from "./recoveryManifest.js";
 import type { JobExecutionFence } from "./jobs.js";
 import {
@@ -84,30 +84,31 @@ async function restoreVolumeArtifact(
   if (host.connectionMode !== "ssh") {
     throw new Error("Recovery volume restore currently requires SSH host mode.");
   }
-  const sourcePath = await ensureRecoveryArtifactLocalPath(point, artifact);
-  const inspect = await runSshCommand(
-    host.ssh,
-    withDockerEnv(`docker volume inspect ${shQuote(targetVolumeName)}`, host.public.dockerSocketPath),
-    { timeoutMs: 60_000 }
-  );
-  if (inspect.code === 0) {
-    throw new Error(`Recovery volume ${targetVolumeName} already exists; refusing to merge restored data into an existing volume.`);
-  }
-  const createResult = await runSshCommand(
-    host.ssh,
-    withDockerEnv(`docker volume create ${shQuote(targetVolumeName)}`, host.public.dockerSocketPath),
-    { timeoutMs: 60_000 }
-  );
-  if (createResult.code !== 0) {
-    throw new Error(createResult.stderr || createResult.stdout || `Failed to create recovery volume ${targetVolumeName}`);
-  }
-  const restoreCommand = withDockerEnv(
-    `docker run --rm -i -v ${shQuote(`${targetVolumeName}:/volume`)} alpine:3.20 sh -c ${shQuote("cd /volume && tar xzf -")}`,
-    host.public.dockerSocketPath
-  );
-  const result = await pipeFileToSshCommand(host.ssh, sourcePath, restoreCommand);
-  if (result.code !== 0) throw new Error(result.stderr || result.stdout || "Recovery volume restore failed");
-  return { stdout: result.stdout, stderr: result.stderr };
+  return withRecoveryArtifactLocalPath(point, artifact, async (sourcePath) => {
+    const inspect = await runSshCommand(
+      host.ssh,
+      withDockerEnv(`docker volume inspect ${shQuote(targetVolumeName)}`, host.public.dockerSocketPath),
+      { timeoutMs: 60_000 }
+    );
+    if (inspect.code === 0) {
+      throw new Error(`Recovery volume ${targetVolumeName} already exists; refusing to merge restored data into an existing volume.`);
+    }
+    const createResult = await runSshCommand(
+      host.ssh,
+      withDockerEnv(`docker volume create ${shQuote(targetVolumeName)}`, host.public.dockerSocketPath),
+      { timeoutMs: 60_000 }
+    );
+    if (createResult.code !== 0) {
+      throw new Error(createResult.stderr || createResult.stdout || `Failed to create recovery volume ${targetVolumeName}`);
+    }
+    const restoreCommand = withDockerEnv(
+      `docker run --rm -i -v ${shQuote(`${targetVolumeName}:/volume`)} alpine:3.20 sh -c ${shQuote("cd /volume && tar xzf -")}`,
+      host.public.dockerSocketPath
+    );
+    const result = await pipeFileToSshCommand(host.ssh, sourcePath, restoreCommand);
+    if (result.code !== 0) throw new Error(result.stderr || result.stdout || "Recovery volume restore failed");
+    return { stdout: result.stdout, stderr: result.stderr };
+  });
 }
 
 async function restoreBindMountArtifact(
@@ -123,11 +124,12 @@ async function restoreBindMountArtifact(
   if (host.connectionMode !== "ssh") {
     throw new Error("Recovery bind mount restore currently requires SSH host mode.");
   }
-  const sourcePath = await ensureRecoveryArtifactLocalPath(point, artifact);
-  const restoreCommand = buildBindMountRestoreCommand(targetPath);
-  const result = await pipeFileToSshCommand(host.ssh, sourcePath, restoreCommand);
-  if (result.code !== 0) throw new Error(result.stderr || result.stdout || "Recovery bind mount restore failed");
-  return { stdout: result.stdout, stderr: result.stderr };
+  return withRecoveryArtifactLocalPath(point, artifact, async (sourcePath) => {
+    const restoreCommand = buildBindMountRestoreCommand(targetPath);
+    const result = await pipeFileToSshCommand(host.ssh, sourcePath, restoreCommand);
+    if (result.code !== 0) throw new Error(result.stderr || result.stdout || "Recovery bind mount restore failed");
+    return { stdout: result.stdout, stderr: result.stderr };
+  });
 }
 
 function isPathInside(parent: string, child: string) {

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
-import type { WorkerBackupTarget } from "./recoveryBackupTargets.js";
+import { assertBackupTargetS3EndpointAllowed, type WorkerBackupTarget } from "./recoveryBackupTargets.js";
 import {
   buildS3ObjectKey,
   createS3Client,
@@ -50,15 +50,20 @@ export async function uploadRemoteArtifact(input: {
 }): Promise<RemoteArtifactUpload | null> {
   const { target, namespaceId, storageKey, localPath, checksum } = input;
   if (target.kind === "s3" && target.s3) {
+    await assertBackupTargetS3EndpointAllowed(target);
     const client = createS3Client(target.s3.config, target.s3.credentials);
-    const objectKey = buildRemoteObjectKey(target, namespaceId, storageKey);
-    const uploaded = await uploadRecoveryArtifactToS3(client, target.s3.config.bucket, objectKey, localPath, checksum);
-    return {
-      remoteObjectKey: objectKey,
-      remoteBackend: "s3",
-      remoteSizeBytes: uploaded.sizeBytes,
-      remoteEtag: uploaded.etag
-    };
+    try {
+      const objectKey = buildRemoteObjectKey(target, namespaceId, storageKey);
+      const uploaded = await uploadRecoveryArtifactToS3(client, target.s3.config.bucket, objectKey, localPath, checksum);
+      return {
+        remoteObjectKey: objectKey,
+        remoteBackend: "s3",
+        remoteSizeBytes: uploaded.sizeBytes,
+        remoteEtag: uploaded.etag
+      };
+    } finally {
+      client.destroy();
+    }
   }
   if (target.kind === "rclone" && target.rclone) {
     const objectKey = buildRemoteObjectKey(target, namespaceId, storageKey);
@@ -76,9 +81,14 @@ export async function uploadRemoteArtifact(input: {
 
 export async function headRemoteArtifact(target: WorkerBackupTarget, objectKey: string): Promise<RemoteArtifactHead> {
   if (target.kind === "s3" && target.s3) {
+    await assertBackupTargetS3EndpointAllowed(target);
     const client = createS3Client(target.s3.config, target.s3.credentials);
-    const head = await headRecoveryArtifactOnS3(client, target.s3.config.bucket, objectKey);
-    return { sizeBytes: head.sizeBytes, checksum: head.checksum, etag: head.etag };
+    try {
+      const head = await headRecoveryArtifactOnS3(client, target.s3.config.bucket, objectKey);
+      return { sizeBytes: head.sizeBytes, checksum: head.checksum, etag: head.etag };
+    } finally {
+      client.destroy();
+    }
   }
   if (target.kind === "rclone" && target.rclone) {
     return headRecoveryArtifactOnRclone(target, objectKey);
@@ -88,8 +98,13 @@ export async function headRemoteArtifact(target: WorkerBackupTarget, objectKey: 
 
 export async function downloadRemoteArtifact(target: WorkerBackupTarget, objectKey: string, localPath: string) {
   if (target.kind === "s3" && target.s3) {
+    await assertBackupTargetS3EndpointAllowed(target);
     const client = createS3Client(target.s3.config, target.s3.credentials);
-    return downloadRecoveryArtifactFromS3(client, target.s3.config.bucket, objectKey, localPath);
+    try {
+      return await downloadRecoveryArtifactFromS3(client, target.s3.config.bucket, objectKey, localPath);
+    } finally {
+      client.destroy();
+    }
   }
   if (target.kind === "rclone" && target.rclone) {
     return downloadRecoveryArtifactFromRclone(target, objectKey, localPath);
@@ -99,9 +114,14 @@ export async function downloadRemoteArtifact(target: WorkerBackupTarget, objectK
 
 export async function deleteRemoteArtifact(target: WorkerBackupTarget, objectKey: string) {
   if (target.kind === "s3" && target.s3) {
+    await assertBackupTargetS3EndpointAllowed(target);
     const client = createS3Client(target.s3.config, target.s3.credentials);
-    await deleteRecoveryArtifactFromS3(client, target.s3.config.bucket, objectKey);
-    return;
+    try {
+      await deleteRecoveryArtifactFromS3(client, target.s3.config.bucket, objectKey);
+      return;
+    } finally {
+      client.destroy();
+    }
   }
   if (target.kind === "rclone" && target.rclone) {
     await deleteRecoveryArtifactFromRclone(target, objectKey);

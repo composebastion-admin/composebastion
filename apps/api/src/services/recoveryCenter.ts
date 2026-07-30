@@ -1,3 +1,6 @@
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { v4 as uuid } from "uuid";
 import type {
   MigrationExecuteRequest,
@@ -15,17 +18,31 @@ import {
 } from "@composebastion/shared";
 import { query, withTransaction } from "../db/pool.js";
 import type pg from "pg";
+import {
+  assertBackupTargetIdentityChangeAllowed,
+  assertBackupTargetUsableForReference,
+  backupTargetReferenceConflict,
+  getBackupTargetReferenceCounts,
+  hasBackupTargetReferences,
+  lockBackupTarget
+} from "./backupTargetLifecycle.js";
 import { enqueueJob, enqueueJobInTransaction, notifyJobQueued, type JobExecutionFence } from "./jobs.js";
 import {
   assertBackupTargetS3EndpointAllowed,
   exportBackupTargetSecrets,
-  loadWorkerBackupTarget,
   mapBackupTargetFields,
   normalizeBackupTargetCreate,
   normalizeBackupTargetUpdate,
-  toWorkerBackupTarget
+  toWorkerBackupTarget,
+  type WorkerBackupTarget
 } from "./recoveryBackupTargets.js";
-import { testRcloneTarget } from "./recoveryRclone.js";
+import {
+  buildRemoteObjectKey,
+  deleteRemoteArtifact,
+  downloadRemoteArtifactAtomically,
+  headRemoteArtifact,
+  uploadRemoteArtifact
+} from "./recoveryRemoteStorage.js";
 import { getRecoveryProfile } from "./recoveryProfiles.js";
 import {
   mapMigrationRun,
@@ -45,7 +62,11 @@ import {
 } from "./migrationPlanning.js";
 import { sanitizeArtifactName } from "./recoveryManifest.js";
 import { deleteRecoveryPointRemoteArtifacts } from "./recoveryArtifactDelete.js";
-import { artifactRelativePath, deleteRecoveryPointLocalFiles } from "./recoveryStorage.js";
+import {
+  artifactRelativePath,
+  deleteRecoveryPointLocalFiles,
+  recoveryPointsRootDir
+} from "./recoveryStorage.js";
 import { safeErrorMessage, safeLogValue } from "./operationLogs.js";
 
 export { resolveAppContext, buildMigrationPlan };
@@ -105,98 +126,238 @@ export async function createBackupTarget(input: unknown, createdBy?: string | nu
 }
 
 export async function updateBackupTarget(id: string, input: unknown) {
-  const existing = await getBackupTarget(id);
-  if (!existing) return null;
-  const current = await query<any>("SELECT * FROM backup_targets WHERE id = $1", [id]);
-  const row = current.rows[0];
-  const patch = normalizeBackupTargetUpdate(row, backupTargetUpdateSchema.parse(input));
-  await assertBackupTargetS3EndpointAllowed({
-    kind: row.kind,
-    config: patch.config ?? row.config
+  const body = backupTargetUpdateSchema.parse(input);
+  return withTransaction(async (client) => {
+    const locked = await lockBackupTarget(client, id);
+    if (!locked) return null;
+    const row = locked as any;
+    const patch = normalizeBackupTargetUpdate(row, body);
+    const nextIdentity = {
+      kind: row.kind,
+      config: patch.config ?? row.config,
+      provider: patch.provider ?? row.provider,
+      remote_path: patch.remotePath ?? row.remote_path,
+      generic_config_encrypted: patch.genericConfigEncrypted !== undefined
+        ? patch.genericConfigEncrypted
+        : row.generic_config_encrypted
+    };
+    await assertBackupTargetS3EndpointAllowed(nextIdentity);
+    await assertBackupTargetIdentityChangeAllowed(client, id, row, nextIdentity);
+    const result = await client.query(
+      `UPDATE backup_targets
+       SET name = COALESCE($2, name),
+           enabled = COALESCE($3, enabled),
+           config = COALESCE($4, config),
+           access_key_id = COALESCE($5, access_key_id),
+           secret_access_key_encrypted = $6,
+           provider = COALESCE($7, provider),
+           remote_path = COALESCE($8, remote_path),
+           local_cache_policy = COALESCE($9, local_cache_policy),
+           generic_config_encrypted = $10,
+           generic_credentials_encrypted = $11,
+           health_status = CASE
+             WHEN ($4 IS NOT NULL AND $4 IS DISTINCT FROM config)
+               OR ($5 IS NOT NULL AND $5 IS DISTINCT FROM access_key_id)
+               OR $6 IS DISTINCT FROM secret_access_key_encrypted
+               OR ($7 IS NOT NULL AND $7 IS DISTINCT FROM provider)
+               OR ($8 IS NOT NULL AND $8 IS DISTINCT FROM remote_path)
+               OR $10 IS DISTINCT FROM generic_config_encrypted
+               OR $11 IS DISTINCT FROM generic_credentials_encrypted
+               THEN 'unknown'
+             ELSE health_status
+           END,
+           health_checked_at = CASE
+             WHEN ($4 IS NOT NULL AND $4 IS DISTINCT FROM config)
+               OR ($5 IS NOT NULL AND $5 IS DISTINCT FROM access_key_id)
+               OR $6 IS DISTINCT FROM secret_access_key_encrypted
+               OR ($7 IS NOT NULL AND $7 IS DISTINCT FROM provider)
+               OR ($8 IS NOT NULL AND $8 IS DISTINCT FROM remote_path)
+               OR $10 IS DISTINCT FROM generic_config_encrypted
+               OR $11 IS DISTINCT FROM generic_credentials_encrypted
+               THEN NULL
+             ELSE health_checked_at
+           END,
+           health_error = CASE
+             WHEN ($4 IS NOT NULL AND $4 IS DISTINCT FROM config)
+               OR ($5 IS NOT NULL AND $5 IS DISTINCT FROM access_key_id)
+               OR $6 IS DISTINCT FROM secret_access_key_encrypted
+               OR ($7 IS NOT NULL AND $7 IS DISTINCT FROM provider)
+               OR ($8 IS NOT NULL AND $8 IS DISTINCT FROM remote_path)
+               OR $10 IS DISTINCT FROM generic_config_encrypted
+               OR $11 IS DISTINCT FROM generic_credentials_encrypted
+               THEN NULL
+             ELSE health_error
+           END,
+           updated_at = now()
+       WHERE id = $1
+       RETURNING *`,
+      [
+        id,
+        patch.name ?? null,
+        patch.enabled ?? null,
+        patch.config ?? null,
+        patch.accessKeyId === undefined ? null : patch.accessKeyId,
+        patch.secretAccessKeyEncrypted !== undefined ? patch.secretAccessKeyEncrypted : row.secret_access_key_encrypted,
+        patch.provider === undefined ? null : patch.provider,
+        patch.remotePath === undefined ? null : patch.remotePath,
+        patch.localCachePolicy ?? null,
+        patch.genericConfigEncrypted !== undefined ? patch.genericConfigEncrypted : row.generic_config_encrypted,
+        patch.genericCredentialsEncrypted !== undefined ? patch.genericCredentialsEncrypted : row.generic_credentials_encrypted
+      ]
+    );
+    return mapBackupTargetFields(result.rows[0] as Parameters<typeof mapBackupTargetFields>[0]);
   });
-  const result = await query(
-    `UPDATE backup_targets
-     SET name = COALESCE($2, name),
-         enabled = COALESCE($3, enabled),
-         config = COALESCE($4, config),
-         access_key_id = COALESCE($5, access_key_id),
-         secret_access_key_encrypted = $6,
-         provider = COALESCE($7, provider),
-         remote_path = COALESCE($8, remote_path),
-         local_cache_policy = COALESCE($9, local_cache_policy),
-         generic_config_encrypted = $10,
-         generic_credentials_encrypted = $11,
-         health_status = CASE
-           WHEN $4 IS NOT NULL OR $7 IS NOT NULL OR $8 IS NOT NULL OR $10 IS DISTINCT FROM generic_config_encrypted OR $11 IS DISTINCT FROM generic_credentials_encrypted
-             THEN 'unknown'
-           ELSE health_status
-         END,
-         updated_at = now()
-     WHERE id = $1
-     RETURNING *`,
-    [
-      id,
-      patch.name ?? null,
-      patch.enabled ?? null,
-      patch.config ?? null,
-      patch.accessKeyId === undefined ? null : patch.accessKeyId,
-      patch.secretAccessKeyEncrypted !== undefined ? patch.secretAccessKeyEncrypted : row.secret_access_key_encrypted,
-      patch.provider === undefined ? null : patch.provider,
-      patch.remotePath === undefined ? null : patch.remotePath,
-      patch.localCachePolicy ?? null,
-      patch.genericConfigEncrypted !== undefined ? patch.genericConfigEncrypted : row.generic_config_encrypted,
-      patch.genericCredentialsEncrypted !== undefined ? patch.genericCredentialsEncrypted : row.generic_credentials_encrypted
-    ]
-  );
-  return mapBackupTargetFields(result.rows[0] as Parameters<typeof mapBackupTargetFields>[0]);
 }
 
-export async function testBackupTarget(id: string) {
-  const target = await loadWorkerBackupTarget(id);
-  const checkedAt = new Date();
+async function probeRemoteBackupTarget(target: WorkerBackupTarget) {
+  const payload = Buffer.from("ComposeBastion backup target health probe\n", "utf8");
+  const tempDirectory = await mkdtemp(path.join(tmpdir(), "composebastion-target-test-"));
+  const localPath = path.join(tempDirectory, "probe.txt");
+  const downloadedPath = path.join(tempDirectory, "downloaded-probe.txt");
+  const namespaceId = `target-tests/${target.id}`;
+  const storageKey = `${uuid()}.probe`;
+  const objectKey = buildRemoteObjectKey(target, namespaceId, storageKey);
+  let uploadAttempted = false;
+  let primaryError: unknown;
   try {
-    if (!target.enabled) throw new Error("Backup target is disabled");
-    if (target.kind === "s3") {
-      await assertBackupTargetS3EndpointAllowed(target);
-    } else if (target.kind === "rclone") {
-      await testRcloneTarget(target);
-    } else if (target.kind === "local") {
-      // Local targets are validated by path safety and write attempts during capture.
-    } else {
-      throw new Error(`Unsupported backup target kind: ${(target as { kind: string }).kind}`);
+    await writeFile(localPath, payload, { flag: "wx", mode: 0o600 });
+    uploadAttempted = true;
+    const uploaded = await uploadRemoteArtifact({
+      target,
+      namespaceId,
+      storageKey,
+      localPath
+    });
+    if (!uploaded || uploaded.remoteBackend !== target.kind || uploaded.remoteObjectKey !== objectKey) {
+      throw new Error("Remote backup target did not return the expected probe object");
     }
-    const result = await query(
-      `UPDATE backup_targets
-       SET health_status = 'healthy',
-           health_checked_at = $2,
-           health_error = NULL,
-           updated_at = now()
-       WHERE id = $1
-       RETURNING *`,
-      [id, checkedAt]
-    );
-    return { target: mapBackupTargetFields(result.rows[0] as Parameters<typeof mapBackupTargetFields>[0]), ok: true };
+    const head = await headRemoteArtifact(target, objectKey);
+    if (head.sizeBytes !== payload.byteLength) {
+      throw new Error("Remote backup target probe metadata did not match the uploaded object");
+    }
+    await downloadRemoteArtifactAtomically(target, objectKey, downloadedPath);
+    const downloaded = await readFile(downloadedPath);
+    if (!downloaded.equals(payload)) {
+      throw new Error("Remote backup target probe download did not match the uploaded content");
+    }
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const result = await query(
-      `UPDATE backup_targets
-       SET health_status = 'failed',
-           health_checked_at = $2,
-           health_error = $3,
-           updated_at = now()
-       WHERE id = $1
-       RETURNING *`,
-      [id, checkedAt, message]
-    );
-    return { target: mapBackupTargetFields(result.rows[0] as Parameters<typeof mapBackupTargetFields>[0]), ok: false, error: message };
+    primaryError = error;
+    throw error;
+  } finally {
+    let cleanupError: unknown;
+    if (uploadAttempted) {
+      try {
+        await deleteRemoteArtifact(target, objectKey);
+      } catch (error) {
+        cleanupError = error;
+      }
+    }
+    try {
+      await rm(tempDirectory, { recursive: true, force: true });
+    } catch (error) {
+      cleanupError ??= error;
+    }
+    if (!primaryError && cleanupError) throw cleanupError;
   }
 }
 
+async function probeLocalBackupTarget() {
+  const root = path.resolve(recoveryPointsRootDir());
+  await mkdir(root, { recursive: true });
+  const probeDirectory = await mkdtemp(path.join(root, ".composebastion-target-test-"));
+  const resolvedProbeDirectory = path.resolve(probeDirectory);
+  if (!resolvedProbeDirectory.startsWith(`${root}${path.sep}`)) {
+    throw new Error("Local backup target probe escaped the recovery storage directory");
+  }
+  const probePath = path.join(resolvedProbeDirectory, "probe.txt");
+  const payload = Buffer.from("ComposeBastion local backup target health probe\n", "utf8");
+  let primaryError: unknown;
+  try {
+    await writeFile(probePath, payload, { flag: "wx", mode: 0o600 });
+    const readBack = await readFile(probePath);
+    if (!readBack.equals(payload)) {
+      throw new Error("Local backup target probe did not read back the written content");
+    }
+  } catch (error) {
+    primaryError = error;
+    throw error;
+  } finally {
+    try {
+      await rm(resolvedProbeDirectory, { recursive: true, force: true });
+    } catch (error) {
+      if (!primaryError) throw error;
+    }
+  }
+}
+
+export async function testBackupTarget(id: string) {
+  const initial = await query<any>(
+    "SELECT *, xmin::text AS row_version FROM backup_targets WHERE id = $1",
+    [id]
+  );
+  const snapshot = initial.rows[0];
+  if (!snapshot) {
+    throw Object.assign(new Error("Backup target not found"), { statusCode: 404 });
+  }
+  const target = toWorkerBackupTarget(snapshot);
+  const checkedAt = new Date();
+  let ok = true;
+  let message: string | null = null;
+  try {
+    if (!target.enabled) throw new Error("Backup target is disabled");
+    if (target.kind === "s3") {
+      await probeRemoteBackupTarget(target);
+    } else if (target.kind === "rclone") {
+      await probeRemoteBackupTarget(target);
+    } else if (target.kind === "local") {
+      await probeLocalBackupTarget();
+    } else {
+      throw new Error(`Unsupported backup target kind: ${(target as { kind: string }).kind}`);
+    }
+  } catch (error) {
+    ok = false;
+    message = safeErrorMessage(error);
+  }
+  const result = await query(
+    `UPDATE backup_targets
+     SET health_status = $3,
+         health_checked_at = $2,
+         health_error = $4,
+         updated_at = now()
+     WHERE id = $1
+       AND xmin::text = $5
+     RETURNING *`,
+    [
+      id,
+      checkedAt,
+      ok ? "healthy" : "failed",
+      message,
+      snapshot.row_version
+    ]
+  );
+  if (!result.rows[0]) {
+    throw Object.assign(
+      new Error("Backup target changed or was deleted while the connection test was running; the stale health result was discarded."),
+      { statusCode: 409 }
+    );
+  }
+  const mapped = mapBackupTargetFields(result.rows[0] as Parameters<typeof mapBackupTargetFields>[0]);
+  return ok
+    ? { target: mapped, ok: true }
+    : { target: mapped, ok: false, error: message ?? "Backup target test failed" };
+}
+
 export async function deleteBackupTarget(id: string) {
-  const target = await getBackupTarget(id);
-  if (!target) return null;
-  await query("DELETE FROM backup_targets WHERE id = $1", [id]);
-  return target;
+  return withTransaction(async (client) => {
+    const locked = await lockBackupTarget(client, id);
+    if (!locked) return null;
+    const counts = await getBackupTargetReferenceCounts(client, id);
+    if (hasBackupTargetReferences(counts)) {
+      throw backupTargetReferenceConflict("delete", counts);
+    }
+    await client.query("DELETE FROM backup_targets WHERE id = $1", [id]);
+    return mapBackupTargetFields(locked as Parameters<typeof mapBackupTargetFields>[0]);
+  });
 }
 
 export async function listRecoveryPoints(input?: unknown) {
@@ -205,18 +366,60 @@ export async function listRecoveryPoints(input?: unknown) {
   const clauses: string[] = [];
   if (queryInput.hostId) {
     values.push(queryInput.hostId);
-    clauses.push(`host_id = $${values.length}`);
+    clauses.push(`rp.host_id = $${values.length}`);
   }
   if (queryInput.status) {
     values.push(queryInput.status);
-    clauses.push(`status = $${values.length}`);
+    clauses.push(`rp.status = $${values.length}`);
   }
   if (queryInput.appKind) {
     values.push(queryInput.appKind);
-    clauses.push(`app_identity->>'kind' = $${values.length}`);
+    clauses.push(`rp.app_identity->>'kind' = $${values.length}`);
   }
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-  const result = await query(`SELECT * FROM recovery_points ${where} ORDER BY created_at DESC`, values);
+  const result = await query(
+    `SELECT rp.*,
+            COALESCE(evidence.remote_artifact_count, 0) AS remote_artifact_count,
+            COALESCE(evidence.remote_upload_failure_count, 0) AS remote_upload_failure_count,
+            COALESCE(evidence.local_retained_artifact_count, 0) AS local_retained_artifact_count,
+            COALESCE(evidence.local_removed_artifact_count, 0) AS local_removed_artifact_count
+     FROM recovery_points rp
+     LEFT JOIN LATERAL (
+       SELECT
+         COUNT(*) FILTER (
+           WHERE NULLIF(artifact.metadata->>'remoteObjectKey', '') IS NOT NULL
+         ) AS remote_artifact_count,
+         COUNT(*) FILTER (
+           WHERE artifact.metadata ? 'remoteUploadError'
+              OR artifact.metadata ? 'remoteVerificationError'
+         ) AS remote_upload_failure_count,
+         COUNT(*) FILTER (
+           WHERE artifact.status IN ('completed', 'partial')
+             AND (
+               (
+                 artifact.metadata->>'localCacheRemoved' = 'false'
+                 AND (
+                   artifact.metadata->>'localCachePolicy' IS DISTINCT FROM 'remote_only'
+                   OR artifact.metadata->>'localCacheCleanupAttempted' = 'true'
+                   OR NULLIF(artifact.metadata->>'remoteObjectKey', '') IS NULL
+                 )
+               )
+               OR (
+                 artifact.metadata->>'localCacheRemoved' IS NULL
+                 AND artifact.metadata->>'localCachePolicy' IS DISTINCT FROM 'remote_only'
+               )
+             )
+         ) AS local_retained_artifact_count,
+         COUNT(*) FILTER (
+           WHERE artifact.metadata->>'localCacheRemoved' = 'true'
+         ) AS local_removed_artifact_count
+       FROM recovery_artifacts artifact
+       WHERE artifact.recovery_point_id = rp.id
+     ) evidence ON true
+     ${where}
+     ORDER BY rp.created_at DESC`,
+    values
+  );
   return result.rows.map(mapRecoveryPoint);
 }
 
@@ -291,6 +494,7 @@ async function insertPreparedRecoveryPoint(
   migrationRunId: string | null = null
 ) {
   const { id, body, context, profile, effectiveCaptureMode, name, scheduleMetadata, createdBy } = prepared;
+  await assertBackupTargetUsableForReference(client, body.backupTargetId);
   const stopFirst = body.stopFirst || effectiveCaptureMode === "stop_first";
   await client.query(
     `INSERT INTO recovery_points
@@ -500,26 +704,29 @@ export async function createRecoverySchedule(input: unknown, createdBy?: string 
   const body = recoveryScheduleCreateSchema.parse(input);
   const id = uuid();
   const nextRunAt = new Date(Date.now() + body.intervalMs);
-  const result = await query(
-    `INSERT INTO recovery_schedules
-      (id, host_id, name, app_identity, backup_target_id, profile_id, interval_ms, retention_count, next_run_at, enabled, capture_mode, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-     RETURNING *`,
-    [
-      id,
-      body.hostId,
-      body.name,
-      body.appIdentity,
-      body.backupTargetId ?? null,
-      body.profileId ?? null,
-      body.intervalMs,
-      body.retentionCount ?? null,
-      nextRunAt,
-      body.enabled,
-      body.captureMode,
-      createdBy ?? null
-    ]
-  );
+  const result = await withTransaction(async (client) => {
+    await assertBackupTargetUsableForReference(client, body.backupTargetId);
+    return client.query(
+      `INSERT INTO recovery_schedules
+        (id, host_id, name, app_identity, backup_target_id, profile_id, interval_ms, retention_count, next_run_at, enabled, capture_mode, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+       RETURNING *`,
+      [
+        id,
+        body.hostId,
+        body.name,
+        body.appIdentity,
+        body.backupTargetId ?? null,
+        body.profileId ?? null,
+        body.intervalMs,
+        body.retentionCount ?? null,
+        nextRunAt,
+        body.enabled,
+        body.captureMode,
+        createdBy ?? null
+      ]
+    );
+  });
   return mapRecoverySchedule(result.rows[0]);
 }
 

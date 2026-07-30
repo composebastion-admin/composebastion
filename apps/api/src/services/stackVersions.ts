@@ -110,6 +110,14 @@ export async function rollbackStackVersion(
     const stack = await client.query<any>("SELECT * FROM compose_stacks WHERE id = $1 FOR UPDATE", [stackId]);
     const row = stack.rows[0];
     if (!row) throw new Error("Compose stack not found");
+    if (row.source_working_dir || row.source_compose_path) {
+      throw Object.assign(
+        new Error(
+          "Rollback is unavailable for folder-backed Compose stacks because ComposeBastion cannot safely overwrite source files it does not exclusively own. Restore the desired version in the source folder or Git repository, then redeploy it."
+        ),
+        { statusCode: 409 }
+      );
+    }
 
     await recordStackVersionInTransaction(client, {
       stackId,

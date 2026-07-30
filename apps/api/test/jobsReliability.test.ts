@@ -27,8 +27,11 @@ const {
   enqueueJob,
   enqueueJobInTransaction,
   getWorkerStatus,
+  markSelfUpdateHandoffPending,
   recoverExpiredJobs,
   renewJobLease,
+  shouldResumeWorkerClaimsAfterReconciliation,
+  shouldStopWorkerClaimsAfterHandoff,
   updateJobProgress
 } = await import("../src/services/jobs.js");
 
@@ -107,6 +110,56 @@ describe("durable job enqueue", () => {
     await expect(enqueueJob({ type: "host.check", hostId, payload: {} })).resolves.toMatchObject({ id: jobId });
     expect(redisDisconnect).toHaveBeenCalledOnce();
   });
+
+  it("serializes single-flight deployment jobs before inserting them", async () => {
+    transactionQuery
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [jobRow({ type: "deploy.execute", status: "queued" })] });
+
+    await expect(enqueueJob({
+      type: "deploy.execute",
+      hostId,
+      payload: { analysisId: "44444444-4444-4444-8444-444444444444" }
+    })).resolves.toMatchObject({ id: jobId, type: "deploy.execute" });
+
+    expect(transactionQuery.mock.calls[0]?.[0]).toContain("pg_advisory_xact_lock");
+    expect(transactionQuery.mock.calls[1]?.[0]).toContain("status IN ('queued', 'running')");
+    expect(transactionQuery.mock.calls[2]?.[0]).toContain("INSERT INTO operation_jobs");
+  });
+
+  it("returns a clear conflict when a singleton self-update is already active", async () => {
+    transactionQuery
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [jobRow({
+          type: "system.self_update",
+          status: "running",
+          payload: {
+            workingDir: "/srv/composebastion",
+            composeFile: "docker-compose.image.yml",
+            versionMode: "latest",
+            targetVersion: "latest"
+          }
+        })]
+      });
+
+    await expect(enqueueJob({
+      type: "system.self_update",
+      hostId,
+      payload: {
+        workingDir: "/srv/composebastion",
+        composeFile: "docker-compose.image.yml",
+        versionMode: "latest",
+        targetVersion: "latest"
+      }
+    })).rejects.toMatchObject({
+      statusCode: 409,
+      activeJobId: jobId,
+      message: expect.stringContaining("already queued or running")
+    });
+    expect(transactionQuery).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("fenced job leases", () => {
@@ -137,9 +190,50 @@ describe("fenced job leases", () => {
       expect(call[0]).toContain("lease_expires_at > clock_timestamp()");
     }
   });
+
+  it("durably releases the lease only after recording a pending self-update handoff", async () => {
+    query.mockResolvedValueOnce({ rows: [{ id: jobId }], rowCount: 1 });
+
+    await expect(markSelfUpdateHandoffPending(jobId, {
+      handoffStarted: true,
+      handoffPending: true,
+      pid: "4242",
+      targetVersion: "1.0.8",
+      workingDir: "/srv/composebastion",
+      composeFile: "docker-compose.image.yml",
+      scriptPath: `/srv/composebastion/.composebastion-self-update-${jobId}.sh`,
+      logPath: `/srv/composebastion/.composebastion-self-update-${jobId}.log`,
+      outcomePath: `/srv/composebastion/.composebastion-self-update-${jobId}.outcome`,
+      gatePath: `/srv/composebastion/.composebastion-self-update-${jobId}.gate`,
+      lockPath: "/tmp/composebastion-self-update.lock",
+      handedOffAt: now.toISOString()
+    }, { workerId, attemptCount: 1 })).resolves.toBe(true);
+
+    expect(query.mock.calls[0]?.[0]).toContain("result = $2::jsonb");
+    expect(query.mock.calls[0]?.[0]).toContain("lease_owner = NULL");
+    expect(query.mock.calls[0]?.[0]).toContain("lease_expires_at = NULL");
+    expect(JSON.parse(query.mock.calls[0]?.[1]?.[1])).toMatchObject({ handoffPending: true, pid: "4242" });
+  });
+
+  it("requires the handing-off worker to stop before claiming another job", () => {
+    expect(shouldStopWorkerClaimsAfterHandoff("system.self_update", true)).toBe(true);
+    expect(shouldStopWorkerClaimsAfterHandoff("system.self_update", false)).toBe(false);
+    expect(shouldStopWorkerClaimsAfterHandoff("host.check", true)).toBe(false);
+    expect(shouldResumeWorkerClaimsAfterReconciliation({ completed: 0, failed: 0, pending: 0 })).toBe(true);
+    expect(shouldResumeWorkerClaimsAfterReconciliation({ completed: 0, failed: 1, pending: 0 })).toBe(true);
+    expect(shouldResumeWorkerClaimsAfterReconciliation({ completed: 1, failed: 0, pending: 1 })).toBe(false);
+  });
 });
 
 describe("expired lease recovery", () => {
+  it("excludes pending self-update handoffs from generic lease recovery", async () => {
+    transactionQuery.mockResolvedValueOnce({ rows: [] });
+
+    await expect(recoverExpiredJobs()).resolves.toEqual({ requeued: 0, failed: 0 });
+
+    expect(transactionQuery.mock.calls[0]?.[0]).toContain("result @> '{\"handoffPending\":true}'::jsonb");
+  });
+
   it("requeues only allowlisted idempotent work below the attempt limit", async () => {
     transactionQuery
       .mockResolvedValueOnce({ rows: [jobRow({ type: "host.sync", attempt_count: 2 })] })
@@ -162,6 +256,23 @@ describe("expired lease recovery", () => {
     await expect(recoverExpiredJobs()).resolves.toEqual({ requeued: 0, failed: 1 });
     expect(transactionQuery.mock.calls[1]?.[0]).toContain("status = 'failed'");
     expect(transactionQuery.mock.calls[2]?.[0]).toContain("UPDATE backups SET status = 'failed'");
+  });
+
+  it.each([
+    ["deploy.analyze", { analysisId: "44444444-4444-4444-8444-444444444444" }],
+    ["deploy.execute", { analysisId: "44444444-4444-4444-8444-444444444444" }],
+    ["host.configureRegistryTrust", { registry: "registry.internal:5000" }]
+  ])("never automatically replays abandoned non-idempotent %s work", async (type, payload) => {
+    transactionQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes("SELECT *") && sql.includes("lease_expires_at")) {
+        return { rows: [jobRow({ type, payload, attempt_count: 1 })] };
+      }
+      return { rows: [], rowCount: 1 };
+    });
+
+    await expect(recoverExpiredJobs()).resolves.toEqual({ requeued: 0, failed: 1 });
+    expect(transactionQuery.mock.calls.some((call) => String(call[0]).includes("SET status = 'queued'"))).toBe(false);
+    expect(transactionQuery.mock.calls.some((call) => String(call[0]).includes("SET status = 'failed'"))).toBe(true);
   });
 
   it("stops retrying an allowlisted job after its third abandoned attempt", async () => {

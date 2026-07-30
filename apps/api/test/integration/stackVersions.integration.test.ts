@@ -100,4 +100,51 @@ describe.skipIf(!integrationEnabled)("stack versions API integration", () => {
     expect(diff.statusCode).toBe(200);
     expect(diff.json().composeChanges.length).toBeGreaterThan(0);
   });
+
+  it("returns 409 and leaves v2 active when a host-file stack requests rollback to v1", async () => {
+    await pool.query(
+      `UPDATE compose_stacks
+       SET source_type = 'host_files',
+           source_working_dir = '/srv/apps/demo-stack',
+           source_compose_path = 'compose.yaml'
+       WHERE id = $1`,
+      [stackId]
+    );
+    const before = await pool.query<any>(
+      `SELECT compose_yaml, current_version_id,
+              (SELECT count(*)::int FROM compose_stack_versions WHERE stack_id = $1) AS version_count
+       FROM compose_stacks
+       WHERE id = $1`,
+      [stackId]
+    );
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/compose/${stackId}/rollback`,
+      headers: { cookie: sessionCookie },
+      payload: { versionId: firstVersionId }
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({
+      code: "CONFLICT",
+      error: expect.stringContaining("cannot safely overwrite source files")
+    });
+    const after = await pool.query<any>(
+      `SELECT compose_yaml, current_version_id,
+              (SELECT count(*)::int FROM compose_stack_versions WHERE stack_id = $1) AS version_count
+       FROM compose_stacks
+       WHERE id = $1`,
+      [stackId]
+    );
+    const jobs = await pool.query(
+      "SELECT id FROM operation_jobs WHERE host_id = $1 AND payload->>'stackId' = $2",
+      [hostId, stackId]
+    );
+    expect(after.rows[0]?.compose_yaml).toContain("nginx:1.28");
+    expect(after.rows[0]?.compose_yaml).toBe(before.rows[0]?.compose_yaml);
+    expect(after.rows[0]?.current_version_id).toBe(before.rows[0]?.current_version_id);
+    expect(after.rows[0]?.version_count).toBe(before.rows[0]?.version_count);
+    expect(jobs.rowCount).toBe(0);
+  });
 });

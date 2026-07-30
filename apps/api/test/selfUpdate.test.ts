@@ -1,13 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const getHostForWorker = vi.fn();
+const getHost = vi.fn();
 const runSshCommand = vi.fn();
 const writeRemoteFile = vi.fn();
 const query = vi.fn();
 const enqueueJob = vi.fn();
 
 vi.mock("../src/services/hosts.js", () => ({
-  getHost: vi.fn(),
+  getHost: (...args: unknown[]) => getHost(...args),
   getHostForWorker: (...args: unknown[]) => getHostForWorker(...args)
 }));
 
@@ -25,10 +26,12 @@ vi.mock("../src/services/redis.js", () => ({
 }));
 
 vi.mock("../src/services/jobs.js", () => ({
+  buildJobProgress: (type: string, phase: string) => [{ id: "reconnect", label: "Reconnect", status: phase === "completed" ? "completed" : phase === "failed" ? "failed" : "running" }],
   enqueueJob: (...args: unknown[]) => enqueueJob(...args)
 }));
 
 const hostId = "11111111-1111-4111-8111-111111111111";
+const jobId = "22222222-2222-4222-8222-222222222222";
 
 function sshHost(mode: "ssh" | "agent" = "ssh") {
   return {
@@ -43,7 +46,10 @@ describe("self update service", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     enqueueJob.mockReset();
+    query.mockReset();
+    getHost.mockReset();
     getHostForWorker.mockResolvedValue(sshHost());
+    getHost.mockResolvedValue(sshHost());
     runSshCommand
       .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
       .mockResolvedValueOnce({ code: 0, stdout: "4242\n", stderr: "" });
@@ -58,23 +64,62 @@ describe("self update service", () => {
       composeFile: "docker-compose.image.yml",
       versionMode: "pinned",
       targetVersion: "1.0.2"
-    });
+    }, { jobId });
 
     expect(result).toMatchObject({
       handoffStarted: true,
+      handoffPending: true,
       pid: "4242",
       targetVersion: "1.0.2",
-      logPath: "/srv/composebastion/.composebastion-self-update.log"
+      scriptPath: `/srv/composebastion/.composebastion-self-update-${jobId}.sh`,
+      logPath: `/srv/composebastion/.composebastion-self-update-${jobId}.log`,
+      outcomePath: `/srv/composebastion/.composebastion-self-update-${jobId}.outcome`,
+      gatePath: `/srv/composebastion/.composebastion-self-update-${jobId}.gate`,
+      lockPath: "/tmp/composebastion-self-update.lock"
     });
     expect(writeRemoteFile).toHaveBeenCalledWith(
       expect.anything(),
-      "/srv/composebastion/.composebastion-self-update.sh",
+      `/srv/composebastion/.composebastion-self-update-${jobId}.sh`,
       expect.stringContaining("COMPOSEBASTION_VERSION=1.0.2")
     );
     const script = String(writeRemoteFile.mock.calls[0]?.[2] ?? "");
-    expect(script).toContain("docker compose -f 'docker-compose.image.yml' pull app worker");
-    expect(script).toContain("docker compose -f 'docker-compose.image.yml' up -d app worker");
-    expect(String(runSshCommand.mock.calls[1]?.[1])).toContain("nohup '/srv/composebastion/.composebastion-self-update.sh'");
+    expect(script).toContain('"$DOCKER_BIN" compose -f "$COMPOSE_FILE" pull app worker');
+    expect(script).toContain('"$DOCKER_BIN" compose -f "$COMPOSE_FILE" up -d --force-recreate app worker');
+    expect(script).toContain("PREVIOUS_APP_IMAGE_ID");
+    expect(script).toContain("pull_policy: never");
+    const preflight = String(runSshCommand.mock.calls[0]?.[1]);
+    expect(preflight).toContain("readlink -f");
+    expect(preflight).toContain("grep -Fx app");
+    expect(preflight).toContain("apps/api/dist/worker.js");
+    expect(preflight).toContain("org.opencontainers.image.source");
+    const launch = String(runSshCommand.mock.calls[1]?.[1]);
+    expect(launch).toContain('LOCK_PATH=\'/tmp/composebastion-self-update.lock\'');
+    expect(launch).toContain("kill -0");
+    expect(launch).toContain("/proc/$existing_owner/cmdline");
+    expect(launch).toContain(`nohup '/srv/composebastion/.composebastion-self-update-${jobId}.sh'`);
+  });
+
+  it("confirms a persisted handoff through its job-specific gate", async () => {
+    runSshCommand.mockReset().mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+    const { confirmSelfUpdateHandoff } = await import("../src/services/selfUpdate.js");
+    const gatePath = `/srv/composebastion/.composebastion-self-update-${jobId}.gate`;
+
+    await confirmSelfUpdateHandoff(hostId, {
+      handoffStarted: true,
+      handoffPending: true,
+      pid: "4242",
+      targetVersion: "1.0.2",
+      workingDir: "/srv/composebastion",
+      composeFile: "docker-compose.image.yml",
+      scriptPath: `/srv/composebastion/.composebastion-self-update-${jobId}.sh`,
+      logPath: `/srv/composebastion/.composebastion-self-update-${jobId}.log`,
+      outcomePath: `/srv/composebastion/.composebastion-self-update-${jobId}.outcome`,
+      gatePath,
+      lockPath: "/tmp/composebastion-self-update.lock",
+      handedOffAt: new Date().toISOString()
+    });
+
+    expect(runSshCommand.mock.calls[0]?.[1]).toContain(`: > '${gatePath}'`);
   });
 
   it("requires SSH mode for the detached self-update handoff", async () => {
@@ -136,5 +181,97 @@ describe("self update service", () => {
 
     expect(latest.version).toBe("1.0.4");
     fetchSpy.mockRestore();
+  });
+
+  function pendingRow(overrides: Record<string, unknown> = {}) {
+    return {
+      id: jobId,
+      type: "system.self_update",
+      status: "running",
+      host_id: hostId,
+      payload: {
+        workingDir: "/srv/composebastion",
+        composeFile: "docker-compose.image.yml",
+        versionMode: "pinned",
+        targetVersion: "1.0.2"
+      },
+      result: {
+        handoffPending: true,
+        handedOffAt: new Date().toISOString()
+      },
+      created_at: new Date(),
+      updated_at: new Date(),
+      ...overrides
+    };
+  }
+
+  it.each([
+    ["passed", "complete", "not_required", "0", "completed"],
+    ["failed", "verification", "succeeded", "1", "failed"]
+  ])("reconciles a strict %s authoritative outcome", async (status, stage, rollback, exitCode, terminalStatus) => {
+    query
+      .mockResolvedValueOnce({ rows: [pendingRow()] })
+      .mockResolvedValueOnce({ rows: [{ id: jobId }], rowCount: 1 });
+    runSshCommand.mockReset().mockResolvedValueOnce({
+      code: 0,
+      stderr: "",
+      stdout: [
+        "schema=1",
+        `job_id=${jobId}`,
+        `status=${status}`,
+        `stage=${stage}`,
+        `rollback=${rollback}`,
+        "target_version=1.0.2",
+        `exit_code=${exitCode}`,
+        ""
+      ].join("\n")
+    });
+    const { reconcileSelfUpdateHandoffs } = await import("../src/services/selfUpdate.js");
+
+    const result = await reconcileSelfUpdateHandoffs();
+
+    expect(result).toMatchObject(status === "passed" ? { completed: 1, failed: 0 } : { completed: 0, failed: 1 });
+    expect(query.mock.calls[1]?.[1]?.[1]).toBe(terminalStatus);
+    expect(query.mock.calls[1]?.[0]).toContain("result ->> 'handoffPending' = 'true'");
+  });
+
+  it("keeps an active detached updater nonterminal", async () => {
+    query.mockResolvedValueOnce({ rows: [pendingRow()] });
+    runSshCommand.mockReset()
+      .mockResolvedValueOnce({ code: 44, stdout: "", stderr: "" })
+      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+    const { reconcileSelfUpdateHandoffs } = await import("../src/services/selfUpdate.js");
+
+    await expect(reconcileSelfUpdateHandoffs()).resolves.toEqual({ completed: 0, failed: 0, pending: 1 });
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(runSshCommand.mock.calls[1]?.[1]).toContain("/proc/$owner/cmdline");
+  });
+
+  it("fails a malformed outcome immediately with a sanitized error", async () => {
+    query
+      .mockResolvedValueOnce({ rows: [pendingRow()] })
+      .mockResolvedValueOnce({ rows: [{ id: jobId }], rowCount: 1 });
+    runSshCommand.mockReset().mockResolvedValueOnce({
+      code: 0,
+      stdout: "schema=1\njob_id=wrong-job\nstatus=passed\nstage=complete\nrollback=not_required\ntarget_version=1.0.2\nexit_code=0\nSECRET=hidden\n",
+      stderr: ""
+    });
+    const { reconcileSelfUpdateHandoffs } = await import("../src/services/selfUpdate.js");
+
+    await expect(reconcileSelfUpdateHandoffs()).resolves.toEqual({ completed: 0, failed: 1, pending: 0 });
+    expect(query.mock.calls[1]?.[1]?.[2]).toBe("Self-update wrote an invalid authoritative outcome.");
+  });
+
+  it("fails a timed-out handoff without retaining remote error text", async () => {
+    query
+      .mockResolvedValueOnce({
+        rows: [pendingRow({ result: { handoffPending: true, handedOffAt: "2026-01-01T00:00:00.000Z" } })]
+      })
+      .mockResolvedValueOnce({ rows: [{ id: jobId }], rowCount: 1 });
+    runSshCommand.mockReset().mockRejectedValueOnce(new Error("ssh user:secret unavailable"));
+    const { reconcileSelfUpdateHandoffs } = await import("../src/services/selfUpdate.js");
+
+    await expect(reconcileSelfUpdateHandoffs()).resolves.toEqual({ completed: 0, failed: 1, pending: 0 });
+    expect(query.mock.calls[1]?.[1]?.[2]).toBe("Self-update outcome could not be reconciled before the handoff timeout.");
   });
 });

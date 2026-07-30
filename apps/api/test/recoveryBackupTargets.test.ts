@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 import { backupTargetCreateSchema } from "@composebastion/shared";
 import {
   assertBackupTargetS3EndpointAllowed,
+  exportBackupTargetSecrets,
   mapBackupTargetFields,
-  normalizeBackupTargetCreate
+  normalizeBackupTargetCreate,
+  normalizeBackupTargetUpdate,
+  toWorkerBackupTarget
 } from "../src/services/recoveryBackupTargets.js";
 import { decryptSecret } from "../src/services/crypto.js";
 
@@ -57,6 +60,60 @@ describe("recovery backup targets", () => {
     expect(mapped.hasSecretAccessKey).toBe(true);
     expect(mapped).not.toHaveProperty("secretAccessKey");
     expect(mapped).not.toHaveProperty("secret_access_key_encrypted");
+  });
+
+  it("redacts an unsafe legacy S3 endpoint before returning a viewer-readable target", () => {
+    const mapped = mapBackupTargetFields({
+      id: "00000000-0000-4000-8000-000000000009",
+      name: "Legacy offsite",
+      kind: "s3",
+      enabled: true,
+      config: {
+        endpoint: "https://legacy-user:legacy-password@s3.example.com?token=private#fragment",
+        bucket: "recovery"
+      },
+      access_key_id: "AKIA123",
+      secret_access_key_encrypted: "ciphertext",
+      created_at: new Date("2026-06-15T12:00:00.000Z"),
+      updated_at: new Date("2026-06-15T12:00:00.000Z")
+    });
+
+    expect(mapped.endpoint).toBeNull();
+    expect(mapped.config.endpoint).toBeNull();
+    expect(JSON.stringify(mapped)).not.toContain("legacy-password");
+    expect(JSON.stringify(mapped)).not.toContain("token=private");
+  });
+
+  it("canonicalizes legacy local targets to the manager backup directory contract", () => {
+    const row = {
+      id: "00000000-0000-4000-8000-000000000019",
+      name: "Legacy local",
+      kind: "local",
+      enabled: true,
+      config: { basePath: "/legacy/custom/path" },
+      local_cache_policy: "remote_only",
+      created_at: new Date("2026-06-15T12:00:00.000Z"),
+      updated_at: new Date("2026-06-15T12:00:00.000Z")
+    };
+
+    const mapped = mapBackupTargetFields(row);
+    expect(mapped.config).toEqual({});
+    expect(mapped.basePath).toBeNull();
+    expect(mapped.localCachePolicy).toBe("keep");
+    expect(toWorkerBackupTarget(row)).toMatchObject({ config: {}, localCachePolicy: "keep" });
+    expect(exportBackupTargetSecrets(row)).toMatchObject({ config: {}, localCachePolicy: "keep" });
+
+    let updateError: unknown;
+    try {
+      normalizeBackupTargetUpdate(row, { localCachePolicy: "remote_only" });
+    } catch (error) {
+      updateError = error;
+    }
+    expect(updateError).toMatchObject({ statusCode: 400 });
+    expect(normalizeBackupTargetUpdate(row, { name: "Canonical local" })).toMatchObject({
+      config: {},
+      localCachePolicy: "keep"
+    });
   });
 
   it("normalizes SMB rclone targets without storing plaintext passwords in config", () => {

@@ -12,6 +12,7 @@ import {
 } from "./backups.js";
 import { recordBackupScheduleResult } from "./backupFailureAlerts.js";
 import { normalizeHostSourcePath } from "./backupHostPaths.js";
+import { assertBackupTargetUsableForReference } from "./backupTargetLifecycle.js";
 
 function parseCreateInput(input: unknown) {
   const raw = input && typeof input === "object"
@@ -62,25 +63,30 @@ export async function createBackupSchedule(input: unknown, createdBy?: string | 
   const backupTargetId = await assertBackupTargetUsable(body.backupTargetId);
   const volumeName = body.kind === "volume" ? body.volumeName : null;
   const sourcePath = body.kind === "host_path" ? normalizeHostSourcePath(body.sourcePath) : null;
-  const result = await query(
-    `INSERT INTO backup_schedules
-      (id, host_id, kind, volume_name, source_path, backup_target_id, encryption, interval_ms, retention_count, next_run_at, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-     RETURNING *`,
-    [
-      id,
-      body.hostId,
-      body.kind,
-      volumeName,
-      sourcePath,
-      backupTargetId,
-      body.encryption,
-      body.intervalMs,
-      body.retentionCount ?? null,
-      nextRunAt,
-      createdBy ?? null
-    ]
-  );
+  const result = await withTransaction(async (client) => {
+    await assertBackupTargetUsableForReference(client, backupTargetId, {
+      allowedKinds: ["s3", "rclone"]
+    });
+    return client.query(
+      `INSERT INTO backup_schedules
+        (id, host_id, kind, volume_name, source_path, backup_target_id, encryption, interval_ms, retention_count, next_run_at, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       RETURNING *`,
+      [
+        id,
+        body.hostId,
+        body.kind,
+        volumeName,
+        sourcePath,
+        backupTargetId,
+        body.encryption,
+        body.intervalMs,
+        body.retentionCount ?? null,
+        nextRunAt,
+        createdBy ?? null
+      ]
+    );
+  });
   const row = result.rows[0];
   if (!row) throw new Error("Failed to create backup schedule");
   return mapBackupSchedule(row);

@@ -103,6 +103,65 @@ describe("job lifecycle helpers", () => {
     expect(query).toHaveBeenCalledTimes(1);
   });
 
+  it("does not manually retry registry trust while an equivalent job is active", async () => {
+    const registryPayload = { registry: "registry.internal:5000" };
+    query
+      .mockResolvedValueOnce({
+        rows: [jobRow({
+          type: "host.configureRegistryTrust",
+          status: "failed",
+          payload: registryPayload,
+          attempt_count: 1
+        })]
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [jobRow({
+          id: "44444444-4444-4444-8444-444444444444",
+          type: "host.configureRegistryTrust",
+          status: "running",
+          payload: registryPayload,
+          attempt_count: 1
+        })]
+      });
+
+    await expect(
+      retryJob("33333333-3333-4333-8333-333333333333", userId)
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      activeJobId: "44444444-4444-4444-8444-444444444444"
+    });
+    expect(query.mock.calls[1]?.[0]).toContain("pg_advisory_xact_lock");
+    expect(query.mock.calls[2]?.[0]).toContain("status IN ('queued', 'running')");
+    expect(query.mock.calls.some(([sql]) => String(sql).includes("SET status = 'queued'"))).toBe(false);
+  });
+
+  it("does not replay non-idempotent work after an ambiguous worker lease loss", async () => {
+    for (const type of ["deploy.execute", "host.configureRegistryTrust"]) {
+      query.mockResolvedValueOnce({
+        rows: [jobRow({
+          type,
+          status: "failed",
+          payload: type === "deploy.execute"
+            ? { analysisId: "44444444-4444-4444-8444-444444444444" }
+            : { registry: "registry.internal:5000" },
+          attempt_count: 1,
+          error: "WORKER_LOST: Worker lease expired during attempt 1"
+        })]
+      });
+
+      await expect(
+        retryJob("33333333-3333-4333-8333-333333333333", userId)
+      ).resolves.toMatchObject({
+        original: { type, status: "failed" },
+        retried: null
+      });
+    }
+
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(query.mock.calls.some(([sql]) => String(sql).includes("SET status = 'queued'"))).toBe(false);
+  });
+
   it("builds typed progress steps for long-running jobs", () => {
     expect(buildJobProgress("recovery.restore", "running").slice(0, 2)).toMatchObject([
       { label: "Prepare", status: "running" },

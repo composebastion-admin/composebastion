@@ -12,13 +12,33 @@ import type {
   RecoverySchedule,
   ResourceSnapshot
 } from "@composebastion/shared";
-import { migrationPlanSchema, recoveryAppIdentitySchema } from "@composebastion/shared";
+import {
+  migrationPlanSchema,
+  recoveryAppIdentitySchema,
+  sanitizeGitRepositoryUrl,
+  sanitizeUrlDiagnosticText
+} from "@composebastion/shared";
 import { mapBackupTargetFields } from "./recoveryBackupTargets.js";
 
 const iso = (value: Date | string | null | undefined) => {
   if (!value) return null;
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 };
+
+function publicAgentUrl(value: unknown) {
+  if (typeof value !== "string" || !value) return null;
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+    parsed.username = "";
+    parsed.password = "";
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
 
 export function mapHost(row: any): DockerHost {
   return {
@@ -29,7 +49,9 @@ export function mapHost(row: any): DockerHost {
     username: row.username,
     connectionMode: row.connection_mode ?? "ssh",
     sshAuthType: row.ssh_auth_type ?? "key",
-    agentUrl: row.agent_url,
+    // Legacy/imported rows may predate URL validation. Never reflect embedded
+    // URL credentials or token-like query/fragment data to any role.
+    agentUrl: publicAgentUrl(row.agent_url),
     dockerSocketPath: row.docker_socket_path,
     tags: row.tags ?? [],
     lastStatus: row.last_status,
@@ -75,7 +97,7 @@ export function mapStack(row: any): ComposeStack {
     updatePolicyEnabled: row.update_policy_enabled ?? false,
     updatePolicyChannel: row.update_policy_channel ?? null,
     sourceType: row.source_type ?? "ui",
-    sourceRepositoryUrl: row.source_repository_url ?? null,
+    sourceRepositoryUrl: sanitizeGitRepositoryUrl(row.source_repository_url),
     sourceBranch: row.source_branch ?? null,
     sourceWorkingDir: row.source_working_dir ?? null,
     sourceComposePath: row.source_compose_path ?? null,
@@ -83,10 +105,24 @@ export function mapStack(row: any): ComposeStack {
     sourceLatestCommitSha: row.source_latest_commit_sha ?? null,
     deploymentSourceId: row.deployment_source_id ?? null,
     sourceCheckedAt: iso(row.source_checked_at),
-    sourceCheckError: row.source_check_error ?? null,
-    lastDeployError: row.last_deploy_error ?? null,
+    sourceCheckError: sanitizeUrlDiagnosticText(row.source_check_error ?? null) as string | null,
+    lastDeployError: sanitizeUrlDiagnosticText(row.last_deploy_error ?? null) as string | null,
     createdAt: iso(row.created_at)!,
     updatedAt: iso(row.updated_at)!
+  };
+}
+
+export function redactStackSensitiveFields(stack: ComposeStack): ComposeStack {
+  return {
+    ...stack,
+    composeYaml: "",
+    env: "",
+    sourceRepositoryUrl: null,
+    sourceWorkingDir: null,
+    sourceComposePath: null,
+    sourceCheckError: stack.sourceCheckError ? "Source check failed; details require operator access." : null,
+    lastDeployError: stack.lastDeployError ? "Deployment failed; details require operator access." : null,
+    sensitiveFieldsRedacted: true
   };
 }
 
@@ -133,6 +169,17 @@ export function mapJob(row: any): OperationJob {
     updatedAt: iso(row.updated_at)!,
     startedAt: iso(row.started_at),
     completedAt: iso(row.completed_at)
+  };
+}
+
+export function redactJobSensitiveFields(job: OperationJob): OperationJob {
+  return {
+    ...job,
+    payload: {},
+    result: null,
+    progress: job.progress.map(({ id, label, status }) => ({ id, label, status })),
+    error: job.error ? "Operation failed; details require operator access." : null,
+    sensitiveFieldsRedacted: true
   };
 }
 
@@ -200,6 +247,10 @@ export function mapRecoveryPoint(row: any): RecoveryPointListItem {
     profileId: row.profile_id ?? null,
     artifactCount: toCount(row.artifact_count),
     completedArtifactCount: toCount(row.completed_artifact_count),
+    remoteArtifactCount: toCount(row.remote_artifact_count),
+    remoteUploadFailureCount: toCount(row.remote_upload_failure_count),
+    localRetainedArtifactCount: toCount(row.local_retained_artifact_count),
+    localRemovedArtifactCount: toCount(row.local_removed_artifact_count),
     totalBytes: toNullableNumber(row.total_bytes),
     error: row.error ?? null,
     metadata: row.metadata ?? {},

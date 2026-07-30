@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const query = vi.hoisted(() => vi.fn());
 const readRecoveryArtifact = vi.hoisted(() => vi.fn());
-const ensureRecoveryArtifactLocalPath = vi.hoisted(() => vi.fn());
+const withRecoveryArtifactLocalPath = vi.hoisted(() => vi.fn());
 const loadWorkerBackupTarget = vi.hoisted(() => vi.fn());
 const headRemoteArtifact = vi.hoisted(() => vi.fn());
 const hashFile = vi.hoisted(() => vi.fn());
@@ -10,13 +10,15 @@ const hashFile = vi.hoisted(() => vi.fn());
 vi.mock("../src/db/pool.js", () => ({ query }));
 vi.mock("../src/services/recoveryArtifactStore.js", () => ({
   readRecoveryArtifact,
-  ensureRecoveryArtifactLocalPath
+  withRecoveryArtifactLocalPath
 }));
 vi.mock("../src/services/recoveryBackupTargets.js", () => ({
   loadWorkerBackupTarget,
   exportBackupTargetSecrets: vi.fn()
 }));
 vi.mock("../src/services/recoveryRemoteStorage.js", () => ({
+  deleteRemoteArtifact: vi.fn(),
+  downloadRemoteArtifactAtomically: vi.fn(),
   headRemoteArtifact,
   uploadRemoteArtifact: vi.fn()
 }));
@@ -81,7 +83,9 @@ describe("remote-only recovery verification", () => {
       .mockResolvedValueOnce({ rows: artifacts })
       .mockResolvedValueOnce({ rows: [] });
     readRecoveryArtifact.mockResolvedValue(Buffer.from(JSON.stringify({ artifacts: [{ storageKey: "volumes/data.tar.gz" }] })));
-    ensureRecoveryArtifactLocalPath.mockImplementation(async (_point, artifact) => `/rehydrated/${artifact.storageKey}`);
+    withRecoveryArtifactLocalPath.mockImplementation(async (_point, artifact, useArtifact) =>
+      useArtifact(`/rehydrated/${artifact.storageKey}`)
+    );
     hashFile.mockResolvedValue(checksum);
     loadWorkerBackupTarget.mockResolvedValue({
       kind: "s3",
@@ -100,7 +104,7 @@ describe("remote-only recovery verification", () => {
     });
 
     expect(readRecoveryArtifact).toHaveBeenCalledTimes(1);
-    expect(ensureRecoveryArtifactLocalPath).toHaveBeenCalledTimes(2);
+    expect(withRecoveryArtifactLocalPath).toHaveBeenCalledTimes(2);
     expect(hashFile).toHaveBeenCalledWith("/rehydrated/manifest.json");
     expect(hashFile).toHaveBeenCalledWith("/rehydrated/volumes/data.tar.gz");
     expect(headRemoteArtifact).toHaveBeenCalledTimes(2);

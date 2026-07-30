@@ -2,6 +2,7 @@ import { v4 as uuid } from "uuid";
 import type { AuditEvent } from "@composebastion/shared";
 import { paginationQuerySchema, paginatedResponse } from "@composebastion/shared";
 import type { FastifyRequest } from "fastify";
+import type { PoolClient } from "pg";
 import { query } from "../db/pool.js";
 function mapAudit(row: any): AuditEvent {
   return {
@@ -35,13 +36,14 @@ export async function writeAuditEvent(input: {
   details?: Record<string, unknown>;
   ipAddress?: string | null;
   userAgent?: string | null;
-}) {
+}, client?: PoolClient) {
   const safeDetails = { ...(input.details ?? {}) };
   for (const key of ["password", "sshPrivateKey", "sshPassword", "agentToken", "token", "passphrase"]) {
     if (key in safeDetails) safeDetails[key] = "[redacted]";
   }
 
-  await query(
+  const execute = client ? client.query.bind(client) : query;
+  await execute(
     `INSERT INTO audit_events (id, user_id, host_id, action, target_kind, target_id, details, ip_address, user_agent)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
     [

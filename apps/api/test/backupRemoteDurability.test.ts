@@ -10,9 +10,13 @@ const mocks = vi.hoisted(() => ({
   recordBackupScheduleResult: vi.fn(),
   loadWorkerBackupTarget: vi.fn(),
   assertBackupTargetS3EndpointAllowed: vi.fn(),
+  deleteRemoteArtifact: vi.fn(),
+  downloadRemoteArtifactAtomically: vi.fn(),
+  headRemoteArtifact: vi.fn(),
   uploadRemoteArtifact: vi.fn(),
   hashFile: vi.fn(),
   mkdir: vi.fn(),
+  mkdtemp: vi.fn(),
   rm: vi.fn(),
   stat: vi.fn(),
   writeFile: vi.fn()
@@ -21,6 +25,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("node:fs/promises", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:fs/promises")>()),
   mkdir: (...args: unknown[]) => mocks.mkdir(...args),
+  mkdtemp: (...args: unknown[]) => mocks.mkdtemp(...args),
   rm: (...args: unknown[]) => mocks.rm(...args),
   stat: (...args: unknown[]) => mocks.stat(...args),
   writeFile: (...args: unknown[]) => mocks.writeFile(...args)
@@ -55,9 +60,9 @@ vi.mock("../src/services/recoveryBackupTargets.js", () => ({
 }));
 
 vi.mock("../src/services/recoveryRemoteStorage.js", () => ({
-  deleteRemoteArtifact: vi.fn(),
-  downloadRemoteArtifactAtomically: vi.fn(),
-  headRemoteArtifact: vi.fn(),
+  deleteRemoteArtifact: (...args: unknown[]) => mocks.deleteRemoteArtifact(...args),
+  downloadRemoteArtifactAtomically: (...args: unknown[]) => mocks.downloadRemoteArtifactAtomically(...args),
+  headRemoteArtifact: (...args: unknown[]) => mocks.headRemoteArtifact(...args),
   uploadRemoteArtifact: (...args: unknown[]) => mocks.uploadRemoteArtifact(...args)
 }));
 
@@ -71,13 +76,14 @@ vi.mock("../src/services/ssh.js", () => ({
   streamSshCommandToFile: vi.fn()
 }));
 
-const { runVolumeBackup } = await import("../src/services/backups.js");
+const { runBackupVerify, runVolumeBackup } = await import("../src/services/backups.js");
 
 const backupId = "00000000-0000-4000-8000-000000000201";
 const hostId = "00000000-0000-4000-8000-000000000202";
 const targetId = "00000000-0000-4000-8000-000000000203";
 const checksum = "sha256:remote-only-durability";
 const remoteObjectKey = `backups/${backupId}/remote.tar.gz`;
+const verificationDirectory = "/tmp/composebastion-backup-verify";
 
 let backupRow: Record<string, unknown>;
 
@@ -162,6 +168,13 @@ describe("remote-only backup completion durability", () => {
       }
     });
     mocks.assertBackupTargetS3EndpointAllowed.mockResolvedValue(undefined);
+    mocks.deleteRemoteArtifact.mockResolvedValue(undefined);
+    mocks.downloadRemoteArtifactAtomically.mockResolvedValue({ sizeBytes: 64 });
+    mocks.headRemoteArtifact.mockResolvedValue({
+      sizeBytes: 64,
+      checksum,
+      etag: "verified-etag"
+    });
     mocks.uploadRemoteArtifact.mockResolvedValue({
       remoteObjectKey,
       remoteBackend: "s3",
@@ -170,6 +183,7 @@ describe("remote-only backup completion durability", () => {
     });
     mocks.hashFile.mockResolvedValue(checksum);
     mocks.mkdir.mockResolvedValue(undefined);
+    mocks.mkdtemp.mockResolvedValue(verificationDirectory);
     mocks.rm.mockResolvedValue(undefined);
     mocks.stat.mockResolvedValue({ size: 64 });
     mocks.writeFile.mockResolvedValue(undefined);
@@ -186,6 +200,18 @@ describe("remote-only backup completion durability", () => {
         remoteEtag: "etag"
       };
     });
+    mocks.headRemoteArtifact.mockImplementationOnce(async () => {
+      events.push("verify");
+      return {
+        sizeBytes: 64,
+        checksum,
+        etag: "verified-etag"
+      };
+    });
+    mocks.downloadRemoteArtifactAtomically.mockImplementationOnce(async () => {
+      events.push("download");
+      return { sizeBytes: 64 };
+    });
     mocks.leaseQuery.mockImplementation(async (sql: string, values?: unknown[]) => {
       if (sql.includes("remote_object_key") && values) {
         events.push("durable-update");
@@ -193,7 +219,10 @@ describe("remote-only backup completion durability", () => {
         expect(JSON.parse(String(values[6]))).toMatchObject({
           remoteBackend: "s3",
           remoteSizeBytes: 64,
-          remoteEtag: "etag",
+          remoteEtag: "verified-etag",
+          remoteChecksum: checksum,
+          remoteDeclaredChecksum: checksum,
+          remoteVerifiedAt: expect.any(String),
           localCachePolicy: "remote_only"
         });
         backupRow = {
@@ -208,8 +237,8 @@ describe("remote-only backup completion durability", () => {
       }
       return { rows: [] };
     });
-    mocks.rm.mockImplementationOnce(async () => {
-      events.push("cleanup");
+    mocks.rm.mockImplementation(async (target: string) => {
+      events.push(target === verificationDirectory ? "verify-cleanup" : "cleanup");
     });
 
     await expect(runVolumeBackup(hostId, backupId, "app-data", fence)).resolves.toMatchObject({
@@ -218,7 +247,117 @@ describe("remote-only backup completion durability", () => {
       remoteObjectKey
     });
 
-    expect(events).toEqual(["upload", "durable-update", "cleanup"]);
+    expect(events).toEqual([
+      "upload",
+      "verify",
+      "download",
+      "verify-cleanup",
+      "durable-update",
+      "cleanup"
+    ]);
+  });
+
+  it("rejects same-size S3 content when HEAD only echoes the submitted checksum metadata", async () => {
+    mocks.headRemoteArtifact.mockResolvedValueOnce({
+      sizeBytes: 64,
+      checksum,
+      etag: "echoed-metadata"
+    });
+    mocks.hashFile
+      .mockResolvedValueOnce(checksum)
+      .mockResolvedValueOnce("sha256:corrupt-remote-body");
+
+    await expect(runVolumeBackup(hostId, backupId, "app-data", fence)).resolves.toMatchObject({
+      status: "partial",
+      checksum,
+      remoteObjectKey: null
+    });
+
+    expect(mocks.downloadRemoteArtifactAtomically).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "s3" }),
+      remoteObjectKey,
+      `${verificationDirectory}/artifact`
+    );
+    expect(mocks.deleteRemoteArtifact).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "s3" }),
+      remoteObjectKey
+    );
+    expect(mocks.rm.mock.calls.some(([target]) => target !== verificationDirectory)).toBe(false);
+    expect(backupRow).toMatchObject({
+      status: "partial",
+      remote_object_key: null,
+      error: expect.stringContaining("downloaded remote checksum mismatch")
+    });
+  });
+
+  it("retains the local S3 artifact and marks the backup partial when the independent HEAD size is wrong", async () => {
+    mocks.headRemoteArtifact.mockResolvedValueOnce({
+      sizeBytes: 63,
+      checksum,
+      etag: "wrong-size"
+    });
+
+    await expect(runVolumeBackup(hostId, backupId, "app-data", fence)).resolves.toMatchObject({
+      status: "partial",
+      checksum,
+      remoteObjectKey: null
+    });
+
+    expect(mocks.deleteRemoteArtifact).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "s3" }),
+      remoteObjectKey
+    );
+    expect(mocks.rm).not.toHaveBeenCalled();
+    expect(backupRow).toMatchObject({
+      status: "partial",
+      remote_object_key: null,
+      error: expect.stringContaining("remote size mismatch")
+    });
+  });
+
+  it("retains the local rclone artifact and marks the backup partial when the remote checksum is wrong", async () => {
+    mocks.loadWorkerBackupTarget.mockResolvedValueOnce({
+      id: targetId,
+      name: "SMB remote only",
+      kind: "rclone",
+      enabled: true,
+      config: {},
+      localCachePolicy: "remote_only",
+      rclone: {
+        provider: "smb",
+        remoteName: "composebastion",
+        remotePath: "backups",
+        credentials: { password: "test" }
+      }
+    });
+    mocks.uploadRemoteArtifact.mockResolvedValueOnce({
+      remoteObjectKey,
+      remoteBackend: "rclone",
+      remoteSizeBytes: 64,
+      remoteEtag: null
+    });
+    mocks.headRemoteArtifact.mockResolvedValueOnce({
+      sizeBytes: 64,
+      checksum: "sha256:wrong",
+      etag: null
+    });
+
+    await expect(runVolumeBackup(hostId, backupId, "app-data", fence)).resolves.toMatchObject({
+      status: "partial",
+      checksum,
+      remoteObjectKey: null
+    });
+
+    expect(mocks.deleteRemoteArtifact).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "rclone" }),
+      remoteObjectKey
+    );
+    expect(mocks.rm).not.toHaveBeenCalled();
+    expect(backupRow).toMatchObject({
+      status: "partial",
+      remote_object_key: null,
+      error: expect.stringContaining("remote checksum mismatch")
+    });
   });
 
   it("retains the local artifact when the fenced completion update fails after upload", async () => {
@@ -231,12 +370,15 @@ describe("remote-only backup completion durability", () => {
     await expect(runVolumeBackup(hostId, backupId, "app-data", fence)).rejects.toThrow("active lease was lost");
 
     expect(mocks.uploadRemoteArtifact).toHaveBeenCalledTimes(1);
-    expect(mocks.rm).not.toHaveBeenCalled();
+    expect(mocks.rm.mock.calls.every(([target]) => target === verificationDirectory)).toBe(true);
     expect(mocks.poolQuery.mock.calls.some((call) => String(call[0]).includes("AND remote_object_key = $2"))).toBe(false);
   });
 
   it("keeps a committed remote backup valid and records a post-commit local cleanup failure", async () => {
-    mocks.rm.mockRejectedValueOnce(Object.assign(new Error("permission denied"), { code: "EACCES" }));
+    mocks.rm.mockImplementation(async (target: string) => {
+      if (target === verificationDirectory) return;
+      throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+    });
 
     await expect(runVolumeBackup(hostId, backupId, "app-data", fence)).resolves.toMatchObject({
       status: "completed",
@@ -309,6 +451,91 @@ describe("remote-only backup completion durability", () => {
         scheduleResultError: "schedule database unavailable",
         retentionCleanupError: "retention database unavailable"
       }
+    });
+  });
+
+  describe("independent remote verification", () => {
+    beforeEach(() => {
+      backupRow = {
+        ...backupRow,
+        size_bytes: 64,
+        checksum,
+        remote_object_key: remoteObjectKey,
+        status: "completed",
+        completed_at: new Date("2026-07-11T00:05:00.000Z"),
+        metadata: { localCachePolicy: "retain_local" }
+      };
+    });
+
+    it("downloads, hashes, and cleans the exact remote object while retaining the local copy", async () => {
+      await expect(runBackupVerify(hostId, backupId)).resolves.toMatchObject({
+        backupId,
+        checksum
+      });
+
+      expect(mocks.headRemoteArtifact).toHaveBeenCalledWith(
+        expect.objectContaining({ id: targetId }),
+        remoteObjectKey
+      );
+      expect(mocks.mkdtemp).toHaveBeenCalledWith(
+        expect.stringContaining(".composebastion-remote-verify-")
+      );
+      expect(mocks.downloadRemoteArtifactAtomically).toHaveBeenCalledWith(
+        expect.objectContaining({ id: targetId }),
+        remoteObjectKey,
+        `${verificationDirectory}/artifact`
+      );
+      expect(mocks.rm).toHaveBeenCalledTimes(1);
+      expect(mocks.rm).toHaveBeenCalledWith(verificationDirectory, {
+        recursive: true,
+        force: true
+      });
+      const verifyUpdate = mocks.poolQuery.mock.calls.find((call) =>
+        String(call[0]).includes("SET verified_at")
+      );
+      expect(JSON.parse(String(verifyUpdate?.[1]?.[2]))).toMatchObject({
+        verifyStatus: "completed",
+        verifyFailures: []
+      });
+    });
+
+    it("rejects same-size corrupt remote bytes even when HEAD echoes the expected checksum", async () => {
+      mocks.headRemoteArtifact.mockResolvedValueOnce({
+        sizeBytes: 64,
+        checksum,
+        etag: "echoed-metadata"
+      });
+      mocks.hashFile
+        .mockResolvedValueOnce(checksum)
+        .mockResolvedValueOnce(checksum)
+        .mockResolvedValueOnce("sha256:corrupt-remote-body");
+
+      await expect(runBackupVerify(hostId, backupId))
+        .rejects.toThrow("downloaded remote checksum mismatch");
+
+      expect(mocks.downloadRemoteArtifactAtomically).toHaveBeenCalledWith(
+        expect.objectContaining({ id: targetId }),
+        remoteObjectKey,
+        `${verificationDirectory}/artifact`
+      );
+      expect(mocks.rm).toHaveBeenCalledTimes(1);
+      expect(mocks.rm).toHaveBeenCalledWith(verificationDirectory, {
+        recursive: true,
+        force: true
+      });
+      expect(mocks.rm).not.toHaveBeenCalledWith(
+        expect.stringMatching(/remote\.tar\.gz$/),
+        expect.anything()
+      );
+      const verifyUpdate = mocks.poolQuery.mock.calls.find((call) =>
+        String(call[0]).includes("SET verified_at")
+      );
+      expect(JSON.parse(String(verifyUpdate?.[1]?.[2]))).toMatchObject({
+        verifyStatus: "failed",
+        verifyFailures: [
+          expect.stringContaining("downloaded remote checksum mismatch")
+        ]
+      });
     });
   });
 });

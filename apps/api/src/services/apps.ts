@@ -1,5 +1,6 @@
 import { v4 as uuid } from "uuid";
 import type { AppGithubVersionSelect, AppGithubVersions, AppRenameInput, AppSourceLink, AppSourceLinkInput, ComposeStack, DockerActionRequest, DockerApp, DockerAppUpdate, GithubRepository, ImageUpdateCheck, ResourceSnapshot } from "@composebastion/shared";
+import { sanitizeGitRepositoryUrl } from "@composebastion/shared";
 import { query, withTransaction } from "../db/pool.js";
 import { shQuote } from "./commands.js";
 import { isDemoHost } from "./demo.js";
@@ -126,7 +127,11 @@ async function readHostGitMetadata(hostId: string, workingDir: string, branch?: 
   ].join(" && ");
   const result = await runSshCommand(host.ssh, command, { timeoutMs: fetchRemote ? 5 * 60_000 : 30_000 });
   if (result.code !== 0) throw new Error(result.stderr || result.stdout || "Git update check failed");
-  return JSON.parse(result.stdout.trim()) as HostGitMetadata;
+  const metadata = JSON.parse(result.stdout.trim()) as HostGitMetadata;
+  return {
+    ...metadata,
+    repositoryUrl: sanitizeGitRepositoryUrl(metadata.repositoryUrl) ?? ""
+  };
 }
 
 async function latestCommitForGithubUrl(repositoryUrl: string | null | undefined, branch: string | null | undefined) {
@@ -176,7 +181,7 @@ function mapAppSourceLink(row: any): AppSourceLink {
     id: row.id,
     sourceType: row.source_type,
     name: row.name ?? null,
-    repositoryUrl: row.repository_url ?? null,
+    repositoryUrl: sanitizeGitRepositoryUrl(row.repository_url),
     branch: row.branch ?? null,
     workingDir: row.working_dir ?? null,
     composePath: row.compose_path ?? null,

@@ -6,12 +6,11 @@ import { useAsyncAction } from "../../../hooks/useAsyncAction.js";
 import { formatDate, emptyToUndefined } from "../../../lib/format.js";
 import { ButtonRow, DataTable, InlineForm, Panel } from "../../ui/primitives.js";
 
-type TargetForm = {
+export type TargetForm = {
   name: string;
   type: "local" | "s3" | "rclone";
   enabled: boolean;
   localCachePolicy: "keep" | "remote_only";
-  basePath: string;
   endpoint: string;
   bucket: string;
   region: string;
@@ -47,7 +46,6 @@ const emptyForm = (): TargetForm => ({
   type: "local",
   enabled: true,
   localCachePolicy: "keep",
-  basePath: "",
   endpoint: "",
   bucket: "",
   region: "",
@@ -68,13 +66,16 @@ const emptyForm = (): TargetForm => ({
   port: ""
 });
 
-function formFromTarget(target: BackupTarget): TargetForm {
+export function formFromTarget(target: BackupTarget): TargetForm {
+  const smb = target.config.smb && typeof target.config.smb === "object" && !Array.isArray(target.config.smb)
+    ? target.config.smb as Record<string, unknown>
+    : {};
+  const smbText = (key: string) => typeof smb[key] === "string" ? smb[key] as string : "";
   return {
     name: target.name,
     type: target.type,
     enabled: target.enabled,
-    localCachePolicy: target.localCachePolicy,
-    basePath: target.basePath ?? "",
+    localCachePolicy: target.type === "local" ? "keep" : target.localCachePolicy,
     endpoint: target.endpoint ?? "",
     bucket: target.bucket ?? "",
     region: target.region ?? "",
@@ -86,24 +87,22 @@ function formFromTarget(target: BackupTarget): TargetForm {
     remoteName: target.remoteName ?? "composebastion",
     remotePath: target.remotePath ?? "",
     rcloneConfig: "",
-    server: "",
-    share: "",
-    subPath: "",
-    domain: "",
-    username: "",
+    server: smbText("server"),
+    share: smbText("share"),
+    subPath: smbText("subPath"),
+    domain: smbText("domain"),
+    username: smbText("username"),
     password: "",
-    port: ""
+    port: typeof smb.port === "number" || typeof smb.port === "string" ? String(smb.port) : ""
   };
 }
 
-function buildPayload(form: TargetForm, editing: BackupTarget | null) {
+export function buildBackupTargetPayload(form: TargetForm, editing: BackupTarget | null) {
   if (form.type === "local") {
     return {
       name: form.name,
       type: "local",
-      enabled: form.enabled,
-      localCachePolicy: form.localCachePolicy,
-      basePath: emptyToUndefined(form.basePath)
+      enabled: form.enabled
     };
   }
   if (form.type === "rclone") {
@@ -169,7 +168,7 @@ export function StorageTargetsPanel({
       <InlineForm
         onSubmit={async () => {
           await action.run(async () => {
-            const payload = buildPayload(form, editing);
+            const payload = buildBackupTargetPayload(form, editing);
             if (editing) {
               await patchJson(`/api/recovery/targets/${editing.id}`, payload);
             } else {
@@ -195,13 +194,13 @@ export function StorageTargetsPanel({
           <input type="checkbox" checked={form.enabled} onChange={(event) => setForm((current) => ({ ...current, enabled: event.target.checked }))} />
           Enabled
         </label>
-        <select value={form.localCachePolicy} onChange={(event) => setForm((current) => ({ ...current, localCachePolicy: event.target.value as TargetForm["localCachePolicy"] }))}>
-          <option value="keep">Keep local cache</option>
-          <option value="remote_only">Remote only after upload</option>
-        </select>
-        {form.type === "local" ? (
-          <input placeholder="Base path (optional)" value={form.basePath} onChange={(event) => setForm((current) => ({ ...current, basePath: event.target.value }))} />
-        ) : form.type === "s3" ? (
+        {form.type !== "local" && (
+          <select value={form.localCachePolicy} onChange={(event) => setForm((current) => ({ ...current, localCachePolicy: event.target.value as TargetForm["localCachePolicy"] }))}>
+            <option value="keep">Keep local cache</option>
+            <option value="remote_only">Remote only after verified upload</option>
+          </select>
+        )}
+        {form.type === "s3" ? (
           <>
             <input placeholder="Endpoint URL" value={form.endpoint} onChange={(event) => setForm((current) => ({ ...current, endpoint: event.target.value }))} required />
             <input placeholder="Bucket" value={form.bucket} onChange={(event) => setForm((current) => ({ ...current, bucket: event.target.value }))} required />
@@ -220,7 +219,7 @@ export function StorageTargetsPanel({
               Force path-style URLs
             </label>
           </>
-        ) : (
+        ) : form.type === "rclone" ? (
           <>
             <select value={form.provider} onChange={(event) => setForm((current) => ({ ...current, provider: event.target.value as TargetForm["provider"] }))}>
               {rcloneProviderOptions.map((option) => (
@@ -245,7 +244,7 @@ export function StorageTargetsPanel({
               </>
             )}
           </>
-        )}
+        ) : null}
         <ButtonRow>
           <button type="submit" className="primary" disabled={action.busy}>
             <Plus size={16} />
@@ -267,7 +266,7 @@ export function StorageTargetsPanel({
         render={(target) => [
           target.name,
           target.type === "rclone" ? `rclone:${target.rcloneProvider ?? "custom"}` : target.type,
-          target.type === "s3" ? target.endpoint : target.type === "rclone" ? target.remotePath ?? "remote root" : (target.basePath ?? "default"),
+          target.type === "s3" ? target.endpoint : target.type === "rclone" ? target.remotePath ?? "remote root" : "manager backup directory",
           target.bucket ?? "—",
           target.localCachePolicy === "remote_only" ? "remote only" : "keep",
           target.healthStatus === "healthy" ? "healthy" : target.healthStatus === "failed" ? (target.healthError ?? "failed") : "unknown",

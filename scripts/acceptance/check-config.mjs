@@ -1,10 +1,41 @@
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
+import {
+  dockerBindPathRelativeChild,
+  isDockerBindPathStrictlyBeneath
+} from "./bind-paths.mjs";
 import { acceptanceScenarioManifest } from "./scenario-manifest.mjs";
 
 const candidateVersion = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")).version;
 const root = new URL("../..", import.meta.url);
+
+const bindFixtureRoot = "/tmp/composebastion-acceptance-bind/compose-workload";
+for (const candidate of [
+  `${bindFixtureRoot}/relative-data`,
+  `/private${bindFixtureRoot}/relative-data`,
+  `/host_mnt/private${bindFixtureRoot}/relative-data`
+]) {
+  if (!isDockerBindPathStrictlyBeneath(bindFixtureRoot, candidate)) {
+    throw new Error(`Acceptance bind containment rejected Docker path alias ${candidate}`);
+  }
+  if (dockerBindPathRelativeChild(bindFixtureRoot, candidate) !== "relative-data") {
+    throw new Error(`Acceptance bind suffix was not preserved for Docker path alias ${candidate}`);
+  }
+}
+for (const candidate of [
+  bindFixtureRoot,
+  `${bindFixtureRoot}-other/relative-data`,
+  `/host_mnt/private${bindFixtureRoot}/../escape`,
+  "relative-data"
+]) {
+  if (isDockerBindPathStrictlyBeneath(bindFixtureRoot, candidate)) {
+    throw new Error(`Acceptance bind containment allowed path outside the Compose working directory: ${candidate}`);
+  }
+  if (dockerBindPathRelativeChild(bindFixtureRoot, candidate) !== null) {
+    throw new Error(`Acceptance bind suffix escaped the Compose working directory: ${candidate}`);
+  }
+}
 
 function curatedHostEnvironment(source) {
   const curated = {};
@@ -88,6 +119,15 @@ for (const fragment of [
   'go-module-legal-review'
 ]) {
   if (!runnerSource.includes(fragment)) throw new Error(`Acceptance runner is missing release evidence invariant: ${fragment}`);
+}
+for (const fragment of [
+  'api(`/api/hosts/${host.id}/files/write`',
+  'type: "compose.deployPath"'
+]) {
+  if (!runnerSource.includes(fragment)) throw new Error(`Acceptance disposable deployment is missing supported API flow: ${fragment}`);
+}
+if (runnerSource.includes('type: "compose.writeDeployPath"')) {
+  throw new Error("Acceptance runner must not use the internal compose.writeDeployPath action through the public host-action endpoint");
 }
 if (runnerSource.includes("...process.env")) throw new Error("Acceptance runner must not spread the ambient process environment");
 const disposableYamlSource = /function disposableComposeYaml\(\) \{([\s\S]*?)\n\}\n\nasync function deployDisposableStack/.exec(runnerSource)?.[1];

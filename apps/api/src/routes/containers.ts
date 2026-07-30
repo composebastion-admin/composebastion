@@ -3,9 +3,10 @@ import { containerCloneSchema, containerExecRequestSchema, volumeCloneSchema } f
 import { z } from "zod";
 import { createVolumeBackupsWithJobs, createVolumeCloneWithJob } from "../services/backups.js";
 import { execInContainer, getContainerInspect, getContainerLogs, getContainerStats, getContainerUsage, getContainerVolumeMounts, redactInspectEnv, streamContainerLogs, streamContainerUsage } from "../services/docker.js";
-import { enqueueJob } from "../services/jobs.js";
+import { enqueueJobInTransaction, notifyJobQueued } from "../services/jobs.js";
 import { requireRole } from "../services/auth.js";
-import { writeAuditEvent } from "../services/audit.js";
+import { auditContextFromRequest, writeAuditEvent } from "../services/audit.js";
+import { withTransaction } from "../db/pool.js";
 import { authenticatedReadRateLimit, sensitiveMutationRateLimit, streamRateLimit } from "../services/rateLimits.js";
 
 const containerParamSchema = z.object({
@@ -160,22 +161,65 @@ export async function registerContainerRoutes(app: FastifyInstance) {
   app.post("/api/hosts/:hostId/containers/:containerId/exec", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
     const { hostId, containerId } = request.params as { hostId: string; containerId: string };
     const body = containerExecRequestSchema.parse(request.body);
-    const result = await execInContainer(hostId, containerId, body.command);
-    await writeAuditEvent({ userId: request.user?.id, hostId, action: "container.exec", targetKind: "container", targetId: containerId, details: { command: body.command } });
-    return result;
+    // Record the high-risk attempt before execution so a Docker rejection or
+    // transport failure cannot erase the audit trail. Command text is never
+    // retained.
+    await writeAuditEvent({
+      userId: request.user?.id,
+      hostId,
+      action: "container.exec",
+      targetKind: "container",
+      targetId: containerId,
+      details: { commandRedacted: true },
+      ...auditContextFromRequest(request)
+    });
+    return execInContainer(hostId, containerId, body.command);
   });
 
   app.post("/api/migrations/volume-clone", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
     const body = volumeCloneSchema.parse(request.body);
-    return createVolumeCloneWithJob(body, request.user?.id);
+    const result = await createVolumeCloneWithJob(
+      body,
+      request.user?.id,
+      async (client, created) => writeAuditEvent({
+        userId: request.user?.id,
+        hostId: body.sourceHostId,
+        action: "volume.clone",
+        targetKind: "backup",
+        targetId: created.backup.id,
+        details: {
+          targetHostId: body.targetHostId,
+          overwrite: body.overwrite
+        },
+        ...auditContextFromRequest(request)
+      }, client)
+    );
+    return result;
   });
 
   app.post("/api/migrations/container-clone", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
     const body = containerCloneSchema.parse(request.body);
-    const job = await enqueueJob(
-      { type: "container.clone", hostId: body.sourceHostId, payload: { targetHostId: body.targetHostId, containerId: body.containerId, targetName: body.targetName, start: body.start } },
-      request.user?.id
-    );
+    const job = await withTransaction(async (client) => {
+      const queued = await enqueueJobInTransaction(
+        client,
+        { type: "container.clone", hostId: body.sourceHostId, payload: { targetHostId: body.targetHostId, containerId: body.containerId, targetName: body.targetName, start: body.start } },
+        request.user?.id
+      );
+      await writeAuditEvent({
+        userId: request.user?.id,
+        hostId: body.sourceHostId,
+        action: "container.clone",
+        targetKind: "container",
+        targetId: body.containerId,
+        details: {
+          targetHostId: body.targetHostId,
+          start: body.start
+        },
+        ...auditContextFromRequest(request)
+      }, client);
+      return queued;
+    });
+    await notifyJobQueued(job.id);
     return { job };
   });
 }

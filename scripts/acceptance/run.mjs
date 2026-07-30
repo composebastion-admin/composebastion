@@ -4,6 +4,10 @@ import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  dockerBindPathRelativeChild,
+  isDockerBindPathStrictlyBeneath
+} from "./bind-paths.mjs";
 import { acceptanceScenarioManifest } from "./scenario-manifest.mjs";
 import { assertSafeTestResultsPath, digestGitBuildContext, materializeGitBuildContext } from "../materialize-git-context.mjs";
 import { validateGoAttributionReview } from "../go-attribution-review.mjs";
@@ -1242,18 +1246,28 @@ networks:
 }
 
 async function deployDisposableStack(host) {
+  await api(`/api/hosts/${host.id}/files/write`, {
+    method: "POST",
+    body: {
+      path: `${acceptanceComposeDir}/compose.yml`,
+      content: disposableComposeYaml()
+    }
+  });
+  await api(`/api/hosts/${host.id}/files/write`, {
+    method: "POST",
+    body: {
+      path: `${acceptanceComposeDir}/.env`,
+      content: `WORKLOAD_DATABASE_PASSWORD=${fixture.workloadPassword}\nWORKLOAD_BIND_DIR=${acceptanceExternalBindDir}\n`
+    }
+  });
   const response = await api(`/api/hosts/${host.id}/actions`, {
     method: "POST",
     body: {
-      type: "compose.writeDeployPath",
+      type: "compose.deployPath",
       payload: {
         projectName: workloadProject,
         workingDir: acceptanceComposeDir,
-        composePath: "compose.yml",
-        composeYaml: disposableComposeYaml(),
-        env: `WORKLOAD_DATABASE_PASSWORD=${fixture.workloadPassword}\nWORKLOAD_BIND_DIR=${acceptanceExternalBindDir}\n`,
-        overwrite: true,
-        pullBeforeDeploy: false
+        composePath: "compose.yml"
       }
     }
   });
@@ -1306,7 +1320,10 @@ printf 'ACCEPTANCE_RELATIVE_BIND_SOURCE=%s\n' "$relative_bind_source"
     ?.slice("ACCEPTANCE_RELATIVE_BIND_SOURCE=".length);
   assert(/^\/[A-Za-z0-9._/-]+$/.test(bindSourcePath ?? ""), `Docker reported an unsafe acceptance bind source: ${JSON.stringify(bindSourcePath)}`);
   assert(/^\/[A-Za-z0-9._/-]+$/.test(relativeBindSourcePath ?? ""), `Docker reported an unsafe relative bind source: ${JSON.stringify(relativeBindSourcePath)}`);
-  assert(relativeBindSourcePath.startsWith(`${acceptanceComposeDir}/`), "relative bind was not resolved beneath the Compose working directory");
+  assert(
+    isDockerBindPathStrictlyBeneath(acceptanceComposeDir, relativeBindSourcePath),
+    `relative bind was not resolved beneath the Compose working directory: expected beneath ${JSON.stringify(acceptanceComposeDir)}, got ${JSON.stringify(relativeBindSourcePath)}`
+  );
 
   const verifyRuntime = `
 set -eu
@@ -1498,7 +1515,11 @@ async function exerciseRecovery(host, stack, targets) {
   const restoredDatabaseVolume = restoreJob.result.volumeMap?.[sourceDatabaseVolume];
   const restoredBindPath = restoreJob.result.bindMap?.[expectedBindSourcePath];
   const restoredWorkingDir = restoreJob.result.bindMap?.[expectedComposeWorkingDir];
-  const relativeChildPath = path.posix.relative(expectedComposeWorkingDir, expectedRelativeBindSourcePath);
+  const relativeChildPath = dockerBindPathRelativeChild(
+    expectedComposeWorkingDir,
+    expectedRelativeBindSourcePath
+  );
+  assert(relativeChildPath, "relative bind did not preserve a safe child path beneath the Compose working directory");
   const restoredRelativeBindPath = restoredWorkingDir && relativeChildPath
     ? path.posix.join(restoredWorkingDir, relativeChildPath)
     : null;
@@ -2004,6 +2025,9 @@ async function upgradeScenario() {
   activeEnv = oldEnv;
   sessionCookie = "";
   const upgradeJobId = randomUUID();
+  const upgradeLocalTargetId = randomUUID();
+  const upgradeRepositoryId = randomUUID();
+  const upgradeEnvironmentSecret = runtimeSecret(20);
   await compose(project, oldEnv, ["down", "--volumes", "--remove-orphans"]).catch(() => undefined);
   try {
     await run("docker", ["pull", publicImage], { inherit: true });
@@ -2059,7 +2083,26 @@ async function upgradeScenario() {
        VALUES ('${upgradeJobId}', 'host.check', 'completed',
          jsonb_build_object('acceptanceMarker', '${fixture.publicMarker}'),
          jsonb_build_object('preserved', true),
-         now() - interval '1 minute', now(), now() - interval '30 seconds', now())`
+         now() - interval '1 minute', now(), now() - interval '30 seconds', now());
+       INSERT INTO backup_targets (
+         id, name, kind, enabled, config, local_cache_policy,
+         health_status, health_checked_at, health_error, created_at, updated_at
+       ) VALUES (
+         '${upgradeLocalTargetId}', '${fixture.publicMarker}-legacy-local', 'local', true,
+         jsonb_build_object('basePath', '/legacy/unsupported/path'), 'remote_only',
+         'healthy', now(), 'legacy probe did not perform I/O', now(), now()
+       );
+       INSERT INTO github_repositories (
+         id, name, repository_url, owner, repo, branch, compose_path, project_name,
+         env, default_host_id, host_clone_url, host_clone_directory, created_at, updated_at
+       ) VALUES (
+         '${upgradeRepositoryId}', '${fixture.publicMarker}-repository',
+         'https://github.com/composebastion/example.git', 'composebastion', 'example',
+         'main', 'compose.yml', '${fixture.publicMarker}-project',
+         E'PUBLIC_SETTING=upgrade-preserved\\nSECRET_TOKEN=${upgradeEnvironmentSecret}',
+         '${demoHost.id}', 'https://github.com/composebastion/example.git',
+         '/tmp/${fixture.publicMarker}-repository', now(), now()
+       )`
     ]);
     await compose(project, oldEnv, ["stop", "app"]);
     activeEnv = newEnv;
@@ -2080,6 +2123,16 @@ async function upgradeScenario() {
     assert(encryptedRegistryTags.data.tags.includes("1.0.0"), "upgraded manager could not use preserved registry credentials");
     const state = await api("/api/auth/setup-state");
     assert(state.data.needsSetup === false, "database state did not survive the image upgrade");
+    const upgradedSource = await api(`/api/deployment-sources/${upgradeRepositoryId}`);
+    assert(
+      upgradedSource.data.source.safeEnvironment?.PUBLIC_SETTING === "upgrade-preserved",
+      "legacy source non-secret environment was not preserved through encrypted backfill"
+    );
+    assert(
+      !Object.prototype.hasOwnProperty.call(upgradedSource.data.source.safeEnvironment ?? {}, "SECRET_TOKEN")
+        && !JSON.stringify(upgradedSource.data).includes(upgradeEnvironmentSecret),
+      "legacy source secret environment was disclosed by the upgraded API"
+    );
     const completedQueuedJob = await waitForJob(queuedJobId, { timeoutMs: 3 * 60_000 });
     assert(completedQueuedJob.status === "completed", "queued pre-upgrade API job did not complete after upgrade");
     assert(await jobAttemptCount(queuedJobId) === 1, "queued pre-upgrade API job did not complete exactly once");
@@ -2114,20 +2167,72 @@ async function upgradeScenario() {
       "exec", "-T", "postgres",
       "psql", "-v", "ON_ERROR_STOP=1", "-U", "composebastion", "-d", "composebastion", "-Atc",
       `SELECT json_build_object(
-        'applied', (SELECT count(*) FROM schema_migrations WHERE version IN ('029_worker_reliability.sql', '030_migration_plan_binding.sql')),
+        'applied', (SELECT count(*) FROM schema_migrations WHERE version IN (
+          '029_worker_reliability.sql',
+          '030_migration_plan_binding.sql',
+          '031_universal_deployments.sql',
+          '032_normalize_local_backup_targets.sql'
+        )),
         'workerTable', to_regclass('public.worker_instances') IS NOT NULL,
         'leaseIndex', to_regclass('public.operation_jobs_expired_lease_idx') IS NOT NULL,
         'planColumn', EXISTS (
           SELECT 1 FROM information_schema.columns
           WHERE table_schema = 'public' AND table_name = 'migration_runs' AND column_name = 'plan_run_id'
         ),
-        'planIndex', to_regclass('public.migration_runs_plan_run_unique_idx') IS NOT NULL
+        'planIndex', to_regclass('public.migration_runs_plan_run_unique_idx') IS NOT NULL,
+        'deploymentSourcesTable', to_regclass('public.deployment_sources') IS NOT NULL,
+        'deploymentSourceColumn', EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'compose_stacks' AND column_name = 'deployment_source_id'
+        ),
+        'legacyDeploymentSource', (
+          SELECT json_build_object(
+            'id', id,
+            'legacyId', metadata ->> 'legacyGithubRepositoryId',
+            'sourceLocator', source_locator,
+            'projectName', project_name,
+            'environmentEncrypted', env_encrypted IS NOT NULL,
+            'ciphertextContainsPlaintextSecret',
+              position('${upgradeEnvironmentSecret}' in COALESCE(env_encrypted, '')) > 0
+          ) FROM deployment_sources
+          WHERE id = '${upgradeRepositoryId}'
+        ),
+        'legacyLocalTarget', (
+          SELECT json_build_object(
+            'config', config,
+            'localCachePolicy', local_cache_policy,
+            'healthStatus', health_status,
+            'healthCheckedAt', health_checked_at,
+            'healthError', health_error
+          ) FROM backup_targets
+          WHERE id = '${upgradeLocalTargetId}'
+        )
       )::text`
     ]);
     const migrated = JSON.parse(migrationResult.stdout);
-    assert(Number(migrated.applied) === 2, "release-candidate migrations 029/030 were not recorded");
+    assert(Number(migrated.applied) === 4, "release-candidate migrations 029-032 were not recorded");
     assert(migrated.workerTable && migrated.leaseIndex && migrated.planColumn && migrated.planIndex,
       "release-candidate worker/migration schema is incomplete after upgrade");
+    assert(migrated.deploymentSourcesTable && migrated.deploymentSourceColumn,
+      "universal deployment schema is incomplete after upgrade");
+    assert(
+      migrated.legacyDeploymentSource?.id === upgradeRepositoryId
+        && migrated.legacyDeploymentSource?.legacyId === upgradeRepositoryId
+        && migrated.legacyDeploymentSource?.sourceLocator === "https://github.com/composebastion/example.git"
+        && migrated.legacyDeploymentSource?.projectName === `${fixture.publicMarker}-project`
+        && migrated.legacyDeploymentSource?.environmentEncrypted === true
+        && migrated.legacyDeploymentSource?.ciphertextContainsPlaintextSecret === false,
+      "legacy GitHub repository was not preserved and backfilled as a deployment source"
+    );
+    assert(
+      migrated.legacyLocalTarget?.localCachePolicy === "keep"
+        && migrated.legacyLocalTarget?.config
+        && Object.keys(migrated.legacyLocalTarget.config).length === 0
+        && migrated.legacyLocalTarget?.healthStatus === "unknown"
+        && migrated.legacyLocalTarget?.healthCheckedAt === null
+        && migrated.legacyLocalTarget?.healthError === null,
+      "legacy local backup target was not canonicalized without losing the row"
+    );
     return {
       from: "1.0.6",
       to: candidateVersion,
@@ -2137,8 +2242,18 @@ async function upgradeScenario() {
       preservedDatabase: true,
       preservedCompletedJob: true,
       preservedQueuedJob: true,
-      migrations: ["029_worker_reliability.sql", "030_migration_plan_binding.sql"],
-      workerMigrationHealthy: true
+      migrations: [
+        "029_worker_reliability.sql",
+        "030_migration_plan_binding.sql",
+        "031_universal_deployments.sql",
+        "032_normalize_local_backup_targets.sql"
+      ],
+      workerMigrationHealthy: true,
+      universalDeploymentMigrationHealthy: true,
+      legacyRepositoryBackfilled: true,
+      legacySourceEnvironmentEncrypted: true,
+      legacySourceEnvironmentApiRedacted: true,
+      legacyLocalTargetCanonicalized: true
     };
   } catch (error) {
     await captureFailureLogs();

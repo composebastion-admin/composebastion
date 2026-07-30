@@ -1,5 +1,5 @@
 import path from "node:path";
-import { rm } from "node:fs/promises";
+import { rm, stat } from "node:fs/promises";
 import { v4 as uuid } from "uuid";
 import type { RecoveryPointDetail } from "@composebastion/shared";
 import type { RecoveryProfile } from "@composebastion/shared";
@@ -38,8 +38,13 @@ import {
 import {
   resolveRecoveryPointStatus
 } from "./recoveryS3.js";
-import { headRemoteArtifact, uploadRemoteArtifact } from "./recoveryRemoteStorage.js";
-import { ensureRecoveryArtifactLocalPath, readRecoveryArtifact } from "./recoveryArtifactStore.js";
+import {
+  deleteRemoteArtifact,
+  downloadRemoteArtifactAtomically,
+  headRemoteArtifact,
+  uploadRemoteArtifact
+} from "./recoveryRemoteStorage.js";
+import { readRecoveryArtifact, withRecoveryArtifactLocalPath } from "./recoveryArtifactStore.js";
 import { getRecoveryProfile } from "./recoveryProfiles.js";
 import { runSshCommand, streamSshCommandToFile } from "./ssh.js";
 import type { JobExecutionFence } from "./jobs.js";
@@ -185,32 +190,93 @@ async function finalizeRecoveryPoint(recoveryPointId: string, remoteUploadFailur
   );
 }
 
-async function uploadRecoveryArtifactsToRemote(recoveryPointId: string, backupTargetId: string, executionFence?: JobExecutionFence) {
+export async function uploadRecoveryArtifactsToRemote(recoveryPointId: string, backupTargetId: string, executionFence?: JobExecutionFence) {
   const target = await loadWorkerBackupTarget(backupTargetId);
-  if ((target.kind !== "s3" && target.kind !== "rclone") || !target.enabled) return 0;
-
   const point = await loadRecoveryPoint(recoveryPointId);
-  if (!point) return 0;
+  if (!point) throw new Error("Recovery point not found during remote upload");
+  if (!target.enabled) throw new Error(`Backup target ${target.name} is disabled`);
+  if (target.kind === "local") {
+    await executionQuery(
+      executionFence,
+      `UPDATE recovery_points
+       SET metadata = metadata || $2::jsonb
+       WHERE id = $1`,
+      [recoveryPointId, JSON.stringify({
+        remoteUploadAttempted: false,
+        remoteUploadNotApplicable: true,
+        backupTargetKind: "local"
+      })]
+    );
+    return 0;
+  }
+  if (
+    (target.kind === "s3" && !target.s3)
+    || (target.kind === "rclone" && !target.rclone)
+    || (target.kind !== "s3" && target.kind !== "rclone")
+  ) {
+    throw new Error(`Backup target ${target.name} does not support remote recovery artifacts`);
+  }
 
   let failures = 0;
+  let attempted = 0;
+  let uploadedCount = 0;
+  const verifiedObjectKeys: string[] = [];
 
   for (const artifact of point.artifacts) {
     if (artifact.status !== "completed") continue;
+    attempted += 1;
     const localPath = safeRecoveryPointFile(recoveryPointId, artifact.storageKey);
+    let uploaded: Awaited<ReturnType<typeof uploadRemoteArtifact>> = null;
     try {
       await executionFence?.assertActive();
-      const uploaded = await uploadRemoteArtifact({
+      const localStat = await stat(localPath);
+      uploaded = await uploadRemoteArtifact({
         target,
         namespaceId: recoveryPointId,
         storageKey: artifact.storageKey,
         localPath,
         checksum: artifact.checksum
       });
-      if (!uploaded) continue;
+      if (!uploaded) {
+        throw new Error(`Backup target ${target.name} did not store recovery artifact ${artifact.storageKey}`);
+      }
+      const remoteHead = await headRemoteArtifact(target, uploaded.remoteObjectKey);
+      if (remoteHead.sizeBytes == null || remoteHead.sizeBytes !== localStat.size) {
+        throw new Error(
+          `Remote artifact ${artifact.storageKey} size verification failed: expected ${localStat.size}, got ${String(remoteHead.sizeBytes)}`
+        );
+      }
+      const expectedChecksum = artifact.checksum ?? await hashFile(localPath);
+      const verificationPath = safeRecoveryPointFile(
+        recoveryPointId,
+        path.posix.join(
+          ".remote-verification",
+          `${artifact.id}-${uuid()}-${path.posix.basename(artifact.storageKey)}`
+        )
+      );
+      let verifiedSizeBytes: number;
+      let verifiedChecksum: string;
+      try {
+        await downloadRemoteArtifactAtomically(target, uploaded.remoteObjectKey, verificationPath);
+        const verifiedStat = await stat(verificationPath);
+        verifiedSizeBytes = verifiedStat.size;
+        if (verifiedSizeBytes !== localStat.size) {
+          throw new Error(
+            `Downloaded remote artifact ${artifact.storageKey} size verification failed: expected ${localStat.size}, got ${verifiedSizeBytes}`
+          );
+        }
+        verifiedChecksum = await hashFile(verificationPath);
+        if (verifiedChecksum !== expectedChecksum) {
+          throw new Error(`Downloaded remote artifact ${artifact.storageKey} checksum verification failed`);
+        }
+      } finally {
+        await rm(verificationPath, { force: true });
+      }
       await executionQuery(
         executionFence,
         `UPDATE recovery_artifacts
          SET backup_target_id = $2,
+             error = NULL,
              metadata = metadata || $3::jsonb
          WHERE id = $1`,
         [
@@ -221,29 +287,113 @@ async function uploadRecoveryArtifactsToRemote(recoveryPointId: string, backupTa
             remoteBackend: uploaded.remoteBackend,
             remoteSizeBytes: uploaded.remoteSizeBytes,
             remoteEtag: uploaded.remoteEtag,
-            localCachePolicy: target.localCachePolicy
+            remoteVerified: true,
+            remoteVerifiedAt: new Date().toISOString(),
+            remoteVerifiedSizeBytes: verifiedSizeBytes,
+            remoteVerifiedChecksum: verifiedChecksum,
+            remoteChecksumVerified: true,
+            localCachePolicy: target.localCachePolicy,
+            localCacheCleanupAttempted: false,
+            ...(target.localCachePolicy === "keep" ? { localCacheRemoved: false } : {})
           })
         ]
       );
+      uploadedCount += 1;
+      verifiedObjectKeys.push(uploaded.remoteObjectKey);
       if (target.localCachePolicy === "remote_only") {
-        await rm(localPath, { force: true }).catch(() => undefined);
+        let localCacheRemoved = false;
+        let localCacheCleanupError: string | null = null;
+        try {
+          await rm(localPath, { force: true });
+          localCacheRemoved = true;
+        } catch (error) {
+          localCacheCleanupError = error instanceof Error ? error.message : String(error);
+        }
+        try {
+          await executionQuery(
+            executionFence,
+            `UPDATE recovery_artifacts
+             SET metadata = metadata || $2::jsonb
+             WHERE id = $1`,
+            [artifact.id, JSON.stringify({
+              localCacheCleanupAttempted: true,
+              localCacheRemoved,
+              ...(localCacheRemoved ? {
+                localCacheRemovedAt: new Date().toISOString(),
+                localCacheCleanupError: null
+              } : {
+                localCacheCleanupError
+              })
+            })]
+          );
+        } catch {
+          // The verified remote locator is already durable. Cache cleanup
+          // bookkeeping is best-effort and must not turn a successful upload
+          // into a remote-artifact failure.
+        }
       }
     } catch (error) {
       failures += 1;
+      const message = error instanceof Error ? error.message : String(error);
+      let orphanCleanupError: string | null = null;
+      if (uploaded) {
+        try {
+          await deleteRemoteArtifact(target, uploaded.remoteObjectKey);
+        } catch (cleanupError) {
+          orphanCleanupError = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+        }
+      }
       await executionQuery(
         executionFence,
         `UPDATE recovery_artifacts
-         SET metadata = metadata || $2::jsonb
+         SET backup_target_id = COALESCE($2, backup_target_id),
+             error = $3,
+             metadata = metadata || $4::jsonb
          WHERE id = $1`,
         [
           artifact.id,
+          uploaded && orphanCleanupError ? backupTargetId : null,
+          message,
           JSON.stringify({
-            remoteUploadError: error instanceof Error ? error.message : String(error)
+            ...(uploaded ? {
+              remoteVerificationError: message,
+              remoteObjectDeletedAfterFailedVerification: orphanCleanupError === null,
+              ...(orphanCleanupError ? {
+                orphanRemoteObjectKey: uploaded.remoteObjectKey,
+                orphanRemoteBackend: uploaded.remoteBackend,
+                orphanRemoteSizeBytes: uploaded.remoteSizeBytes,
+                orphanRemoteEtag: uploaded.remoteEtag,
+                orphanCleanupError
+              } : {})
+            } : {
+              remoteUploadError: message
+            }),
+            remoteVerified: false,
+            localCachePolicy: target.localCachePolicy,
+            localCacheCleanupAttempted: false,
+            localCacheRemoved: false
           })
         ]
       );
     }
   }
+
+  await executionQuery(
+    executionFence,
+    `UPDATE recovery_points
+     SET metadata = metadata || $2::jsonb
+     WHERE id = $1`,
+    [recoveryPointId, JSON.stringify({
+      remoteUploadAttempted: true,
+      remoteUploadBackend: target.kind,
+      remoteUploadArtifactCount: attempted,
+      remoteUploadedArtifactCount: uploadedCount,
+      remoteVerifiedArtifactCount: uploadedCount,
+      remoteUploadFailureCount: failures,
+      remoteUploadComplete: attempted > 0 && failures === 0 && uploadedCount === attempted,
+      remoteObjectKeys: verifiedObjectKeys
+    })]
+  );
 
   return failures;
 }
@@ -628,6 +778,24 @@ export async function runRecoveryCreate(
         remoteUploadFailures = await uploadRecoveryArtifactsToRemote(recoveryPointId, point.backupTargetId, executionFence);
       } catch (error) {
         remoteUploadFailures = 1;
+        const message = error instanceof Error ? error.message : String(error);
+        await executionQuery(
+          executionFence,
+          `UPDATE recovery_artifacts
+           SET error = $2,
+               metadata = metadata || $3::jsonb
+           WHERE recovery_point_id = $1
+             AND status = 'completed'`,
+          [
+            recoveryPointId,
+            message,
+            JSON.stringify({
+              remoteUploadError: message,
+              remoteVerified: false,
+              localCacheRemoved: false
+            })
+          ]
+        );
         await executionQuery(
           executionFence,
           `UPDATE recovery_points
@@ -636,7 +804,13 @@ export async function runRecoveryCreate(
           [
             recoveryPointId,
             JSON.stringify({
-              remoteUploadError: error instanceof Error ? error.message : String(error)
+              remoteUploadAttempted: true,
+              remoteUploadComplete: false,
+              remoteUploadFailureCount: 1,
+              remoteUploadedArtifactCount: 0,
+              remoteVerifiedArtifactCount: 0,
+              remoteObjectKeys: [],
+              remoteUploadError: message
             })
           ]
         );
@@ -753,11 +927,12 @@ export async function runRecoveryVerify(hostId: string, recoveryPointId: string,
       continue;
     }
     try {
-      const filePath = await ensureRecoveryArtifactLocalPath(point, artifact);
-      const checksum = await hashFile(filePath);
-      if (artifact.checksum && artifact.checksum !== checksum) {
-        failures.push(`${artifact.storageKey} checksum mismatch`);
-      }
+      await withRecoveryArtifactLocalPath(point, artifact, async (filePath) => {
+        const checksum = await hashFile(filePath);
+        if (artifact.checksum && artifact.checksum !== checksum) {
+          failures.push(`${artifact.storageKey} checksum mismatch`);
+        }
+      });
     } catch (error) {
       failures.push(`${artifact.storageKey} missing (${error instanceof Error ? error.message : String(error)})`);
     }

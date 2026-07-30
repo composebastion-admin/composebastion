@@ -8,7 +8,7 @@ import {
 const query = vi.fn();
 const getHostForWorker = vi.fn();
 const readRecoveryArtifact = vi.fn();
-const ensureRecoveryArtifactLocalPath = vi.fn();
+const withRecoveryArtifactLocalPath = vi.fn();
 const runSshCommand = vi.fn();
 const pipeFileToSshCommand = vi.fn();
 const writeRemoteFile = vi.fn();
@@ -22,7 +22,7 @@ vi.mock("../src/services/hosts.js", () => ({
 }));
 
 vi.mock("../src/services/recoveryArtifactStore.js", () => ({
-  ensureRecoveryArtifactLocalPath: (...args: unknown[]) => ensureRecoveryArtifactLocalPath(...args),
+  withRecoveryArtifactLocalPath: (...args: unknown[]) => withRecoveryArtifactLocalPath(...args),
   readRecoveryArtifact: (...args: unknown[]) => readRecoveryArtifact(...args)
 }));
 
@@ -196,7 +196,9 @@ describe("recovery standalone restore cleanup", () => {
       ssh: { hostname: "host", port: 22, username: "root" }
     });
     readRecoveryArtifact.mockResolvedValue(Buffer.from(JSON.stringify(manifest)));
-    ensureRecoveryArtifactLocalPath.mockResolvedValue("/tmp/recovery-artifact");
+    withRecoveryArtifactLocalPath.mockImplementation(async (_point, _artifact, useArtifact) =>
+      useArtifact("/tmp/recovery-artifact")
+    );
     pipeFileToSshCommand.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
     writeRemoteFile.mockResolvedValue(undefined);
   });

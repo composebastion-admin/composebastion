@@ -49,12 +49,42 @@ export const recoveryAppIdentitySchema = z.discriminatedUnion("kind", [
   })
 ]);
 
-const backupTargetLocalConfigSchema = z.object({
-  basePath: z.string().min(1).max(1024).optional()
+const backupTargetLocalConfigSchema = z.object({}).strict();
+
+export const s3EndpointSchema = z.string().url().superRefine((value, ctx) => {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "S3 endpoint must use http or https" });
+  }
+  if (!parsed.hostname) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "S3 endpoint must include a hostname" });
+  }
+  if (
+    parsed.username
+    || parsed.password
+    || parsed.search
+    || parsed.hash
+    || value.includes("?")
+    || value.includes("#")
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "S3 endpoint must not contain embedded credentials, query parameters, or a fragment"
+    });
+  }
+}).transform((value) => {
+  const parsed = new URL(value.trim());
+  const pathname = parsed.pathname === "/" ? "" : parsed.pathname.replace(/\/+$/, "");
+  return `${parsed.origin}${pathname}`;
 });
 
 const backupTargetS3ConfigSchema = z.object({
-  endpoint: z.string().url(),
+  endpoint: s3EndpointSchema,
   bucket: z.string().min(1).max(255),
   region: z.string().max(64).optional(),
   prefix: z.string().max(512).optional(),
@@ -86,17 +116,23 @@ const backupTargetSharedFieldsSchema = z.object({
   localCachePolicy: localCachePolicySchema.default("keep")
 });
 
+const backupTargetLocalFieldsSchema = z.object({
+  name: z.string().min(1).max(80),
+  enabled: z.boolean().default(true),
+  localCachePolicy: z.literal("keep").default("keep")
+});
+
 export const backupTargetCreateSchema = z.union([
-  backupTargetSharedFieldsSchema.extend({
+  backupTargetLocalFieldsSchema.extend({
     type: z.literal("local"),
     kind: z.literal("local").optional(),
-    basePath: z.string().min(1).max(1024).optional(),
+    basePath: z.never().optional(),
     config: backupTargetLocalConfigSchema.optional()
   }),
   backupTargetSharedFieldsSchema.extend({
     type: z.literal("s3"),
     kind: z.literal("s3").optional(),
-    endpoint: z.string().url(),
+    endpoint: s3EndpointSchema,
     bucket: z.string().min(1).max(255),
     region: z.string().max(64).optional(),
     prefix: z.string().max(512).optional(),
@@ -133,7 +169,7 @@ export const backupTargetCreateSchema = z.union([
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Imported rclone config is required for experimental rclone targets", path: ["rcloneConfig"] });
     }
   }),
-  backupTargetSharedFieldsSchema.extend({
+  backupTargetLocalFieldsSchema.extend({
     kind: z.literal("local"),
     config: backupTargetLocalConfigSchema.default({})
   }),
@@ -164,13 +200,17 @@ export const backupTargetCreateSchema = z.union([
 export const backupTargetUpdateSchema = z.object({
   name: z.string().min(1).max(80).optional(),
   enabled: z.boolean().optional(),
-  endpoint: z.string().url().optional(),
+  endpoint: s3EndpointSchema.optional(),
   bucket: z.string().min(1).max(255).optional(),
   region: z.string().max(64).nullable().optional(),
   prefix: z.string().max(512).nullable().optional(),
   forcePathStyle: z.boolean().optional(),
-  basePath: z.string().min(1).max(1024).nullable().optional(),
-  config: z.union([backupTargetLocalConfigSchema, backupTargetS3ConfigSchema, backupTargetRcloneConfigSchema]).optional(),
+  basePath: z.never().optional(),
+  config: z.union([
+    backupTargetS3ConfigSchema.strict(),
+    backupTargetRcloneConfigSchema.strict(),
+    z.object({}).strict()
+  ]).optional(),
   accessKeyId: z.string().min(1).max(255).nullable().optional(),
   secretAccessKey: z.string().min(1).nullable().optional()
 }).extend({
@@ -257,6 +297,10 @@ export const recoveryPointListItemSchema = z.object({
   profileId: idSchema.nullable().optional(),
   artifactCount: z.number().int().nonnegative(),
   completedArtifactCount: z.number().int().nonnegative(),
+  remoteArtifactCount: z.number().int().nonnegative().optional(),
+  remoteUploadFailureCount: z.number().int().nonnegative().optional(),
+  localRetainedArtifactCount: z.number().int().nonnegative().optional(),
+  localRemovedArtifactCount: z.number().int().nonnegative().optional(),
   totalBytes: z.number().nullable(),
   error: z.string().nullable(),
   metadata: z.record(z.unknown()),

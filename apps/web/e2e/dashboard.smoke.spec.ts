@@ -932,9 +932,16 @@ test("keyboard focus and theme toggle are visible", async ({ page }) => {
   await mockApi(page);
   await gotoApp(page, "/overview");
   await expect(page.getByRole("heading", { name: "prod-01" })).toBeVisible();
+  await expect(page.locator(".globalSearch")).toHaveCSS("display", "grid");
   await page.keyboard.press("/");
   await expect(page.getByRole("searchbox", { name: /Search hosts and resources/ })).toBeFocused();
+  const openSidebar = page.getByRole("button", { name: "Open sidebar" });
+  if ((page.viewportSize()?.width ?? 1_440) <= 980) {
+    await openSidebar.click();
+    await expect(page.getByRole("navigation", { name: "Main navigation" })).toBeVisible();
+  }
   await page.getByRole("link", { name: /Admin/ }).click();
+  await expect(page.getByRole("heading", { name: "Admin" })).toBeVisible();
   await page.getByRole("button", { name: "Appearance" }).click();
   await page.getByRole("button", { name: /dark mode/i }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
@@ -944,6 +951,7 @@ test("reduced-motion mode keeps focus and contrast usable", async ({ page }) => 
   await page.emulateMedia({ reducedMotion: "reduce" });
   await mockApi(page);
   await gotoApp(page, "/overview");
+  await expect(page.locator(".globalSearch")).toHaveCSS("display", "grid");
   const search = page.getByRole("searchbox", { name: /Search hosts and resources/ });
   await search.focus();
   await expect(search).toBeFocused();
@@ -1145,6 +1153,7 @@ test("viewer direct restricted routes redirect without issuing mutation requests
   await expect(page.getByRole("link", { name: /Deploy/ })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Host", exact: true })).toHaveCount(0);
   await expect(page.locator('button[title="Open SSH terminal"]')).toHaveCount(0);
+  await expect.poll(() => mock.requests.filter((request) => request === "GET /api/github/repos")).toEqual([]);
   await expect.poll(() => mock.requests.filter((request) => /^(POST|PUT|PATCH|DELETE) /.test(request))).toEqual([]);
 });
 

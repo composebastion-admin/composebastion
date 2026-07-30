@@ -10,6 +10,7 @@ import {
   getDeploymentAnalysis,
   getDeploymentSource,
   listDeploymentSources,
+  normalizeRegistryTrustAuthority,
   queueDeployment,
   updateDeploymentSource
 } from "../services/deployments.js";
@@ -22,7 +23,6 @@ const registryBodySchema = z.object({
 });
 
 export async function registerDeploymentRoutes(app: FastifyInstance) {
-  const viewer = requireRole(["owner", "admin", "operator", "viewer"]);
   const operator = requireRole(["owner", "admin", "operator"]);
   const admin = requireRole(["owner", "admin"]);
 
@@ -43,7 +43,7 @@ export async function registerDeploymentRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/deploy/analyses/:id", {
-    preHandler: viewer,
+    preHandler: operator,
     config: { rateLimit: authenticatedReadRateLimit }
   }, async (request, reply) => {
     const { id } = request.params as { id: string };
@@ -73,7 +73,7 @@ export async function registerDeploymentRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/deployment-sources", {
-    preHandler: viewer,
+    preHandler: operator,
     config: { rateLimit: authenticatedReadRateLimit }
   }, async () => ({ sources: await listDeploymentSources() }));
 
@@ -92,7 +92,7 @@ export async function registerDeploymentRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/deployment-sources/:id", {
-    preHandler: viewer,
+    preHandler: operator,
     config: { rateLimit: authenticatedReadRateLimit }
   }, async (request, reply) => {
     const { id } = request.params as { id: string };
@@ -146,7 +146,8 @@ export async function registerDeploymentRoutes(app: FastifyInstance) {
   }, async (request) => {
     const { hostId } = request.params as { hostId: string };
     const body = registryBodySchema.parse(request.body);
-    return { registryTrust: await checkRegistryTrust(hostId, body.registry, body.insecure) };
+    const registry = normalizeRegistryTrustAuthority(body.registry);
+    return { registryTrust: await checkRegistryTrust(hostId, registry, body.insecure) };
   });
 
   app.post("/api/hosts/:hostId/registry-trust/apply", {
@@ -156,8 +157,9 @@ export async function registerDeploymentRoutes(app: FastifyInstance) {
     const { hostId } = request.params as { hostId: string };
     const body = registryBodySchema.parse(request.body);
     if (!body.insecure) throw Object.assign(new Error("Only explicit HTTP registries require daemon trust configuration."), { statusCode: 400 });
+    const registry = normalizeRegistryTrustAuthority(body.registry);
     const job = await enqueueJob(
-      { type: "host.configureRegistryTrust", hostId, payload: { registry: body.registry } },
+      { type: "host.configureRegistryTrust", hostId, payload: { registry } },
       request.user?.id
     );
     await writeAuditEvent({
@@ -166,7 +168,7 @@ export async function registerDeploymentRoutes(app: FastifyInstance) {
       action: "host.configure_registry_trust",
       targetKind: "docker_host",
       targetId: hostId,
-      details: { registry: body.registry }
+      details: { registry }
     });
     reply.code(202);
     return { job };

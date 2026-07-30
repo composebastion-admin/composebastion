@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   backupTargetCreateSchema,
   backupTargetSchema,
+  backupTargetUpdateSchema,
   migrationExecuteRequestSchema,
   migrationPlanRequestSchema,
   migrationRunSchema,
@@ -26,6 +27,17 @@ describe("recovery center schemas", () => {
     });
     expect(local.kind).toBe("local");
     expect(local.enabled).toBe(true);
+    expect(local.localCachePolicy).toBe("keep");
+    expect(() => backupTargetCreateSchema.parse({
+      name: "Custom local path",
+      type: "local",
+      basePath: "/mnt/custom"
+    })).toThrow();
+    expect(() => backupTargetCreateSchema.parse({
+      name: "Remote-only local",
+      type: "local",
+      localCachePolicy: "remote_only"
+    })).toThrow();
 
     const s3 = backupTargetCreateSchema.parse({
       name: "Offsite",
@@ -44,6 +56,39 @@ describe("recovery center schemas", () => {
       kind: "s3",
       config: { endpoint: "not-a-url", bucket: "recovery" }
     })).toThrow();
+  });
+
+  it("normalizes and restricts S3 endpoints for create and update payloads", () => {
+    const created = backupTargetCreateSchema.parse({
+      name: "Offsite",
+      type: "s3",
+      endpoint: "https://S3.Example.COM:443/storage/",
+      bucket: "recovery",
+      accessKeyId: "key",
+      secretAccessKey: "secret"
+    });
+    expect(created.endpoint).toBe("https://s3.example.com/storage");
+    expect(backupTargetUpdateSchema.parse({
+      endpoint: "http://MINIO.Example.COM:80/backups/"
+    }).endpoint).toBe("http://minio.example.com/backups");
+
+    for (const endpoint of [
+      "ftp://s3.example.com",
+      "file:///tmp/s3",
+      "https://user:password@s3.example.com",
+      "https://s3.example.com?token=secret",
+      "https://s3.example.com#private"
+    ]) {
+      expect(backupTargetCreateSchema.safeParse({
+        name: "Unsafe",
+        type: "s3",
+        endpoint,
+        bucket: "recovery",
+        accessKeyId: "key",
+        secretAccessKey: "secret"
+      }).success).toBe(false);
+      expect(backupTargetUpdateSchema.safeParse({ endpoint }).success).toBe(false);
+    }
   });
 
   it("allows SMB without imported rclone config and requires configs for experimental rclone targets", () => {

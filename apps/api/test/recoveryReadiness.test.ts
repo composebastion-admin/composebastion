@@ -218,6 +218,41 @@ describe("recovery readiness", () => {
     expect(readiness.reasons.map((reason) => reason.code)).toContain("target_health_failed");
   });
 
+  it.each([
+    {
+      targetOverrides: { enabled: false, healthStatus: "healthy" },
+      reason: "target_disabled"
+    },
+    {
+      targetOverrides: { healthStatus: "failed", healthError: "manager directory is read-only" },
+      reason: "target_health_failed"
+    },
+    {
+      targetOverrides: { healthStatus: "unknown", healthCheckedAt: null },
+      reason: "target_health_unknown"
+    }
+  ])("does not report readiness for an unqualified local manager target ($reason)", async ({ targetOverrides, reason }) => {
+    getRecoveryPoint.mockResolvedValue(point({ backupTargetId: targetId }));
+    getBackupTarget.mockResolvedValue(target({
+      type: "local",
+      kind: "local",
+      provider: null,
+      rcloneProvider: null,
+      remotePath: null,
+      remoteName: null,
+      hasCredentials: false,
+      hasGenericConfig: false,
+      hasGenericCredentials: false,
+      ...targetOverrides
+    }));
+
+    const { analyzeRecoveryReadiness } = await import("../src/services/recoveryReadiness.js");
+    const readiness = await analyzeRecoveryReadiness({ hostId, appIdentity });
+
+    expect(readiness.status).toBe("risky");
+    expect(readiness.reasons.map((item) => item.code)).toContain(reason);
+  });
+
   it("blocks apps without containers", async () => {
     listApps.mockResolvedValue([app({ containerIds: [], primaryContainerId: null })]);
 
@@ -285,6 +320,87 @@ describe("recovery readiness", () => {
     expect(readiness.status).toBe("ready");
     expect(readiness.lastRecoveryPoint?.localUsable).toBe(false);
     expect(readiness.lastRecoveryPoint?.remoteUsable).toBe(true);
+  });
+
+  it("accepts a mixed point when every artifact has either a retained local or verified remote copy", async () => {
+    const baseArtifact = point().artifacts[0];
+    getRecoveryPoint.mockResolvedValue(point({
+      status: "partial",
+      backupTargetId: targetId,
+      artifactCount: 2,
+      completedArtifactCount: 2,
+      artifacts: [
+        {
+          ...baseArtifact,
+          backupTargetId: targetId,
+          metadata: {
+            remoteObjectKey: "points/openwebui/remote.tar.gz",
+            remoteVerified: true,
+            localCachePolicy: "remote_only",
+            localCacheRemoved: true
+          }
+        },
+        {
+          ...baseArtifact,
+          id: "00000000-0000-4000-8000-000000000007",
+          storageKey: "volumes/local.tar.gz",
+          backupTargetId: targetId,
+          metadata: {
+            remoteVerified: false,
+            remoteUploadError: "upload failed",
+            localCachePolicy: "remote_only",
+            localCacheRemoved: false
+          }
+        }
+      ]
+    }));
+    getBackupTarget.mockResolvedValue(target({ localCachePolicy: "remote_only" }));
+
+    const { analyzeRecoveryReadiness } = await import("../src/services/recoveryReadiness.js");
+    const readiness = await analyzeRecoveryReadiness({ hostId, appIdentity });
+
+    expect(readiness.lastRecoveryPoint?.localUsable).toBe(false);
+    expect(readiness.lastRecoveryPoint?.remoteUsable).toBe(false);
+    expect(readiness.reasons.map((reason) => reason.code)).not.toContain("no_usable_artifact");
+  });
+
+  it("blocks a mixed point when any completed artifact has neither local nor remote evidence", async () => {
+    const baseArtifact = point().artifacts[0];
+    getRecoveryPoint.mockResolvedValue(point({
+      backupTargetId: targetId,
+      artifactCount: 2,
+      completedArtifactCount: 2,
+      artifacts: [
+        {
+          ...baseArtifact,
+          backupTargetId: targetId,
+          metadata: {
+            remoteObjectKey: "points/openwebui/remote.tar.gz",
+            remoteVerified: true,
+            localCachePolicy: "remote_only",
+            localCacheRemoved: true
+          }
+        },
+        {
+          ...baseArtifact,
+          id: "00000000-0000-4000-8000-000000000008",
+          storageKey: "volumes/missing.tar.gz",
+          backupTargetId: targetId,
+          metadata: {
+            remoteVerified: false,
+            localCachePolicy: "remote_only",
+            localCacheRemoved: true
+          }
+        }
+      ]
+    }));
+    getBackupTarget.mockResolvedValue(target({ localCachePolicy: "remote_only" }));
+
+    const { analyzeRecoveryReadiness } = await import("../src/services/recoveryReadiness.js");
+    const readiness = await analyzeRecoveryReadiness({ hostId, appIdentity });
+
+    expect(readiness.status).toBe("blocked");
+    expect(readiness.reasons.map((reason) => reason.code)).toContain("no_usable_artifact");
   });
 
   it("batches readiness inspection for 50 containers across 12 projects", async () => {

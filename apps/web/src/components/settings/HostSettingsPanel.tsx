@@ -28,6 +28,7 @@ export function HostSettingsPanel({ host, onChanged }: { host: DockerHost; onCha
     sshKeyPassphrase: "",
     sshPassword: "",
     agentToken: "",
+    clearSshKeyPassphrase: false,
     tags: host.tags.join(", ")
   });
 
@@ -45,6 +46,7 @@ export function HostSettingsPanel({ host, onChanged }: { host: DockerHost; onCha
       sshKeyPassphrase: "",
       sshPassword: "",
       agentToken: "",
+      clearSshKeyPassphrase: false,
       tags: host.tags.join(", ")
     });
   }, [host]);
@@ -91,10 +93,11 @@ export function HostSettingsPanel({ host, onChanged }: { host: DockerHost; onCha
           <input type="number" min={1} max={65535} value={form.port} onChange={(event) => setForm({ ...form, port: Number(event.target.value) })} />
         </div>
         <div className="two">
-          <input value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} />
+          <input value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} required />
           <input value={form.dockerSocketPath} onChange={(event) => setForm({ ...form, dockerSocketPath: event.target.value })} />
         </div>
         <input placeholder="Tags, comma separated" value={form.tags} onChange={(event) => setForm({ ...form, tags: event.target.value })} />
+        <div className="formHint compact">Saving removes credentials that belong only to an inactive connection or authentication mode.</div>
         {form.connectionMode === "ssh" ? (
           <>
             <select value={form.sshAuthType} onChange={(event) => setForm({ ...form, sshAuthType: event.target.value as DockerHost["sshAuthType"] })}>
@@ -102,18 +105,55 @@ export function HostSettingsPanel({ host, onChanged }: { host: DockerHost; onCha
               <option value="key">SSH private key</option>
             </select>
             {form.sshAuthType === "password" ? (
-              <input placeholder="Replace SSH login password" type="password" value={form.sshPassword} onChange={(event) => setForm({ ...form, sshPassword: event.target.value })} />
+              <input
+                placeholder={host.connectionMode === "ssh" && host.sshAuthType === "password" ? "Replace SSH login password (blank keeps saved password)" : "SSH login password"}
+                type="password"
+                value={form.sshPassword}
+                onChange={(event) => setForm({ ...form, sshPassword: event.target.value })}
+                required={host.connectionMode !== "ssh" || host.sshAuthType !== "password"}
+              />
             ) : (
-              <div className="two">
-                <textarea placeholder="Replace SSH private key" value={form.sshPrivateKey} onChange={(event) => setForm({ ...form, sshPrivateKey: event.target.value })} />
-                <input placeholder="Replace key passphrase" type="password" value={form.sshKeyPassphrase} onChange={(event) => setForm({ ...form, sshKeyPassphrase: event.target.value })} />
-              </div>
+              <>
+                <div className="two">
+                  <textarea
+                    placeholder={host.connectionMode === "ssh" && host.sshAuthType === "key" ? "Replace SSH private key (blank keeps saved key)" : "SSH private key"}
+                    value={form.sshPrivateKey}
+                    onChange={(event) => setForm({ ...form, sshPrivateKey: event.target.value })}
+                    required={host.connectionMode !== "ssh" || host.sshAuthType !== "key"}
+                  />
+                  <input
+                    placeholder="Replace key passphrase"
+                    type="password"
+                    value={form.sshKeyPassphrase}
+                    disabled={form.clearSshKeyPassphrase}
+                    onChange={(event) => setForm({ ...form, sshKeyPassphrase: event.target.value, clearSshKeyPassphrase: false })}
+                  />
+                </div>
+                <label className="checkLine">
+                  <input
+                    type="checkbox"
+                    checked={form.clearSshKeyPassphrase}
+                    onChange={(event) => setForm({
+                      ...form,
+                      sshKeyPassphrase: event.target.checked ? "" : form.sshKeyPassphrase,
+                      clearSshKeyPassphrase: event.target.checked
+                    })}
+                  />
+                  Clear saved key passphrase
+                </label>
+              </>
             )}
           </>
         ) : (
           <div className="two">
-            <input placeholder="Agent URL" value={form.agentUrl} onChange={(event) => setForm({ ...form, agentUrl: event.target.value })} />
-            <input placeholder="Replace agent token" type="password" value={form.agentToken} onChange={(event) => setForm({ ...form, agentToken: event.target.value })} />
+            <input placeholder="Agent URL" value={form.agentUrl} onChange={(event) => setForm({ ...form, agentUrl: event.target.value })} required />
+            <input
+              placeholder={host.connectionMode === "agent" ? "Replace agent token (blank keeps saved token)" : "Agent token"}
+              type="password"
+              value={form.agentToken}
+              onChange={(event) => setForm({ ...form, agentToken: event.target.value })}
+              required={host.connectionMode !== "agent"}
+            />
           </div>
         )}
         {action.error && <div className="notice error">{action.error}</div>}

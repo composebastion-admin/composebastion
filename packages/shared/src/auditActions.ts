@@ -8,12 +8,15 @@ export const auditActions = [
   "host.file.read",
   "host.file.write",
   "container.exec",
+  "container.clone",
   "compose.create",
   "compose.update",
   "compose.deploy",
   "compose.stop",
   "compose.remove",
   "compose.rollback",
+  "compose.proxy.update",
+  "compose.forget",
   "catalog.deploy",
   "app.update_check",
   "app.update",
@@ -27,7 +30,9 @@ export const auditActions = [
   "system.self_update.config",
   "system.self_update.start",
   "alert.channel.create",
+  "alert.channel.delete",
   "alert.rule.create",
+  "alert.rule.delete",
   "alert.silence.create",
   "alert.silence.delete",
   "user.create",
@@ -42,13 +47,15 @@ export const auditActions = [
   "recovery.target.delete",
   "recovery.point.create",
   "recovery.point.delete",
+  "recovery.verify",
   "recovery.drill",
   "recovery.restore",
   "recovery.schedule.create",
   "recovery.schedule.delete",
   "migration.plan",
   "migration.execute",
-  "migration.rollback"
+  "migration.rollback",
+  "volume.clone"
 ] as const;
 
 export type AuditAction = typeof auditActions[number] | string;

@@ -51,8 +51,21 @@ function connect(target: SshTarget) {
       keepaliveInterval: 10_000
     };
 
-    client.once("ready", () => resolve(client));
-    client.once("error", reject);
+    const onError = (error: Error) => {
+      client.removeListener("ready", onReady);
+      reject(error);
+    };
+    const onReady = () => {
+      client.removeListener("error", onError);
+      // ssh2 may report more than one late socket/protocol/keepalive error
+      // while a client is closing. Operation-specific listeners handle the
+      // first actionable failure; this persistent sink prevents any later
+      // EventEmitter "error" from becoming an uncaught process exception.
+      client.on("error", () => undefined);
+      resolve(client);
+    };
+    client.once("ready", onReady);
+    client.once("error", onError);
     client.connect(config);
   });
 }
@@ -61,35 +74,53 @@ export async function runSshCommand(target: SshTarget, command: string, options:
   const client = await connect(target);
   return new Promise<SshResult>((resolve, reject) => {
     let settled = false;
-    const timeout = setTimeout(() => {
+    let streamRef: ClientChannel | null = null;
+    const fail = (error: unknown) => {
       if (settled) return;
       settled = true;
+      clearTimeout(timeout);
+      streamRef?.destroy();
       client.end();
-      reject(new Error(`SSH command timed out after ${options.timeoutMs ?? 120_000}ms`));
-    }, options.timeoutMs ?? 120_000);
+      reject(error instanceof Error ? error : new Error(String(error)));
+    };
+    const timeout = setTimeout(
+      () => fail(new Error(`SSH command timed out after ${options.timeoutMs ?? 120_000}ms`)),
+      options.timeoutMs ?? 120_000
+    );
+    client.once("error", fail);
 
     execValidatedSshCommand(client, command, (error, stream) => {
       if (error) {
-        clearTimeout(timeout);
-        client.end();
-        reject(error);
+        fail(error);
         return;
       }
+      if (settled) {
+        stream.destroy();
+        return;
+      }
+      streamRef = stream;
 
       const stdout: Buffer[] = [];
       const stderr: Buffer[] = [];
 
       stream.on("data", (chunk: Buffer) => stdout.push(chunk));
       stream.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+      stream.once("error", fail);
+      stream.stderr.once("error", fail);
       stream.on("close", (code: number | null, signal?: string) => {
         if (settled) return;
+        if (code === null) {
+          fail(new Error(`SSH command closed without an exit status${signal ? ` (${signal})` : ""}`));
+          return;
+        }
         settled = true;
         clearTimeout(timeout);
+        client.removeListener("error", fail);
         client.end();
         resolve({
           stdout: Buffer.concat(stdout).toString("utf8"),
           stderr: Buffer.concat(stderr).toString("utf8"),
-          code: code ?? 0,
+          code,
           signal
         });
       });
@@ -109,21 +140,38 @@ export async function streamSshCommandLines(
 ) {
   const client = await connect(target);
   return new Promise<() => void>((resolve, reject) => {
-    let streamRef: { destroy: () => void } | null = null;
+    let streamRef: ClientChannel | null = null;
     let buffer = "";
     let settled = false;
+    let promiseResolved = false;
 
     const cleanup = () => {
       if (settled) return;
       settled = true;
+      client.removeListener("error", handleClientError);
       streamRef?.destroy();
       client.end();
     };
+    const handleClientError = (error: unknown) => {
+      const failure = error instanceof Error ? error : new Error(String(error));
+      onError(failure);
+      cleanup();
+      if (!promiseResolved) reject(failure);
+    };
+    const handleStreamError = (error: unknown) => {
+      onError(error instanceof Error ? error : new Error(String(error)));
+      cleanup();
+    };
+    client.once("error", handleClientError);
 
     execValidatedSshCommand(client, command, (error, stream) => {
       if (error) {
-        client.end();
+        cleanup();
         reject(error);
+        return;
+      }
+      if (settled) {
+        stream.destroy();
         return;
       }
 
@@ -145,8 +193,10 @@ export async function streamSshCommandLines(
         const message = chunk.toString("utf8").trim();
         if (message) onError(new Error(message));
       });
-      stream.on("error", onError);
-      stream.on("close", cleanup);
+      stream.once("error", handleStreamError);
+      stream.stderr.once("error", handleStreamError);
+      stream.once("close", cleanup);
+      promiseResolved = true;
       resolve(cleanup);
     });
   });
@@ -155,17 +205,37 @@ export async function streamSshCommandLines(
 export async function writeRemoteFile(target: SshTarget, remotePath: string, contents: string) {
   const client = await connect(target);
   return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let sftpRef: { once: (event: "error", handler: (error: unknown) => void) => unknown; removeListener: (event: "error", handler: (error: unknown) => void) => unknown } | null = null;
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      client.removeListener("error", fail);
+      sftpRef?.removeListener("error", fail);
+      client.end();
+      reject(error instanceof Error ? error : new Error(String(error)));
+    };
+    client.once("error", fail);
     client.sftp((sftpError, sftp) => {
+      if (settled) return;
       if (sftpError) {
-        client.end();
-        reject(sftpError);
+        fail(sftpError);
         return;
       }
+      sftpRef = sftp;
+      sftp.once("error", fail);
 
       sftp.writeFile(remotePath, contents, { mode: 0o600 }, (writeError) => {
+        if (settled) return;
+        if (writeError) {
+          fail(writeError);
+          return;
+        }
+        settled = true;
+        client.removeListener("error", fail);
+        sftp.removeListener("error", fail);
         client.end();
-        if (writeError) reject(writeError);
-        else resolve();
+        resolve();
       });
     });
   });
@@ -174,29 +244,48 @@ export async function writeRemoteFile(target: SshTarget, remotePath: string, con
 export async function readRemoteFile(target: SshTarget, remotePath: string, maxBytes = 512 * 1024) {
   const client = await connect(target);
   return new Promise<string>((resolve, reject) => {
+    let settled = false;
+    let sftpRef: { once: (event: "error", handler: (error: unknown) => void) => unknown; removeListener: (event: "error", handler: (error: unknown) => void) => unknown } | null = null;
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      client.removeListener("error", fail);
+      sftpRef?.removeListener("error", fail);
+      client.end();
+      reject(error instanceof Error ? error : new Error(String(error)));
+    };
+    client.once("error", fail);
     client.sftp((sftpError, sftp) => {
+      if (settled) return;
       if (sftpError) {
-        client.end();
-        reject(sftpError);
+        fail(sftpError);
         return;
       }
+      sftpRef = sftp;
+      sftp.once("error", fail);
 
       sftp.stat(remotePath, (statError, stats) => {
+        if (settled) return;
         if (statError) {
-          client.end();
-          reject(statError);
+          fail(statError);
           return;
         }
         if (stats.size > maxBytes) {
-          client.end();
-          reject(new Error(`File is too large to edit in-browser (${stats.size} bytes, limit ${maxBytes} bytes)`));
+          fail(new Error(`File is too large to edit in-browser (${stats.size} bytes, limit ${maxBytes} bytes)`));
           return;
         }
 
         sftp.readFile(remotePath, (readError, data) => {
+          if (settled) return;
+          if (readError) {
+            fail(readError);
+            return;
+          }
+          settled = true;
+          client.removeListener("error", fail);
+          sftp.removeListener("error", fail);
           client.end();
-          if (readError) reject(readError);
-          else resolve(data.toString("utf8"));
+          resolve(data.toString("utf8"));
         });
       });
     });
@@ -234,10 +323,15 @@ export async function streamSshCommandToFile(
     }, timeoutMs);
 
     file.on("error", fail);
+    client.once("error", fail);
 
     execValidatedSshCommand(client, command, (error, stream) => {
       if (error) {
         fail(error);
+        return;
+      }
+      if (settled) {
+        stream.destroy();
         return;
       }
 
@@ -245,10 +339,15 @@ export async function streamSshCommandToFile(
       output.pipe(file);
       stream.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
       stream.on("error", fail);
+      stream.stderr.on("error", fail);
       outputTransform?.on("error", fail);
       stream.on("close", async (code: number | null) => {
         if (settled) return;
-        if (code && code !== 0) {
+        if (code === null) {
+          fail(new Error("SSH stream closed without an exit status"));
+          return;
+        }
+        if (code !== 0) {
           fail(new Error(Buffer.concat(stderr).toString("utf8") || `SSH stream failed with code ${code}`));
           return;
         }
@@ -256,6 +355,7 @@ export async function streamSshCommandToFile(
           await fileFinished;
           settled = true;
           clearTimeout(timeout);
+          client.removeListener("error", fail);
           client.end();
           const stats = await stat(localPath);
           resolve({ stderr: Buffer.concat(stderr).toString("utf8"), sizeBytes: stats.size });
@@ -286,21 +386,46 @@ export async function openSshShell(
   const term = options.term ?? "xterm-256color";
 
   return new Promise((resolve, reject) => {
+    let streamRef: ClientChannel | null = null;
+    let resolved = false;
+    let closed = false;
+    let terminalError: Error | null = null;
+    const errorHandlers = new Set<(error: Error) => void>();
+    const close = () => {
+      if (closed) return;
+      closed = true;
+      client.removeListener("error", handleFailure);
+      streamRef?.close();
+      client.end();
+    };
+    const handleFailure = (error: unknown) => {
+      if (closed) return;
+      terminalError = error instanceof Error ? error : new Error(String(error));
+      for (const handler of errorHandlers) handler(terminalError);
+      if (!resolved) {
+        closed = true;
+        client.removeListener("error", handleFailure);
+        client.end();
+        reject(terminalError);
+        return;
+      }
+      close();
+    };
+    client.once("error", handleFailure);
     client.shell({ cols, rows, term }, (error, stream) => {
       if (error) {
-        client.end();
-        reject(error);
+        handleFailure(error);
+        return;
+      }
+      if (closed) {
+        stream.destroy();
         return;
       }
 
-      let closed = false;
-      const close = () => {
-        if (closed) return;
-        closed = true;
-        stream.close();
-        client.end();
-      };
+      streamRef = stream;
+      stream.once("error", handleFailure);
 
+      resolved = true;
       resolve({
         write: (data) => stream.write(data),
         resize: (width, height) => stream.setWindow(height, width, 0, 0),
@@ -311,8 +436,8 @@ export async function openSshShell(
           client.on("close", handler);
         },
         onError: (handler) => {
-          stream.on("error", handler);
-          client.on("error", handler);
+          errorHandlers.add(handler);
+          if (terminalError) queueMicrotask(() => handler(terminalError!));
         }
       });
     });
@@ -347,12 +472,15 @@ export async function pipeReadableToSshCommand(
     };
 
     input.on("error", (error) => fail(error instanceof Error ? error : new Error(String(error))));
+    client.once("error", fail);
 
     client.exec(command, (error, stream) => {
       if (error) {
-        clearTimeout(timeout);
-        client.end();
-        reject(error);
+        fail(error);
+        return;
+      }
+      if (settled) {
+        stream.destroy();
         return;
       }
 
@@ -360,15 +488,21 @@ export async function pipeReadableToSshCommand(
       stream.on("data", (chunk: Buffer) => stdout.push(chunk));
       stream.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
       stream.on("error", fail);
+      stream.stderr.on("error", fail);
       stream.on("close", (code: number | null, signal?: string) => {
         if (settled) return;
+        if (code === null) {
+          fail(new Error(`SSH restore stream closed without an exit status${signal ? ` (${signal})` : ""}`));
+          return;
+        }
         settled = true;
         clearTimeout(timeout);
+        client.removeListener("error", fail);
         client.end();
         resolve({
           stdout: Buffer.concat(stdout).toString("utf8"),
           stderr: Buffer.concat(stderr).toString("utf8"),
-          code: code ?? 0,
+          code,
           signal
         });
       });

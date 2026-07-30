@@ -30,6 +30,7 @@ export function StackVersionsPanel({
   const [diff, setDiff] = useState<VersionDiff | null>(null);
   const [compareFrom, setCompareFrom] = useState("");
   const [compareTo, setCompareTo] = useState("");
+  const folderBacked = Boolean(stack.sourceWorkingDir || stack.sourceComposePath);
 
   const load = useCallback(async () => {
     const result = await api<{ versions: ComposeStackVersion[] }>(`/api/compose/${stack.id}/versions`);
@@ -69,6 +70,11 @@ export function StackVersionsPanel({
         <h3>Versions for {stack.name}</h3>
         <small>Current v{stack.currentVersionNumber ?? "—"}</small>
       </div>
+      {folderBacked && (
+        <div className="notice">
+          Restore folder-backed versions in the source folder or Git repository, then redeploy. ComposeBastion will not overwrite source files it cannot prove it exclusively owns.
+        </div>
+      )}
       <DataTable
         rows={versions}
         columns={["Version", "Source", "Created", "Note", "Actions"]}
@@ -79,7 +85,15 @@ export function StackVersionsPanel({
           version.note ?? "",
           <ButtonRow key="actions">
             <button type="button" onClick={() => { setCompareFrom(version.id); setCompareTo(versions[0]?.id ?? version.id); }}><GitCompare size={16} /></button>
-            <button type="button" className="danger" disabled={action.busy} onClick={() => void rollback(version.id, version.versionNumber)}><RotateCcw size={16} /></button>
+            <button
+              type="button"
+              className="danger"
+              disabled={action.busy || folderBacked}
+              title={folderBacked ? "Restore this version in the source folder or Git repository, then redeploy." : undefined}
+              onClick={() => void rollback(version.id, version.versionNumber)}
+            >
+              <RotateCcw size={16} />
+            </button>
           </ButtonRow>
         ]}
       />

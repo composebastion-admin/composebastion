@@ -116,17 +116,26 @@ export function UpdatesPanel({
     await load();
   }
 
-  async function openPreview(imageReference: string, title: string, confirmLabel: string, onConfirm: () => Promise<void>) {
+  async function openPreview(
+    imageReference: string,
+    title: string,
+    confirmLabel: string,
+    onConfirm: () => Promise<void>,
+    returnFocus: HTMLElement
+  ) {
     if (!hostId) return;
-    previewReturnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    previewReturnFocusRef.current = returnFocus;
     const result = await api<{ preview: ImageUpdatePreview }>(`/api/image-updates/preview?hostId=${encodeURIComponent(hostId)}&image=${encodeURIComponent(imageReference)}`);
     setPreview({ data: result.preview, title, confirmLabel, onConfirm });
   }
 
   function closePreview() {
     const returnTarget = previewReturnFocusRef.current;
+    previewReturnFocusRef.current = null;
     setPreview(null);
-    window.setTimeout(() => returnTarget?.focus(), 0);
+    window.setTimeout(() => {
+      if (returnTarget && document.contains(returnTarget)) returnTarget.focus({ preventScroll: true });
+    }, 0);
   }
 
   async function confirmPreview() {
@@ -172,19 +181,21 @@ export function UpdatesPanel({
               <button title="Scan image" onClick={() => void scanImage(update.imageReference)}><ShieldAlert size={16} /></button>
               <button title="Pull latest" onClick={() => void pullImage(update.imageReference)}><Download size={16} /></button>
               {update.affectedContainers?.[0] && (
-                <button title="Update container" onClick={() => void openPreview(
+                <button title="Update container" onClick={(event) => void openPreview(
                   update.imageReference,
                   "Update container",
                   "Update container",
-                  () => updateContainerNow(update.affectedContainers?.[0]!.id, update.imageReference, update.affectedContainers?.[0]!.name)
+                  () => updateContainerNow(update.affectedContainers?.[0]!.id, update.imageReference, update.affectedContainers?.[0]!.name),
+                  event.currentTarget
                 )}><Play size={16} /></button>
               )}
               {update.affectedStacks?.[0] && update.status === "update_available" && (
-                <button title={`Redeploy ${update.affectedStacks?.[0]!.name}`} onClick={() => void openPreview(
+                <button title={`Redeploy ${update.affectedStacks?.[0]!.name}`} onClick={(event) => void openPreview(
                   update.imageReference,
                   `Redeploy ${update.affectedStacks?.[0]!.name}`,
                   "Redeploy stack",
-                  () => redeployStackNow(update.affectedStacks?.[0]!.id)
+                  () => redeployStackNow(update.affectedStacks?.[0]!.id),
+                  event.currentTarget
                 )}><RefreshCw size={16} /></button>
               )}
               <span className="monoText">{hostName(hosts, update.hostId)}</span>

@@ -2,6 +2,7 @@ import nodemailer from "nodemailer";
 import { v4 as uuid } from "uuid";
 import { alertRuleCreateSchema, alertSilenceCreateSchema, hostMetricAlertConditionSchema, hostThresholdParamsSchema, notificationChannelCreateSchema } from "@composebastion/shared";
 import type { HostMetricAlertCondition } from "@composebastion/shared";
+import type { PoolClient } from "pg";
 import { env } from "../config/env.js";
 import { query } from "../db/pool.js";
 import { evaluateHostThreshold } from "./hostAlertEvaluation.js";
@@ -105,8 +106,9 @@ export async function createChannel(input: unknown) {
   return mapChannel(result.rows[0]);
 }
 
-export async function deleteChannel(id: string) {
-  await query("DELETE FROM notification_channels WHERE id = $1", [id]);
+export async function deleteChannel(id: string, client?: PoolClient) {
+  const execute = client ? client.query.bind(client) : query;
+  await execute("DELETE FROM notification_channels WHERE id = $1", [id]);
 }
 
 export async function listAlertChannelTestEvents(channelId: string, limit = 20) {
@@ -162,8 +164,9 @@ export async function createAlertRule(input: unknown) {
   return mapAlertRule(result.rows[0]);
 }
 
-export async function deleteAlertRule(id: string) {
-  await query("DELETE FROM alert_rules WHERE id = $1", [id]);
+export async function deleteAlertRule(id: string, client?: PoolClient) {
+  const execute = client ? client.query.bind(client) : query;
+  await execute("DELETE FROM alert_rules WHERE id = $1", [id]);
 }
 
 export async function listAlertSilences() {

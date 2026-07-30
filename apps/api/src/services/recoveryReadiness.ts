@@ -26,6 +26,7 @@ type ReadinessInput = {
 type PointUsability = {
   localUsable: boolean;
   remoteUsable: boolean;
+  combinedUsable: boolean;
 };
 
 const DATABASE_WARNING_HINTS = [
@@ -141,21 +142,30 @@ function hasTmpfsWarning(analysis: RecoveryAnalysis) {
   return analysis.warnings.some((warning) => warning.toLowerCase().includes("tmpfs"));
 }
 
-function hasRemoteObject(detail: RecoveryPointDetail) {
-  return detail.artifacts
-    .filter((artifact) => artifact.status === "completed")
-    .some((artifact) => typeof artifact.metadata.remoteObjectKey === "string" && artifact.metadata.remoteObjectKey);
+function hasUsableRemoteObject(artifact: RecoveryPointDetail["artifacts"][number]) {
+  return typeof artifact.metadata.remoteObjectKey === "string"
+    && artifact.metadata.remoteObjectKey.length > 0
+    && artifact.metadata.remoteVerified !== false;
 }
 
 function pointUsability(detail: RecoveryPointDetail, target: BackupTarget | null): PointUsability {
-  const hasCompletedArtifacts = detail.completedArtifactCount > 0 &&
-    detail.artifacts.some((artifact) => artifact.status === "completed");
-  if (!hasCompletedArtifacts) return { localUsable: false, remoteUsable: false };
+  const artifacts = detail.artifacts.filter((artifact) => artifact.status === "completed");
+  if (!artifacts.length) return { localUsable: false, remoteUsable: false, combinedUsable: false };
 
-  const remoteUsable = Boolean(target && target.enabled && hasRemoteObject(detail));
-  const remoteOnly = target?.localCachePolicy === "remote_only" || detail.artifacts.some((artifact) => artifact.metadata.localCachePolicy === "remote_only");
-  const localUsable = !remoteOnly;
-  return { localUsable, remoteUsable };
+  const usability = artifacts.map((artifact) => {
+    const remoteObject = hasUsableRemoteObject(artifact);
+    const legacyRemoteOnlyRemoval = artifact.metadata.localCacheRemoved == null
+      && artifact.metadata.localCachePolicy === "remote_only"
+      && remoteObject;
+    const local = artifact.metadata.localCacheRemoved !== true && !legacyRemoteOnlyRemoval;
+    const remote = Boolean(target?.enabled && remoteObject);
+    return { local, remote };
+  });
+  return {
+    localUsable: usability.every((artifact) => artifact.local),
+    remoteUsable: usability.every((artifact) => artifact.remote),
+    combinedUsable: usability.every((artifact) => artifact.local || artifact.remote)
+  };
 }
 
 async function latestMatchingRecoveryPoint(hostId: string, appIdentity: RecoveryAppIdentity) {
@@ -320,7 +330,7 @@ function pointReasons(detail: RecoveryPointDetail | null, target: BackupTarget |
     });
   }
 
-  if (usability && detail.status !== "failed" && !usability.localUsable && !usability.remoteUsable) {
+  if (usability && detail.status !== "failed" && !usability.combinedUsable) {
     reasons.push({
       code: "no_usable_artifact",
       severity: "critical",
@@ -347,7 +357,7 @@ function pointReasons(detail: RecoveryPointDetail | null, target: BackupTarget |
     });
   }
 
-  if (target && target.kind !== "local") {
+  if (target) {
     if (!target.enabled) {
       reasons.push({
         code: "target_disabled",

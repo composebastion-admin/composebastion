@@ -1033,6 +1033,9 @@
               "$ref": "#/components/schemas/JobProgressStep"
             }
           },
+          "sensitiveFieldsRedacted": {
+            "type": "boolean"
+          },
           "error": {
             "type": [
               "string",
@@ -1071,6 +1074,910 @@
             ]
           }
         }
+      },
+      "DirectHostActionRequest": {
+        "description": "A direct host action. Operations with durable domain state or dedicated authorization and audit contracts use their dedicated endpoints instead.",
+        "discriminator": {
+          "propertyName": "type"
+        },
+        "oneOf": [
+          {
+            "title": "host.check",
+            "type": "object",
+            "required": [
+              "type",
+              "payload"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "host.check"
+              },
+              "payload": {
+                "type": "object",
+                "required": [],
+                "additionalProperties": false,
+                "properties": {}
+              }
+            }
+          },
+          {
+            "title": "host.sync",
+            "type": "object",
+            "required": [
+              "type",
+              "payload"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "host.sync"
+              },
+              "payload": {
+                "type": "object",
+                "required": [],
+                "additionalProperties": false,
+                "properties": {}
+              }
+            }
+          },
+          {
+            "title": "host.mkdir",
+            "type": "object",
+            "required": [
+              "type",
+              "payload"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "host.mkdir"
+              },
+              "payload": {
+                "type": "object",
+                "required": [
+                  "path"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  }
+                }
+              }
+            }
+          },
+          {
+            "title": "git.clone",
+            "type": "object",
+            "required": [
+              "type",
+              "payload"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "git.clone"
+              },
+              "payload": {
+                "type": "object",
+                "required": [
+                  "repositoryUrl",
+                  "directory"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "repositoryUrl": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048,
+                    "description": "HTTP(S), ssh://, git://, or scp-style SSH repository URL. Embedded passwords, HTTP(S)/git user information, query parameters, and fragments are rejected.",
+                    "examples": [
+                      "https://github.com/example/app.git",
+                      "git@github.com:example/app.git"
+                    ]
+                  },
+                  "directory": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "branch": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 255
+                  },
+                  "shallow": {
+                    "type": "boolean",
+                    "default": true
+                  }
+                }
+              }
+            }
+          },
+          {
+            "title": "git.pull",
+            "type": "object",
+            "required": [
+              "type",
+              "payload"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "git.pull"
+              },
+              "payload": {
+                "type": "object",
+                "required": [
+                  "directory"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "directory": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "branch": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 255
+                  }
+                }
+              }
+            }
+          },
+          {
+            "title": "git.testRemote",
+            "type": "object",
+            "required": [
+              "type",
+              "payload"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "git.testRemote"
+              },
+              "payload": {
+                "type": "object",
+                "required": [
+                  "repositoryUrl"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "repositoryUrl": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048,
+                    "description": "HTTP(S), ssh://, git://, or scp-style SSH repository URL. Embedded passwords, HTTP(S)/git user information, query parameters, and fragments are rejected.",
+                    "examples": [
+                      "https://github.com/example/app.git",
+                      "git@github.com:example/app.git"
+                    ]
+                  },
+                  "branch": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 255
+                  }
+                }
+              }
+            }
+          },
+          {
+            "title": "container.run",
+            "type": "object",
+            "required": [
+              "type",
+              "payload"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "container.run"
+              },
+              "payload": {
+                "type": "object",
+                "required": [
+                  "image"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "image": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "restartPolicy": {
+                    "type": "string",
+                    "enum": [
+                      "no",
+                      "unless-stopped",
+                      "always",
+                      "on-failure"
+                    ],
+                    "default": "unless-stopped"
+                  },
+                  "ports": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "hostPort",
+                        "containerPort"
+                      ],
+                      "additionalProperties": false,
+                      "properties": {
+                        "hostPort": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 65535
+                        },
+                        "containerPort": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 65535
+                        },
+                        "protocol": {
+                          "type": "string",
+                          "enum": [
+                            "tcp",
+                            "udp"
+                          ],
+                          "default": "tcp"
+                        }
+                      }
+                    },
+                    "default": []
+                  },
+                  "env": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "key",
+                        "value"
+                      ],
+                      "additionalProperties": false,
+                      "properties": {
+                        "key": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "value": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "default": []
+                  },
+                  "volumes": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "volumeName",
+                        "containerPath"
+                      ],
+                      "additionalProperties": false,
+                      "properties": {
+                        "volumeName": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 255,
+                          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]*$"
+                        },
+                        "containerPath": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "readOnly": {
+                          "type": "boolean",
+                          "default": false
+                        }
+                      }
+                    },
+                    "default": []
+                  },
+                  "network": {
+                    "type": "string"
+                  },
+                  "command": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "title": "container.start",
+            "type": "object",
+            "required": [
+              "type",
+              "payload"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "container.start"
+              },
+              "payload": {
+                "type": "object",
+                "required": [
+                  "containerId"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "containerId": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          },
+          {
+            "title": "container.stop",
+            "type": "object",
+            "required": [
+              "type",
+              "payload"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "container.stop"
+              },
+              "payload": {
+                "type": "object",
+                "required": [
+                  "containerId"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "containerId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "timeoutSeconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 300
+                  }
+                }
+              }
+            }
+          },
+          {
+            "title": "container.restart",
+            "type": "object",
+            "required": [
+              "type",
+              "payload"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "container.restart"
+              },
+              "payload": {
+                "type": "object",
+                "required": [
+                  "containerId"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "containerId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "timeoutSeconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 300
+                  }
+                }
+              }
+            }
+          },
+          {
+            "title": "container.rename",
+            "type": "object",
+            "required": [
+              "type",
+              "payload"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "container.rename"
+              },
+              "payload": {
+                "type": "object",
+                "required": [
+                  "containerId",
+                  "name"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "containerId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  }
+                }
+              }
+            }
+          },
+          {
+            "title": "container.update",
+            "type": "object",
+            "required": [
+              "type",
+              "payload"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "container.update"
+              },
+              "payload": {
+                "type": "object",
+                "required": [
+                  "containerId"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "containerId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "targetImage": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          },
+          {
+            "title": "container.remove",
+            "type": "object",
+            "required": [
+              "type",
+              "payload"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "container.remove"
+              },
+              "payload": {
+                "type": "object",
+                "required": [
+                  "containerId"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "containerId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "force": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "removeVolumes": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                }
+              }
+            }
+          },
+          {
+            "title": "image.pull",
+            "type": "object",
+            "required": [
+              "type",
+              "payload"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "image.pull"
+              },
+              "payload": {
+                "type": "object",
+                "required": [
+                  "image"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "image": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          },
+          {
+            "title": "image.remove",
+            "type": "object",
+            "required": [
+              "type",
+              "payload"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "image.remove"
+              },
+              "payload": {
+                "type": "object",
+                "required": [
+                  "imageId"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "imageId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "force": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                }
+              }
+            }
+          },
+          {
+            "title": "image.prune",
+            "type": "object",
+            "required": [
+              "type",
+              "payload"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "image.prune"
+              },
+              "payload": {
+                "type": "object",
+                "required": [],
+                "additionalProperties": false,
+                "properties": {
+                  "all": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                }
+              }
+            }
+          },
+          {
+            "title": "image.cleanup",
+            "type": "object",
+            "required": [
+              "type",
+              "payload"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "image.cleanup"
+              },
+              "payload": {
+                "type": "object",
+                "required": [
+                  "targets"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "targets": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "imageId"
+                      ],
+                      "additionalProperties": false,
+                      "properties": {
+                        "imageId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "reference": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      }
+                    },
+                    "minItems": 1,
+                    "maxItems": 200
+                  }
+                }
+              }
+            }
+          },
+          {
+            "title": "network.create",
+            "type": "object",
+            "required": [
+              "type",
+              "payload"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "network.create"
+              },
+              "payload": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "driver": {
+                    "type": "string",
+                    "enum": [
+                      "bridge",
+                      "host",
+                      "overlay",
+                      "macvlan",
+                      "ipvlan",
+                      "none"
+                    ],
+                    "default": "bridge"
+                  },
+                  "subnet": {
+                    "type": "string"
+                  },
+                  "gateway": {
+                    "type": "string"
+                  },
+                  "attachable": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "internal": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "labels": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "default": {}
+                  }
+                }
+              }
+            }
+          },
+          {
+            "title": "network.remove",
+            "type": "object",
+            "required": [
+              "type",
+              "payload"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "network.remove"
+              },
+              "payload": {
+                "type": "object",
+                "required": [
+                  "networkId"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "networkId": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          },
+          {
+            "title": "network.prune",
+            "type": "object",
+            "required": [
+              "type",
+              "payload"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "network.prune"
+              },
+              "payload": {
+                "type": "object",
+                "required": [],
+                "additionalProperties": false,
+                "properties": {}
+              }
+            }
+          },
+          {
+            "title": "volume.create",
+            "type": "object",
+            "required": [
+              "type",
+              "payload"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "volume.create"
+              },
+              "payload": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 255,
+                    "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]*$"
+                  },
+                  "labels": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "default": {}
+                  }
+                }
+              }
+            }
+          },
+          {
+            "title": "volume.remove",
+            "type": "object",
+            "required": [
+              "type",
+              "payload"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "volume.remove"
+              },
+              "payload": {
+                "type": "object",
+                "required": [
+                  "volumeName"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "volumeName": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "force": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                }
+              }
+            }
+          },
+          {
+            "title": "volume.prune",
+            "type": "object",
+            "required": [
+              "type",
+              "payload"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "volume.prune"
+              },
+              "payload": {
+                "type": "object",
+                "required": [],
+                "additionalProperties": false,
+                "properties": {}
+              }
+            }
+          },
+          {
+            "title": "compose.deployPath",
+            "type": "object",
+            "required": [
+              "type",
+              "payload"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "compose.deployPath"
+              },
+              "payload": {
+                "type": "object",
+                "required": [
+                  "projectName",
+                  "workingDir",
+                  "composePath"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "projectName": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 80,
+                    "pattern": "^[a-z0-9][a-z0-9_-]*$"
+                  },
+                  "workingDir": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024,
+                    "pattern": "^/[^\\u0000-\\u001F\\u007F]*$",
+                    "description": "Absolute Linux path without control characters."
+                  },
+                  "composePath": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024,
+                    "pattern": "^(?=.*\\S)[^\\u0000-\\u001F\\u007F]+$",
+                    "description": "Absolute or working-directory-relative Compose file path without control characters."
+                  }
+                }
+              }
+            }
+          }
+        ]
       },
       "JobResponse": {
         "type": "object",
@@ -3114,6 +4021,268 @@
           }
         }
       },
+      "GithubRepositoryCreateRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "repositoryUrl"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "repositoryUrl": {
+            "type": "string",
+            "format": "uri",
+            "minLength": 1,
+            "maxLength": 2048,
+            "description": "Credential-free HTTPS github.com repository URL with exactly owner/repository path segments. Query parameters and fragments are rejected.",
+            "example": "https://github.com/example/app"
+          },
+          "branch": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "default": "main"
+          },
+          "composePath": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255,
+            "default": "docker-compose.yml"
+          },
+          "projectName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "pattern": "^[a-z0-9][a-z0-9_-]*$"
+          },
+          "env": {
+            "type": "string",
+            "default": ""
+          },
+          "defaultHostId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "hostCloneUrl": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048,
+                "description": "HTTP(S), ssh://, git://, or scp-style SSH repository URL. Embedded passwords, HTTP(S)/git user information, query parameters, and fragments are rejected.",
+                "examples": [
+                  "https://github.com/example/app.git",
+                  "git@github.com:example/app.git"
+                ]
+              },
+              {
+                "type": "string",
+                "maxLength": 0
+              }
+            ],
+            "description": "Credential-free host-side Git clone URL. Use an SSH deploy key for private repositories."
+          },
+          "hostCloneDirectory": {
+            "type": "string",
+            "maxLength": 1024
+          },
+          "githubToken": {
+            "type": "string",
+            "maxLength": 4096,
+            "writeOnly": true,
+            "description": "Fine-grained GitHub API token stored separately with encryption; never place it in a URL."
+          }
+        }
+      },
+      "GithubRepositoryUpdateRequest": {
+        "type": "object",
+        "required": [],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "repositoryUrl": {
+            "type": "string",
+            "format": "uri",
+            "minLength": 1,
+            "maxLength": 2048,
+            "description": "Credential-free HTTPS github.com repository URL with exactly owner/repository path segments. Query parameters and fragments are rejected.",
+            "example": "https://github.com/example/app"
+          },
+          "branch": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "composePath": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "projectName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "pattern": "^[a-z0-9][a-z0-9_-]*$"
+          },
+          "env": {
+            "type": "string"
+          },
+          "defaultHostId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "hostCloneUrl": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048,
+                "description": "HTTP(S), ssh://, git://, or scp-style SSH repository URL. Embedded passwords, HTTP(S)/git user information, query parameters, and fragments are rejected.",
+                "examples": [
+                  "https://github.com/example/app.git",
+                  "git@github.com:example/app.git"
+                ]
+              },
+              {
+                "type": "string",
+                "maxLength": 0
+              }
+            ],
+            "description": "Credential-free host-side Git clone URL; send an empty string to clear it."
+          },
+          "hostCloneDirectory": {
+            "type": "string",
+            "maxLength": 1024
+          },
+          "githubToken": {
+            "type": "string",
+            "maxLength": 4096,
+            "writeOnly": true
+          },
+          "clearGithubToken": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
+      "GithubBranchesRequest": {
+        "type": "object",
+        "required": [
+          "repositoryUrl"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "repositoryUrl": {
+            "type": "string",
+            "format": "uri",
+            "minLength": 1,
+            "maxLength": 2048,
+            "description": "Credential-free HTTPS github.com repository URL with exactly owner/repository path segments. Query parameters and fragments are rejected.",
+            "example": "https://github.com/example/app"
+          },
+          "githubToken": {
+            "type": "string",
+            "maxLength": 4096,
+            "writeOnly": true
+          }
+        }
+      },
+      "GithubAccessCheckRequest": {
+        "type": "object",
+        "required": [
+          "repositoryUrl"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "repositoryUrl": {
+            "type": "string",
+            "format": "uri",
+            "minLength": 1,
+            "maxLength": 2048,
+            "description": "Credential-free HTTPS github.com repository URL with exactly owner/repository path segments. Query parameters and fragments are rejected.",
+            "example": "https://github.com/example/app"
+          },
+          "branch": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "default": "main"
+          },
+          "composePath": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255,
+            "default": "docker-compose.yml"
+          },
+          "githubToken": {
+            "type": "string",
+            "maxLength": 4096,
+            "writeOnly": true
+          }
+        }
+      },
+      "GithubDeployRequest": {
+        "type": "object",
+        "required": [],
+        "additionalProperties": false,
+        "properties": {
+          "hostId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "branch": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "projectName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "pattern": "^[a-z0-9][a-z0-9_-]*$"
+          },
+          "composeYaml": {
+            "type": "string",
+            "minLength": 1
+          },
+          "env": {
+            "type": "string",
+            "writeOnly": true
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "api",
+              "host_clone"
+            ],
+            "default": "api"
+          },
+          "hostCloneUrl": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048,
+            "description": "HTTP(S), ssh://, git://, or scp-style SSH repository URL. Embedded passwords, HTTP(S)/git user information, query parameters, and fragments are rejected.",
+            "examples": [
+              "https://github.com/example/app.git",
+              "git@github.com:example/app.git"
+            ]
+          },
+          "hostCloneDirectory": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        }
+      },
       "GithubRepository": {
         "type": "object",
         "required": [
@@ -3152,7 +4321,12 @@
             "type": "string"
           },
           "repositoryUrl": {
-            "type": "string"
+            "type": "string",
+            "format": "uri",
+            "minLength": 1,
+            "maxLength": 2048,
+            "description": "Canonical credential-free GitHub repository URL.",
+            "example": "https://github.com/example/app"
           },
           "owner": {
             "type": "string"
@@ -3184,10 +4358,22 @@
             ]
           },
           "hostCloneUrl": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048,
+                "description": "HTTP(S), ssh://, git://, or scp-style SSH repository URL. Embedded passwords, HTTP(S)/git user information, query parameters, and fragments are rejected.",
+                "examples": [
+                  "https://github.com/example/app.git",
+                  "git@github.com:example/app.git"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Credential-free host-side clone URL."
           },
           "hostCloneDirectory": {
             "type": [
@@ -3331,7 +4517,8 @@
             "type": "string"
           },
           "sourceLocator": {
-            "type": "string"
+            "type": "string",
+            "description": "Canonical source locator. Git and Compose URL locators never contain credentials, query parameters, or fragments."
           },
           "branch": {
             "type": [
@@ -3476,13 +4663,15 @@
             ]
           },
           "sourceInput": {
-            "type": "string"
+            "type": "string",
+            "description": "Sanitized source input. Persisted Git and Compose URLs never reflect embedded credentials, queries, or fragments."
           },
           "sourceLocator": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "Canonical credential-free source locator when applicable."
           },
           "status": {
             "type": "string",
@@ -3634,7 +4823,8 @@
             "format": "uuid"
           },
           "source": {
-            "type": "string"
+            "type": "string",
+            "description": "Git URL, public Compose URL, uploaded Compose text, or image reference. Git and Compose URLs reject embedded credentials, query parameters, and fragments."
           },
           "sourceType": {
             "type": "string",
@@ -3656,11 +4846,13 @@
           },
           "credentialUsername": {
             "type": "string",
-            "writeOnly": true
+            "writeOnly": true,
+            "description": "HTTPS Git username; not supported for Compose URLs."
           },
           "credentialSecret": {
             "type": "string",
-            "writeOnly": true
+            "writeOnly": true,
+            "description": "Encrypted HTTPS Git token/password; not supported for Compose URLs."
           },
           "sourceId": {
             "type": "string",
@@ -3779,7 +4971,8 @@
             "type": "string"
           },
           "sourceLocator": {
-            "type": "string"
+            "type": "string",
+            "description": "Git URL, public credential-free Compose URL, uploaded Compose locator, or image reference according to sourceType."
           },
           "branch": {
             "type": "string"
@@ -3806,11 +4999,13 @@
           },
           "credentialUsername": {
             "type": "string",
-            "writeOnly": true
+            "writeOnly": true,
+            "description": "HTTPS Git username; not supported for Compose URLs."
           },
           "credentialSecret": {
             "type": "string",
-            "writeOnly": true
+            "writeOnly": true,
+            "description": "Encrypted HTTPS Git token/password; not supported for Compose URLs."
           }
         }
       },
@@ -3822,7 +5017,12 @@
         "additionalProperties": false,
         "properties": {
           "registry": {
-            "type": "string"
+            "type": "string",
+            "description": "Validated DNS name, IPv4 address, or bracketed IPv6 address with optional port. An http(s) origin is accepted only without credentials, path, query, or fragment.",
+            "examples": [
+              "registry.example.test:5000",
+              "[2001:db8::1]:5000"
+            ]
           },
           "insecure": {
             "type": "boolean",
@@ -5677,7 +6877,7 @@
     },
     "/api/v1/hosts/{id}/actions": {
       "post": {
-        "summary": "Enqueue a typed Docker action",
+        "summary": "Enqueue a supported direct Docker action; orchestrated operations use dedicated endpoints",
         "tags": [
           "Jobs"
         ],
@@ -5686,6 +6886,16 @@
             "cookieSession": []
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DirectHostActionRequest"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Successful response",
@@ -6559,7 +7769,7 @@
     },
     "/api/v1/jobs/{id}/retry": {
       "post": {
-        "summary": "Retry a failed or canceled operation job",
+        "summary": "Retry an eligible failed or canceled operation job",
         "tags": [
           "Jobs"
         ],
@@ -6611,6 +7821,16 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The job is not eligible for replay, or a non-idempotent operation has an ambiguous WORKER_LOST outcome",
             "content": {
               "application/json": {
                 "schema": {
@@ -8397,6 +9617,16 @@
             "cookieSession": []
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GithubRepositoryCreateRequest"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Successful response",
@@ -8462,6 +9692,16 @@
             "cookieSession": []
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GithubBranchesRequest"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Successful response",
@@ -8527,6 +9767,16 @@
             "cookieSession": []
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GithubAccessCheckRequest"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Successful response",
@@ -8787,6 +10037,16 @@
             "cookieSession": []
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GithubRepositoryUpdateRequest"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Successful response",
@@ -8915,6 +10175,16 @@
             "cookieSession": []
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GithubDeployRequest"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Successful response",

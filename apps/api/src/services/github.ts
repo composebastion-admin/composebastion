@@ -1,9 +1,15 @@
 import { Buffer } from "node:buffer";
 import { v4 as uuid } from "uuid";
 import {
+  canonicalizeGithubRepositoryUrl,
+  canonicalizeGitRepositoryUrl,
+  gitRepositoryUrlIssue,
   githubRepositoryAccessCheckSchema,
   githubRepositoryCreateSchema,
   githubRepositoryUpdateSchema,
+  sanitizeGithubRepositoryUrl,
+  sanitizeGitRepositoryUrl,
+  sanitizeUrlDiagnosticText,
   type AppGithubVersionOption,
   type AppGithubVersions
 } from "@composebastion/shared";
@@ -68,6 +74,12 @@ function defaultHostCloneUrl(owner: string, repo: string) {
   return `git@github.com:${owner}/${repo}.git`;
 }
 
+function defaultHostCloneUrlForRepositoryUrl(repositoryUrl: string | null) {
+  if (!repositoryUrl) return null;
+  const [owner, repo] = new URL(repositoryUrl).pathname.replace(/^\/|\/$/g, "").split("/");
+  return owner && repo ? defaultHostCloneUrl(owner, repo) : null;
+}
+
 function githubRepoParts(owner: string | undefined, repo: string | undefined) {
   const normalizedOwner = owner?.trim();
   const normalizedRepo = repo?.trim().replace(/\.git$/i, "");
@@ -80,9 +92,22 @@ function githubRepoParts(owner: string | undefined, repo: string | undefined) {
 export function parseGithubUrl(repositoryUrl: string) {
   const trimmed = repositoryUrl.trim();
   const scpMatch = /^git@github\.com:([^/]+)\/(.+?)(?:\.git)?$/i.exec(trimmed);
-  if (scpMatch) return githubRepoParts(scpMatch[1], scpMatch[2]);
+  if (scpMatch && !gitRepositoryUrlIssue(trimmed)) {
+    return githubRepoParts(scpMatch[1], scpMatch[2]);
+  }
+  if (/^ssh:\/\//i.test(trimmed) && !gitRepositoryUrlIssue(trimmed)) {
+    const sshUrl = new URL(trimmed);
+    const sshPath = sshUrl.pathname.replace(/^\/|\/$/g, "").replace(/\.git$/i, "");
+    const [sshOwner, sshRepo] = sshPath.split("/");
+    if (
+      sshUrl.hostname.toLowerCase().replace(/^www\./, "") === "github.com"
+      && sshPath.split("/").filter(Boolean).length === 2
+    ) {
+      return githubRepoParts(sshOwner, sshRepo);
+    }
+  }
 
-  const url = new URL(trimmed);
+  const url = new URL(canonicalizeGithubRepositoryUrl(trimmed));
   const hostname = url.hostname.toLowerCase().replace(/^www\./, "");
   const path = url.pathname.replace(/^\/|\/$/g, "").replace(/\.git$/i, "");
   const [owner, repo] = path.split("/");
@@ -256,10 +281,16 @@ async function listGithubVersionOptions(
 
 export function mapGithubRepository(row: any) {
   const hasGithubToken = Boolean(row.github_token_encrypted);
+  const repositoryUrl = sanitizeGithubRepositoryUrl(row.repository_url, {
+    owner: row.owner,
+    repo: row.repo
+  });
+  const hostCloneUrl = sanitizeGitRepositoryUrl(row.host_clone_url)
+    ?? defaultHostCloneUrlForRepositoryUrl(repositoryUrl);
   return {
     id: row.id,
     name: row.name,
-    repositoryUrl: row.repository_url,
+    repositoryUrl: repositoryUrl ?? "",
     owner: row.owner,
     repo: row.repo,
     branch: row.branch,
@@ -267,18 +298,18 @@ export function mapGithubRepository(row: any) {
     projectName: row.project_name,
     env: row.env ?? "",
     defaultHostId: row.default_host_id,
-    hostCloneUrl: row.host_clone_url ?? defaultHostCloneUrl(row.owner, row.repo),
+    hostCloneUrl,
     hostCloneDirectory: row.host_clone_directory ?? null,
     lastDeployedAt: iso(row.last_deployed_at),
     lastDeployedCommitSha: row.last_deployed_commit_sha ?? null,
     latestCommitSha: row.latest_commit_sha ?? null,
     updateCheckedAt: iso(row.update_checked_at),
-    updateCheckError: row.update_check_error ?? null,
+    updateCheckError: sanitizeUrlDiagnosticText(row.update_check_error) as string | null,
     hasGithubToken,
     githubTokenStatus: githubTokenStatus(row),
     githubTokenCheckedAt: iso(row.github_token_checked_at),
-    githubTokenCheckError: row.github_token_check_error ?? null,
-    lastError: row.last_error,
+    githubTokenCheckError: sanitizeUrlDiagnosticText(row.github_token_check_error) as string | null,
+    lastError: sanitizeUrlDiagnosticText(row.last_error) as string | null,
     createdAt: iso(row.created_at)!,
     updatedAt: iso(row.updated_at)!
   };
@@ -374,8 +405,13 @@ export async function testGithubRepositoryStoredAccess(id: string) {
   if (!row) return null;
   let access: GithubRepositoryAccessResult;
   try {
+    const repositoryUrl = sanitizeGithubRepositoryUrl(row.repository_url, {
+      owner: row.owner,
+      repo: row.repo
+    });
+    if (!repositoryUrl) throw new Error("Stored GitHub repository URL is invalid");
     access = await checkGithubRepositoryAccess({
-      repositoryUrl: row.repository_url,
+      repositoryUrl,
       branch: row.branch,
       composePath: row.compose_path,
       githubToken: githubTokenForRow(row) ?? undefined
@@ -397,14 +433,17 @@ export async function testGithubRepositoryStoredAccess(id: string) {
 
 export async function createGithubRepository(input: unknown) {
   const body = githubRepositoryCreateSchema.parse(input);
-  const { owner, repo } = parseGithubUrl(body.repositoryUrl);
+  const repositoryUrl = canonicalizeGithubRepositoryUrl(body.repositoryUrl);
+  const { owner, repo } = parseGithubUrl(repositoryUrl);
   const projectName = body.projectName ?? normalizeProjectName(repo);
   const githubToken = body.githubToken?.trim() || null;
-  const hostCloneUrl = nullIfBlank(body.hostCloneUrl);
+  const hostCloneUrl = body.hostCloneUrl
+    ? canonicalizeGitRepositoryUrl(body.hostCloneUrl)
+    : null;
   const hostCloneDirectory = nullIfBlank(body.hostCloneDirectory);
   if (githubToken) {
     await requireValidGithubRepositoryAccess({
-      repositoryUrl: body.repositoryUrl,
+      repositoryUrl,
       branch: body.branch,
       composePath: body.composePath,
       githubToken
@@ -435,7 +474,7 @@ export async function createGithubRepository(input: unknown) {
     [
       uuid(),
       body.name,
-      body.repositoryUrl,
+      repositoryUrl,
       owner,
       repo,
       body.branch,
@@ -456,8 +495,11 @@ export async function updateGithubRepository(id: string, input: unknown) {
   const current = await query<any>("SELECT * FROM github_repositories WHERE id = $1", [id]);
   const row = current.rows[0];
   if (!row) return null;
-  const repositoryUrl = body.repositoryUrl ?? row.repository_url;
-  const parsed = body.repositoryUrl ? parseGithubUrl(body.repositoryUrl) : { owner: row.owner, repo: row.repo };
+  const repositoryUrl = body.repositoryUrl
+    ? canonicalizeGithubRepositoryUrl(body.repositoryUrl)
+    : sanitizeGithubRepositoryUrl(row.repository_url, { owner: row.owner, repo: row.repo });
+  if (!repositoryUrl) throw Object.assign(new Error("Stored GitHub repository URL is invalid"), { statusCode: 400 });
+  const parsed = parseGithubUrl(repositoryUrl);
   const nextBranch = body.branch ?? row.branch;
   const nextComposePath = body.composePath ?? row.compose_path;
   const githubToken = body.githubToken?.trim() || null;
@@ -465,7 +507,11 @@ export async function updateGithubRepository(id: string, input: unknown) {
   const existingToken = clearGithubToken ? null : githubTokenForRow(row);
   const tokenForValidation = githubToken ?? existingToken;
   const changedAccessTarget = Boolean(body.repositoryUrl || body.branch || body.composePath);
-  const hostCloneUrl = body.hostCloneUrl === undefined ? row.host_clone_url : nullIfBlank(body.hostCloneUrl);
+  const hostCloneUrl = body.hostCloneUrl === undefined
+    ? sanitizeGitRepositoryUrl(row.host_clone_url) ?? defaultHostCloneUrl(parsed.owner, parsed.repo)
+    : body.hostCloneUrl
+      ? canonicalizeGitRepositoryUrl(body.hostCloneUrl)
+      : null;
   const hostCloneDirectory = body.hostCloneDirectory === undefined ? row.host_clone_directory : nullIfBlank(body.hostCloneDirectory);
   if (!clearGithubToken && tokenForValidation && (githubToken || changedAccessTarget)) {
     await requireValidGithubRepositoryAccess({
@@ -655,7 +701,8 @@ export async function checkGithubRepositoryUpdates(id?: string) {
 }
 
 export async function listGithubBranchesForUrl(repositoryUrl: string, githubToken?: string) {
-  const { owner, repo } = parseGithubUrl(repositoryUrl);
+  const canonical = canonicalizeGithubRepositoryUrl(repositoryUrl);
+  const { owner, repo } = parseGithubUrl(canonical);
   return listGithubBranches(owner, repo, githubToken);
 }
 
@@ -664,8 +711,9 @@ export async function listGithubVersionsForUrl(
   githubToken?: string,
   context: { selectedRef?: string | null; currentCommitSha?: string | null } = {}
 ) {
-  const { owner, repo } = parseGithubUrl(repositoryUrl);
-  return listGithubVersionOptions(owner, repo, repositoryUrl, githubToken, context);
+  const canonical = canonicalizeGithubRepositoryUrl(repositoryUrl);
+  const { owner, repo } = parseGithubUrl(canonical);
+  return listGithubVersionOptions(owner, repo, canonical, githubToken, context);
 }
 
 export async function listGithubBranchesForRepository(id: string) {
@@ -683,7 +731,12 @@ export async function listGithubVersionsForRepository(
   const row = result.rows[0];
   if (!row) throw new Error("GitHub repository not found");
   const token = row.github_token_encrypted ? decryptSecret(row.github_token_encrypted) : undefined;
-  return listGithubVersionOptions(row.owner, row.repo, row.repository_url, token, {
+  const repositoryUrl = sanitizeGithubRepositoryUrl(row.repository_url, {
+    owner: row.owner,
+    repo: row.repo
+  });
+  if (!repositoryUrl) throw Object.assign(new Error("Stored GitHub repository URL is invalid"), { statusCode: 400 });
+  return listGithubVersionOptions(row.owner, row.repo, repositoryUrl, token, {
     selectedRef: context.selectedRef ?? row.branch,
     currentCommitSha: context.currentCommitSha ?? row.last_deployed_commit_sha ?? null
   });
@@ -739,11 +792,20 @@ export async function deployGithubRepository(
   const branch = options.branch ?? row.branch;
   const projectName = options.projectName ?? normalizeProjectName(row.project_name);
   const env = options.env ?? row.env ?? "";
+  const repositoryUrl = sanitizeGithubRepositoryUrl(row.repository_url, {
+    owner: row.owner,
+    repo: row.repo
+  });
+  if (!repositoryUrl) throw Object.assign(new Error("Stored GitHub repository URL is invalid"), { statusCode: 400 });
   let commitSha: string | null = null;
 
   try {
     if (options.mode === "host_clone") {
-      const hostCloneUrl = nullIfBlank(options.hostCloneUrl) ?? row.host_clone_url ?? defaultHostCloneUrl(row.owner, row.repo);
+      const requestedHostCloneUrl = nullIfBlank(options.hostCloneUrl);
+      const hostCloneUrl = requestedHostCloneUrl
+        ? canonicalizeGitRepositoryUrl(requestedHostCloneUrl)
+        : sanitizeGitRepositoryUrl(row.host_clone_url) ?? defaultHostCloneUrlForRepositoryUrl(repositoryUrl);
+      if (!hostCloneUrl) throw Object.assign(new Error("Stored host clone URL is invalid"), { statusCode: 400 });
       const hostCloneDirectory = nullIfBlank(options.hostCloneDirectory) ?? row.host_clone_directory;
       if (!hostCloneDirectory) throw new Error("Choose a host clone directory before using Clone/Build Deploy.");
       const transactionResult = await withTransaction(async (client) => {
@@ -812,7 +874,7 @@ export async function deployGithubRepository(
                        source_check_error = null,
                        updated_at = now()
          RETURNING *`,
-        [uuid(), hostId, row.name, projectName, composeYaml, env, row.repository_url, branch, commitSha]
+        [uuid(), hostId, row.name, projectName, composeYaml, env, repositoryUrl, branch, commitSha]
       );
       const stack = mapStack(stackResult.rows[0]);
       await recordStackVersionInTransaction(client, {

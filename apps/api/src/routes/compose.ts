@@ -6,10 +6,10 @@ import {
   composeStackUpdateSchema,
   stackRollbackSchema
 } from "@composebastion/shared";
-import { query } from "../db/pool.js";
+import { query, withTransaction } from "../db/pool.js";
 import { requireRole } from "../services/auth.js";
 import { enqueueJob } from "../services/jobs.js";
-import { mapStack } from "../services/mappers.js";
+import { mapStack, redactStackSensitiveFields } from "../services/mappers.js";
 import { writeAuditEvent, auditContextFromRequest } from "../services/audit.js";
 import { buildProxySnippets, mergeTraefikLabelsIntoCompose } from "../services/proxySnippets.js";
 import {
@@ -33,7 +33,12 @@ export async function registerComposeRoutes(app: FastifyInstance) {
   app.get("/api/hosts/:id/compose", { preHandler: viewer }, async (request) => {
     const { id } = request.params as { id: string };
     const result = await query(`${stackSelect} WHERE s.host_id = $1 ORDER BY s.name ASC`, [id]);
-    return { stacks: result.rows.map(mapStack) };
+    const stacks = result.rows.map(mapStack);
+    return {
+      stacks: request.user?.role === "viewer"
+        ? stacks.map(redactStackSensitiveFields)
+        : stacks
+    };
   });
 
   app.post("/api/hosts/:id/compose", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
@@ -110,34 +115,50 @@ export async function registerComposeRoutes(app: FastifyInstance) {
   app.put("/api/compose/:stackId/proxy", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request, reply) => {
     const { stackId } = request.params as { stackId: string };
     const body = composeStackProxyUpdateSchema.parse(request.body);
-    const current = await query<any>("SELECT * FROM compose_stacks WHERE id = $1", [stackId]);
-    const row = current.rows[0];
-    if (!row) {
+    const stack = await withTransaction(async (client) => {
+      const current = await client.query<any>(
+        "SELECT * FROM compose_stacks WHERE id = $1 FOR UPDATE",
+        [stackId]
+      );
+      const row = current.rows[0];
+      if (!row) return null;
+      const result = await client.query(
+        `UPDATE compose_stacks
+         SET domains = $2,
+             exposed_service = $3,
+             exposed_port = $4,
+             tls_desired = $5,
+             update_policy_enabled = $6,
+             update_policy_channel = $7,
+             updated_at = now()
+         WHERE id = $1
+         RETURNING *`,
+        [
+          stackId,
+          body.domains ?? row.domains ?? [],
+          body.exposedService ?? row.exposed_service,
+          body.exposedPort ?? row.exposed_port,
+          body.tlsDesired ?? row.tls_desired ?? false,
+          body.updatePolicyEnabled ?? row.update_policy_enabled ?? false,
+          body.updatePolicyChannel ?? row.update_policy_channel
+        ]
+      );
+      await writeAuditEvent({
+        userId: request.user?.id,
+        hostId: row.host_id,
+        action: "compose.proxy.update",
+        targetKind: "compose_stack",
+        targetId: stackId,
+        details: { proxyConfigurationUpdated: true },
+        ...auditContextFromRequest(request)
+      }, client);
+      return mapStack(result.rows[0]);
+    });
+    if (!stack) {
       reply.code(404);
       return { error: "Compose stack not found" };
     }
-    const result = await query(
-      `UPDATE compose_stacks
-       SET domains = $2,
-           exposed_service = $3,
-           exposed_port = $4,
-           tls_desired = $5,
-           update_policy_enabled = $6,
-           update_policy_channel = $7,
-           updated_at = now()
-       WHERE id = $1
-       RETURNING *`,
-      [
-        stackId,
-        body.domains ?? row.domains ?? [],
-        body.exposedService ?? row.exposed_service,
-        body.exposedPort ?? row.exposed_port,
-        body.tlsDesired ?? row.tls_desired ?? false,
-        body.updatePolicyEnabled ?? row.update_policy_enabled ?? false,
-        body.updatePolicyChannel ?? row.update_policy_channel
-      ]
-    );
-    return { stack: mapStack(result.rows[0]) };
+    return { stack };
   });
 
   app.get("/api/compose/:stackId/proxy/snippets", { preHandler: viewer }, async (request, reply) => {
@@ -198,12 +219,12 @@ export async function registerComposeRoutes(app: FastifyInstance) {
     return { stack: mapStack(updated.rows[0]), warnings: snippets.warnings };
   });
 
-  app.get("/api/compose/:stackId/versions", { preHandler: viewer }, async (request) => {
+  app.get("/api/compose/:stackId/versions", { preHandler: operator }, async (request) => {
     const { stackId } = request.params as { stackId: string };
     return { versions: await listStackVersions(stackId) };
   });
 
-  app.get("/api/compose/:stackId/versions/diff", { preHandler: viewer }, async (request, reply) => {
+  app.get("/api/compose/:stackId/versions/diff", { preHandler: operator }, async (request, reply) => {
     const { stackId } = request.params as { stackId: string };
     const { from, to } = request.query as { from?: string; to?: string };
     if (!from || !to) {
@@ -236,7 +257,23 @@ export async function registerComposeRoutes(app: FastifyInstance) {
 
   app.delete("/api/compose/:stackId", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
     const { stackId } = request.params as { stackId: string };
-    await query("DELETE FROM compose_stacks WHERE id = $1", [stackId]);
+    await withTransaction(async (client) => {
+      const result = await client.query<{ host_id: string }>(
+        "DELETE FROM compose_stacks WHERE id = $1 RETURNING host_id",
+        [stackId]
+      );
+      if (result.rows[0]) {
+        await writeAuditEvent({
+          userId: request.user?.id,
+          hostId: result.rows[0].host_id,
+          action: "compose.forget",
+          targetKind: "compose_stack",
+          targetId: stackId,
+          details: { dockerResourcesRemoved: false },
+          ...auditContextFromRequest(request)
+        }, client);
+      }
+    });
     return { ok: true };
   });
 

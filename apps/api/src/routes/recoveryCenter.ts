@@ -13,7 +13,7 @@ import {
 } from "@composebastion/shared";
 import { requireRole } from "../services/auth.js";
 import { sendApiError } from "../services/apiError.js";
-import { writeAuditEvent } from "../services/audit.js";
+import { auditContextFromRequest, writeAuditEvent } from "../services/audit.js";
 import {
   createBackupTarget,
   createMigrationPlan,
@@ -24,7 +24,6 @@ import {
   deleteRecoverySchedule,
   enqueueRecoveryDrill,
   enqueueRecoveryRestore,
-  enqueueRecoveryVerify,
   getBackupTarget,
   getMigrationRun,
   getRecoveryPoint,
@@ -37,6 +36,8 @@ import {
   testBackupTarget,
   updateBackupTarget
 } from "../services/recoveryCenter.js";
+import { withTransaction } from "../db/pool.js";
+import { enqueueJobInTransaction, notifyJobQueued } from "../services/jobs.js";
 import { analyzeRecovery } from "../services/recoveryAnalysis.js";
 import { deleteRecoveryProfile, getRecoveryProfile, getRecoveryProfileForApp, upsertRecoveryProfile } from "../services/recoveryProfiles.js";
 import { analyzeRecoveryReadiness, listRecoveryReadiness } from "../services/recoveryReadiness.js";
@@ -236,7 +237,23 @@ export async function registerRecoveryCenterRoutes(app: FastifyInstance) {
     const { id } = request.params as { id: string };
     const point = await getRecoveryPoint(id);
     if (!point) throw new Error("Recovery point not found");
-    const job = await enqueueRecoveryVerify(point.id, point.hostId, request.user?.id);
+    const job = await withTransaction(async (client) => {
+      const queued = await enqueueJobInTransaction(
+        client,
+        { type: "recovery.verify", hostId: point.hostId, payload: { recoveryPointId: point.id } },
+        request.user?.id
+      );
+      await writeAuditEvent({
+        userId: request.user?.id,
+        hostId: point.hostId,
+        action: "recovery.verify",
+        targetKind: "recovery_point",
+        targetId: point.id,
+        ...auditContextFromRequest(request)
+      }, client);
+      return queued;
+    });
+    await notifyJobQueued(job.id);
     return { job };
   });
 

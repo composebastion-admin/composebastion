@@ -8,6 +8,7 @@ const stopContainersWithRestartOnFailure = vi.fn();
 const startContainersOneByOne = vi.fn();
 const writeRecoveryPointFile = vi.fn();
 const enforceScheduledRecoveryRetention = vi.fn();
+const loadWorkerBackupTarget = vi.fn();
 
 vi.mock("../src/db/pool.js", () => ({
   query: (...args: unknown[]) => query(...args),
@@ -38,6 +39,17 @@ vi.mock("../src/services/recoveryRetention.js", () => ({
   enforceScheduledRecoveryRetention: (...args: unknown[]) => enforceScheduledRecoveryRetention(...args)
 }));
 
+vi.mock("../src/services/recoveryBackupTargets.js", () => ({
+  loadWorkerBackupTarget: (...args: unknown[]) => loadWorkerBackupTarget(...args)
+}));
+
+vi.mock("../src/services/recoveryRemoteStorage.js", () => ({
+  deleteRemoteArtifact: vi.fn(),
+  downloadRemoteArtifactAtomically: vi.fn(),
+  headRemoteArtifact: vi.fn(),
+  uploadRemoteArtifact: vi.fn()
+}));
+
 vi.mock("../src/services/recoveryStorage.js", () => ({
   artifactRelativePath: (...parts: string[]) => parts.join("/"),
   hashFile: vi.fn(),
@@ -50,7 +62,19 @@ vi.mock("../src/services/recoveryS3.js", () => ({
   buildS3ObjectKey: vi.fn(),
   createS3Client: vi.fn(),
   headRecoveryArtifactOnS3: vi.fn(),
-  resolveRecoveryPointStatus: () => ({ status: "completed", error: null }),
+  resolveRecoveryPointStatus: ({
+    localCompleted,
+    localFailed,
+    remoteUploadFailures
+  }: {
+    localCompleted: number;
+    localFailed: number;
+    remoteUploadFailures: number;
+  }) => {
+    if (remoteUploadFailures > 0) return { status: localCompleted > 0 ? "partial" : "failed", error: "Remote upload failed" };
+    if (localFailed > 0) return { status: localCompleted > 0 ? "partial" : "failed", error: "Artifact capture failed" };
+    return { status: "completed", error: null };
+  },
   uploadRecoveryArtifactToS3: vi.fn()
 }));
 
@@ -70,6 +94,7 @@ vi.mock("../src/services/recoveryRestoreUtils.js", () => ({
 const hostId = "00000000-0000-4000-8000-000000000050";
 const recoveryPointId = "00000000-0000-4000-8000-000000000051";
 const now = new Date("2026-06-15T12:00:00.000Z");
+let backupTargetId: string | null = null;
 
 const pointRow = {
   id: recoveryPointId,
@@ -120,7 +145,9 @@ function installQueryMock() {
         }]
       };
     }
-    if (sql === "SELECT * FROM recovery_points WHERE id = $1") return { rows: [pointRow] };
+    if (sql === "SELECT * FROM recovery_points WHERE id = $1") {
+      return { rows: [{ ...pointRow, backup_target_id: backupTargetId }] };
+    }
     if (sql.includes("SELECT * FROM recovery_artifacts")) return { rows: [metadataArtifactRow] };
     if (sql.includes("SELECT status FROM recovery_artifacts")) return { rows: [{ status: "completed" }] };
     if (sql.includes("SELECT COALESCE(SUM(size_bytes)")) return { rows: [{ total: 12 }] };
@@ -131,6 +158,7 @@ function installQueryMock() {
 describe("runRecoveryCreate stop-first restart behavior", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    backupTargetId = null;
     installQueryMock();
     getHostForWorker.mockResolvedValue({
       public: {
@@ -310,5 +338,55 @@ describe("runRecoveryCreate stop-first restart behavior", () => {
         })
       ])
     );
+  });
+
+  it.each([
+    {
+      label: "missing",
+      configure: () => loadWorkerBackupTarget.mockRejectedValue(new Error("Backup target not found"))
+    },
+    {
+      label: "disabled",
+      configure: () => loadWorkerBackupTarget.mockResolvedValue({
+        id: "00000000-0000-4000-8000-000000000060",
+        name: "Disabled vault",
+        kind: "s3",
+        enabled: false,
+        localCachePolicy: "keep",
+        s3: { config: {}, credentials: {} }
+      })
+    },
+    {
+      label: "unsupported",
+      configure: () => loadWorkerBackupTarget.mockResolvedValue({
+        id: "00000000-0000-4000-8000-000000000060",
+        name: "Incomplete vault",
+        kind: "rclone",
+        enabled: true,
+        localCachePolicy: "remote_only",
+        rclone: null
+      })
+    }
+  ])("keeps local artifacts completed and makes the point partial when its target is $label", async ({ configure }) => {
+    backupTargetId = "00000000-0000-4000-8000-000000000060";
+    configure();
+
+    const { runRecoveryCreate } = await import("../src/services/recoveryCapture.js");
+    await runRecoveryCreate(hostId, recoveryPointId, { stopFirst: false });
+
+    const remoteFailureWrite = query.mock.calls.find(([sql, values]) =>
+      String(sql).includes("UPDATE recovery_artifacts")
+      && Array.isArray(values)
+      && typeof values[2] === "string"
+      && values[2].includes("remoteUploadError")
+    );
+    expect(remoteFailureWrite).toBeDefined();
+    expect(String(remoteFailureWrite?.[0])).not.toContain("SET status =");
+    const finalPointWrite = query.mock.calls.find(([sql, values]) =>
+      String(sql).includes("SET status = $2")
+      && Array.isArray(values)
+      && values[1] === "partial"
+    );
+    expect(finalPointWrite).toBeDefined();
   });
 });

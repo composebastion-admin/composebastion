@@ -5,6 +5,7 @@ import { dockerActionSchema, jobProgressStepSchema, paginationQuerySchema, pagin
 import { query, withTransaction } from "../db/pool.js";
 import { createRedis } from "./redis.js";
 import { mapJob } from "./mappers.js";
+import type { SelfUpdateHandoff } from "./selfUpdate.js";
 
 export const WORKER_HEARTBEAT_INTERVAL_MS = 5_000;
 export const WORKER_ACTIVE_WINDOW_SECONDS = 20;
@@ -15,12 +16,21 @@ export const MAX_AUTO_ATTEMPTS = 3;
 export const AUTO_RETRY_JOB_TYPES = new Set([
   "host.check",
   "host.sync",
-  "host.configureRegistryTrust",
-  "deploy.analyze",
-  "deploy.execute",
   "git.testRemote",
   "backup.verify",
   "recovery.verify"
+]);
+
+export const MANUAL_RETRY_JOB_TYPES = new Set([
+  ...AUTO_RETRY_JOB_TYPES,
+  "host.configureRegistryTrust",
+  "deploy.analyze",
+  "deploy.execute"
+]);
+
+const NON_IDEMPOTENT_WORKER_LOSS_RETRY_TYPES = new Set([
+  "host.configureRegistryTrust",
+  "deploy.execute"
 ]);
 
 export type JobLease = {
@@ -46,6 +56,17 @@ export type ClaimedOperationJob = OperationJob & JobLease & {
   leaseExpiresAt: string;
 };
 
+export function shouldStopWorkerClaimsAfterHandoff(type: string, handoffPending: boolean) {
+  return type === "system.self_update" && handoffPending;
+}
+
+export function shouldResumeWorkerClaimsAfterReconciliation(result: { completed: number; failed: number; pending: number }) {
+  // Another worker may have reconciled the last durable handoff between this
+  // worker's polling intervals. An empty result is therefore just as terminal
+  // as one that reports a locally completed or failed handoff.
+  return result.pending === 0;
+}
+
 function mapClaimedJob(row: any): ClaimedOperationJob {
   return {
     ...mapJob(row),
@@ -56,15 +77,90 @@ function mapClaimedJob(row: any): ClaimedOperationJob {
 }
 
 function jobInsert(action: DockerActionRequest, createdBy?: string | null, idempotencyKey?: string | null) {
-  const parsed = dockerActionSchema.parse(action);
   return {
     text: `INSERT INTO operation_jobs (id, type, host_id, payload, created_by, idempotency_key)
            VALUES ($1, $2, $3, $4, $5, $6)
            ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL
            DO UPDATE SET id = operation_jobs.id
            RETURNING *`,
-    values: [uuid(), parsed.type, parsed.hostId, parsed.payload, createdBy ?? null, idempotencyKey ?? null]
+    values: [uuid(), action.type, action.hostId, action.payload, createdBy ?? null, idempotencyKey ?? null]
   };
+}
+
+type SingleFlightScope = {
+  key: string;
+  types: string[];
+  hostId?: string;
+  matches: (row: any) => boolean;
+  conflictMessage: string;
+};
+
+function normalizedRegistry(value: unknown) {
+  return String(value ?? "").trim().replace(/^https?:\/\//i, "").replace(/\/+$/, "").toLowerCase();
+}
+
+function singleFlightScope(action: DockerActionRequest): SingleFlightScope | null {
+  if (action.type === "system.self_update") {
+    return {
+      key: "system.self_update",
+      types: ["system.self_update"],
+      matches: () => true,
+      conflictMessage: "A ComposeBastion self-update is already queued or running."
+    };
+  }
+  if (action.type === "deploy.analyze" || action.type === "deploy.execute") {
+    const analysisId = action.payload.analysisId;
+    return {
+      key: `deployment:${analysisId}`,
+      types: ["deploy.analyze", "deploy.execute"],
+      matches: (row) => row.payload?.analysisId === analysisId,
+      conflictMessage: "This deployment already has an analysis or deployment job queued or running."
+    };
+  }
+  if (action.type === "host.configureRegistryTrust") {
+    const registry = normalizedRegistry(action.payload.registry);
+    return {
+      key: `registry-trust:${action.hostId}:${registry}`,
+      types: ["host.configureRegistryTrust"],
+      hostId: action.hostId,
+      matches: (row) => normalizedRegistry(row.payload?.registry) === registry,
+      conflictMessage: "Registry trust configuration for this host and registry is already queued or running."
+    };
+  }
+  return null;
+}
+
+async function findActiveSingleFlightJob(
+  client: PoolClient,
+  action: DockerActionRequest,
+  idempotencyKey?: string | null
+) {
+  const scope = singleFlightScope(action);
+  if (!scope) return null;
+
+  await client.query(
+    "SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))",
+    [scope.key]
+  );
+  const values: unknown[] = [scope.types];
+  const hostPredicate = scope.hostId
+    ? ` AND host_id = $${values.push(scope.hostId)}`
+    : "";
+  const active = await client.query(
+    `SELECT *
+     FROM operation_jobs
+     WHERE status IN ('queued', 'running')
+       AND type = ANY($1::text[])${hostPredicate}
+     FOR UPDATE`,
+    values
+  );
+  const row = active.rows.find(scope.matches);
+  if (!row) return null;
+  if (idempotencyKey && row.idempotency_key === idempotencyKey) return row;
+  throw Object.assign(new Error(scope.conflictMessage), {
+    statusCode: 409,
+    activeJobId: row.id
+  });
 }
 
 export async function notifyJobQueued(jobId: string) {
@@ -97,7 +193,10 @@ export async function enqueueJobInTransaction(
   createdBy?: string | null,
   idempotencyKey?: string | null
 ) {
-  const insert = jobInsert(action, createdBy, idempotencyKey);
+  const parsed = dockerActionSchema.parse(action);
+  const active = await findActiveSingleFlightJob(client, parsed, idempotencyKey);
+  if (active) return mapJob(active);
+  const insert = jobInsert(parsed, createdBy, idempotencyKey);
   const result = await client.query(insert.text, insert.values);
   const row = result.rows[0];
   if (!row) throw new Error("Failed to enqueue job");
@@ -109,7 +208,16 @@ export async function enqueueJob(
   createdBy?: string | null,
   idempotencyKey?: string | null
 ) {
-  const insert = jobInsert(action, createdBy, idempotencyKey);
+  const parsed = dockerActionSchema.parse(action);
+  if (singleFlightScope(parsed)) {
+    const job = await withTransaction((client) => (
+      enqueueJobInTransaction(client, parsed, createdBy, idempotencyKey)
+    ));
+    await notifyJobQueued(job.id);
+    return job;
+  }
+
+  const insert = jobInsert(parsed, createdBy, idempotencyKey);
   const result = await query(insert.text, insert.values);
 
   const row = result.rows[0];
@@ -223,14 +331,30 @@ export async function retryJob(id: string, createdBy?: string | null) {
     const row = selected.rows[0];
     if (!row) return { original: null, retried: null };
     const original = mapJob(row);
+    const ambiguousWorkerLoss = NON_IDEMPOTENT_WORKER_LOSS_RETRY_TYPES.has(original.type)
+      && original.error?.startsWith("WORKER_LOST");
     if (
       (original.status !== "failed" && original.status !== "canceled")
       || !original.hostId
-      || !AUTO_RETRY_JOB_TYPES.has(original.type)
+      || !MANUAL_RETRY_JOB_TYPES.has(original.type)
       || Number(row.attempt_count ?? 0) >= MAX_AUTO_ATTEMPTS
+      // The expired worker may still be mutating Docker or deployment state.
+      // Reconciliation must establish the remote outcome before a new
+      // dedicated operation is allowed; replaying this row is unsafe.
+      || ambiguousWorkerLoss
     ) {
       return { original, retried: null };
     }
+
+    // Manual retry is another enqueue path. Apply the same advisory-lock
+    // single-flight policy before reviving the existing row so it cannot race a
+    // newly queued deployment or registry-trust operation.
+    const retryAction = dockerActionSchema.parse({
+      type: original.type,
+      hostId: original.hostId,
+      payload: original.payload
+    });
+    await findActiveSingleFlightJob(client, retryAction);
 
     const retriedResult = await client.query(
       `UPDATE operation_jobs
@@ -459,6 +583,33 @@ export async function completeJob(id: string, resultValue: Record<string, unknow
   return result.rowCount === 1;
 }
 
+export async function markSelfUpdateHandoffPending(id: string, handoff: SelfUpdateHandoff, lease: JobLease) {
+  const progress = buildJobProgress(
+    "system.self_update",
+    "running",
+    "reconnect",
+    "Waiting for the restarted app and worker to report the authoritative update outcome"
+  );
+  const result = await query(
+    `UPDATE operation_jobs
+     SET result = $2::jsonb,
+         progress = $3::jsonb,
+         error = NULL,
+         lease_owner = NULL,
+         lease_expires_at = NULL,
+         updated_at = now()
+     WHERE id = $1
+       AND type = 'system.self_update'
+       AND status = 'running'
+       AND lease_owner = $4
+       AND attempt_count = $5
+       AND lease_expires_at > clock_timestamp()
+     RETURNING id`,
+    [id, JSON.stringify(handoff), JSON.stringify(progress), lease.workerId, lease.attemptCount]
+  );
+  return result.rowCount === 1;
+}
+
 async function finalizeLinkedOperationFailure(client: PoolClient, row: any, message: string) {
   const payload = row.payload && typeof row.payload === "object" ? row.payload as Record<string, unknown> : {};
   if ((row.type === "deploy.analyze" || row.type === "deploy.execute") && typeof payload.analysisId === "string") {
@@ -591,6 +742,10 @@ export async function recoverExpiredJobs() {
       `SELECT *
        FROM operation_jobs
        WHERE status = 'running'
+         AND NOT (
+           type = 'system.self_update'
+           AND result @> '{"handoffPending":true}'::jsonb
+         )
          AND (
            lease_expires_at <= now()
            OR (

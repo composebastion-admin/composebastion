@@ -1,4 +1,11 @@
-import type { BackupTarget, BackupTargetCreate, BackupTargetUpdate, LocalCachePolicy, RcloneProvider } from "@composebastion/shared";
+import {
+  s3EndpointSchema,
+  type BackupTarget,
+  type BackupTargetCreate,
+  type BackupTargetUpdate,
+  type LocalCachePolicy,
+  type RcloneProvider
+} from "@composebastion/shared";
 import { env } from "../config/env.js";
 import { query } from "../db/pool.js";
 import { decryptSecret, encryptSecret } from "./crypto.js";
@@ -67,10 +74,6 @@ export function s3ConfigFromFlat(input: {
   };
 }
 
-export function localConfigFromFlat(input: { basePath?: string | null }) {
-  return input.basePath ? { basePath: input.basePath } : {};
-}
-
 function emptyToNull(value: unknown) {
   const text = typeof value === "string" ? value.trim() : "";
   return text ? text : null;
@@ -123,17 +126,17 @@ export function normalizeBackupTargetCreate(input: BackupTargetCreate): BackupTa
   const kind = (input as { type?: "local" | "s3" | "rclone"; kind?: "local" | "s3" | "rclone" }).type
     ?? (input as { kind?: "local" | "s3" | "rclone" }).kind;
   if (kind === "local") {
-    const local = input as Extract<BackupTargetCreate, { kind: "local" }> & { basePath?: string };
+    const local = input as Extract<BackupTargetCreate, { kind: "local" }>;
     return {
       name: local.name,
       kind: "local",
       enabled: local.enabled,
-      config: localConfigFromFlat({ basePath: local.config?.basePath ?? local.basePath }),
+      config: {},
       accessKeyId: null,
       secretAccessKeyEncrypted: null,
       provider: null,
       remotePath: null,
-      localCachePolicy,
+      localCachePolicy: "keep",
       genericConfigEncrypted: null,
       genericCredentialsEncrypted: null
     };
@@ -228,22 +231,49 @@ export function normalizeBackupTargetUpdate(
   },
   input: BackupTargetUpdate
 ): Partial<BackupTargetRowInput> {
-  const nextConfig: Record<string, unknown> = { ...current.config, ...(input.config ?? {}) };
+  if (current.kind === "local" && input.localCachePolicy === "remote_only") {
+    throw Object.assign(
+      new Error("Local backup targets always keep artifacts in the manager backup directory"),
+      { statusCode: 400 }
+    );
+  }
+  const nextConfig: Record<string, unknown> = current.kind === "local"
+    ? {}
+    : { ...current.config, ...(input.config ?? {}) };
   if (input.endpoint !== undefined) nextConfig.endpoint = input.endpoint;
   if (input.bucket !== undefined) nextConfig.bucket = input.bucket;
   if (input.region !== undefined) nextConfig.region = input.region;
   if (input.prefix !== undefined) nextConfig.prefix = input.prefix;
   if (input.forcePathStyle !== undefined) nextConfig.forcePathStyle = input.forcePathStyle;
-  if (input.config && current.kind === "local" && "basePath" in input.config) {
-    nextConfig.basePath = input.config.basePath;
-  }
+  let nestedRcloneConfig: string | undefined;
+  let nestedRclonePassword: string | undefined;
+  let nestedProvider: RcloneProvider | undefined;
+  let nestedRemotePath: string | undefined;
   if (current.kind === "rclone") {
-    if (input.provider !== undefined && input.provider !== null) nextConfig.provider = input.provider;
-    if (input.remoteName !== undefined) nextConfig.remoteName = input.remoteName;
-    if (input.remotePath !== undefined) nextConfig.remotePath = input.remotePath;
+    const nested = input.config && "provider" in input.config
+      ? input.config as {
+        provider?: RcloneProvider;
+        remoteName?: string;
+        remotePath?: string;
+        rcloneConfig?: string;
+        smb?: { password?: string };
+      }
+      : undefined;
+    nestedProvider = nested?.provider;
+    nestedRemotePath = nested?.remotePath;
+    nestedRcloneConfig = nested?.rcloneConfig;
+    nestedRclonePassword = nested?.smb?.password;
+    const provider = input.provider !== undefined ? input.provider : nestedProvider;
+    const remoteName = input.remoteName !== undefined ? input.remoteName : nested?.remoteName;
+    const remotePath = input.remotePath !== undefined ? input.remotePath : nestedRemotePath;
+    if (provider !== undefined && provider !== null) nextConfig.provider = provider;
+    if (remoteName !== undefined && remoteName !== null) nextConfig.remoteName = remoteName;
+    if (remotePath !== undefined && remotePath !== null) nextConfig.remotePath = remotePath;
+    delete nextConfig.rcloneConfig;
     const smb = {
       ...((nextConfig.smb && typeof nextConfig.smb === "object" && !Array.isArray(nextConfig.smb)) ? nextConfig.smb as Record<string, unknown> : {})
     };
+    delete smb.password;
     for (const key of ["server", "share", "subPath", "domain", "username", "port"] as const) {
       if (input[key] !== undefined) smb[key] = input[key];
     }
@@ -255,25 +285,33 @@ export function normalizeBackupTargetUpdate(
   else if (input.secretAccessKey) secret = encryptSecret(input.secretAccessKey);
 
   let genericConfig = current.generic_config_encrypted ?? null;
-  if (input.rcloneConfig === null) genericConfig = null;
-  else if (input.rcloneConfig) genericConfig = encryptSecret(input.rcloneConfig);
+  const rcloneConfigUpdate = input.rcloneConfig !== undefined
+    ? input.rcloneConfig
+    : nestedRcloneConfig;
+  if (rcloneConfigUpdate === null) genericConfig = null;
+  else if (rcloneConfigUpdate) genericConfig = encryptSecret(rcloneConfigUpdate);
 
   let genericCredentials = current.generic_credentials_encrypted ?? null;
-  if (input.password === null) genericCredentials = null;
-  else if (input.password) genericCredentials = encryptSecret(JSON.stringify({ password: input.password }));
+  const passwordUpdate = input.password !== undefined
+    ? input.password
+    : nestedRclonePassword;
+  if (passwordUpdate === null) genericCredentials = null;
+  else if (passwordUpdate) genericCredentials = encryptSecret(JSON.stringify({ password: passwordUpdate }));
 
   const result: Partial<BackupTargetRowInput> = {
     name: input.name,
     enabled: input.enabled,
-    config: Object.keys(nextConfig).length ? nextConfig : undefined,
+    config: current.kind === "local" ? {} : Object.keys(nextConfig).length ? nextConfig : undefined,
     accessKeyId: input.accessKeyId === undefined ? undefined : input.accessKeyId,
-    provider: input.provider === undefined ? undefined : input.provider,
-    remotePath: input.remotePath === undefined ? undefined : input.remotePath,
-    localCachePolicy: input.localCachePolicy ?? current.local_cache_policy as LocalCachePolicy ?? undefined
+    provider: input.provider === undefined ? nestedProvider : input.provider,
+    remotePath: input.remotePath === undefined ? nestedRemotePath : input.remotePath,
+    localCachePolicy: current.kind === "local"
+      ? "keep"
+      : input.localCachePolicy ?? current.local_cache_policy as LocalCachePolicy ?? undefined
   };
   if (input.secretAccessKey !== undefined) result.secretAccessKeyEncrypted = secret;
-  if (input.rcloneConfig !== undefined) result.genericConfigEncrypted = genericConfig;
-  if (input.password !== undefined) result.genericCredentialsEncrypted = genericCredentials;
+  if (rcloneConfigUpdate !== undefined) result.genericConfigEncrypted = genericConfig;
+  if (passwordUpdate !== undefined) result.genericCredentialsEncrypted = genericCredentials;
   return result;
 }
 
@@ -296,9 +334,16 @@ export function mapBackupTargetFields(row: {
   created_at: Date | string;
   updated_at: Date | string;
 }): BackupTarget {
-  const config = row.config ?? {};
+  const storedConfig = row.config ?? {};
+  const isLocal = row.kind === "local";
   const isS3 = row.kind === "s3";
   const isRclone = row.kind === "rclone";
+  const parsedEndpoint = isS3 ? s3EndpointSchema.safeParse(storedConfig.endpoint) : null;
+  const config = isLocal
+    ? {}
+    : isS3 && Object.prototype.hasOwnProperty.call(storedConfig, "endpoint")
+      ? { ...storedConfig, endpoint: parsedEndpoint?.success ? parsedEndpoint.data : null }
+      : storedConfig;
   const s3Config = isS3 ? config : {};
   return {
     id: row.id,
@@ -312,12 +357,12 @@ export function mapBackupTargetFields(row: {
     bucket: isS3 ? String(s3Config.bucket ?? "") || null : null,
     prefix: isS3 ? (s3Config.prefix ? String(s3Config.prefix) : null) : null,
     forcePathStyle: isS3 ? Boolean(s3Config.forcePathStyle ?? s3Config.pathStyle) : false,
-    basePath: !isS3 && config.basePath ? String(config.basePath) : null,
+    basePath: null,
     provider: isRclone ? row.provider as BackupTarget["provider"] ?? config.provider as BackupTarget["provider"] ?? null : null,
     rcloneProvider: isRclone ? row.provider as BackupTarget["rcloneProvider"] ?? config.provider as BackupTarget["rcloneProvider"] ?? null : null,
     remotePath: isRclone ? row.remote_path ?? (config.remotePath ? String(config.remotePath) : null) : null,
     remoteName: isRclone && config.remoteName ? String(config.remoteName) : null,
-    localCachePolicy: (row.local_cache_policy === "remote_only" ? "remote_only" : "keep") as BackupTarget["localCachePolicy"],
+    localCachePolicy: (isLocal ? "keep" : row.local_cache_policy === "remote_only" ? "remote_only" : "keep") as BackupTarget["localCachePolicy"],
     healthStatus: (row.health_status ?? "unknown") as BackupTarget["healthStatus"],
     healthCheckedAt: row.health_checked_at ? new Date(row.health_checked_at).toISOString() : null,
     healthError: row.health_error ?? null,
@@ -374,13 +419,14 @@ export function toWorkerBackupTarget(row: {
   generic_config_encrypted?: string | null;
   generic_credentials_encrypted?: string | null;
 }): WorkerBackupTarget {
+  const isLocal = row.kind === "local";
   const target: WorkerBackupTarget = {
     id: row.id,
     name: row.name,
     kind: row.kind as "local" | "s3" | "rclone",
     enabled: row.enabled,
-    config: row.config ?? {},
-    localCachePolicy: row.local_cache_policy === "remote_only" ? "remote_only" : "keep"
+    config: isLocal ? {} : row.config ?? {},
+    localCachePolicy: isLocal ? "keep" : row.local_cache_policy === "remote_only" ? "remote_only" : "keep"
   };
   if (row.kind === "s3") {
     target.s3 = getS3TargetForWorker(row);
@@ -419,16 +465,17 @@ export function exportBackupTargetSecrets(row: {
   generic_config_encrypted?: string | null;
   generic_credentials_encrypted?: string | null;
 }) {
+  const isLocal = row.kind === "local";
   return {
     kind: row.kind,
-    config: row.config ?? {},
-    accessKeyId: row.access_key_id ?? null,
-    secretAccessKey: row.secret_access_key_encrypted ? decryptSecret(row.secret_access_key_encrypted) : null,
-    provider: row.provider ?? null,
-    remotePath: row.remote_path ?? null,
-    localCachePolicy: row.local_cache_policy ?? "keep",
-    rcloneConfig: row.generic_config_encrypted ? decryptSecret(row.generic_config_encrypted) : null,
-    rcloneCredentials: row.generic_credentials_encrypted ? JSON.parse(decryptSecret(row.generic_credentials_encrypted)) : null
+    config: isLocal ? {} : row.config ?? {},
+    accessKeyId: isLocal ? null : row.access_key_id ?? null,
+    secretAccessKey: isLocal ? null : row.secret_access_key_encrypted ? decryptSecret(row.secret_access_key_encrypted) : null,
+    provider: isLocal ? null : row.provider ?? null,
+    remotePath: isLocal ? null : row.remote_path ?? null,
+    localCachePolicy: isLocal ? "keep" : row.local_cache_policy ?? "keep",
+    rcloneConfig: isLocal ? null : row.generic_config_encrypted ? decryptSecret(row.generic_config_encrypted) : null,
+    rcloneCredentials: isLocal ? null : row.generic_credentials_encrypted ? JSON.parse(decryptSecret(row.generic_credentials_encrypted)) : null
   };
 }
 

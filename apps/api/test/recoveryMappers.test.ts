@@ -44,6 +44,10 @@ describe("recovery center mappers", () => {
       legacy_volume_backup_id: null,
       artifact_count: 2,
       completed_artifact_count: 2,
+      remote_artifact_count: "1",
+      remote_upload_failure_count: "1",
+      local_retained_artifact_count: "1",
+      local_removed_artifact_count: "1",
       total_bytes: "4096",
       error: null,
       metadata: { note: "test" },
@@ -53,6 +57,12 @@ describe("recovery center mappers", () => {
     });
     expect(point.appIdentity.kind).toBe("compose");
     expect(point.totalBytes).toBe(4096);
+    expect(point).toMatchObject({
+      remoteArtifactCount: 1,
+      remoteUploadFailureCount: 1,
+      localRetainedArtifactCount: 1,
+      localRemovedArtifactCount: 1
+    });
 
     const artifact = mapRecoveryArtifact({
       id: "00000000-0000-4000-8000-000000000004",

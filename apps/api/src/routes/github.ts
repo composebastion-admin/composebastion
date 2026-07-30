@@ -17,10 +17,9 @@ import { writeAuditEvent } from "../services/audit.js";
 import { authenticatedReadRateLimit, sensitiveMutationRateLimit } from "../services/rateLimits.js";
 
 export async function registerGithubRoutes(app: FastifyInstance) {
-  const viewer = requireRole(["owner", "admin", "operator", "viewer"]);
   const operator = requireRole(["owner", "admin", "operator"]);
 
-  app.get("/api/github/repos", { preHandler: viewer, config: { rateLimit: authenticatedReadRateLimit } }, async () => ({
+  app.get("/api/github/repos", { preHandler: operator, config: { rateLimit: authenticatedReadRateLimit } }, async () => ({
     repositories: await listGithubRepositories()
   }));
 

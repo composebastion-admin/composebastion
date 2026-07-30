@@ -171,6 +171,54 @@ describe("private GitHub repository credentials", () => {
     expect(query.mock.calls).toHaveLength(2);
   });
 
+  it("rejects plaintext Git URL credentials before GitHub persistence or access", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const {
+      createGithubRepository,
+      listGithubBranchesForUrl,
+      testGithubRepositoryAccess,
+      updateGithubRepository
+    } = await import("../src/services/github.js");
+
+    await expect(createGithubRepository({
+      name: "Unsafe repository",
+      repositoryUrl: "https://git-user:git-secret@github.com/owner/private-app?token=git-secret"
+    })).rejects.toThrow();
+    await expect(updateGithubRepository(
+      "00000000-0000-4000-8000-000000000123",
+      { hostCloneUrl: "ssh://git:git-secret@github.com/owner/private-app.git" }
+    )).rejects.toThrow();
+    await expect(listGithubBranchesForUrl(
+      "https://github.com/owner/private-app?token=git-secret"
+    )).rejects.toThrow();
+    await expect(testGithubRepositoryAccess({
+      repositoryUrl: "https://git-user:git-secret@github.com/owner/private-app",
+      branch: "main",
+      composePath: "docker-compose.yml"
+    })).rejects.toThrow();
+
+    expect(query).not.toHaveBeenCalled();
+    expect(enqueueJob).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("sanitizes legacy GitHub and host clone URL fields on reads", async () => {
+    const { mapGithubRepository } = await import("../src/services/github.js");
+    const mapped = mapGithubRepository(repoRow({
+      repository_url: "https://git-user:git-secret@github.com/owner/private-app?token=git-secret",
+      host_clone_url: "ssh://git:git-secret@github.com/owner/private-app.git#git-secret",
+      last_error: "Clone failed for https://git-user:git-secret@github.com/owner/private-app?token=git-secret"
+    }));
+
+    expect(mapped).toMatchObject({
+      repositoryUrl: "https://github.com/owner/private-app",
+      hostCloneUrl: "ssh://git@github.com/owner/private-app.git",
+      lastError: "Clone failed for https://github.com/owner/private-app"
+    });
+    expect(JSON.stringify(mapped)).not.toContain("git-secret");
+  });
+
   it("enqueues tracked host clone deploy jobs with repository metadata", async () => {
     query
       .mockResolvedValueOnce({ rows: [repoRow({

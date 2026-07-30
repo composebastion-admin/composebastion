@@ -1,9 +1,48 @@
 import type { FastifyInstance } from "fastify";
-import { appGithubVersionSelectSchema, appRenameInputSchema, appSourceLinkInputSchema } from "@composebastion/shared";
+import {
+  appGithubVersionSelectSchema,
+  appRenameInputSchema,
+  appSourceLinkInputSchema,
+  sanitizeGitRepositoryUrl,
+  type DockerApp
+} from "@composebastion/shared";
 import { auditContextFromRequest, writeAuditEvent } from "../services/audit.js";
 import { requireRole } from "../services/auth.js";
 import { checkAppUpdates, deleteAppSourceLink, listAppGithubVersions, listApps, renameApp, selectAppGithubVersion, updateApp, upsertAppSourceLink } from "../services/apps.js";
 import { sensitiveMutationRateLimit } from "../services/rateLimits.js";
+
+function redactViewerApp(app: DockerApp): DockerApp {
+  const sanitized = sanitizeAppRepositoryUrls(app);
+  return {
+    ...sanitized,
+    sensitiveFieldsRedacted: true,
+    sourceLink: sanitized.sourceLink ? {
+      ...sanitized.sourceLink,
+      workingDir: null,
+      composePath: null,
+      checkError: sanitized.sourceLink.checkError
+        ? "Source check failed; details require operator access."
+        : null
+    } : null,
+    update: {
+      ...sanitized.update,
+      riskNote: sanitized.update.riskNote
+        ? "Update details require operator access."
+        : sanitized.update.riskNote
+    }
+  };
+}
+
+function sanitizeAppRepositoryUrls(app: DockerApp): DockerApp {
+  return {
+    ...app,
+    repositoryUrl: sanitizeGitRepositoryUrl(app.repositoryUrl),
+    sourceLink: app.sourceLink ? {
+      ...app.sourceLink,
+      repositoryUrl: sanitizeGitRepositoryUrl(app.sourceLink.repositoryUrl)
+    } : null
+  };
+}
 
 export async function registerAppRoutes(app: FastifyInstance) {
   const viewer = requireRole(["owner", "admin", "operator", "viewer"]);
@@ -11,12 +50,17 @@ export async function registerAppRoutes(app: FastifyInstance) {
 
   app.get("/api/apps", { preHandler: viewer }, async (request) => {
     const { hostId } = request.query as { hostId?: string };
-    return { apps: await listApps(hostId) };
+    const apps = (await listApps(hostId)).map(sanitizeAppRepositoryUrls);
+    return {
+      apps: request.user?.role === "viewer"
+        ? apps.map(redactViewerApp)
+        : apps
+    };
   });
 
   app.post("/api/apps/check-updates", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
     const { hostId } = (request.body ?? {}) as { hostId?: string };
-    const apps = await checkAppUpdates(hostId);
+    const apps = (await checkAppUpdates(hostId)).map(sanitizeAppRepositoryUrls);
     await writeAuditEvent({
       userId: request.user?.id,
       hostId: hostId ?? null,
@@ -28,9 +72,15 @@ export async function registerAppRoutes(app: FastifyInstance) {
     return { apps };
   });
 
-  app.get("/api/apps/:appId/versions", { preHandler: viewer }, async (request) => {
+  app.get("/api/apps/:appId/versions", { preHandler: operator }, async (request) => {
     const { appId } = request.params as { appId: string };
-    return { versions: await listAppGithubVersions(decodeURIComponent(appId)) };
+    const versions = await listAppGithubVersions(decodeURIComponent(appId));
+    return {
+      versions: {
+        ...versions,
+        repositoryUrl: sanitizeGitRepositoryUrl(versions.repositoryUrl) ?? ""
+      }
+    };
   });
 
   app.put("/api/apps/:appId/version", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
@@ -45,7 +95,10 @@ export async function registerAppRoutes(app: FastifyInstance) {
       details: { ref: body.ref, kind: body.kind ?? null },
       ...auditContextFromRequest(request)
     });
-    return result;
+    return {
+      ...result,
+      app: result.app ? sanitizeAppRepositoryUrls(result.app) : null
+    };
   });
 
   app.post("/api/apps/:appId/update", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
@@ -73,7 +126,10 @@ export async function registerAppRoutes(app: FastifyInstance) {
       details: { name: body.name },
       ...auditContextFromRequest(request)
     });
-    return result;
+    return {
+      ...result,
+      app: result.app ? sanitizeAppRepositoryUrls(result.app) : null
+    };
   });
 
   app.put("/api/apps/:appId/source", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {

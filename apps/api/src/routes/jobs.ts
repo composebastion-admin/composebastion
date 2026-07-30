@@ -1,10 +1,20 @@
 import type { FastifyInstance } from "fastify";
-import { idSchema } from "@composebastion/shared";
+import { idSchema, sanitizeGitRepositoryUrlFields, type OperationJob } from "@composebastion/shared";
 import { cancelQueuedJob, getJob, getWorkerStatus, listJobs, retryJob } from "../services/jobs.js";
 import { requireRole } from "../services/auth.js";
 import { sendApiError } from "../services/apiError.js";
 import { auditContextFromRequest, writeAuditEvent } from "../services/audit.js";
 import { authenticatedReadRateLimit, sensitiveMutationRateLimit } from "../services/rateLimits.js";
+import { redactJobSensitiveFields } from "../services/mappers.js";
+
+function sanitizeJobRepositoryUrls(job: OperationJob): OperationJob {
+  return sanitizeGitRepositoryUrlFields(job);
+}
+
+const nonIdempotentWorkerLossTypes = new Set([
+  "host.configureRegistryTrust",
+  "deploy.execute"
+]);
 
 export async function registerJobRoutes(app: FastifyInstance) {
   const viewer = requireRole(["owner", "admin", "operator", "viewer"]);
@@ -12,7 +22,11 @@ export async function registerJobRoutes(app: FastifyInstance) {
 
   app.get("/api/jobs", { preHandler: viewer, config: { rateLimit: authenticatedReadRateLimit } }, async (request) => {
     const page = await listJobs(request.query);
-    return { jobs: page.items, ...page };
+    const sanitized = page.items.map(sanitizeJobRepositoryUrls);
+    const items = request.user?.role === "viewer"
+      ? sanitized.map(redactJobSensitiveFields)
+      : sanitized;
+    return { jobs: items, ...page, items };
   });
 
   app.get("/api/jobs/status", { preHandler: viewer, config: { rateLimit: authenticatedReadRateLimit } }, async () => ({
@@ -25,7 +39,11 @@ export async function registerJobRoutes(app: FastifyInstance) {
     if (!job) {
       return sendApiError(reply, 404, "NOT_FOUND", "Job not found");
     }
-    return { job };
+    return {
+      job: request.user?.role === "viewer"
+        ? redactJobSensitiveFields(sanitizeJobRepositoryUrls(job))
+        : sanitizeJobRepositoryUrls(job)
+    };
   });
 
   app.post("/api/jobs/:id/cancel", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request, reply) => {
@@ -42,7 +60,7 @@ export async function registerJobRoutes(app: FastifyInstance) {
       details: { type: result.job.type },
       ...auditContextFromRequest(request)
     });
-    return { job: result.job };
+    return { job: sanitizeJobRepositoryUrls(result.job) };
   });
 
   app.post("/api/jobs/:id/retry", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request, reply) => {
@@ -50,11 +68,15 @@ export async function registerJobRoutes(app: FastifyInstance) {
     const result = await retryJob(id, request.user?.id);
     if (!result.original) return sendApiError(reply, 404, "NOT_FOUND", "Job not found");
     if (!result.retried) {
+      const ambiguousWorkerLoss = nonIdempotentWorkerLossTypes.has(result.original.type)
+        && result.original.error?.startsWith("WORKER_LOST");
       return sendApiError(
         reply,
         409,
         "CONFLICT",
-        "Only failed or canceled idempotent verification/sync jobs below the three-attempt limit can be retried"
+        ambiguousWorkerLoss
+          ? "The worker lease expired during a non-idempotent operation. Reconcile the deployment or registry state before starting a new operation; automatic replay is disabled."
+          : "This job is not eligible for retry because its status, operation type, host assignment, or attempt limit does not permit replay."
       );
     }
     await writeAuditEvent({
@@ -66,6 +88,9 @@ export async function registerJobRoutes(app: FastifyInstance) {
       details: { retriedJobId: result.retried.id, type: result.original.type },
       ...auditContextFromRequest(request)
     });
-    return { job: result.retried, original: result.original };
+    return {
+      job: sanitizeJobRepositoryUrls(result.retried),
+      original: sanitizeJobRepositoryUrls(result.original)
+    };
   });
 }

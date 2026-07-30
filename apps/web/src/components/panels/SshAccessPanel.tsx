@@ -25,7 +25,7 @@ export function SshAccessPanel({
   onSelectHost: (hostId: string) => void;
   onHostAction: (type: string, hostId: string) => Promise<void>;
   onOpenHostSettings: (hostId: string) => void;
-  onOpenTerminal: (host: DockerHost) => void;
+  onOpenTerminal: (host: DockerHost, returnFocus: HTMLElement) => void;
   refresh: () => Promise<void>;
   runJob: <T extends Jobish>(request: () => Promise<T>) => Promise<T>;
 }) {
@@ -111,7 +111,7 @@ export function SshAccessPanel({
               {canOperate && <button title="Check SSH host" onClick={() => void onHostAction("host.check", host.id)}><Activity size={16} /></button>}
               {canOperate && <button title="Refresh inventory" onClick={() => void onHostAction("host.sync", host.id)}><RefreshCw size={16} /></button>}
               {canUseTerminal && canOpenHostTerminal(user, host) && (
-                <button title="Open SSH terminal" onClick={() => onOpenTerminal(host)}><Terminal size={16} /></button>
+                <button title="Open SSH terminal" onClick={(event) => onOpenTerminal(host, event.currentTarget)}><Terminal size={16} /></button>
               )}
               <button title="Open in Hosts" onClick={() => onSelectHost(host.id)}><Server size={16} /></button>
               {canOperate && <button title="SSH host settings" onClick={() => onOpenHostSettings(host.id)}><Settings size={16} /></button>}

@@ -109,6 +109,7 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
   const [customHostIds, setCustomHostIds] = useState<string[]>([]);
   const [showHostForm, setShowHostForm] = useState(false);
   const [terminalHost, setTerminalHost] = useState<DockerHost | null>(null);
+  const terminalReturnFocusRef = useRef<HTMLElement | null>(null);
   const [activity, setActivity] = useState<string | null>(null);
   const [resourceListQuery, setResourceListQuery] = useState({ query: "", key: 0 });
   const hostUsage = useContainerUsage(hosts);
@@ -151,7 +152,9 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
         api<{ backups?: Backup[] }>("/api/backups"),
         api<{ jobs?: OperationJob[] }>("/api/jobs?limit=80"),
         api<{ images?: FavoriteImage[] }>("/api/favorite-images"),
-        api<{ repositories?: GithubRepository[] }>("/api/github/repos"),
+        authorization.canOperate
+          ? api<{ repositories?: GithubRepository[] }>("/api/github/repos")
+          : Promise.resolve({ repositories: [] }),
         api<{ apps?: DockerApp[] }>("/api/apps"),
         api<{ readiness?: RecoveryReadiness[] }>("/api/recovery/readiness")
       ]);
@@ -212,7 +215,7 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
     } finally {
       setRefreshing(false);
     }
-  }, [selectedHostId, hostScope, customHostIds]);
+  }, [selectedHostId, hostScope, customHostIds, authorization.canOperate]);
 
   useKeyboardShortcuts({
     setTab,
@@ -362,6 +365,20 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
     }
   }
 
+  function openHostTerminal(host: DockerHost, returnFocus: HTMLElement) {
+    terminalReturnFocusRef.current = returnFocus;
+    setTerminalHost(host);
+  }
+
+  function closeHostTerminal() {
+    const returnFocus = terminalReturnFocusRef.current;
+    terminalReturnFocusRef.current = null;
+    setTerminalHost(null);
+    window.setTimeout(() => {
+      if (returnFocus && document.contains(returnFocus)) returnFocus.focus({ preventScroll: true });
+    }, 0);
+  }
+
   return (
     <AuthorizationProvider role={user.role}>
     <main className={`appShell ${isSidebarCollapsed ? "sidebarCollapsed" : ""}`}>
@@ -406,7 +423,14 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
         )}
         {authorization.canOperate && showHostForm && <HostForm runJob={runJob} onCreated={() => { setShowHostForm(false); void refresh(); }} />}
 
-        <SideNavigation currentTab={tab} hasHost={Boolean(selectedHost)} onTabChange={setTab} />
+        <SideNavigation
+          currentTab={tab}
+          hasHost={Boolean(selectedHost)}
+          onTabChange={(nextTab) => {
+            setTab(nextTab);
+            setIsSidebarOpen(false);
+          }}
+        />
       </aside>
 
       <section className="workspace">
@@ -570,7 +594,7 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
                       setTab("host-metrics");
                     }}
                     onOpenAdmin={() => setTab("admin")}
-                    onOpenTerminal={setTerminalHost}
+                    onOpenTerminal={openHostTerminal}
                   />
                 )}
                 {tab === "ssh" && (
@@ -588,7 +612,7 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
                       setHostScope("selected");
                       setTab("admin");
                     }}
-                    onOpenTerminal={setTerminalHost}
+                    onOpenTerminal={openHostTerminal}
                     refresh={refresh}
                     runJob={runJob}
                   />
@@ -667,7 +691,7 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
       {authorization.canUseTerminal && terminalHost && (
         <ErrorBoundary resetKey={terminalHost.id} title="The host terminal failed to load">
           <Suspense fallback={<div className="drawer hostTerminalDrawer"><div className="notice">Loading host terminal...</div></div>}>
-            <HostTerminalDrawer host={terminalHost} onClose={() => setTerminalHost(null)} />
+            <HostTerminalDrawer host={terminalHost} onClose={closeHostTerminal} />
           </Suspense>
         </ErrorBoundary>
       )}

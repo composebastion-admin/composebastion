@@ -1,8 +1,39 @@
-import { CONFIG_BACKUP_FORMAT_VERSION, registryCreateSchema } from "@composebastion/shared";
+import {
+  alertRuleCreateSchema,
+  appSourceLinkInputSchema,
+  backupTargetCreateSchema,
+  canonicalizeGithubRepositoryUrl,
+  canonicalizeGitRepositoryUrl,
+  canonicalizePlaintextHttpSourceUrl,
+  composeStackCreateSchema,
+  composeStackProxyFieldsSchema,
+  CONFIG_BACKUP_FORMAT_VERSION,
+  deploymentSourceCreateSchema,
+  dockerHostCreateSchema,
+  githubRepositoryCreateSchema,
+  idSchema,
+  sanitizeDeploymentSourceLocator,
+  sanitizeGithubRepositoryUrl,
+  sanitizeGitRepositoryUrl,
+  sanitizePlaintextHttpSourceUrl,
+  registryCreateSchema
+} from "@composebastion/shared";
+import { env } from "../config/env.js";
 import { query, withTransaction } from "../db/pool.js";
+import {
+  assertBackupTargetIdentityChangeAllowed,
+  lockBackupTarget
+} from "./backupTargetLifecycle.js";
 import { decryptConfigPayload, decryptSecret, encryptConfigPayload, encryptSecret, type EncryptedConfigPayload } from "./crypto.js";
-import { exportBackupTargetSecrets } from "./recoveryBackupTargets.js";
+import {
+  assertBackupTargetS3EndpointAllowed,
+  exportBackupTargetSecrets,
+  normalizeBackupTargetCreate,
+  type BackupTargetRowInput
+} from "./recoveryBackupTargets.js";
 import { APP_VERSION } from "./version.js";
+import { validateAgentUrl } from "./ssrf.js";
+import { HOST_CREATE_LOCK_ID, normalizeHostCreateCredentials } from "./hosts.js";
 
 const CONFIG_BACKUP_APP_NAME = "ComposeBastion";
 
@@ -96,9 +127,378 @@ function normalizeImportedRegistries(registries: Array<Record<string, any>>) {
   });
 }
 
+async function normalizeImportedHosts(hosts: Array<Record<string, any>>) {
+  return Promise.all(hosts.map(async (host, index) => {
+    if (!host || typeof host !== "object") {
+      throw configImportError(`Config backup host ${index + 1} is invalid`);
+    }
+    const parsed = dockerHostCreateSchema.safeParse({
+      name: host.name,
+      hostname: host.hostname,
+      port: host.port,
+      username: host.username,
+      connectionMode: host.connectionMode ?? "ssh",
+      sshAuthType: host.sshAuthType ?? "key",
+      sshPrivateKey: host.secrets?.sshPrivateKey ?? undefined,
+      sshKeyPassphrase: host.secrets?.sshKeyPassphrase ?? undefined,
+      sshPassword: host.secrets?.sshPassword ?? undefined,
+      agentUrl: host.agentUrl ?? undefined,
+      agentToken: host.secrets?.agentToken ?? undefined,
+      dockerSocketPath: host.dockerSocketPath ?? "/var/run/docker.sock",
+      tags: host.tags ?? []
+    });
+    if (!parsed.success) {
+      const detail = parsed.error.issues[0]?.message ?? "Host configuration is invalid";
+      throw configImportError(`Config backup host ${index + 1} is invalid: ${detail}`);
+    }
+    if (
+      parsed.data.connectionMode === "agent"
+      && parsed.data.agentUrl
+      && env.NODE_ENV === "production"
+      && !env.ALLOW_PRIVATE_AGENT_URLS
+      && !await validateAgentUrl(parsed.data.agentUrl)
+    ) {
+      throw configImportError(
+        `Config backup host ${index + 1} is invalid: the agent URL is blocked by the private-network request policy`
+      );
+    }
+    return { id: host.id, ...normalizeHostCreateCredentials(parsed.data) };
+  }));
+}
+
+function indexedConfigError(kind: string, index: number, error: unknown) {
+  const detail = error instanceof Error ? error.message : `${kind} configuration is invalid`;
+  return configImportError(`Config backup ${kind} ${index + 1} is invalid: ${detail}`);
+}
+
+type NormalizedImportedBackupTarget = BackupTargetRowInput & { id: string };
+
+function importedRclonePassword(target: Record<string, any>, index: number) {
+  const credentials = target.rcloneCredentials;
+  if (credentials === undefined || credentials === null) return undefined;
+  if (typeof credentials !== "object" || Array.isArray(credentials)) {
+    throw indexedConfigError("backup target", index, new Error("rcloneCredentials must be an object"));
+  }
+  const password = credentials.password;
+  if (password === undefined || password === null) return undefined;
+  if (typeof password !== "string") {
+    throw indexedConfigError("backup target", index, new Error("rcloneCredentials.password must be a string"));
+  }
+  return password;
+}
+
+async function normalizeImportedBackupTargets(
+  targets: Array<Record<string, any>>
+): Promise<NormalizedImportedBackupTarget[]> {
+  return Promise.all(targets.map(async (target, index) => {
+    if (!target || typeof target !== "object" || Array.isArray(target)) {
+      throw configImportError(`Config backup backup target ${index + 1} is invalid`);
+    }
+    const parsedId = idSchema.safeParse(target.id);
+    if (!parsedId.success) {
+      throw indexedConfigError(
+        "backup target",
+        index,
+        new Error(parsedId.error.issues[0]?.message ?? "Backup target id is invalid")
+      );
+    }
+    const importedKind = target.type ?? target.kind;
+    const schemaInput = importedKind === "local"
+      ? {
+        ...target,
+        basePath: undefined,
+        config: {},
+        localCachePolicy: "keep"
+      }
+      : target;
+    const parsed = backupTargetCreateSchema.safeParse(schemaInput);
+    if (!parsed.success) {
+      throw indexedConfigError(
+        "backup target",
+        index,
+        new Error(parsed.error.issues[0]?.message ?? "Backup target configuration is invalid")
+      );
+    }
+    try {
+      const kind = (parsed.data as { type?: string; kind?: string }).type
+        ?? (parsed.data as { kind?: string }).kind;
+      const password = kind === "rclone" ? importedRclonePassword(target, index) : undefined;
+      const normalizedInput = password === undefined
+        ? parsed.data
+        : Object.assign(parsed.data, { password });
+      const normalized = normalizeBackupTargetCreate(normalizedInput);
+      await assertBackupTargetS3EndpointAllowed(normalized);
+      return { id: parsedId.data, ...normalized };
+    } catch (error) {
+      if (error instanceof Error && "statusCode" in error) throw error;
+      throw indexedConfigError("backup target", index, error);
+    }
+  }));
+}
+
+function normalizeImportedGithubRepositories(repositories: Array<Record<string, any>>) {
+  return repositories.map((repository, index) => {
+    if (!repository || typeof repository !== "object") {
+      throw configImportError(`Config backup GitHub repository ${index + 1} is invalid`);
+    }
+    const parsed = githubRepositoryCreateSchema.safeParse({
+      name: repository.name,
+      repositoryUrl: repository.repositoryUrl,
+      branch: repository.branch ?? "main",
+      composePath: repository.composePath ?? "docker-compose.yml",
+      projectName: repository.projectName ?? undefined,
+      env: repository.env ?? "",
+      defaultHostId: repository.defaultHostId ?? undefined,
+      hostCloneUrl: repository.hostCloneUrl ?? undefined,
+      hostCloneDirectory: repository.hostCloneDirectory ?? undefined,
+      githubToken: repository.githubToken ?? undefined
+    });
+    if (!parsed.success) {
+      throw indexedConfigError(
+        "GitHub repository",
+        index,
+        new Error(parsed.error.issues[0]?.message ?? "Repository configuration is invalid")
+      );
+    }
+    try {
+      const repositoryUrl = canonicalizeGithubRepositoryUrl(parsed.data.repositoryUrl);
+      const [owner, repo] = new URL(repositoryUrl).pathname.replace(/^\/|\/$/g, "").split("/");
+      return {
+        ...repository,
+        ...parsed.data,
+        id: repository.id,
+        repositoryUrl,
+        owner,
+        repo,
+        projectName: parsed.data.projectName ?? repo,
+        hostCloneUrl: parsed.data.hostCloneUrl
+          ? canonicalizeGitRepositoryUrl(parsed.data.hostCloneUrl)
+          : null
+      };
+    } catch (error) {
+      throw indexedConfigError("GitHub repository", index, error);
+    }
+  });
+}
+
+function normalizeImportedDeploymentSources(sources: Array<Record<string, any>>) {
+  return sources.map((source, index) => {
+    if (!source || typeof source !== "object") {
+      throw configImportError(`Config backup deployment source ${index + 1} is invalid`);
+    }
+    const parsed = deploymentSourceCreateSchema.safeParse({
+      sourceType: source.sourceType,
+      name: source.name,
+      sourceLocator: source.sourceLocator,
+      branch: source.branch ?? undefined,
+      composePath: source.composePath ?? undefined,
+      workingDir: source.workingDir ?? undefined,
+      projectName: source.projectName,
+      composeYaml: source.composeYaml ?? undefined,
+      env: source.env ?? undefined,
+      defaultHostId: source.defaultHostId ?? undefined,
+      credentialUsername: source.credentialUsername ?? undefined,
+      credentialSecret: source.credentialSecret ?? undefined
+    });
+    if (!parsed.success) {
+      throw indexedConfigError(
+        "deployment source",
+        index,
+        new Error(parsed.error.issues[0]?.message ?? "Deployment source configuration is invalid")
+      );
+    }
+    try {
+      const sourceLocator = parsed.data.sourceType === "git"
+        ? canonicalizeGitRepositoryUrl(parsed.data.sourceLocator)
+        : parsed.data.sourceType === "compose_url"
+          ? canonicalizePlaintextHttpSourceUrl(parsed.data.sourceLocator)
+          : parsed.data.sourceLocator;
+      return {
+        ...source,
+        ...parsed.data,
+        id: source.id,
+        sourceLocator,
+        metadata: source.metadata ?? {},
+        lastDeployedAt: source.lastDeployedAt ?? null
+      };
+    } catch (error) {
+      throw indexedConfigError("deployment source", index, error);
+    }
+  });
+}
+
+function normalizeImportedComposeStacks(
+  stacks: Array<Record<string, any>>
+): Array<Record<string, any>> {
+  return stacks.map((stack, index) => {
+    if (!stack || typeof stack !== "object") {
+      throw configImportError(`Config backup Compose stack ${index + 1} is invalid`);
+    }
+    const parsedStack = composeStackCreateSchema.safeParse({
+      name: stack.name,
+      projectName: stack.projectName,
+      composeYaml: stack.composeYaml,
+      env: stack.env ?? ""
+    });
+    const parsedProxy = composeStackProxyFieldsSchema.safeParse({
+      domains: stack.domains ?? [],
+      exposedService: stack.exposedService ?? null,
+      exposedPort: stack.exposedPort ?? null,
+      tlsDesired: stack.tlsDesired ?? false,
+      updatePolicyEnabled: stack.updatePolicyEnabled ?? false,
+      updatePolicyChannel: stack.updatePolicyChannel ?? null
+    });
+    const parsedId = idSchema.safeParse(stack.id);
+    const parsedHostId = idSchema.safeParse(stack.hostId);
+    const issue = !parsedStack.success
+      ? parsedStack.error.issues[0]
+      : !parsedProxy.success
+        ? parsedProxy.error.issues[0]
+        : !parsedId.success
+          ? parsedId.error.issues[0]
+          : !parsedHostId.success
+            ? parsedHostId.error.issues[0]
+            : null;
+    if (issue || !parsedStack.success || !parsedProxy.success || !parsedId.success || !parsedHostId.success) {
+      throw indexedConfigError(
+        "Compose stack",
+        index,
+        new Error(issue?.message ?? "Stack configuration is invalid")
+      );
+    }
+    try {
+      return {
+        ...stack,
+        ...parsedStack.data,
+        ...parsedProxy.data,
+        id: parsedId.data,
+        hostId: parsedHostId.data,
+        exposedService: parsedProxy.data.exposedService ?? null,
+        exposedPort: parsedProxy.data.exposedPort ?? null,
+        updatePolicyChannel: parsedProxy.data.updatePolicyChannel ?? null,
+        sourceRepositoryUrl: stack.sourceRepositoryUrl
+          ? canonicalizeGitRepositoryUrl(stack.sourceRepositoryUrl)
+          : null
+      };
+    } catch (error) {
+      throw indexedConfigError("Compose stack", index, error);
+    }
+  });
+}
+
+function normalizeImportedAlertRules(
+  rules: Array<Record<string, any>>
+): Array<Record<string, any>> {
+  return rules.map((rule, index) => {
+    if (!rule || typeof rule !== "object") {
+      throw configImportError(`Config backup alert rule ${index + 1} is invalid`);
+    }
+    const parsed = alertRuleCreateSchema.safeParse({
+      name: rule.name,
+      condition: rule.condition,
+      hostId: rule.hostId,
+      containerId: rule.containerId ?? undefined,
+      channelId: rule.channelId,
+      enabled: rule.enabled ?? true,
+      params: rule.params ?? undefined
+    });
+    const parsedId = idSchema.safeParse(rule.id);
+    const issue = !parsed.success
+      ? parsed.error.issues[0]
+      : !parsedId.success
+        ? parsedId.error.issues[0]
+        : null;
+    if (issue || !parsed.success || !parsedId.success) {
+      throw indexedConfigError(
+        "alert rule",
+        index,
+        new Error(issue?.message ?? "Alert rule configuration is invalid")
+      );
+    }
+    return {
+      id: parsedId.data,
+      ...parsed.data,
+      containerId: "containerId" in parsed.data ? parsed.data.containerId ?? null : null,
+      params: "params" in parsed.data ? parsed.data.params : null
+    };
+  });
+}
+
+function normalizeImportedAppSourceLinks(
+  links: Array<Record<string, any>>
+): Array<Record<string, any>> {
+  return links.map((link, index) => {
+    if (!link || typeof link !== "object") {
+      throw configImportError(`Config backup app source link ${index + 1} is invalid`);
+    }
+    const parsed = appSourceLinkInputSchema.safeParse({
+      sourceType: link.sourceType,
+      name: link.name ?? null,
+      repositoryUrl: link.repositoryUrl ?? null,
+      branch: link.branch ?? null,
+      workingDir: link.workingDir ?? null,
+      composePath: link.composePath ?? null,
+      imageReference: link.imageReference ?? null
+    });
+    if (!parsed.success) {
+      throw indexedConfigError(
+        "app source link",
+        index,
+        new Error(parsed.error.issues[0]?.message ?? "App source link configuration is invalid")
+      );
+    }
+    try {
+      return {
+        ...link,
+        ...parsed.data,
+        id: link.id,
+        hostId: link.hostId,
+        containerExternalId: link.containerExternalId,
+        repositoryUrl: parsed.data.repositoryUrl
+          ? canonicalizeGitRepositoryUrl(parsed.data.repositoryUrl)
+          : null
+      };
+    } catch (error) {
+      throw indexedConfigError("app source link", index, error);
+    }
+  });
+}
+
+function normalizedHostName(host: { name: string }) {
+  return host.name.trim().toLowerCase();
+}
+
+function normalizedHostConnection(host: {
+  hostname: string;
+  username: string;
+  port: number;
+}) {
+  return `${host.hostname.trim().toLowerCase()}\u0000${host.username}\u0000${host.port}`;
+}
+
+function assertUniqueImportedHosts(hosts: Array<{
+  id?: unknown;
+  name: string;
+  hostname: string;
+  username: string;
+  port: number;
+}>) {
+  const names = new Set<string>();
+  const connections = new Set<string>();
+  for (const host of hosts) {
+    const name = normalizedHostName(host);
+    const connection = normalizedHostConnection(host);
+    if (names.has(name) || connections.has(connection)) {
+      throw configImportError("Config backup contains duplicate host names or connection identities");
+    }
+    names.add(name);
+    connections.add(connection);
+  }
+}
+
 export async function exportConfigBackup(passphrase: string) {
   const [hosts, composeStacks, registries, notificationChannels, alertRules, favoriteImages, githubRepositories, appSourceLinks, backupTargets, deploymentSources] = await Promise.all([
-    query("SELECT * FROM docker_hosts ORDER BY name ASC"),
+    query("SELECT * FROM docker_hosts WHERE deleted_at IS NULL ORDER BY name ASC"),
     query("SELECT * FROM compose_stacks ORDER BY name ASC"),
     query("SELECT * FROM registries ORDER BY name ASC"),
     query("SELECT * FROM notification_channels ORDER BY name ASC"),
@@ -109,31 +509,47 @@ export async function exportConfigBackup(passphrase: string) {
     query("SELECT * FROM backup_targets ORDER BY name ASC"),
     query("SELECT * FROM deployment_sources ORDER BY name ASC")
   ]);
+  const activeHostRows = hosts.rows.filter((row: any) => row.deleted_at == null);
+  const activeHostIds = new Set(activeHostRows.map((row: any) => row.id));
 
   const payload: ConfigBackupPayload = {
     app: CONFIG_BACKUP_APP_NAME,
     formatVersion: CONFIG_BACKUP_FORMAT_VERSION,
     version: APP_VERSION,
     exportedAt: new Date().toISOString(),
-    hosts: hosts.rows.map((row: any) => ({
-      id: row.id,
-      name: row.name,
-      hostname: row.hostname,
-      port: Number(row.port),
-      username: row.username,
-      connectionMode: row.connection_mode ?? "ssh",
-      sshAuthType: row.ssh_auth_type ?? "key",
-      dockerSocketPath: row.docker_socket_path,
-      tags: row.tags ?? [],
-      agentUrl: row.agent_url,
-      secrets: {
-        sshPrivateKey: decryptNullable(row.ssh_key_encrypted),
-        sshKeyPassphrase: decryptNullable(row.ssh_key_passphrase_encrypted),
-        sshPassword: decryptNullable(row.ssh_password_encrypted),
-        agentToken: decryptNullable(row.agent_token_encrypted)
-      }
-    })),
-    composeStacks: composeStacks.rows.map((row: any) => ({
+    hosts: activeHostRows.map((row: any) => {
+      const connectionMode = row.connection_mode ?? "ssh";
+      const sshAuthType = row.ssh_auth_type ?? "key";
+      return {
+        id: row.id,
+        name: row.name,
+        hostname: row.hostname,
+        port: Number(row.port),
+        username: row.username,
+        connectionMode,
+        sshAuthType,
+        dockerSocketPath: row.docker_socket_path,
+        tags: row.tags ?? [],
+        agentUrl: connectionMode === "agent"
+          ? sanitizePlaintextHttpSourceUrl(row.agent_url)
+          : null,
+        secrets: {
+          sshPrivateKey: connectionMode === "ssh" && sshAuthType === "key"
+            ? decryptNullable(row.ssh_key_encrypted)
+            : null,
+          sshKeyPassphrase: connectionMode === "ssh" && sshAuthType === "key"
+            ? decryptNullable(row.ssh_key_passphrase_encrypted)
+            : null,
+          sshPassword: connectionMode === "ssh" && sshAuthType === "password"
+            ? decryptNullable(row.ssh_password_encrypted)
+            : null,
+          agentToken: connectionMode === "agent"
+            ? decryptNullable(row.agent_token_encrypted)
+            : null
+        }
+      };
+    }),
+    composeStacks: composeStacks.rows.filter((row: any) => activeHostIds.has(row.host_id)).map((row: any) => ({
       id: row.id,
       hostId: row.host_id,
       name: row.name,
@@ -142,13 +558,21 @@ export async function exportConfigBackup(passphrase: string) {
       env: row.env ?? "",
       status: row.status,
       sourceType: row.source_type ?? "ui",
-      sourceRepositoryUrl: row.source_repository_url,
+      sourceRepositoryUrl: sanitizeGitRepositoryUrl(row.source_repository_url),
       sourceBranch: row.source_branch,
       sourceWorkingDir: row.source_working_dir,
       sourceComposePath: row.source_compose_path,
       sourceCurrentCommitSha: row.source_current_commit_sha,
       sourceLatestCommitSha: row.source_latest_commit_sha,
-      deploymentSourceId: row.deployment_source_id
+      deploymentSourceId: row.deployment_source_id,
+      domains: row.domains ?? [],
+      exposedService: row.exposed_service ?? null,
+      exposedPort: row.exposed_port === null || row.exposed_port === undefined
+        ? null
+        : Number(row.exposed_port),
+      tlsDesired: row.tls_desired ?? false,
+      updatePolicyEnabled: row.update_policy_enabled ?? false,
+      updatePolicyChannel: row.update_policy_channel ?? null
     })),
     registries: registries.rows.map((row: any) => ({
       id: row.id,
@@ -167,14 +591,15 @@ export async function exportConfigBackup(passphrase: string) {
       enabled: row.enabled,
       config: row.config ?? {}
     })),
-    alertRules: alertRules.rows.map((row: any) => ({
+    alertRules: alertRules.rows.filter((row: any) => activeHostIds.has(row.host_id)).map((row: any) => ({
       id: row.id,
       name: row.name,
       condition: row.condition,
       hostId: row.host_id,
       containerId: row.container_id,
       channelId: row.channel_id,
-      enabled: row.enabled
+      enabled: row.enabled,
+      params: row.params ?? null
     })),
     favoriteImages: favoriteImages.rows.map((row: any) => ({
       id: row.id,
@@ -185,15 +610,18 @@ export async function exportConfigBackup(passphrase: string) {
     githubRepositories: githubRepositories.rows.map((row: any) => ({
       id: row.id,
       name: row.name,
-      repositoryUrl: row.repository_url,
+      repositoryUrl: sanitizeGithubRepositoryUrl(row.repository_url, {
+        owner: row.owner,
+        repo: row.repo
+      }) ?? "",
       owner: row.owner,
       repo: row.repo,
       branch: row.branch,
       composePath: row.compose_path,
       projectName: row.project_name,
       env: row.env ?? "",
-      defaultHostId: row.default_host_id,
-      hostCloneUrl: row.host_clone_url,
+      defaultHostId: activeHostIds.has(row.default_host_id) ? row.default_host_id : null,
+      hostCloneUrl: sanitizeGitRepositoryUrl(row.host_clone_url),
       hostCloneDirectory: row.host_clone_directory,
       githubToken: decryptNullable(row.github_token_encrypted)
     })),
@@ -201,7 +629,7 @@ export async function exportConfigBackup(passphrase: string) {
       id: row.id,
       sourceType: row.source_type,
       name: row.name,
-      sourceLocator: row.source_locator,
+      sourceLocator: sanitizeDeploymentSourceLocator(row.source_locator, row.source_type) ?? "",
       branch: row.branch,
       composePath: row.compose_path,
       workingDir: row.working_dir,
@@ -210,17 +638,17 @@ export async function exportConfigBackup(passphrase: string) {
       env: decryptNullable(row.env_encrypted),
       credentialUsername: row.credential_username,
       credentialSecret: decryptNullable(row.credential_secret_encrypted),
-      defaultHostId: row.default_host_id,
+      defaultHostId: activeHostIds.has(row.default_host_id) ? row.default_host_id : null,
       metadata: row.metadata ?? {},
       lastDeployedAt: row.last_deployed_at
     })),
-    appSourceLinks: appSourceLinks.rows.map((row: any) => ({
+    appSourceLinks: appSourceLinks.rows.filter((row: any) => activeHostIds.has(row.host_id)).map((row: any) => ({
       id: row.id,
       hostId: row.host_id,
       containerExternalId: row.container_external_id,
       sourceType: row.source_type,
       name: row.name,
-      repositoryUrl: row.repository_url,
+      repositoryUrl: sanitizeGitRepositoryUrl(row.repository_url),
       branch: row.branch,
       workingDir: row.working_dir,
       composePath: row.compose_path,
@@ -235,7 +663,7 @@ export async function exportConfigBackup(passphrase: string) {
         name: row.name,
         kind: row.kind,
         enabled: row.enabled,
-        config: row.config ?? {},
+        config: secrets.config,
         accessKeyId: secrets.accessKeyId,
         secretAccessKey: secrets.secretAccessKey,
         provider: secrets.provider,
@@ -253,9 +681,42 @@ export async function exportConfigBackup(passphrase: string) {
 export async function importConfigBackup(backup: Record<string, unknown>, passphrase: string) {
   const payload = decryptConfigBackupPayload(backup, passphrase);
   validateConfigBackupPayload(payload);
+  const normalizedHosts = await normalizeImportedHosts(payload.hosts);
   const normalizedRegistries = normalizeImportedRegistries(payload.registries ?? []);
+  const normalizedGithubRepositories = normalizeImportedGithubRepositories(payload.githubRepositories ?? []);
+  const normalizedDeploymentSources = normalizeImportedDeploymentSources(payload.deploymentSources ?? []);
+  const normalizedComposeStacks = normalizeImportedComposeStacks(payload.composeStacks ?? []);
+  const normalizedAlertRules = normalizeImportedAlertRules(payload.alertRules ?? []);
+  const normalizedAppSourceLinks = normalizeImportedAppSourceLinks(payload.appSourceLinks ?? []);
+  const normalizedBackupTargets = await normalizeImportedBackupTargets(payload.backupTargets ?? []);
+  assertUniqueImportedHosts(normalizedHosts);
 
   const summary = await withTransaction(async (client) => {
+    await client.query("SELECT pg_advisory_xact_lock($1::bigint)", [HOST_CREATE_LOCK_ID]);
+    const activeHosts = await client.query(
+      `SELECT id, name, hostname, username, port
+       FROM docker_hosts
+       WHERE deleted_at IS NULL`
+    );
+    for (const importedHost of normalizedHosts) {
+      const conflictingHost = activeHosts.rows.find((activeHost: any) =>
+        activeHost.id !== importedHost.id
+        && (
+          normalizedHostName(activeHost) === normalizedHostName(importedHost)
+          || normalizedHostConnection({
+            ...activeHost,
+            port: Number(activeHost.port)
+          }) === normalizedHostConnection(importedHost)
+        )
+      );
+      if (conflictingHost) {
+        throw Object.assign(
+          new Error("A host with this name or connection already exists"),
+          { statusCode: 409 }
+        );
+      }
+    }
+
     const counts = {
       hosts: 0,
       composeStacks: 0,
@@ -269,7 +730,7 @@ export async function importConfigBackup(backup: Record<string, unknown>, passph
       backupTargets: 0
     };
 
-    for (const host of payload.hosts ?? []) {
+    for (const host of normalizedHosts) {
       await client.query(
         `INSERT INTO docker_hosts
           (id, name, hostname, port, username, connection_mode, ssh_auth_type, ssh_key_encrypted,
@@ -298,11 +759,11 @@ export async function importConfigBackup(backup: Record<string, unknown>, passph
           host.username,
           host.connectionMode ?? "ssh",
           host.sshAuthType ?? "key",
-          encryptNullable(host.secrets?.sshPrivateKey),
-          encryptNullable(host.secrets?.sshKeyPassphrase),
-          encryptNullable(host.secrets?.sshPassword),
+          encryptNullable(host.sshPrivateKey),
+          encryptNullable(host.sshKeyPassphrase),
+          encryptNullable(host.sshPassword),
           host.agentUrl ?? null,
-          encryptNullable(host.secrets?.agentToken),
+          encryptNullable(host.agentToken),
           host.dockerSocketPath ?? "/var/run/docker.sock",
           host.tags ?? []
         ]
@@ -354,7 +815,7 @@ export async function importConfigBackup(backup: Record<string, unknown>, passph
       counts.notificationChannels += 1;
     }
 
-    for (const repo of payload.githubRepositories ?? []) {
+    for (const repo of normalizedGithubRepositories) {
       await client.query(
         `INSERT INTO github_repositories
           (id, name, repository_url, owner, repo, branch, compose_path, project_name, env, default_host_id,
@@ -389,7 +850,7 @@ export async function importConfigBackup(backup: Record<string, unknown>, passph
       counts.githubRepositories += 1;
     }
 
-    for (const source of payload.deploymentSources ?? []) {
+    for (const source of normalizedDeploymentSources) {
       await client.query(
         `INSERT INTO deployment_sources (
            id, source_type, name, source_locator, branch, compose_path, project_name,
@@ -434,14 +895,16 @@ export async function importConfigBackup(backup: Record<string, unknown>, passph
       counts.deploymentSources += 1;
     }
 
-    for (const stack of payload.composeStacks ?? []) {
+    for (const stack of normalizedComposeStacks) {
       await client.query(
         `INSERT INTO compose_stacks (
            id, host_id, name, project_name, compose_yaml, env, status,
            source_type, source_repository_url, source_branch, source_working_dir, source_compose_path,
-           source_current_commit_sha, source_latest_commit_sha, deployment_source_id
+           source_current_commit_sha, source_latest_commit_sha, deployment_source_id,
+           domains, exposed_service, exposed_port, tls_desired, update_policy_enabled, update_policy_channel
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+                 $16, $17, $18, $19, $20, $21)
          ON CONFLICT (host_id, project_name)
          DO UPDATE SET name = EXCLUDED.name,
                        compose_yaml = EXCLUDED.compose_yaml,
@@ -455,6 +918,12 @@ export async function importConfigBackup(backup: Record<string, unknown>, passph
                        source_current_commit_sha = EXCLUDED.source_current_commit_sha,
                        source_latest_commit_sha = EXCLUDED.source_latest_commit_sha,
                        deployment_source_id = EXCLUDED.deployment_source_id,
+                       domains = EXCLUDED.domains,
+                       exposed_service = EXCLUDED.exposed_service,
+                       exposed_port = EXCLUDED.exposed_port,
+                       tls_desired = EXCLUDED.tls_desired,
+                       update_policy_enabled = EXCLUDED.update_policy_enabled,
+                       update_policy_channel = EXCLUDED.update_policy_channel,
                        updated_at = now()`,
         [
           stack.id,
@@ -471,13 +940,19 @@ export async function importConfigBackup(backup: Record<string, unknown>, passph
           stack.sourceComposePath ?? null,
           stack.sourceCurrentCommitSha ?? null,
           stack.sourceLatestCommitSha ?? null,
-          stack.deploymentSourceId ?? null
+          stack.deploymentSourceId ?? null,
+          stack.domains,
+          stack.exposedService,
+          stack.exposedPort,
+          stack.tlsDesired,
+          stack.updatePolicyEnabled,
+          stack.updatePolicyChannel
         ]
       );
       counts.composeStacks += 1;
     }
 
-    for (const link of payload.appSourceLinks ?? []) {
+    for (const link of normalizedAppSourceLinks) {
       await client.query(
         `INSERT INTO app_source_links (
            id, host_id, container_external_id, source_type, name, repository_url, branch,
@@ -513,10 +988,10 @@ export async function importConfigBackup(backup: Record<string, unknown>, passph
       counts.appSourceLinks += 1;
     }
 
-    for (const rule of payload.alertRules ?? []) {
+    for (const rule of normalizedAlertRules) {
       await client.query(
-        `INSERT INTO alert_rules (id, name, condition, host_id, container_id, channel_id, enabled)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `INSERT INTO alert_rules (id, name, condition, host_id, container_id, channel_id, enabled, params)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          ON CONFLICT (id)
          DO UPDATE SET name = EXCLUDED.name,
                        condition = EXCLUDED.condition,
@@ -524,16 +999,33 @@ export async function importConfigBackup(backup: Record<string, unknown>, passph
                        container_id = EXCLUDED.container_id,
                        channel_id = EXCLUDED.channel_id,
                        enabled = EXCLUDED.enabled,
+                       params = EXCLUDED.params,
                        updated_at = now()`,
-        [rule.id, rule.name, rule.condition, rule.hostId, rule.containerId ?? null, rule.channelId, rule.enabled ?? true]
+        [
+          rule.id,
+          rule.name,
+          rule.condition,
+          rule.hostId,
+          rule.containerId,
+          rule.channelId,
+          rule.enabled,
+          rule.params
+        ]
       );
       counts.alertRules += 1;
     }
 
-    for (const target of payload.backupTargets ?? []) {
-      const rcloneCredentials = target.rcloneCredentials && typeof target.rcloneCredentials === "object" && !Array.isArray(target.rcloneCredentials)
-        ? target.rcloneCredentials
-        : null;
+    for (const target of normalizedBackupTargets) {
+      const currentTarget = await lockBackupTarget(client, target.id);
+      if (currentTarget) {
+        await assertBackupTargetIdentityChangeAllowed(client, target.id, currentTarget, {
+          kind: target.kind,
+          config: target.config,
+          provider: target.provider,
+          remote_path: target.remotePath,
+          generic_config_encrypted: target.genericConfigEncrypted
+        });
+      }
       await client.query(
         `INSERT INTO backup_targets (
            id, name, kind, enabled, config, access_key_id, secret_access_key_encrypted,
@@ -553,20 +1045,23 @@ export async function importConfigBackup(backup: Record<string, unknown>, passph
                        local_cache_policy = EXCLUDED.local_cache_policy,
                        generic_config_encrypted = EXCLUDED.generic_config_encrypted,
                        generic_credentials_encrypted = EXCLUDED.generic_credentials_encrypted,
+                       health_status = 'unknown',
+                       health_checked_at = NULL,
+                       health_error = NULL,
                        updated_at = now()`,
         [
           target.id,
           target.name,
           target.kind,
-          target.enabled ?? true,
-          target.config ?? {},
-          target.accessKeyId ?? null,
-          encryptNullable(target.secretAccessKey),
-          target.provider ?? null,
-          target.remotePath ?? null,
-          target.localCachePolicy ?? "keep",
-          encryptNullable(target.rcloneConfig),
-          rcloneCredentials ? encryptSecret(JSON.stringify(rcloneCredentials)) : null
+          target.enabled,
+          target.config,
+          target.accessKeyId,
+          target.secretAccessKeyEncrypted,
+          target.provider,
+          target.remotePath,
+          target.localCachePolicy,
+          target.genericConfigEncrypted,
+          target.genericCredentialsEncrypted
         ]
       );
       counts.backupTargets += 1;

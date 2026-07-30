@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const loadWorkerBackupTarget = vi.fn();
 const createS3Client = vi.fn();
 const downloadRecoveryArtifactFromS3 = vi.fn();
+const destroyS3Client = vi.fn();
 
 const recoveryPointId = "00000000-0000-4000-8000-000000000011";
 const backupTargetId = "00000000-0000-4000-8000-000000000012";
@@ -58,6 +59,7 @@ async function importStore(tmpDir: string) {
   vi.resetModules();
   vi.stubEnv("BACKUP_DIR", tmpDir);
   vi.doMock("../src/services/recoveryBackupTargets.js", () => ({
+    assertBackupTargetS3EndpointAllowed: vi.fn().mockResolvedValue(undefined),
     loadWorkerBackupTarget: (...args: unknown[]) => loadWorkerBackupTarget(...args)
   }));
   vi.doMock("../src/services/recoveryS3.js", () => ({
@@ -81,7 +83,7 @@ describe("recovery artifact store", () => {
         credentials: { accessKeyId: "key", secretAccessKey: "secret" }
       }
     });
-    createS3Client.mockReturnValue({});
+    createS3Client.mockReturnValue({ destroy: destroyS3Client });
   });
 
   afterEach(() => {
@@ -107,12 +109,124 @@ describe("recovery artifact store", () => {
     expect(path.dirname(downloadPath)).toBe(path.dirname(localPath));
     expect(path.basename(downloadPath)).toMatch(/^\.download-manifest\.json-.+\.tmp$/);
     expect(downloadRecoveryArtifactFromS3).toHaveBeenCalledWith(
-      {},
+      expect.objectContaining({ destroy: expect.any(Function) }),
       "recovery",
       "points/rp/manifest.json",
       downloadPath
     );
+    expect(destroyS3Client).toHaveBeenCalledTimes(1);
     await expect(stat(downloadPath)).rejects.toThrow();
+  });
+
+  it("removes scoped remote-only hydration after a successful consumer", async () => {
+    const content = "{\"remoteOnly\":true}";
+    loadWorkerBackupTarget.mockResolvedValue({
+      kind: "s3",
+      enabled: true,
+      localCachePolicy: "remote_only",
+      s3: {
+        config: { bucket: "recovery", endpoint: "https://s3.example.com" },
+        credentials: { accessKeyId: "key", secretAccessKey: "secret" }
+      }
+    });
+    downloadRecoveryArtifactFromS3.mockImplementation(async (_client: unknown, _bucket: string, _key: string, downloadPath: string) => {
+      await mkdir(path.dirname(downloadPath), { recursive: true });
+      await writeFile(downloadPath, content);
+      return { objectKey: "points/rp/manifest.json", sizeBytes: Buffer.byteLength(content), etag: null, checksum: checksum(content) };
+    });
+
+    const { withRecoveryArtifactLocalPath } = await importStore(tmpDir);
+    let hydratedPath = "";
+    const value = await withRecoveryArtifactLocalPath(
+      recoveryPoint(),
+      artifact(content, {
+        remoteObjectKey: "points/rp/manifest.json",
+        localCachePolicy: "remote_only",
+        localCacheRemoved: true
+      }),
+      async (localPath) => {
+        hydratedPath = localPath;
+        return readFile(localPath, "utf8");
+      }
+    );
+
+    expect(value).toBe(content);
+    expect(hydratedPath).toContain(`${path.sep}.hydrated${path.sep}`);
+    await expect(stat(hydratedPath)).rejects.toThrow();
+    await expect(stat(path.join(tmpDir, "recovery-points", recoveryPointId, "manifest.json"))).rejects.toThrow();
+    expect(destroyS3Client).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves a successful consumer result when scoped cleanup fails", async () => {
+    const content = "{\"remoteOnly\":true}";
+    const localPath = path.join(tmpDir, "recovery-points", recoveryPointId, "manifest.json");
+    await mkdir(localPath, { recursive: true });
+    await writeFile(path.join(localPath, "cleanup-blocker"), "retained for operator cleanup");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    const { withRecoveryArtifactLocalPath } = await importStore(tmpDir);
+    await expect(withRecoveryArtifactLocalPath(
+      recoveryPoint(),
+      {
+        ...artifact(content),
+        sizeBytes: null,
+        checksum: null,
+        metadata: {
+          remoteObjectKey: "points/rp/manifest.json",
+          remoteVerified: true,
+          localCachePolicy: "remote_only",
+          localCacheRemoved: true
+        }
+      },
+      async () => ({ restored: true })
+    )).resolves.toEqual({ restored: true });
+
+    expect(warn).toHaveBeenCalledWith(
+      "Failed to clean a hydrated recovery artifact",
+      expect.objectContaining({
+        recoveryPointId,
+        artifactId: artifact(content).id,
+        error: expect.any(String)
+      })
+    );
+    warn.mockRestore();
+  });
+
+  it("removes scoped remote-only hydration when its consumer fails", async () => {
+    const content = "{\"remoteOnly\":true}";
+    loadWorkerBackupTarget.mockResolvedValue({
+      kind: "s3",
+      enabled: true,
+      localCachePolicy: "remote_only",
+      s3: {
+        config: { bucket: "recovery", endpoint: "https://s3.example.com" },
+        credentials: { accessKeyId: "key", secretAccessKey: "secret" }
+      }
+    });
+    downloadRecoveryArtifactFromS3.mockImplementation(async (_client: unknown, _bucket: string, _key: string, downloadPath: string) => {
+      await mkdir(path.dirname(downloadPath), { recursive: true });
+      await writeFile(downloadPath, content);
+      return { objectKey: "points/rp/manifest.json", sizeBytes: Buffer.byteLength(content), etag: null, checksum: checksum(content) };
+    });
+
+    const { withRecoveryArtifactLocalPath } = await importStore(tmpDir);
+    let hydratedPath = "";
+    await expect(withRecoveryArtifactLocalPath(
+      recoveryPoint(),
+      artifact(content, {
+        remoteObjectKey: "points/rp/manifest.json",
+        localCachePolicy: "remote_only",
+        localCacheRemoved: true
+      }),
+      async (localPath) => {
+        hydratedPath = localPath;
+        throw new Error("restore stream failed");
+      }
+    )).rejects.toThrow("restore stream failed");
+
+    await expect(stat(hydratedPath)).rejects.toThrow();
+    await expect(stat(path.join(tmpDir, "recovery-points", recoveryPointId, "manifest.json"))).rejects.toThrow();
+    expect(destroyS3Client).toHaveBeenCalledTimes(1);
   });
 
   it("uses a valid local artifact without downloading from S3", async () => {
@@ -123,6 +237,44 @@ describe("recovery artifact store", () => {
 
     const { ensureRecoveryArtifactLocalPath } = await importStore(tmpDir);
     await expect(ensureRecoveryArtifactLocalPath(recoveryPoint(), artifact(content))).resolves.toBe(localPath);
+    expect(downloadRecoveryArtifactFromS3).not.toHaveBeenCalled();
+  });
+
+  it("retains the sole local copy after an unverified remote-only upload failure", async () => {
+    const content = "{\"localAfterRemoteFailure\":true}";
+    const localPath = path.join(tmpDir, "recovery-points", recoveryPointId, "manifest.json");
+    await mkdir(path.dirname(localPath), { recursive: true });
+    await writeFile(localPath, content);
+
+    const { readRecoveryArtifact } = await importStore(tmpDir);
+    await expect(readRecoveryArtifact(recoveryPoint(), artifact(content, {
+      localCachePolicy: "remote_only",
+      localCacheRemoved: false,
+      remoteVerified: false,
+      remoteUploadError: "upload failed"
+    }))).resolves.toEqual(Buffer.from(content));
+
+    expect(await readFile(localPath, "utf8")).toBe(content);
+    expect(downloadRecoveryArtifactFromS3).not.toHaveBeenCalled();
+  });
+
+  it("does not silently remove a verified remote-only artifact whose cache cleanup explicitly failed", async () => {
+    const content = "{\"cleanupFailed\":true}";
+    const localPath = path.join(tmpDir, "recovery-points", recoveryPointId, "manifest.json");
+    await mkdir(path.dirname(localPath), { recursive: true });
+    await writeFile(localPath, content);
+
+    const { readRecoveryArtifact } = await importStore(tmpDir);
+    await expect(readRecoveryArtifact(recoveryPoint(), artifact(content, {
+      remoteObjectKey: "points/rp/manifest.json",
+      remoteVerified: true,
+      localCachePolicy: "remote_only",
+      localCacheCleanupAttempted: true,
+      localCacheRemoved: false,
+      localCacheCleanupError: "permission denied"
+    }))).resolves.toEqual(Buffer.from(content));
+
+    expect(await readFile(localPath, "utf8")).toBe(content);
     expect(downloadRecoveryArtifactFromS3).not.toHaveBeenCalled();
   });
 

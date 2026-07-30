@@ -97,18 +97,41 @@ export function recoveryReadinessClass(status: RecoveryReadiness["status"]) {
 }
 
 export function recoveryLocalState(point: RecoveryPointListItem) {
-  if (point.status === "completed") return "complete";
-  if (point.status === "partial") return "partial";
-  if (point.status === "failed") return "failed";
   if (point.status === "running") return "running";
-  return "queued";
+  if (point.status === "queued") return "queued";
+  const retained = point.localRetainedArtifactCount ?? 0;
+  const removed = point.localRemovedArtifactCount ?? 0;
+  if (point.artifactCount > 0 && retained >= point.artifactCount) return "complete";
+  if (point.artifactCount > 0 && removed >= point.artifactCount) return "removed";
+  if (retained > 0 || removed > 0) return "partial";
+  if (point.status === "failed") return "failed";
+  return "unknown";
 }
 
 export function recoveryRemoteState(point: RecoveryPointListItem) {
   if (!point.backupTargetId) return "none";
-  if (point.status === "partial") return "partial";
+  if (point.metadata.remoteUploadNotApplicable === true) return "none";
+  const failureCount = point.remoteUploadFailureCount
+    ?? (typeof point.metadata.remoteUploadFailureCount === "number" ? point.metadata.remoteUploadFailureCount : 0);
+  const remoteArtifactCount = point.remoteArtifactCount ?? 0;
+  if (failureCount > 0 || point.status === "partial") return "partial";
   if (point.status === "failed") return "failed";
-  if (point.status === "completed") return "synced";
+  const objectKeys = Array.isArray(point.metadata.remoteObjectKeys)
+    ? point.metadata.remoteObjectKeys.filter((value): value is string => typeof value === "string" && value.length > 0)
+    : [];
+  const expectedCount = typeof point.metadata.remoteUploadArtifactCount === "number"
+    ? point.metadata.remoteUploadArtifactCount
+    : 0;
+  const verifiedCount = typeof point.metadata.remoteVerifiedArtifactCount === "number"
+    ? point.metadata.remoteVerifiedArtifactCount
+    : 0;
+  const hasAggregateEvidence = point.artifactCount > 0 && remoteArtifactCount === point.artifactCount;
+  const hasMetadataEvidence = point.metadata.remoteUploadComplete === true
+    && expectedCount > 0
+    && verifiedCount === expectedCount
+    && objectKeys.length === expectedCount;
+  const hasCompleteUploadEvidence = hasAggregateEvidence || hasMetadataEvidence;
+  if (point.status === "completed") return hasCompleteUploadEvidence ? "synced" : "pending";
   if (point.status === "running") return "uploading";
   return "pending";
 }

@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   withTransaction: vi.fn(),
   enqueueJobInTransaction: vi.fn(),
   notifyJobQueued: vi.fn(),
+  assertBackupTargetS3EndpointAllowed: vi.fn(),
   mkdir: vi.fn()
 }));
 
@@ -24,16 +25,42 @@ vi.mock("../src/services/jobs.js", () => ({
   notifyJobQueued: (...args: unknown[]) => mocks.notifyJobQueued(...args)
 }));
 
+vi.mock("../src/services/recoveryBackupTargets.js", () => ({
+  assertBackupTargetS3EndpointAllowed: (...args: unknown[]) => mocks.assertBackupTargetS3EndpointAllowed(...args),
+  loadWorkerBackupTarget: vi.fn()
+}));
+
 const hostId = "00000000-0000-4000-8000-000000000011";
 const userId = "00000000-0000-4000-8000-000000000012";
+const targetId = "00000000-0000-4000-8000-000000000015";
 const client = { query: (...args: unknown[]) => mocks.transactionQuery(...args) };
 
 describe("backup record and job atomicity", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.mkdir.mockResolvedValue(undefined);
+    mocks.assertBackupTargetS3EndpointAllowed.mockResolvedValue(undefined);
+    mocks.poolQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM backup_targets")) {
+        return {
+          rows: [{
+            id: targetId,
+            kind: "s3",
+            enabled: true,
+            config: {
+              endpoint: "https://s3.example.test",
+              bucket: "backups"
+            }
+          }]
+        };
+      }
+      return { rows: [] };
+    });
     mocks.withTransaction.mockImplementation(async (handler: (transactionClient: typeof client) => Promise<unknown>) => handler(client));
     mocks.transactionQuery.mockImplementation(async (sql: string, values: unknown[]) => {
+      if (sql.includes("FROM backup_targets")) {
+        return { rows: [{ id: targetId, kind: "s3", enabled: true }] };
+      }
       if (sql.includes("INSERT INTO backups")) {
         return {
           rows: [{
@@ -88,6 +115,25 @@ describe("backup record and job atomicity", () => {
     expect(mocks.notifyJobQueued).not.toHaveBeenCalled();
   });
 
+  it("locks and revalidates the remote target in the same transaction before linking the backup", async () => {
+    const { createBackupWithJob } = await import("../src/services/backups.js");
+
+    const result = await createBackupWithJob(hostId, "app-data", {
+      backupTargetId: targetId
+    }, userId);
+
+    expect(result.backup.backupTargetId).toBe(targetId);
+    const guardCall = mocks.transactionQuery.mock.calls.findIndex((call) => (
+      String(call[0]).includes("FROM backup_targets")
+      && String(call[0]).includes("FOR KEY SHARE")
+    ));
+    const insertCall = mocks.transactionQuery.mock.calls.findIndex((call) => (
+      String(call[0]).includes("INSERT INTO backups")
+    ));
+    expect(guardCall).toBeGreaterThanOrEqual(0);
+    expect(insertCall).toBeGreaterThan(guardCall);
+  });
+
   it("pre-creates and links the clone backup in the same job transaction", async () => {
     const { createVolumeCloneWithJob } = await import("../src/services/backups.js");
     const result = await createVolumeCloneWithJob({
@@ -108,5 +154,29 @@ describe("backup record and job atomicity", () => {
       userId
     );
     expect(mocks.notifyJobQueued).toHaveBeenCalledWith(result.job.id);
+  });
+
+  it("does not commit or publish a clone job when its transactional audit fails", async () => {
+    const { createVolumeCloneWithJob } = await import("../src/services/backups.js");
+    const auditFailure = vi.fn(async () => {
+      throw new Error("audit insert failed");
+    });
+
+    await expect(createVolumeCloneWithJob({
+      sourceHostId: hostId,
+      targetHostId: "00000000-0000-4000-8000-000000000014",
+      sourceVolumeName: "source-data",
+      targetVolumeName: "target-data",
+      overwrite: false
+    }, userId, auditFailure)).rejects.toThrow("audit insert failed");
+
+    expect(auditFailure).toHaveBeenCalledWith(
+      client,
+      expect.objectContaining({
+        backup: expect.objectContaining({ hostId, volumeName: "source-data" }),
+        job: expect.objectContaining({ id: "00000000-0000-4000-8000-000000000013" })
+      })
+    );
+    expect(mocks.notifyJobQueued).not.toHaveBeenCalled();
   });
 });

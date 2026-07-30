@@ -20,7 +20,7 @@ Stable JSON endpoints are documented under `/api/v1/*`. Existing `/api/*` endpoi
 | POST | `/api/v1/hosts` | operator | Create a Docker host |
 | GET | `/api/v1/hosts/{id}/resources` | viewer | List host resource inventory |
 | GET | `/api/v1/hosts/{id}/image-cleanup` | operator | Preview removable and blocked Docker images |
-| POST | `/api/v1/hosts/{id}/actions` | operator | Enqueue a typed Docker action |
+| POST | `/api/v1/hosts/{id}/actions` | operator | Enqueue a supported direct Docker action; orchestrated operations use dedicated endpoints |
 | GET | `/api/v1/hosts/{hostId}/metrics` | viewer | Read one host metrics snapshot |
 | GET | `/api/v1/hosts/metrics` | viewer | Read fleet metrics snapshot |
 | GET | `/api/v1/hosts/{hostId}/metrics-stream` | viewer | SSE host metrics stream |
@@ -34,7 +34,7 @@ Stable JSON endpoints are documented under `/api/v1/*`. Existing `/api/*` endpoi
 | GET | `/api/v1/jobs` | viewer | List operation jobs |
 | GET | `/api/v1/jobs/status` | viewer | Read worker queue status |
 | GET | `/api/v1/jobs/{id}` | viewer | Read one operation job |
-| POST | `/api/v1/jobs/{id}/retry` | operator | Retry a failed or canceled operation job |
+| POST | `/api/v1/jobs/{id}/retry` | operator | Retry an eligible failed or canceled operation job |
 | POST | `/api/v1/jobs/{id}/cancel` | operator | Cancel a queued operation job |
 | GET | `/api/v1/backups` | viewer | List backups |
 | GET | `/api/v1/backups/health` | viewer | Read backup health |
@@ -61,7 +61,7 @@ Stable JSON endpoints are documented under `/api/v1/*`. Existing `/api/*` endpoi
 | GET | `/api/v1/recovery/migrations` | viewer | List migration plan and execution runs |
 | GET | `/api/v1/recovery/migrations/{id}` | viewer | Read one migration plan or execution run |
 | GET | `/api/v1/apps` | viewer | List managed apps |
-| GET | `/api/v1/github/repos` | viewer | List tracked GitHub repositories |
+| GET | `/api/v1/github/repos` | operator | List tracked GitHub repositories |
 | POST | `/api/v1/github/repos` | operator | Create a tracked GitHub repository |
 | POST | `/api/v1/github/branches` | operator | List branches for a GitHub repository URL |
 | POST | `/api/v1/github/access-check` | operator | Test unsaved GitHub repository access |
@@ -72,11 +72,11 @@ Stable JSON endpoints are documented under `/api/v1/*`. Existing `/api/*` endpoi
 | DELETE | `/api/v1/github/repos/{id}` | operator | Delete a tracked GitHub repository |
 | POST | `/api/v1/github/repos/{id}/deploy` | operator | Deploy a saved GitHub repository Compose file |
 | POST | `/api/v1/deploy/analyses` | operator | Analyze a Git, Compose, or image deployment source |
-| GET | `/api/v1/deploy/analyses/{id}` | viewer | Read a durable deployment analysis |
+| GET | `/api/v1/deploy/analyses/{id}` | operator | Read a durable deployment analysis |
 | POST | `/api/v1/deploy/analyses/{id}/deploy` | operator | Deploy an analyzed source and save it to My Library |
-| GET | `/api/v1/deployment-sources` | viewer | List reusable My Library deployment sources |
+| GET | `/api/v1/deployment-sources` | operator | List reusable My Library deployment sources |
 | POST | `/api/v1/deployment-sources` | operator | Add a reusable source to My Library |
-| GET | `/api/v1/deployment-sources/{id}` | viewer | Read one reusable deployment source |
+| GET | `/api/v1/deployment-sources/{id}` | operator | Read one reusable deployment source |
 | PUT | `/api/v1/deployment-sources/{id}` | operator | Update safe defaults or credentials for a deployment source |
 | DELETE | `/api/v1/deployment-sources/{id}` | operator | Remove a source from My Library without removing services |
 | POST | `/api/v1/hosts/{hostId}/registry-trust/check` | operator | Check Docker daemon trust for an HTTP registry |

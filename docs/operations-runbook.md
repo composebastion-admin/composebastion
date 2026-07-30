@@ -66,9 +66,13 @@ claims for a release.
 3. Confirm migrations are clean with `npm run lint:migrations` in the source tree.
 4. Read the changelog for new migrations, role changes, and agent compatibility notes.
 5. Upgrade a non-critical deployment first when possible.
-6. For in-app self-updates, keep a shell open to the manager host and tail
-   `.composebastion-self-update.log` from the Compose directory until app and
-   worker restart successfully.
+6. For in-app self-updates, copy the update job ID from Admin -> Jobs, keep a
+   shell open to the manager host, and tail
+   `.composebastion-self-update-<jobId>.log` from the Compose directory. Treat
+   `.composebastion-self-update-<jobId>.outcome` as the authoritative terminal
+   result (`status`, `stage`, and `rollback`). Preserve the matching
+   `.env.backup` and `.rollback.yml` artifacts until the job has reconciled and
+   both app and worker are healthy; they are the job-specific rollback evidence.
 
 ## Incident Notes
 
@@ -83,6 +87,12 @@ claims for a release.
 - For job failures, copy the job correlation ID from Admin -> Jobs or Admin ->
   Operations. Match it to worker log `jobId`, API log `jobId`, the job row ID,
   and related audit `targetId` entries.
+- Manual retry is limited to the supported verification/sync operations plus
+  deployment analysis, deployment execution, and registry-trust work below the
+  attempt limit. If a worker lease expires during deployment execution or a
+  registry-trust mutation, ComposeBastion returns a reconciliation warning
+  instead of replaying the non-idempotent operation. Inspect Docker, deployment,
+  and registry state first, then start a new dedicated operation if needed.
 - API logs use the route as `action` and include `hostId`/`jobId` when those
   route params are available. Worker logs use the Docker action type as `action`.
 - If a host is offline, run a host check from the UI, then verify SSH or agent

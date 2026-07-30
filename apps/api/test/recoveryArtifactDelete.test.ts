@@ -3,8 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const loadWorkerBackupTarget = vi.fn();
 const createS3Client = vi.fn();
 const deleteRecoveryArtifactFromS3 = vi.fn();
+const destroyS3Client = vi.fn();
 
 vi.mock("../src/services/recoveryBackupTargets.js", () => ({
+  assertBackupTargetS3EndpointAllowed: vi.fn().mockResolvedValue(undefined),
   loadWorkerBackupTarget: (...args: unknown[]) => loadWorkerBackupTarget(...args)
 }));
 
@@ -92,7 +94,10 @@ describe("recovery artifact remote deletion", () => {
         credentials: { accessKeyId: "key", secretAccessKey: "secret" }
       }
     }));
-    createS3Client.mockImplementation((config: { bucket: string }) => ({ bucket: config.bucket }));
+    createS3Client.mockImplementation((config: { bucket: string }) => ({
+      bucket: config.bucket,
+      destroy: destroyS3Client
+    }));
     deleteRecoveryArtifactFromS3.mockResolvedValue(undefined);
   });
 
@@ -113,6 +118,7 @@ describe("recovery artifact remote deletion", () => {
       expect.any(String),
       expect.stringContaining("volumes/data.tar.gz")
     );
+    expect(destroyS3Client).toHaveBeenCalledTimes(2);
   });
 
   it("fails rather than reconstructing a key when the backup target is missing", async () => {

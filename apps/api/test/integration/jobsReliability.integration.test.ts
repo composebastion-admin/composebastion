@@ -11,6 +11,7 @@ import {
   assertJobLeaseActive,
   claimNextJob,
   completeJob,
+  enqueueJob,
   failJob,
   getWorkerStatus,
   JobLeaseLostError,
@@ -157,6 +158,64 @@ describe.skipIf(!integrationEnabled)("worker reliability integration", () => {
     await expect(renewJobLease(jobA!.id, { workerId: workerB, attemptCount: 1 })).resolves.toBe(false);
     await expect(completeJob(jobA!.id, { wrong: true }, { workerId: workerB, attemptCount: 1 })).resolves.toBe(false);
     await expect(completeJob(jobA!.id, { ok: true }, { workerId: workerA, attemptCount: 1 })).resolves.toBe(true);
+  });
+
+  it("enforces an active self-update singleton across concurrent requests", async () => {
+    const hostId = await insertHost();
+    const action = {
+      type: "system.self_update" as const,
+      hostId,
+      payload: {
+        workingDir: "/srv/composebastion",
+        composeFile: "docker-compose.image.yml",
+        versionMode: "latest" as const,
+        targetVersion: "latest"
+      }
+    };
+
+    const starts = await Promise.allSettled([
+      enqueueJob(action),
+      enqueueJob(action)
+    ]);
+
+    expect(starts.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    const rejected = starts.find((result) => result.status === "rejected") as PromiseRejectedResult;
+    expect(rejected.reason).toMatchObject({
+      statusCode: 409,
+      message: expect.stringContaining("already queued or running")
+    });
+    const rows = await pool.query(
+      "SELECT id FROM operation_jobs WHERE type = 'system.self_update' AND status IN ('queued', 'running')"
+    );
+    expect(rows.rowCount).toBe(1);
+  });
+
+  it("enforces one active analysis or execution job for each deployment analysis", async () => {
+    const hostId = await insertHost();
+    const analysisId = randomUUID();
+    await enqueueJob({
+      type: "deploy.analyze",
+      hostId,
+      payload: { analysisId }
+    });
+
+    await expect(enqueueJob({
+      type: "deploy.execute",
+      hostId,
+      payload: { analysisId }
+    })).rejects.toMatchObject({
+      statusCode: 409,
+      message: expect.stringContaining("already has an analysis or deployment job")
+    });
+    const rows = await pool.query(
+      `SELECT id
+       FROM operation_jobs
+       WHERE type IN ('deploy.analyze', 'deploy.execute')
+         AND payload->>'analysisId' = $1
+         AND status IN ('queued', 'running')`,
+      [analysisId]
+    );
+    expect(rows.rowCount).toBe(1);
   });
 
   it("rejects every write from an expired lease before the reaper runs", async () => {

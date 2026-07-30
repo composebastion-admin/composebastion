@@ -974,6 +974,8 @@ a.sideNavItem[aria-disabled="true"] {
 
 .globalSearch:focus-within {
   border-color: var(--accent);
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent), var(--shadow-soft);
 }
 

@@ -5,13 +5,18 @@ import path from "node:path";
 import { v4 as uuid } from "uuid";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import {
+  canonicalizeGitRepositoryUrl,
+  canonicalizePlaintextHttpSourceUrl,
   deploymentAnalysisCreateSchema,
   deploymentAnalysisDeploySchema,
   deploymentAnalysisSchema,
   deploymentSourceSchema,
   deploymentSourceCreateSchema,
   deploymentSourceUpdateSchema,
+  normalizeRegistryAuthority,
   registryTrustSchema,
+  sanitizeDeploymentSourceLocator,
+  sanitizeUrlDiagnosticText,
   type DeploymentAnalysis,
   type DeploymentSource,
   type DeploymentSourceType
@@ -96,7 +101,7 @@ function mapSource(row: any): DeploymentSource {
     id: row.id,
     sourceType: row.source_type,
     name: row.name,
-    sourceLocator: row.source_locator,
+    sourceLocator: sanitizeDeploymentSourceLocator(row.source_locator, row.source_type) ?? "",
     branch: row.branch ?? null,
     composePath: row.compose_path ?? null,
     workingDir: row.working_dir ?? null,
@@ -128,8 +133,10 @@ function mapAnalysis(row: any): DeploymentAnalysis {
     hostId: row.host_id,
     sourceId: row.source_id ?? null,
     sourceType: row.source_type,
-    sourceInput: row.source_input,
-    sourceLocator: row.source_locator ?? null,
+    sourceInput: sanitizeDeploymentSourceLocator(row.source_input, row.source_type) ?? "",
+    sourceLocator: row.source_locator === null || row.source_locator === undefined
+      ? null
+      : sanitizeDeploymentSourceLocator(row.source_locator, row.source_type),
     status,
     displayName: row.display_name ?? null,
     projectName: row.project_name ?? null,
@@ -148,7 +155,7 @@ function mapAnalysis(row: any): DeploymentAnalysis {
     warnings: Array.isArray(row.warnings) ? row.warnings : [],
     blockers: Array.isArray(row.blockers) ? row.blockers : [],
     registryIssues: Array.isArray(row.registry_issues) ? row.registry_issues : [],
-    error: row.error ?? null,
+    error: sanitizeUrlDiagnosticText(row.error ?? null) as string | null,
     expiresAt: iso(row.expires_at),
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at),
@@ -208,9 +215,6 @@ export function detectDeploymentSourceType(
   if (composeYaml || isYamlText(value)) return "compose_upload";
   if (/^https?:\/\//i.test(value)) {
     const url = new URL(value);
-    if (url.username || url.password) {
-      throw Object.assign(new Error("URLs containing credentials are not accepted. Enter credentials in the protected credential fields."), { statusCode: 400 });
-    }
     if (COMPOSE_FILE.test(url.pathname)) return "compose_url";
     if (/[:@][^/]+$/.test(url.pathname)) return "image";
   }
@@ -220,7 +224,7 @@ export function detectDeploymentSourceType(
 
 export function canonicalizeDeploymentSource(source: string, sourceType: DeploymentSourceType) {
   const value = source.trim();
-  if (/^https?:\/\//i.test(value)) {
+  if (sourceType === "image" && /^https?:\/\//i.test(value)) {
     const checkedUrl = new URL(value);
     if (checkedUrl.username || checkedUrl.password) {
       throw Object.assign(
@@ -230,12 +234,14 @@ export function canonicalizeDeploymentSource(source: string, sourceType: Deploym
     }
   }
   if (sourceType === "git") {
-    if (/^[^@\s]+@[^:\s]+:.+/.test(value)) return value.replace(/\/$/, "");
-    const url = new URL(value);
-    url.hash = "";
-    url.search = "";
-    url.pathname = url.pathname.replace(/\/$/, "");
-    return url.toString().replace(/\/$/, "");
+    try {
+      return canonicalizeGitRepositoryUrl(value);
+    } catch (error) {
+      throw Object.assign(
+        new Error(error instanceof Error ? error.message : "Repository URL is invalid"),
+        { statusCode: 400 }
+      );
+    }
   }
   if (sourceType === "image") {
     if (/^https?:\/\//i.test(value)) {
@@ -245,9 +251,17 @@ export function canonicalizeDeploymentSource(source: string, sourceType: Deploym
     return value.replace(/^docker:\/\//i, "").replace(/^\/|\/$/g, "");
   }
   if (sourceType === "compose_url") {
-    const url = new URL(value);
-    url.hash = "";
-    return url.toString();
+    try {
+      return canonicalizePlaintextHttpSourceUrl(value);
+    } catch (error) {
+      throw Object.assign(
+        new Error(
+          `${error instanceof Error ? error.message : "Compose URL is invalid"}. `
+          + "Private Compose URLs with credentials are not supported; upload the Compose file instead."
+        ),
+        { statusCode: 400 }
+      );
+    }
   }
   if (isYamlText(value)) {
     return `inline-compose:${createHash("sha256").update(value).digest("hex").slice(0, 16)}`;
@@ -986,6 +1000,47 @@ async function composePortConflicts(
     : [];
 }
 
+export function normalizeRegistryTrustAuthority(value: string) {
+  const input = value.trim();
+  let authority = input;
+  const scheme = /^([a-z][a-z0-9+.-]*):\/\//i.exec(input);
+  if (scheme) {
+    if (!/^https?$/i.test(scheme[1]!)) {
+      throw Object.assign(new Error("Registry trust accepts only HTTP(S) origins or a hostname and optional port."), { statusCode: 400 });
+    }
+    let parsed: URL;
+    try {
+      parsed = new URL(input);
+    } catch {
+      throw Object.assign(new Error("Enter a registry hostname and optional port."), { statusCode: 400 });
+    }
+    if (
+      parsed.username
+      || parsed.password
+      || (parsed.pathname && parsed.pathname !== "/")
+      || parsed.search
+      || parsed.hash
+      || input.includes("?")
+      || input.includes("#")
+    ) {
+      throw Object.assign(
+        new Error("Registry trust accepts only a hostname and optional port, without credentials, a path, query parameters, or a fragment."),
+        { statusCode: 400 }
+      );
+    }
+    const rawTarget = input.slice(input.indexOf("://") + 3);
+    authority = rawTarget.endsWith("/") ? rawTarget.slice(0, -1) : rawTarget;
+  }
+  try {
+    return normalizeRegistryAuthority(authority);
+  } catch (error) {
+    throw Object.assign(
+      new Error(error instanceof Error ? error.message : "Enter a registry hostname and optional port."),
+      { statusCode: 400 }
+    );
+  }
+}
+
 function dockerRegistryTrust(indexConfigs: unknown, registry: string) {
   if (!indexConfigs || typeof indexConfigs !== "object") return false;
   const entries = Object.entries(indexConfigs as Record<string, any>);
@@ -997,10 +1052,7 @@ function dockerRegistryTrust(indexConfigs: unknown, registry: string) {
 
 export async function checkRegistryTrust(hostId: string, registry: string, insecure = true) {
   const host = await getHostForWorker(hostId);
-  const normalized = registry.trim().replace(/^https?:\/\//i, "").replace(/\/$/, "");
-  if (!/^[a-z0-9.-]+(?::\d+)?$/i.test(normalized)) {
-    throw Object.assign(new Error("Enter a registry hostname and optional port."), { statusCode: 400 });
-  }
+  const normalized = normalizeRegistryTrustAuthority(registry);
   const info = await runDocker(hostId, "docker info --format '{{json .RegistryConfig.IndexConfigs}}'", 30_000).catch(() => ({ stdout: "{}" }));
   let configs: unknown = {};
   try {
@@ -1103,6 +1155,18 @@ export async function createDeploymentAnalysis(input: unknown, createdBy?: strin
   const source = parsed.source || sourceRow?.source_locator;
   const sourceType = parsed.sourceType ?? sourceRow?.source_type ?? detectDeploymentSourceType(source, parsed.composeYaml);
   const sourceLocator = canonicalizeDeploymentSource(source, sourceType);
+  if (
+    sourceType === "compose_url"
+    && (parsed.credentialUsername || parsed.credentialSecret)
+  ) {
+    throw Object.assign(
+      new Error("Compose URL credentials are not supported; upload the Compose file instead."),
+      { statusCode: 400 }
+    );
+  }
+  const sourceInput = sourceType === "git" || sourceType === "compose_url"
+    ? sourceLocator
+    : source;
   const storedComposeYaml = sourceType === "compose_url" && parsed.composeYaml === undefined
     ? null
     : parsed.composeYaml ?? sourceRow?.compose_yaml ?? null;
@@ -1121,7 +1185,7 @@ export async function createDeploymentAnalysis(input: unknown, createdBy?: strin
         parsed.hostId,
         parsed.sourceId ?? null,
         sourceType,
-        source,
+        sourceInput,
         sourceLocator,
         sourceRow?.name ?? null,
         sourceRow?.project_name ?? null,
@@ -1349,6 +1413,8 @@ export async function queueDeployment(analysisId: string, input: unknown, create
            env_encrypted = CASE WHEN $8::text IS NULL THEN env_encrypted ELSE $8 END,
            updated_at = now()
        WHERE id = $1
+         AND status = 'ready'
+         AND expires_at > now()
        RETURNING *`,
       [
         analysisId,
@@ -1361,6 +1427,12 @@ export async function queueDeployment(analysisId: string, input: unknown, create
         encryptSecret(requestedEnv)
       ]
     );
+    if (!updated.rows[0]) {
+      throw Object.assign(
+        new Error("This deployment is already queued or is no longer ready to deploy."),
+        { statusCode: 409 }
+      );
+    }
     const job = await enqueueJobInTransaction(
       client,
       { type: "deploy.execute", hostId: row.host_id, payload: { analysisId } },

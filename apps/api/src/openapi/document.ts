@@ -1,4 +1,8 @@
 import { createRequire } from "node:module";
+import {
+  directHostActionTypes,
+  type DirectHostActionType
+} from "@composebastion/shared";
 
 export type OpenApiPath = {
   method: "delete" | "get" | "patch" | "post" | "put";
@@ -38,7 +42,7 @@ export const openApiRoutes: OpenApiPath[] = [
   { method: "post", path: "/api/v1/hosts", summary: "Create a Docker host", tags: ["Hosts"], auth: "operator", responseSchema: schemaRef("HostJobResponse") },
   { method: "get", path: "/api/v1/hosts/{id}/resources", summary: "List host resource inventory", tags: ["Resources"], auth: "viewer", responseSchema: schemaRef("ResourcesResponse") },
   { method: "get", path: "/api/v1/hosts/{id}/image-cleanup", summary: "Preview removable and blocked Docker images", tags: ["Images"], auth: "operator", responseSchema: schemaRef("ImageCleanupPreviewResponse") },
-  { method: "post", path: "/api/v1/hosts/{id}/actions", summary: "Enqueue a typed Docker action", tags: ["Jobs"], auth: "operator", responseSchema: schemaRef("JobResponse") },
+  { method: "post", path: "/api/v1/hosts/{id}/actions", summary: "Enqueue a supported direct Docker action; orchestrated operations use dedicated endpoints", tags: ["Jobs"], auth: "operator", requestSchema: schemaRef("DirectHostActionRequest"), responseSchema: schemaRef("JobResponse"), notes: ["Supported types: host.check, host.sync, host.mkdir, git.clone, git.pull, git.testRemote, container.run/start/stop/restart/rename/update/remove, image.pull/remove/prune/cleanup, network.create/remove/prune, volume.create/remove/prune, and compose.deployPath.", "Git repository URLs accept HTTP(S), ssh://, git://, and scp-style SSH values. HTTP(S) credentials, query parameters, and fragments are rejected; use a host deploy key for private clones."] },
   { method: "get", path: "/api/v1/hosts/{hostId}/metrics", summary: "Read one host metrics snapshot", tags: ["Metrics"], auth: "viewer", responseSchema: schemaRef("HostMetricsResponse") },
   { method: "get", path: "/api/v1/hosts/metrics", summary: "Read fleet metrics snapshot", tags: ["Metrics"], auth: "viewer", responseSchema: schemaRef("FleetMetricsResponse") },
   {
@@ -84,7 +88,7 @@ export const openApiRoutes: OpenApiPath[] = [
   { method: "get", path: "/api/v1/jobs", summary: "List operation jobs", tags: ["Jobs"], auth: "viewer", responseSchema: schemaRef("JobsResponse") },
   { method: "get", path: "/api/v1/jobs/status", summary: "Read worker queue status", tags: ["Jobs"], auth: "viewer", responseSchema: schemaRef("WorkerStatusResponse") },
   { method: "get", path: "/api/v1/jobs/{id}", summary: "Read one operation job", tags: ["Jobs"], auth: "viewer", responseSchema: schemaRef("JobResponse") },
-  { method: "post", path: "/api/v1/jobs/{id}/retry", summary: "Retry a failed or canceled operation job", tags: ["Jobs"], auth: "operator", responseSchema: schemaRef("JobRetryResponse") },
+  { method: "post", path: "/api/v1/jobs/{id}/retry", summary: "Retry an eligible failed or canceled operation job", tags: ["Jobs"], auth: "operator", responseSchema: schemaRef("JobRetryResponse"), conflict: true, conflictDescription: "The job is not eligible for replay, or a non-idempotent operation has an ambiguous WORKER_LOST outcome", notes: ["Manual retry supports the verification/sync allowlist plus deployment analysis, deployment execution, and registry-trust operations below the attempt limit.", "A WORKER_LOST result for deployment execution or registry-trust mutation is never replayed automatically. Reconcile remote state before starting a new dedicated operation."] },
   { method: "post", path: "/api/v1/jobs/{id}/cancel", summary: "Cancel a queued operation job", tags: ["Jobs"], auth: "operator", responseSchema: schemaRef("JobResponse") },
   { method: "get", path: "/api/v1/backups", summary: "List backups", tags: ["Backups"], auth: "viewer", responseSchema: schemaRef("BackupsResponse") },
   { method: "get", path: "/api/v1/backups/health", summary: "Read backup health", tags: ["Backups"], auth: "viewer", responseSchema: schemaRef("BackupHealthResponse") },
@@ -119,26 +123,26 @@ export const openApiRoutes: OpenApiPath[] = [
   { method: "get", path: "/api/v1/recovery/migrations", summary: "List migration plan and execution runs", tags: ["Recovery"], auth: "viewer", responseSchema: schemaRef("MigrationRunsResponse") },
   { method: "get", path: "/api/v1/recovery/migrations/{id}", summary: "Read one migration plan or execution run", tags: ["Recovery"], auth: "viewer", responseSchema: schemaRef("MigrationRunResponse") },
   { method: "get", path: "/api/v1/apps", summary: "List managed apps", tags: ["Apps"], auth: "viewer", responseSchema: schemaRef("AppsResponse") },
-  { method: "get", path: "/api/v1/github/repos", summary: "List tracked GitHub repositories", tags: ["GitHub"], auth: "viewer", responseSchema: schemaRef("GithubRepositoriesResponse") },
-  { method: "post", path: "/api/v1/github/repos", summary: "Create a tracked GitHub repository", tags: ["GitHub"], auth: "operator", responseSchema: schemaRef("GithubRepositoryResponse") },
-  { method: "post", path: "/api/v1/github/branches", summary: "List branches for a GitHub repository URL", tags: ["GitHub"], auth: "operator", responseSchema: schemaRef("GithubBranchesResponse") },
-  { method: "post", path: "/api/v1/github/access-check", summary: "Test unsaved GitHub repository access", tags: ["GitHub"], auth: "operator", responseSchema: schemaRef("GithubAccessCheckResponse") },
+  { method: "get", path: "/api/v1/github/repos", summary: "List tracked GitHub repositories", tags: ["GitHub"], auth: "operator", responseSchema: schemaRef("GithubRepositoriesResponse") },
+  { method: "post", path: "/api/v1/github/repos", summary: "Create a tracked GitHub repository", tags: ["GitHub"], auth: "operator", requestSchema: schemaRef("GithubRepositoryCreateRequest"), responseSchema: schemaRef("GithubRepositoryResponse"), notes: ["Repository URLs must be credential-free HTTPS github.com URLs. Store GitHub API tokens only in `githubToken`; use a host deploy key with `hostCloneUrl` for private host-side clones."] },
+  { method: "post", path: "/api/v1/github/branches", summary: "List branches for a GitHub repository URL", tags: ["GitHub"], auth: "operator", requestSchema: schemaRef("GithubBranchesRequest"), responseSchema: schemaRef("GithubBranchesResponse") },
+  { method: "post", path: "/api/v1/github/access-check", summary: "Test unsaved GitHub repository access", tags: ["GitHub"], auth: "operator", requestSchema: schemaRef("GithubAccessCheckRequest"), responseSchema: schemaRef("GithubAccessCheckResponse") },
   { method: "post", path: "/api/v1/github/repos/{id}/access-check", summary: "Test saved GitHub repository access", tags: ["GitHub"], auth: "operator", responseSchema: schemaRef("GithubStoredAccessCheckResponse") },
   { method: "get", path: "/api/v1/github/repos/{id}/branches", summary: "List branches for a saved GitHub repository", tags: ["GitHub"], auth: "operator", responseSchema: schemaRef("GithubBranchesResponse") },
   { method: "get", path: "/api/v1/github/repos/{id}/compose", summary: "Preview a saved GitHub repository Compose file", tags: ["GitHub"], auth: "operator", responseSchema: schemaRef("GithubComposePreviewResponse") },
-  { method: "put", path: "/api/v1/github/repos/{id}", summary: "Update a tracked GitHub repository", tags: ["GitHub"], auth: "operator", responseSchema: schemaRef("GithubRepositoryResponse") },
+  { method: "put", path: "/api/v1/github/repos/{id}", summary: "Update a tracked GitHub repository", tags: ["GitHub"], auth: "operator", requestSchema: schemaRef("GithubRepositoryUpdateRequest"), responseSchema: schemaRef("GithubRepositoryResponse") },
   { method: "delete", path: "/api/v1/github/repos/{id}", summary: "Delete a tracked GitHub repository", tags: ["GitHub"], auth: "operator", responseSchema: schemaRef("OkResponse") },
-  { method: "post", path: "/api/v1/github/repos/{id}/deploy", summary: "Deploy a saved GitHub repository Compose file", tags: ["GitHub"], auth: "operator", responseSchema: schemaRef("GithubDeployResponse") },
-  { method: "post", path: "/api/v1/deploy/analyses", summary: "Analyze a Git, Compose, or image deployment source", tags: ["Deploy"], auth: "operator", requestSchema: schemaRef("DeploymentAnalysisCreateRequest"), responseSchema: schemaRef("DeploymentAnalysisJobResponse") },
-  { method: "get", path: "/api/v1/deploy/analyses/{id}", summary: "Read a durable deployment analysis", tags: ["Deploy"], auth: "viewer", responseSchema: schemaRef("DeploymentAnalysisResponse") },
+  { method: "post", path: "/api/v1/github/repos/{id}/deploy", summary: "Deploy a saved GitHub repository Compose file", tags: ["GitHub"], auth: "operator", requestSchema: schemaRef("GithubDeployRequest"), responseSchema: schemaRef("GithubDeployResponse") },
+  { method: "post", path: "/api/v1/deploy/analyses", summary: "Analyze a Git, Compose, or image deployment source", tags: ["Deploy"], auth: "operator", requestSchema: schemaRef("DeploymentAnalysisCreateRequest"), responseSchema: schemaRef("DeploymentAnalysisJobResponse"), notes: ["Git source URLs reject embedded credentials, query parameters, and fragments; use the encrypted credential fields for HTTPS Git authentication.", "Compose URLs must be public credential-free HTTP(S) URLs without query parameters or fragments. For private Compose content, upload the file instead."] },
+  { method: "get", path: "/api/v1/deploy/analyses/{id}", summary: "Read a durable deployment analysis", tags: ["Deploy"], auth: "operator", responseSchema: schemaRef("DeploymentAnalysisResponse") },
   { method: "post", path: "/api/v1/deploy/analyses/{id}/deploy", summary: "Deploy an analyzed source and save it to My Library", tags: ["Deploy"], auth: "operator", requestSchema: schemaRef("DeploymentExecuteRequest"), responseSchema: schemaRef("DeploymentAnalysisJobResponse") },
-  { method: "get", path: "/api/v1/deployment-sources", summary: "List reusable My Library deployment sources", tags: ["Deploy"], auth: "viewer", responseSchema: schemaRef("DeploymentSourcesResponse") },
-  { method: "post", path: "/api/v1/deployment-sources", summary: "Add a reusable source to My Library", tags: ["Deploy"], auth: "operator", requestSchema: schemaRef("DeploymentSourceCreateRequest"), responseSchema: schemaRef("DeploymentSourceResponse") },
-  { method: "get", path: "/api/v1/deployment-sources/{id}", summary: "Read one reusable deployment source", tags: ["Deploy"], auth: "viewer", responseSchema: schemaRef("DeploymentSourceResponse") },
+  { method: "get", path: "/api/v1/deployment-sources", summary: "List reusable My Library deployment sources", tags: ["Deploy"], auth: "operator", responseSchema: schemaRef("DeploymentSourcesResponse") },
+  { method: "post", path: "/api/v1/deployment-sources", summary: "Add a reusable source to My Library", tags: ["Deploy"], auth: "operator", requestSchema: schemaRef("DeploymentSourceCreateRequest"), responseSchema: schemaRef("DeploymentSourceResponse"), notes: ["Git URLs must keep credentials in the encrypted credential fields. Compose URL credentials are not supported; upload private Compose content."] },
+  { method: "get", path: "/api/v1/deployment-sources/{id}", summary: "Read one reusable deployment source", tags: ["Deploy"], auth: "operator", responseSchema: schemaRef("DeploymentSourceResponse") },
   { method: "put", path: "/api/v1/deployment-sources/{id}", summary: "Update safe defaults or credentials for a deployment source", tags: ["Deploy"], auth: "operator", requestSchema: schemaRef("DeploymentSourceUpdateRequest"), responseSchema: schemaRef("DeploymentSourceResponse") },
   { method: "delete", path: "/api/v1/deployment-sources/{id}", summary: "Remove a source from My Library without removing services", tags: ["Deploy"], auth: "operator", responseSchema: schemaRef("OkResponse") },
-  { method: "post", path: "/api/v1/hosts/{hostId}/registry-trust/check", summary: "Check Docker daemon trust for an HTTP registry", tags: ["Deploy", "Hosts"], auth: "operator", requestSchema: schemaRef("RegistryTrustRequest"), responseSchema: schemaRef("RegistryTrustResponse") },
-  { method: "post", path: "/api/v1/hosts/{hostId}/registry-trust/apply", summary: "Safely configure Docker daemon trust for an HTTP registry", tags: ["Deploy", "Hosts"], auth: "admin", requestSchema: schemaRef("RegistryTrustRequest"), responseSchema: schemaRef("JobResponse") },
+  { method: "post", path: "/api/v1/hosts/{hostId}/registry-trust/check", summary: "Check Docker daemon trust for an HTTP registry", tags: ["Deploy", "Hosts"], auth: "operator", requestSchema: schemaRef("RegistryTrustRequest"), responseSchema: schemaRef("RegistryTrustResponse"), notes: ["Accepts a validated DNS name, IPv4 address, or bracketed IPv6 address with an optional port; an optional http(s) origin may end in `/`."] },
+  { method: "post", path: "/api/v1/hosts/{hostId}/registry-trust/apply", summary: "Safely configure Docker daemon trust for an HTTP registry", tags: ["Deploy", "Hosts"], auth: "admin", requestSchema: schemaRef("RegistryTrustRequest"), responseSchema: schemaRef("JobResponse"), notes: ["Accepts a validated DNS name, IPv4 address, or bracketed IPv6 address with an optional port. Credentials, paths, query parameters, fragments, and non-HTTP(S) schemes are rejected."] },
   { method: "get", path: "/api/v1/image-updates", summary: "List image update intelligence", tags: ["Images"], auth: "viewer", responseSchema: schemaRef("ImageUpdatesResponse") },
   { method: "get", path: "/api/v1/image-updates/preview", summary: "Preview an image update action", tags: ["Images"], auth: "viewer", responseSchema: schemaRef("ImageUpdatePreviewResponse") },
   { method: "get", path: "/api/v1/image-scanner/status", summary: "Read vulnerability scanner availability", tags: ["Images"], auth: "viewer", responseSchema: schemaRef("ImageScannerStatusResponse") },
@@ -196,6 +200,214 @@ const namedArrayResponse = (key: string, itemSchema: Record<string, unknown>, ex
   object([key, ...Object.keys(extra)], { [key]: arrayOf(itemSchema), ...extra });
 const namedItemResponse = (key: string, itemSchema: Record<string, unknown>, extra: Record<string, unknown> = {}) =>
   object([key, ...Object.keys(extra)], { [key]: itemSchema, ...extra });
+
+const nonEmptyString = (maxLength?: number) => ({
+  type: "string",
+  minLength: 1,
+  ...(maxLength === undefined ? {} : { maxLength })
+});
+const defaultBoolean = (value: boolean) => ({ type: "boolean", default: value });
+const stringRecord = (defaultValue?: Record<string, string>) => ({
+  type: "object",
+  additionalProperties: { type: "string" },
+  ...(defaultValue === undefined ? {} : { default: defaultValue })
+});
+const dockerVolumeNameRequestSchema = {
+  type: "string",
+  minLength: 1,
+  maxLength: 255,
+  pattern: "^[a-zA-Z0-9][a-zA-Z0-9_.-]*$"
+};
+const composeProjectNameRequestSchema = {
+  type: "string",
+  minLength: 1,
+  maxLength: 80,
+  pattern: "^[a-z0-9][a-z0-9_-]*$"
+};
+const hostPathRequestSchema = {
+  type: "string",
+  minLength: 1,
+  maxLength: 1024,
+  pattern: "^/[^\\u0000-\\u001F\\u007F]*$",
+  description: "Absolute Linux path without control characters."
+};
+const composePathRequestSchema = {
+  type: "string",
+  minLength: 1,
+  maxLength: 1024,
+  pattern: "^(?=.*\\S)[^\\u0000-\\u001F\\u007F]+$",
+  description: "Absolute or working-directory-relative Compose file path without control characters."
+};
+const gitRepositoryUrlRequestSchema = {
+  type: "string",
+  minLength: 1,
+  maxLength: 2048,
+  description: "HTTP(S), ssh://, git://, or scp-style SSH repository URL. Embedded passwords, HTTP(S)/git user information, query parameters, and fragments are rejected.",
+  examples: [
+    "https://github.com/example/app.git",
+    "git@github.com:example/app.git"
+  ]
+};
+const githubRepositoryUrlRequestSchema = {
+  type: "string",
+  format: "uri",
+  minLength: 1,
+  maxLength: 2048,
+  description: "Credential-free HTTPS github.com repository URL with exactly owner/repository path segments. Query parameters and fragments are rejected.",
+  example: "https://github.com/example/app"
+};
+const composeSourceUrlRequestSchema = {
+  type: "string",
+  format: "uri",
+  minLength: 1,
+  maxLength: 2048,
+  description: "Public HTTP(S) Compose file URL without credentials, query parameters, or a fragment. Upload private Compose content instead."
+};
+const containerPortMappingRequestSchema = object(["hostPort", "containerPort"], {
+  hostPort: { type: "integer", minimum: 1, maximum: 65535 },
+  containerPort: { type: "integer", minimum: 1, maximum: 65535 },
+  protocol: { ...enumSchema(["tcp", "udp"]), default: "tcp" }
+});
+const containerEnvRequestSchema = object(["key", "value"], {
+  key: nonEmptyString(),
+  value: { type: "string" }
+});
+const containerVolumeMountRequestSchema = object(["volumeName", "containerPath"], {
+  volumeName: dockerVolumeNameRequestSchema,
+  containerPath: nonEmptyString(),
+  readOnly: defaultBoolean(false)
+});
+const imageCleanupTargetRequestSchema = object(["imageId"], {
+  imageId: nonEmptyString(),
+  reference: nonEmptyString()
+});
+
+const directHostActionPayloadSchemas = {
+  "host.check": object([], {}),
+  "host.sync": object([], {}),
+  "host.mkdir": object(["path"], {
+    path: nonEmptyString(1024)
+  }),
+  "git.clone": object(["repositoryUrl", "directory"], {
+    repositoryUrl: gitRepositoryUrlRequestSchema,
+    directory: nonEmptyString(1024),
+    branch: nonEmptyString(255),
+    shallow: defaultBoolean(true)
+  }),
+  "git.pull": object(["directory"], {
+    directory: nonEmptyString(1024),
+    branch: nonEmptyString(255)
+  }),
+  "git.testRemote": object(["repositoryUrl"], {
+    repositoryUrl: gitRepositoryUrlRequestSchema,
+    branch: nonEmptyString(255)
+  }),
+  "container.run": object(["image"], {
+    image: nonEmptyString(),
+    name: nonEmptyString(),
+    restartPolicy: {
+      ...enumSchema(["no", "unless-stopped", "always", "on-failure"]),
+      default: "unless-stopped"
+    },
+    ports: {
+      ...arrayOf(containerPortMappingRequestSchema),
+      default: []
+    },
+    env: {
+      ...arrayOf(containerEnvRequestSchema),
+      default: []
+    },
+    volumes: {
+      ...arrayOf(containerVolumeMountRequestSchema),
+      default: []
+    },
+    network: { type: "string" },
+    command: { type: "string" }
+  }),
+  "container.start": object(["containerId"], {
+    containerId: nonEmptyString()
+  }),
+  "container.stop": object(["containerId"], {
+    containerId: nonEmptyString(),
+    timeoutSeconds: { type: "integer", minimum: 1, maximum: 300 }
+  }),
+  "container.restart": object(["containerId"], {
+    containerId: nonEmptyString(),
+    timeoutSeconds: { type: "integer", minimum: 1, maximum: 300 }
+  }),
+  "container.rename": object(["containerId", "name"], {
+    containerId: nonEmptyString(),
+    name: nonEmptyString(128)
+  }),
+  "container.update": object(["containerId"], {
+    containerId: nonEmptyString(),
+    targetImage: nonEmptyString()
+  }),
+  "container.remove": object(["containerId"], {
+    containerId: nonEmptyString(),
+    force: defaultBoolean(false),
+    removeVolumes: defaultBoolean(false)
+  }),
+  "image.pull": object(["image"], {
+    image: nonEmptyString()
+  }),
+  "image.remove": object(["imageId"], {
+    imageId: nonEmptyString(),
+    force: defaultBoolean(false)
+  }),
+  "image.prune": object([], {
+    all: defaultBoolean(false)
+  }),
+  "image.cleanup": object(["targets"], {
+    targets: {
+      ...arrayOf(imageCleanupTargetRequestSchema),
+      minItems: 1,
+      maxItems: 200
+    }
+  }),
+  "network.create": object(["name"], {
+    name: nonEmptyString(),
+    driver: {
+      ...enumSchema(["bridge", "host", "overlay", "macvlan", "ipvlan", "none"]),
+      default: "bridge"
+    },
+    subnet: { type: "string" },
+    gateway: { type: "string" },
+    attachable: defaultBoolean(false),
+    internal: defaultBoolean(false),
+    labels: stringRecord({})
+  }),
+  "network.remove": object(["networkId"], {
+    networkId: nonEmptyString()
+  }),
+  "network.prune": object([], {}),
+  "volume.create": object(["name"], {
+    name: dockerVolumeNameRequestSchema,
+    labels: stringRecord({})
+  }),
+  "volume.remove": object(["volumeName"], {
+    volumeName: nonEmptyString(),
+    force: defaultBoolean(false)
+  }),
+  "volume.prune": object([], {}),
+  "compose.deployPath": object(["projectName", "workingDir", "composePath"], {
+    projectName: composeProjectNameRequestSchema,
+    workingDir: hostPathRequestSchema,
+    composePath: composePathRequestSchema
+  })
+} satisfies Record<DirectHostActionType, Record<string, unknown>>;
+
+const directHostActionRequestSchema = {
+  description: "A direct host action. Operations with durable domain state or dedicated authorization and audit contracts use their dedicated endpoints instead.",
+  discriminator: { propertyName: "type" },
+  oneOf: directHostActionTypes.map((type) => ({
+    title: type,
+    ...object(["type", "payload"], {
+      type: { type: "string", const: type },
+      payload: directHostActionPayloadSchemas[type]
+    })
+  }))
+};
 
 const componentSchemas = {
   Error: errorSchema,
@@ -362,6 +574,7 @@ const componentSchemas = {
     payload: recordSchema,
     result: { anyOf: [recordSchema, { type: "null" }] },
     progress: arrayOf(schemaRef("JobProgressStep")),
+    sensitiveFieldsRedacted: { type: "boolean" },
     error: stringOrNullSchema,
     createdBy: idOrNullSchema,
     createdAt: dateTimeSchema,
@@ -369,6 +582,7 @@ const componentSchemas = {
     startedAt: stringOrNullSchema,
     completedAt: stringOrNullSchema
   }),
+  DirectHostActionRequest: directHostActionRequestSchema,
   JobResponse: namedItemResponse("job", schemaRef("OperationJob")),
   HostJobResponse: object(["host", "job"], { host: schemaRef("DockerHost"), job: schemaRef("OperationJob") }),
   JobsResponse: namedArrayResponse("jobs", schemaRef("OperationJob"), {
@@ -699,10 +913,69 @@ const componentSchemas = {
     job: schemaRef("OperationJob")
   }),
   AppsResponse: namedArrayResponse("apps", objectSchema),
+  GithubRepositoryCreateRequest: object(["name", "repositoryUrl"], {
+    name: nonEmptyString(80),
+    repositoryUrl: githubRepositoryUrlRequestSchema,
+    branch: { type: "string", minLength: 1, maxLength: 120, default: "main" },
+    composePath: { type: "string", minLength: 1, maxLength: 255, default: "docker-compose.yml" },
+    projectName: composeProjectNameRequestSchema,
+    env: { type: "string", default: "" },
+    defaultHostId: idSchema,
+    hostCloneUrl: {
+      anyOf: [gitRepositoryUrlRequestSchema, { type: "string", maxLength: 0 }],
+      description: "Credential-free host-side Git clone URL. Use an SSH deploy key for private repositories."
+    },
+    hostCloneDirectory: { type: "string", maxLength: 1024 },
+    githubToken: {
+      type: "string",
+      maxLength: 4096,
+      writeOnly: true,
+      description: "Fine-grained GitHub API token stored separately with encryption; never place it in a URL."
+    }
+  }),
+  GithubRepositoryUpdateRequest: object([], {
+    name: { type: "string", minLength: 1, maxLength: 80 },
+    repositoryUrl: githubRepositoryUrlRequestSchema,
+    branch: { type: "string", minLength: 1, maxLength: 120 },
+    composePath: { type: "string", minLength: 1, maxLength: 255 },
+    projectName: composeProjectNameRequestSchema,
+    env: { type: "string" },
+    defaultHostId: idSchema,
+    hostCloneUrl: {
+      anyOf: [gitRepositoryUrlRequestSchema, { type: "string", maxLength: 0 }],
+      description: "Credential-free host-side Git clone URL; send an empty string to clear it."
+    },
+    hostCloneDirectory: { type: "string", maxLength: 1024 },
+    githubToken: { type: "string", maxLength: 4096, writeOnly: true },
+    clearGithubToken: { type: "boolean", default: false }
+  }),
+  GithubBranchesRequest: object(["repositoryUrl"], {
+    repositoryUrl: githubRepositoryUrlRequestSchema,
+    githubToken: { type: "string", maxLength: 4096, writeOnly: true }
+  }),
+  GithubAccessCheckRequest: object(["repositoryUrl"], {
+    repositoryUrl: githubRepositoryUrlRequestSchema,
+    branch: { type: "string", minLength: 1, maxLength: 120, default: "main" },
+    composePath: { type: "string", minLength: 1, maxLength: 255, default: "docker-compose.yml" },
+    githubToken: { type: "string", maxLength: 4096, writeOnly: true }
+  }),
+  GithubDeployRequest: object([], {
+    hostId: idSchema,
+    branch: { type: "string", minLength: 1, maxLength: 120 },
+    projectName: composeProjectNameRequestSchema,
+    composeYaml: { type: "string", minLength: 1 },
+    env: { type: "string", writeOnly: true },
+    mode: { type: "string", enum: ["api", "host_clone"], default: "api" },
+    hostCloneUrl: gitRepositoryUrlRequestSchema,
+    hostCloneDirectory: { type: "string", minLength: 1, maxLength: 1024 }
+  }),
   GithubRepository: object(["id", "name", "repositoryUrl", "owner", "repo", "branch", "composePath", "projectName", "env", "defaultHostId", "hostCloneUrl", "hostCloneDirectory", "lastDeployedAt", "lastDeployedCommitSha", "latestCommitSha", "updateCheckedAt", "updateCheckError", "hasGithubToken", "githubTokenStatus", "githubTokenCheckedAt", "githubTokenCheckError", "lastError", "createdAt", "updatedAt"], {
     id: idSchema,
     name: { type: "string" },
-    repositoryUrl: { type: "string" },
+    repositoryUrl: {
+      ...githubRepositoryUrlRequestSchema,
+      description: "Canonical credential-free GitHub repository URL."
+    },
     owner: { type: "string" },
     repo: { type: "string" },
     branch: { type: "string" },
@@ -710,7 +983,10 @@ const componentSchemas = {
     projectName: { type: "string" },
     env: { type: "string" },
     defaultHostId: idOrNullSchema,
-    hostCloneUrl: stringOrNullSchema,
+    hostCloneUrl: {
+      anyOf: [gitRepositoryUrlRequestSchema, { type: "null" }],
+      description: "Credential-free host-side clone URL."
+    },
     hostCloneDirectory: stringOrNullSchema,
     lastDeployedAt: stringOrNullSchema,
     lastDeployedCommitSha: stringOrNullSchema,
@@ -731,7 +1007,10 @@ const componentSchemas = {
     id: idSchema,
     sourceType: enumSchema(["git", "compose_url", "compose_upload", "image"]),
     name: { type: "string" },
-    sourceLocator: { type: "string" },
+    sourceLocator: {
+      type: "string",
+      description: "Canonical source locator. Git and Compose URL locators never contain credentials, query parameters, or fragments."
+    },
     branch: stringOrNullSchema,
     composePath: stringOrNullSchema,
     workingDir: stringOrNullSchema,
@@ -752,8 +1031,14 @@ const componentSchemas = {
     hostId: idSchema,
     sourceId: idOrNullSchema,
     sourceType: enumSchema(["git", "compose_url", "compose_upload", "image"]),
-    sourceInput: { type: "string" },
-    sourceLocator: stringOrNullSchema,
+    sourceInput: {
+      type: "string",
+      description: "Sanitized source input. Persisted Git and Compose URLs never reflect embedded credentials, queries, or fragments."
+    },
+    sourceLocator: {
+      type: ["string", "null"],
+      description: "Canonical credential-free source locator when applicable."
+    },
     status: enumSchema(["queued", "analyzing", "ready", "deploying", "deployed", "failed", "expired"]),
     displayName: stringOrNullSchema,
     projectName: stringOrNullSchema,
@@ -780,13 +1065,16 @@ const componentSchemas = {
   }),
   DeploymentAnalysisCreateRequest: object(["hostId", "source"], {
     hostId: idSchema,
-    source: { type: "string" },
+    source: {
+      type: "string",
+      description: "Git URL, public Compose URL, uploaded Compose text, or image reference. Git and Compose URLs reject embedded credentials, query parameters, and fragments."
+    },
     sourceType: enumSchema(["git", "compose_url", "compose_upload", "image"]),
     composeYaml: { type: "string" },
     branch: { type: "string" },
     composePath: { type: "string" },
-    credentialUsername: { type: "string", writeOnly: true },
-    credentialSecret: { type: "string", writeOnly: true },
+    credentialUsername: { type: "string", writeOnly: true, description: "HTTPS Git username; not supported for Compose URLs." },
+    credentialSecret: { type: "string", writeOnly: true, description: "Encrypted HTTPS Git token/password; not supported for Compose URLs." },
     sourceId: idSchema
   }, true),
   DeploymentExecuteRequest: object([], {
@@ -813,7 +1101,10 @@ const componentSchemas = {
   DeploymentSourceCreateRequest: object(["sourceType", "name", "sourceLocator", "projectName"], {
     sourceType: enumSchema(["git", "compose_url", "compose_upload", "image"]),
     name: { type: "string" },
-    sourceLocator: { type: "string" },
+    sourceLocator: {
+      type: "string",
+      description: "Git URL, public credential-free Compose URL, uploaded Compose locator, or image reference according to sourceType."
+    },
     branch: { type: "string" },
     composePath: { type: "string" },
     workingDir: { type: "string" },
@@ -821,11 +1112,15 @@ const componentSchemas = {
     composeYaml: { type: "string" },
     env: { type: "string", writeOnly: true },
     defaultHostId: idSchema,
-    credentialUsername: { type: "string", writeOnly: true },
-    credentialSecret: { type: "string", writeOnly: true }
+    credentialUsername: { type: "string", writeOnly: true, description: "HTTPS Git username; not supported for Compose URLs." },
+    credentialSecret: { type: "string", writeOnly: true, description: "Encrypted HTTPS Git token/password; not supported for Compose URLs." }
   }, true),
   RegistryTrustRequest: object(["registry"], {
-    registry: { type: "string" },
+    registry: {
+      type: "string",
+      description: "Validated DNS name, IPv4 address, or bracketed IPv6 address with optional port. An http(s) origin is accepted only without credentials, path, query, or fragment.",
+      examples: ["registry.example.test:5000", "[2001:db8::1]:5000"]
+    },
     insecure: { type: "boolean", default: true }
   }),
   RegistryTrustResponse: namedItemResponse("registryTrust", object(["registry", "insecure", "trusted", "canApply", "requiresRestart", "message"], {

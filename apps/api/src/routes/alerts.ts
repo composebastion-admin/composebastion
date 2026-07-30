@@ -3,7 +3,8 @@ import { idSchema } from "@composebastion/shared";
 import { z } from "zod";
 import { requireRole } from "../services/auth.js";
 import { createAlertRule, createAlertSilence, createChannel, deleteAlertRule, deleteAlertSilence, deleteChannel, listAlertChannelTestEvents, listAlertEvents, listAlertRules, listAlertSilences, listChannels, listRecentAlertChannelTestEvents, sendTestNotification } from "../services/alerts.js";
-import { writeAuditEvent } from "../services/audit.js";
+import { auditContextFromRequest, writeAuditEvent } from "../services/audit.js";
+import { withTransaction } from "../db/pool.js";
 import { authenticatedReadRateLimit, sensitiveMutationRateLimit } from "../services/rateLimits.js";
 
 const testHistoryQuerySchema = z.object({
@@ -22,7 +23,16 @@ export async function registerAlertRoutes(app: FastifyInstance) {
   });
   app.delete("/api/alerts/channels/:id", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
     const { id } = request.params as { id: string };
-    await deleteChannel(id);
+    await withTransaction(async (client) => {
+      await deleteChannel(id, client);
+      await writeAuditEvent({
+        userId: request.user?.id,
+        action: "alert.channel.delete",
+        targetKind: "notification_channel",
+        targetId: id,
+        ...auditContextFromRequest(request)
+      }, client);
+    });
     return { ok: true };
   });
   app.post("/api/alerts/channels/:id/test", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
@@ -48,7 +58,16 @@ export async function registerAlertRoutes(app: FastifyInstance) {
   });
   app.delete("/api/alerts/rules/:id", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
     const { id } = request.params as { id: string };
-    await deleteAlertRule(id);
+    await withTransaction(async (client) => {
+      await deleteAlertRule(id, client);
+      await writeAuditEvent({
+        userId: request.user?.id,
+        action: "alert.rule.delete",
+        targetKind: "alert_rule",
+        targetId: id,
+        ...auditContextFromRequest(request)
+      }, client);
+    });
     return { ok: true };
   });
 
