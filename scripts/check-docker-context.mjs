@@ -386,12 +386,30 @@ try {
   const retryReplacementSource = path.join(root, "retry-replacement-source.txt");
   writeFileSync(retryReplacementPayload, "identical contents\n");
   writeFileSync(retryReplacementSource, "identical contents\n");
-  const retryReplacementOriginal = statSync(retryReplacementPayload);
-  chmodSync(retryReplacementSource, retryReplacementOriginal.mode & 0o777);
+  const retryReplacementTimestampSeconds = 1_700_000_000;
+  for (const target of [
+    retryReplacementContext,
+    retryReplacementPayload,
+    retryReplacementSource
+  ]) {
+    utimesSync(
+      target,
+      retryReplacementTimestampSeconds,
+      retryReplacementTimestampSeconds
+    );
+  }
+  const retryReplacementOriginal = statSync(
+    retryReplacementPayload,
+    { bigint: true }
+  );
+  chmodSync(
+    retryReplacementSource,
+    Number(retryReplacementOriginal.mode & 0o777n)
+  );
   utimesSync(
     retryReplacementSource,
-    retryReplacementOriginal.atimeMs / 1_000,
-    retryReplacementOriginal.mtimeMs / 1_000
+    retryReplacementTimestampSeconds,
+    retryReplacementTimestampSeconds
   );
   let retryReplacementChurnApplied = false;
   let retryReplacementIdentityChangedOnly = false;
@@ -411,23 +429,32 @@ try {
         retryReplacementChurnApplied = true;
       },
       beforeDirectoryMetadataRetry: () => {
-        const parentStat = statSync(retryReplacementContext);
+        const parentStat = statSync(
+          retryReplacementContext,
+          { bigint: true }
+        );
         renameSync(retryReplacementSource, retryReplacementPayload);
         utimesSync(
           retryReplacementContext,
-          parentStat.atimeMs / 1_000,
-          parentStat.mtimeMs / 1_000
+          retryReplacementTimestampSeconds,
+          retryReplacementTimestampSeconds
         );
-        const replacementStat = statSync(retryReplacementPayload);
-        const restoredParentStat = statSync(retryReplacementContext);
+        const replacementStat = statSync(
+          retryReplacementPayload,
+          { bigint: true }
+        );
+        const restoredParentStat = statSync(
+          retryReplacementContext,
+          { bigint: true }
+        );
         retryReplacementIdentityChangedOnly =
           replacementStat.dev === retryReplacementOriginal.dev
           && replacementStat.ino !== retryReplacementOriginal.ino
           && replacementStat.mode === retryReplacementOriginal.mode
           && replacementStat.size === retryReplacementOriginal.size
-          && replacementStat.mtimeMs === retryReplacementOriginal.mtimeMs;
+          && replacementStat.mtimeNs === retryReplacementOriginal.mtimeNs;
         retryReplacementParentMtimeRestored =
-          restoredParentStat.mtimeMs === parentStat.mtimeMs;
+          restoredParentStat.mtimeNs === parentStat.mtimeNs;
       }
     });
   } catch (error) {
@@ -435,12 +462,19 @@ try {
       "entries changed across a directory metadata retry"
     );
   }
-  if (!retryReplacementChurnApplied
-      || !retryReplacementIdentityChangedOnly
-      || !retryReplacementParentMtimeRestored
-      || !retryReplacementRejected) {
+  const retryReplacementChecks = {
+    churnApplied: retryReplacementChurnApplied,
+    identityChangedOnly: retryReplacementIdentityChangedOnly,
+    parentMtimeRestored: retryReplacementParentMtimeRestored,
+    replacementRejected: retryReplacementRejected
+  };
+  const failedRetryReplacementChecks = Object.entries(retryReplacementChecks)
+    .filter(([, passed]) => !passed)
+    .map(([name]) => name);
+  if (failedRetryReplacementChecks.length > 0) {
     failures.push(
-      "an identical same-name inode replacement was accepted across a directory metadata retry"
+      "identical same-name inode replacement check failed: "
+      + failedRetryReplacementChecks.join(", ")
     );
   }
 
