@@ -78,11 +78,13 @@ describe("recovery temporary storage cleanup", () => {
     const staleDate = new Date(nowMs - 60 * 60_000);
 
     await Promise.all([
-      writeFile(staleHydrated, "stale hydration"),
       mkdir(staleRemoteVerify),
       mkdir(downloadProtectedRemoteVerify),
       mkdir(activeRemoteVerification),
-      mkdir(recentRemoteVerification),
+      mkdir(recentRemoteVerification)
+    ]);
+    await Promise.all([
+      writeFile(staleHydrated, "stale hydration"),
       writeFile(staleDownload, "stale download"),
       writeFile(staleDownloadLease, "stopped\n", { mode: 0o600 }),
       writeFile(activeDownload, "active download"),
