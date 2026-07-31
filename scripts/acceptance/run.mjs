@@ -2115,8 +2115,16 @@ async function sourceProductionScenario() {
     const appProof = await sourceCompose(["exec", "-T", "app", "node", "-e",
       `process.stdout.write(require('node:fs').readFileSync('/data/backups/${proofName}','utf8'))`]);
     assert(appProof.stdout === proofValue, "source app and worker did not share backup storage");
-    assert((await readFile(path.join(backupDir, proofName), "utf8")) === proofValue, "source backup bind did not persist to the host");
-    await rm(path.join(backupDir, proofName), { force: true });
+    const hostProof = await run("docker", [
+      "run", "--rm", "--user", "1000:1000",
+      "--volume", `${path.resolve(backupDir)}:/data/backups:ro`,
+      report.candidateImages.app.id,
+      "node", "-e",
+      `process.stdout.write(require('node:fs').readFileSync('/data/backups/${proofName}','utf8'))`
+    ]);
+    assert(hostProof.stdout === proofValue, "source backup bind did not persist to the host");
+    await sourceCompose(["exec", "-T", "worker", "node", "-e",
+      `require('node:fs').unlinkSync('/data/backups/${proofName}')`]);
     return {
       runtimeVersion: health.version,
       productionSourceCompose: true,
