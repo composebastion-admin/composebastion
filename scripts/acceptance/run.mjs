@@ -373,6 +373,33 @@ function run(command, args, options = {}) {
   });
 }
 
+async function setManagerBackupDirectoryOwnership(backupDir, mode) {
+  const resolvedBackupDir = path.resolve(backupDir);
+  const resolvedRuntimeDir = path.resolve(runtimeDir);
+  if (
+    resolvedBackupDir === resolvedRuntimeDir
+    || !resolvedBackupDir.startsWith(`${resolvedRuntimeDir}${path.sep}`)
+  ) {
+    throw new Error(
+      `Acceptance backup directory escapes the owned runtime: ${resolvedBackupDir}`
+    );
+  }
+  const candidateAppId = report.candidateImages?.app?.id;
+  assert(
+    candidateAppId,
+    "candidate app image identity is unavailable for backup ownership"
+  );
+  await run("docker", [
+    "run", "--rm", "--user", "0:0",
+    "--volume", `${resolvedBackupDir}:/data/backups`,
+    candidateAppId,
+    "sh", "-ceu",
+    mode === "manager"
+      ? "chown -R 1000:1000 /data/backups; chmod -R u+rwX,g-rwx,o-rwx /data/backups"
+      : "chmod -R a+rwX /data/backups"
+  ]);
+}
+
 function compose(project, env, args, options = {}) {
   assertExplicitComposeControls(env, requiredImageComposeControls, "production image acceptance Compose");
   return composeWithFiles(project, env, [productionImageComposeFile, composeFile], args, options);
@@ -1895,6 +1922,10 @@ async function freshCandidateScenario() {
   const project = projectName("fresh");
   const env = acceptanceEnv(candidateImage, { ACCEPTANCE_SCENARIO: "fresh" });
   await mkdir(env.COMPOSEBASTION_BACKUP_DIR, { recursive: true });
+  await setManagerBackupDirectoryOwnership(
+    env.COMPOSEBASTION_BACKUP_DIR,
+    "manager"
+  );
   activeProject = project;
   activeEnv = env;
   sessionCookie = "";
@@ -1971,8 +2002,15 @@ async function freshCandidateScenario() {
         await cleanupManagedDockerState();
         await compose(project, env, ["down", "--volumes", "--remove-orphans", "--rmi", "local"]);
       } finally {
-        activeProject = null;
-        activeEnv = null;
+        try {
+          await setManagerBackupDirectoryOwnership(
+            env.COMPOSEBASTION_BACKUP_DIR,
+            "cleanup"
+          );
+        } finally {
+          activeProject = null;
+          activeEnv = null;
+        }
       }
     }
   }
@@ -1984,6 +2022,7 @@ async function sourceProductionScenario() {
   const sourcePort = portBase + 180;
   const sourceUrl = `http://127.0.0.1:${sourcePort}`;
   await mkdir(backupDir, { recursive: true });
+  await setManagerBackupDirectoryOwnership(backupDir, "manager");
   const env = {
     ...hostEnvironment,
     ...managerComposeControls({
@@ -2102,7 +2141,13 @@ async function sourceProductionScenario() {
     }
     throw error;
   } finally {
-    if (!keep) await sourceCompose(["down", "--volumes", "--remove-orphans", "--rmi", "local"]);
+    if (!keep) {
+      try {
+        await sourceCompose(["down", "--volumes", "--remove-orphans", "--rmi", "local"]);
+      } finally {
+        await setManagerBackupDirectoryOwnership(backupDir, "cleanup");
+      }
+    }
   }
 }
 
@@ -2123,20 +2168,6 @@ async function hardenedContainersScenario() {
   const backupDir = env.COMPOSEBASTION_BACKUP_DIR;
   assertExplicitComposeControls(env, requiredHardenedComposeControls, "hardened production image acceptance Compose");
   const hardenedCompose = (args, options = {}) => composeWithFiles(project, env, files, args, options);
-
-  async function prepareBackupOwnership(mode) {
-    const candidateAppId = report.candidateImages?.app?.id;
-    assert(candidateAppId, "candidate app image identity is unavailable for hardened backup ownership");
-    await run("docker", [
-      "run", "--rm", "--user", "0:0",
-      "--volume", `${backupDir}:/data/backups`,
-      candidateAppId,
-      "sh", "-ceu",
-      mode === "hardened"
-        ? "chown -R 1000:1000 /data/backups; chmod -R u+rwX,g+rwX,o-rwx /data/backups"
-        : "chmod -R a+rwX /data/backups"
-    ]);
-  }
 
   async function inspectService(service, expectedUser = null) {
     const container = await hardenedCompose(["--profile", "hardening", "ps", "--quiet", service]);
@@ -2180,7 +2211,7 @@ async function hardenedContainersScenario() {
   }
 
   await mkdir(backupDir, { recursive: true });
-  await prepareBackupOwnership("hardened");
+  await setManagerBackupDirectoryOwnership(backupDir, "manager");
   activeProject = project;
   activeEnv = env;
   try {
@@ -2329,10 +2360,13 @@ async function hardenedContainersScenario() {
     if (!keep) {
       try {
         await hardenedCompose(["--profile", "hardening", "down", "--volumes", "--remove-orphans", "--rmi", "local"]);
-        await prepareBackupOwnership("cleanup");
       } finally {
-        activeProject = null;
-        activeEnv = null;
+        try {
+          await setManagerBackupDirectoryOwnership(backupDir, "cleanup");
+        } finally {
+          activeProject = null;
+          activeEnv = null;
+        }
       }
     }
   }
@@ -2348,6 +2382,10 @@ async function upgradeScenario(baseline) {
   let oldEnv = acceptanceEnv(baseline.pinnedImage, upgradeOverrides);
   const newEnv = acceptanceEnv(candidateImage, upgradeOverrides);
   await mkdir(oldEnv.COMPOSEBASTION_BACKUP_DIR, { recursive: true });
+  await setManagerBackupDirectoryOwnership(
+    oldEnv.COMPOSEBASTION_BACKUP_DIR,
+    "manager"
+  );
   activeProject = project;
   activeEnv = oldEnv;
   sessionCookie = "";
@@ -2845,8 +2883,15 @@ async function upgradeScenario(baseline) {
       try {
         await compose(project, newEnv, ["down", "--volumes", "--remove-orphans", "--rmi", "local"]);
       } finally {
-        activeProject = null;
-        activeEnv = null;
+        try {
+          await setManagerBackupDirectoryOwnership(
+            newEnv.COMPOSEBASTION_BACKUP_DIR,
+            "cleanup"
+          );
+        } finally {
+          activeProject = null;
+          activeEnv = null;
+        }
       }
     }
   }

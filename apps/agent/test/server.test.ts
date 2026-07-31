@@ -2,8 +2,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { EventEmitter } from "node:events";
 import { constants as fsConstants } from "node:fs";
 import {
-  lstat,
   mkdir,
+  mkdtemp,
   open,
   readFile,
   rm,
@@ -11,7 +11,10 @@ import {
   symlink,
   writeFile
 } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import packageJson from "../package.json";
+import { AGENT_STACK_ROOT } from "../src/paths.js";
 
 type ExecResult = {
   stdout?: string;
@@ -69,10 +72,8 @@ vi.mock("node:child_process", () => ({
 }));
 
 const token = "agent-server-test-token-that-is-long-enough";
-const agentFileFixtureRoot =
-  `/tmp/composebastion/agent-operation-test-${process.pid}`;
-const agentFileOutsideRoot =
-  `/tmp/composebastion-agent-outside-${process.pid}`;
+let agentFileFixtureRoot: string;
+let agentFileOutsideRoot: string;
 const dockerStatsTombstone = {
   BlockIO: "0B / 0B",
   CPUPerc: "0.00%",
@@ -125,6 +126,13 @@ function createReply() {
 }
 
 beforeAll(async () => {
+  await mkdir(AGENT_STACK_ROOT, { recursive: true, mode: 0o700 });
+  agentFileFixtureRoot = await mkdtemp(
+    path.join(AGENT_STACK_ROOT, "agent-operation-test-")
+  );
+  agentFileOutsideRoot = await mkdtemp(
+    path.join(tmpdir(), "composebastion-agent-outside-")
+  );
   process.env.AGENT_HOST = "127.0.0.1";
   process.env.AGENT_PORT = "19091";
   process.env.AGENT_TOKEN = token;
@@ -281,8 +289,9 @@ describe("agent server", () => {
 
   it("atomically receipts and deduplicates an exact agent file write", async () => {
     const operationId = "d".repeat(64);
-    const target = `${agentFileFixtureRoot}/dedupe/compose.yml`;
-    await rm(agentFileFixtureRoot, { recursive: true, force: true });
+    const directory = path.join(agentFileFixtureRoot, "dedupe");
+    const target = path.join(directory, "compose.yml");
+    await rm(directory, { recursive: true, force: true });
     const payload = {
       path: target,
       content: "services:\n  web:\n    image: nginx:alpine\n",
@@ -308,9 +317,11 @@ describe("agent server", () => {
     expect(await readFile(target, "utf8")).toBe(payload.content);
     expect((await stat(target)).mode & 0o777).toBe(0o600);
 
-    // Removing the target makes a replay observable. An exact duplicate must
-    // return the retained receipt without executing the write a second time.
+    // Replacing the target with a sentinel makes a replay observable. An exact
+    // duplicate must return the retained receipt without executing the write
+    // a second time.
     await rm(target);
+    await writeFile(target, "retained-replay-sentinel\n", { mode: 0o600 });
     const duplicateReply = createReply();
     await expect(
       route("POST", "/api/files/write")(
@@ -320,11 +331,16 @@ describe("agent server", () => {
     ).resolves.toMatchObject({
       operation: { operationId, status: "completed" }
     });
-    // The deliberate deletion above is the behavior under test.
-    // lgtm[js/file-system-race]
-    await expect(readFile(target, "utf8")).rejects.toMatchObject({
-      code: "ENOENT"
-    });
+    const replayTarget = await open(
+      target,
+      fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW
+    );
+    try {
+      expect(await replayTarget.readFile("utf8"))
+        .toBe("retained-replay-sentinel\n");
+    } finally {
+      await replayTarget.close();
+    }
 
     const statusReply = createReply();
     await expect(
@@ -403,9 +419,7 @@ describe("agent server", () => {
     const outsideSentinel = `${agentFileOutsideRoot}/sentinel`;
     const linkedFile = `${safeDirectory}/linked-file`;
     await rm(safeDirectory, { recursive: true, force: true });
-    await rm(agentFileOutsideRoot, { recursive: true, force: true });
     await mkdir(safeDirectory, { recursive: true });
-    await mkdir(agentFileOutsideRoot, { recursive: true });
     await writeFile(outsideSentinel, "outside-sentinel", { mode: 0o600 });
     await symlink(agentFileOutsideRoot, linkedParent);
     await symlink(outsideSentinel, linkedFile);
