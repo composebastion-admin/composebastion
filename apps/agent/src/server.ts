@@ -359,14 +359,34 @@ async function assertAgentParentPath(
 
 async function openAgentFileForRead(target: string) {
   await assertAgentParentPath(path.dirname(target), false);
-  const info = await lstat(target);
-  if (info.isSymbolicLink() || !info.isFile()) {
-    throw agentPathConfinementError();
+  let file: Awaited<ReturnType<typeof open>> | null = null;
+  try {
+    file = await open(
+      target,
+      fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW
+    );
+    const info = await file.stat();
+    if (!info.isFile()) throw agentPathConfinementError();
+
+    if (process.platform === "linux") {
+      const [resolvedRoot, resolvedFile] = await Promise.all([
+        realpath(AGENT_STACK_ROOT),
+        realpath(`/proc/self/fd/${file.fd}`)
+      ]);
+      const expectedFile = path.resolve(
+        resolvedRoot,
+        path.relative(AGENT_STACK_ROOT, target)
+      );
+      if (resolvedFile !== expectedFile) throw agentPathConfinementError();
+    }
+    return file;
+  } catch (error) {
+    await file?.close().catch(() => undefined);
+    if ((error as NodeJS.ErrnoException).code === "ELOOP") {
+      throw agentPathConfinementError();
+    }
+    throw error;
   }
-  return open(
-    target,
-    fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW
-  );
 }
 
 async function runTrackedAgentFileWrite(

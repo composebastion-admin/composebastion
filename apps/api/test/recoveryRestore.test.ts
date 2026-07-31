@@ -1305,7 +1305,6 @@ describe("recovery standalone restore cleanup", () => {
       recoveryPointId
     );
     const composePath = `${stackDirectory}/compose.yml`;
-    const envPath = `${stackDirectory}/.env`;
     const composeContainer = `${composeProjectName}-web-1`;
     const composeVolumeArtifactRow = {
       ...volumeArtifactRow,

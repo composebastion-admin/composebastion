@@ -1,4 +1,4 @@
-import { access, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -64,6 +64,7 @@ const hostId = "00000000-0000-4000-8000-000000000302";
 const probePayload = Buffer.from("ComposeBastion backup target health probe\n", "utf8");
 const fixedDate = new Date("2026-07-30T12:00:00.000Z");
 let localProbeRoot = "";
+let localProbeParent = "";
 
 function targetRow(overrides: Record<string, unknown> = {}) {
   return {
@@ -170,12 +171,10 @@ function mockLockedLifecycle(
   });
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
-  localProbeRoot = path.join(
-    tmpdir(),
-    `composebastion-lifecycle-${process.pid}-${Math.random().toString(16).slice(2)}`
-  );
+  localProbeParent = await mkdtemp(path.join(tmpdir(), "composebastion-lifecycle-"));
+  localProbeRoot = path.join(localProbeParent, "recovery-points");
   mocks.recoveryPointsRootDir.mockReturnValue(localProbeRoot);
   mocks.withTransaction.mockImplementation(async (
     handler: (client: { query: typeof mocks.transactionQuery }) => Promise<unknown>
@@ -228,7 +227,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  await rm(localProbeRoot, { recursive: true, force: true });
+  await rm(localProbeParent, { recursive: true, force: true });
 });
 
 describe("backup target readiness probes", () => {

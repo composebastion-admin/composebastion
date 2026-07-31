@@ -1,8 +1,10 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
+import { constants as fsConstants } from "node:fs";
 import {
   lstat,
   mkdir,
+  open,
   readFile,
   rm,
   stat,
@@ -318,6 +320,8 @@ describe("agent server", () => {
     ).resolves.toMatchObject({
       operation: { operationId, status: "completed" }
     });
+    // The deliberate deletion above is the behavior under test.
+    // lgtm[js/file-system-race]
     await expect(readFile(target, "utf8")).rejects.toMatchObject({
       code: "ENOENT"
     });
@@ -377,8 +381,16 @@ describe("agent server", () => {
       operation: { operationId, status: "completed" }
     });
 
-    expect((await lstat(target)).isSymbolicLink()).toBe(false);
-    expect(await readFile(target, "utf8")).toBe("services: {}\n");
+    const targetFile = await open(
+      target,
+      fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW
+    );
+    try {
+      expect((await targetFile.stat()).isSymbolicLink()).toBe(false);
+      expect(await targetFile.readFile("utf8")).toBe("services: {}\n");
+    } finally {
+      await targetFile.close();
+    }
     expect(await readFile(sentinel, "utf8")).toBe("sentinel");
   });
 

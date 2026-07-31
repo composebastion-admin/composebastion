@@ -22,21 +22,15 @@ import {
   registerRecoveryRestoreResource
 } from "./recoveryRestoreAttempts.js";
 import {
-  buildRecoveryNetworkMap,
   buildRecoveryRestorePlan,
   getRecoveryPointForRestore,
   loadRecoveryManifest,
   type RecoveryRestorePlan
 } from "./recoveryRestorePlan.js";
 import {
-  assertAllowedRestoreRoot,
-  buildComposeProjectVolumeName,
   buildBindMountRestoreCommand,
   buildCloneContainerName,
-  buildCloneRestoreProjectName,
-  buildCloneVolumeName,
   buildComposeServiceBindMounts,
-  composeVolumeNameFromEngineName,
   buildPortRemap,
   buildStandaloneContainerCreateCommand,
   buildStandaloneNetworkConnectCommand,
@@ -46,7 +40,6 @@ import {
   remapComposeYaml,
   assertAllowedHostFolderTargetPath,
   resolveRestoredBindMountPath,
-  resolveHostFolderRestorePath,
   standaloneContainerExtraNetworks
 } from "./recoveryRestoreUtils.js";
 import {
@@ -1288,18 +1281,6 @@ async function listTargetUsedPorts(targetHostId: string) {
   return used;
 }
 
-async function cleanupStandaloneContainers(
-  host: Awaited<ReturnType<typeof getHostForWorker>>,
-  containerNames: string[],
-  ownership: RestoreOwnership
-) {
-  const failures: string[] = [];
-  for (const containerName of Array.from(new Set(containerNames.filter(Boolean))).reverse()) {
-    failures.push(...await cleanupOwnedDockerResource(host, "container", containerName, ownership));
-  }
-  return failures;
-}
-
 async function restoreStandaloneContainers(input: {
   hostId: string;
   manifest: RecoveryManifest;
@@ -1422,26 +1403,6 @@ function composeNetworkNameFromEngineName(networkName: string, projectName: stri
   if (!projectName) return networkName;
   const prefix = `${projectName}_`;
   return networkName.startsWith(prefix) ? networkName.slice(prefix.length) : networkName;
-}
-
-function buildNetworkMap(manifest: RecoveryManifest | null, projectName: string, networkMode: "clone" | "reuse") {
-  const map: Record<string, string> = {};
-  if (!manifest) return map;
-  for (const container of manifest.containers) {
-    for (const network of container.networks) {
-      if (!network || BUILTIN_NETWORKS.has(network)) continue;
-      const sourceNetwork = (manifest.networks ?? []).find((item) => item.name === network);
-      const composeLogicalName = sourceNetwork?.labels["com.docker.compose.network"]?.trim();
-      const logicalName = composeLogicalName
-        || composeNetworkNameFromEngineName(network, manifest.compose.projectName);
-      const targetName = networkMode === "reuse"
-        ? network
-        : `${projectName}_${logicalName.replace(/[^a-zA-Z0-9_.-]/g, "_")}`.slice(0, 255);
-      map[network] = targetName;
-      if (logicalName !== network) map[logicalName] = targetName;
-    }
-  }
-  return map;
 }
 
 function findSourceNetwork(manifest: RecoveryManifest | null, sourceName: string) {

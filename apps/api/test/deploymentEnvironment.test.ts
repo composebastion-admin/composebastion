@@ -16,6 +16,8 @@ describe("deployment environment durability", () => {
       ["DOUBLE_QUOTE", "say \"hello\""],
       ["SINGLE_QUOTE", "it's qualified"],
       ["BACKSLASH", "c:\\qualified\\path"],
+      ["TRAILING_BACKSLASH", "c:\\qualified\\"],
+      ["BACKSLASH_QUOTE", "c:\\operator's stack"],
       ["PADDED", "  padded  "],
       ["MULTILINE", "line one\nline two"],
       ["EMPTY", ""]
@@ -26,6 +28,8 @@ describe("deployment environment durability", () => {
     expect(serialized).toContain("COMMENT='alpha #beta'");
     expect(serialized).toContain("DOLLAR='cost $5 and ${HOME}'");
     expect(serialized).toContain("SINGLE_QUOTE='it\\'s qualified'");
+    expect(serialized).toContain("TRAILING_BACKSLASH='c:\\\\qualified\\\\'");
+    expect(serialized).toContain("BACKSLASH_QUOTE='c:\\\\operator\\'s stack'");
   });
 
   it("parses quoted, exported, commented, escaped, and multiline dotenv values", () => {

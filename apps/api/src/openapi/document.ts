@@ -538,13 +538,6 @@ const githubRepositoryUrlRequestSchema = {
   description: "Credential-free HTTPS github.com repository URL with exactly owner/repository path segments. Query parameters and fragments are rejected.",
   example: "https://github.com/example/app"
 };
-const composeSourceUrlRequestSchema = {
-  type: "string",
-  format: "uri",
-  minLength: 1,
-  maxLength: 2048,
-  description: "Public HTTP(S) Compose file URL without credentials, query parameters, or a fragment. Upload private Compose content instead."
-};
 const containerPortMappingRequestSchema = object(["hostPort", "containerPort"], {
   hostPort: { type: "integer", minimum: 1, maximum: 65535 },
   containerPort: { type: "integer", minimum: 1, maximum: 65535 },

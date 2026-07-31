@@ -2,7 +2,7 @@ import { v4 as uuid } from "uuid";
 import { backupScheduleCreateSchema, sanitizeUrlDiagnosticText } from "@composebastion/shared";
 import type { PoolClient } from "pg";
 import { query } from "../db/pool.js";
-import { enqueueJobInTransaction, notifyJobQueued } from "./jobs.js";
+import { notifyJobQueued } from "./jobs.js";
 import { withTransaction } from "../db/pool.js";
 import {
   assertBackupTargetUsable,

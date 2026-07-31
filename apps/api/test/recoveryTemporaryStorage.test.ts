@@ -1,7 +1,9 @@
+import { constants as fsConstants } from "node:fs";
 import {
   lstat,
   mkdir,
   mkdtemp,
+  open,
   readFile,
   rename,
   rm,
@@ -202,9 +204,18 @@ describe("recovery temporary storage cleanup", () => {
     });
 
     const markerPath = path.join(directory, storage.RECOVERY_RECONCILIATION_MARKER);
-    const markerStats = await lstat(markerPath);
-    expect(markerStats.mode & 0o777).toBe(0o600);
-    const marker = JSON.parse(await readFile(markerPath, "utf8"));
+    const markerFile = await open(
+      markerPath,
+      fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW
+    );
+    let marker: Record<string, unknown>;
+    try {
+      const markerStats = await markerFile.stat();
+      expect(markerStats.mode & 0o777).toBe(0o600);
+      marker = JSON.parse(await markerFile.readFile("utf8"));
+    } finally {
+      await markerFile.close();
+    }
     expect(marker).toMatchObject({
       reason: "capture_commit_outcome_unknown",
       ...evidence,

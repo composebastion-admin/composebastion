@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JobExecutionFence } from "../src/services/jobs.js";
 import { decryptSecret } from "../src/services/crypto.js";
 
@@ -146,12 +146,14 @@ function target(kind: "s3" | "rclone") {
 }
 
 describe("recovery capture remote durability", () => {
+  let backupDirectory: string;
   let tempDirectory: string;
   let localPath: string;
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    tempDirectory = await mkdtemp(path.join(os.tmpdir(), "recovery-remote-durability-"));
+    backupDirectory = await mkdtemp(path.join(os.tmpdir(), "recovery-remote-durability-"));
+    tempDirectory = path.join(backupDirectory, "recovery-points");
     localPath = path.join(tempDirectory, pointId, "manifest.json");
     captureAttempt.directory = path.dirname(localPath);
     await mkdir(path.dirname(localPath), { recursive: true });
@@ -199,6 +201,10 @@ describe("recovery capture remote durability", () => {
     );
     mocks.deleteRemoteArtifact.mockResolvedValue(undefined);
     mocks.preserveTrackedRecoveryTemporaryDirectory.mockResolvedValue(undefined);
+  });
+
+  afterEach(async () => {
+    await rm(backupDirectory, { recursive: true, force: true });
   });
 
   it.each(["s3", "rclone"] as const)(

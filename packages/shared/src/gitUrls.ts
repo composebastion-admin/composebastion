@@ -337,6 +337,9 @@ function canWhitespaceContinueApparentUserInfo(
   const schemeColon = value.indexOf(":", start);
   if (schemeColon < 0 || schemeColon >= whitespaceStart) return false;
   let authorityStart = schemeColon + 1;
+  // This predicate only identifies malformed credential-like URL text for
+  // fail-closed diagnostic redaction; it does not authorize an action.
+  // lgtm[js/user-controlled-bypass]
   while (value[authorityStart] === "/" || value[authorityStart] === "\\") {
     authorityStart += 1;
   }

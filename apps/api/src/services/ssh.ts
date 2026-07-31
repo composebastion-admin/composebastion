@@ -569,6 +569,9 @@ export async function runSshCommand(
       ? null
       : {
           byteLength: Buffer.byteLength(options.input),
+          // This is a transient byte-integrity proof sent inside the SSH
+          // command, not a stored or authentication password hash.
+          // lgtm[js/insufficient-password-hash]
           sha256: createHash("sha256").update(options.input).digest("hex")
         };
     result = await runSshCommandRaw(

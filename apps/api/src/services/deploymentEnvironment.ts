@@ -74,8 +74,8 @@ export function parseDeploymentEnvironment(value: string) {
         }
         if (character === "\\" && index + 1 < value.length) {
           const next = value[index + 1]!;
-          if (quote === "'" && next === "'") {
-            parsed += "'";
+          if (quote === "'" && (next === "'" || next === "\\")) {
+            parsed += next;
             index += 2;
             continue;
           }
@@ -114,7 +114,7 @@ export function parseDeploymentEnvironment(value: string) {
 export function serializeDeploymentEnvironment(values: Map<string, string>) {
   return Array.from(
     values,
-    ([key, value]) => `${key}='${value.replace(/'/g, "\\'")}'`
+    ([key, value]) => `${key}='${value.replace(/[\\']/g, (character) => `\\${character}`)}'`
   ).join("\n");
 }
 

@@ -203,10 +203,6 @@ function normalizedJobTargetPath(value: unknown) {
   return target ? path.posix.normalize(target) : target;
 }
 
-function normalizedJobProject(value: unknown) {
-  return String(value ?? "").trim().toLowerCase();
-}
-
 function isAmbiguousRemoteOutcome(row: any) {
   return row?.status === "failed"
     && (
