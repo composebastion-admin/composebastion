@@ -6,7 +6,7 @@ on:
     tags:
       - "v*"
   pull_request:
-    branches: [main, beta]
+    branches: [main, beta, dev]
   workflow_dispatch:
 
 permissions:
