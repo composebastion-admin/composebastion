@@ -18,17 +18,29 @@ deployment, and runtime Docker images.
 
 Run the same gates CI expects before release:
 
+- `node scripts/bootstrap-npm.mjs` followed by the exact locked `npm ci`
+- `npm run check:npm-version`
+- `npm run check:npm-install-policy`
 - `npm run typecheck`
 - `npm run lint:migrations`
 - `npm run openapi:check`
 - `npm run check:release-version`
 - `npm run check:public-hygiene`
+- `npm run check:gitleaks`
+- `npm run check:go-attribution:release`
+- `npm run test:go-attribution-policy`
+- `npm run test:container-config-policy`
+- `npm run test:release-image-policy`
+- `npm run test:release-alias-policy`
+- `npm run test:acceptance-policy`
 - `npm run notices:check`
 - `npm run check:actions-pinned`
 - `npm run check:release-workflows`
 - `npm run check:compose-env`
 - `npm run check:docker-context`
+- `npm run check:container-config`
 - `npm run acceptance:config`
+- `npm run acceptance:assert-report` after the live acceptance run
 - `npm test`
 - `npm run smoke:web:qualification`
 - `npm audit --audit-level=high`
@@ -80,8 +92,12 @@ Run the same gates CI expects before release:
   from `v*` git tags.
 - The workflow builds each app/agent architecture once as an OCI archive,
   scans that exact archive, and requires all four scans before copying any
-  archive to GHCR. Stable tags promote the protected commit's existing SHA
-  indexes and never rebuild them.
+  archive to GHCR. It generates an SPDX JSON SBOM from each exact passing OCI
+  layout, verifies the copied final root filesystem and legal bundle, then
+  attaches signed SBOM attestations to all four platform digests and signed
+  build provenance to both verified indexes before moving a branch alias.
+  Stable tags verify those attestations, promote the protected commit's
+  existing SHA indexes, and never rebuild them.
 - `npm run release:verify-images` applies the same invariant locally. It requires
   a clean checkout; builds app and agent for `linux/amd64` and `linux/arm64`
   exactly once; verifies the archive, manifest, config, platform, and release
@@ -96,6 +112,38 @@ Run the same gates CI expects before release:
   building from source.
 - After publishing, verify the GitHub Actions run and the registry/package page
   instead of assuming the push succeeded.
+- Treat an alias-reconciliation failure as a public-state incident: compare app
+  and agent alias digests with the recorded index pair before retrying or
+  announcing the release.
+- Before moving an existing app/agent alias pair, the workflow captures both
+  prior digests, verifies attested pairs from one source revision, and records
+  the pair. If reconciliation fails, it attempts to restore and verify every
+  alias with a genuine prior digest. A `verified` rollback is required;
+  `rollback-failed` is a public-state incident that blocks retry and
+  announcement. GHCR cannot safely delete only one newly created tag when its
+  manifest is shared. A one-sided new alias is left at the exact new digest,
+  marked `partial-blocked`, and stops later alias phases. A fully reconciled new
+  exact/minor pair is retained if a later alias fails, with
+  `failed-retained-new-pair` evidence, while the workflow attempts to restore
+  every older alias. Every completed workflow attempt uploads paired
+  reconciliation evidence; runner loss or cancellation may prevent upload and
+  therefore also blocks announcement.
+- The first attestation-aware migration has an explicit, expiring allowlist in
+  `.github/legacy-alias-bootstrap.json` for the exact observed unattested
+  `beta`, `main`, and `latest` digest pairs. A legacy pair is admitted only when
+  its alias, ref, two digests, shared revision labels, canonical repositories,
+  pending status, and expiry all match exactly; evidence records
+  `legacy-unattested` because this label/digest allowlist is not cryptographic
+  provenance. Duplicate or approximate matches fail closed. Remove or retire
+  each entry after its one-time channel migration.
+- GHCR cannot atomically update tags across the app and agent repositories, so
+  even a successful run has a brief mismatch window. Moving aliases are
+  discovery hints, not a paired deployment identity. Production consumers must
+  resolve one reviewed release record and use both `sha-<40-character-sha>`
+  indexes. Automated self-update must not independently follow `latest` until
+  it consumes a single durable, signed release-pair manifest. That manifest is
+  not yet published, so moving-alias self-update is outside the
+  production-qualified release path.
 - After the first GHCR publish, confirm package visibility is public enough for
   unauthenticated `docker pull` installs.
 
@@ -144,17 +192,29 @@ Run these before tagging a public release:
 RELEASE_APP_SECRET="$(openssl rand -hex 32)"
 RELEASE_AGENT_TOKEN="$(openssl rand -hex 32)"
 RELEASE_POSTGRES_PASSWORD="$(openssl rand -hex 32)"
+node scripts/bootstrap-npm.mjs
+npm ci --engine-strict --strict-allow-scripts --dangerously-allow-all-scripts=false --ignore-scripts=false
+npm run check:npm-version
+npm run check:npm-install-policy
 npm run typecheck
 npm run lint:migrations
 npm run check:postgres-upgrade
-npm run openapi:check --workspace @composebastion/api
+npm run openapi:check
 npm run check:release-version
 npm run check:public-hygiene
+npm run check:gitleaks
+npm run check:go-attribution:release
+npm run test:go-attribution-policy
+npm run test:container-config-policy
+npm run test:release-image-policy
+npm run test:release-alias-policy
+npm run test:acceptance-policy
 npm run notices:check
 npm run check:actions-pinned
 npm run check:release-workflows
 npm run check:compose-env
 npm run check:docker-context
+npm run check:container-config
 npm run acceptance:config
 npm test
 COMPOSEBASTION_INTEGRATION=1 \
@@ -168,6 +228,7 @@ npm run smoke:web:qualification
 npm run coverage
 npm audit --audit-level=high
 npm run acceptance:local
+npm run acceptance:assert-report
 POSTGRES_PASSWORD="${RELEASE_POSTGRES_PASSWORD}" \
   APP_SECRET="${RELEASE_APP_SECRET}" \
   docker compose config
@@ -187,6 +248,7 @@ POSTGRES_PASSWORD="${RELEASE_POSTGRES_PASSWORD}" \
 AGENT_TOKEN="${RELEASE_AGENT_TOKEN}" \
   COMPOSEBASTION_AGENT_BIND_ADDRESS=127.0.0.1 \
   docker compose -f agent-compose.image.example.yml -f agent-compose.hardened.yml config
+test -z "$(git status --porcelain=v1 --untracked-files=all)"
 npm run release:verify-images
 ```
 
@@ -221,6 +283,10 @@ full commit SHA and commit timestamp; and verified runtime legal-artifact
 digests. It does not replace the post-publication comparison of remote
 platform/index digests with the scanned digests.
 
+The strict attribution command above is required for `beta`, `main`, and stable
+tag publication. A pending review may still be inspected locally, but it must
+not be published to a public branch alias.
+
 The pinned MinIO and Samba fixtures prove reproducible protocol behavior only.
 A real NAS and a real cloud/S3 target must still be tested and recorded manually
 before production approval. Those external tests are production evidence, not a
@@ -236,6 +302,10 @@ docker pull "ghcr.io/composebastion-admin/composebastion-app:v${VERSION}"
 docker pull "ghcr.io/composebastion-admin/composebastion-agent:v${VERSION}"
 ```
 
+For a beta branch publication, version aliases are intentionally absent.
+Verify `:beta`, the immutable `sha-${REVISION}` indexes, and both
+`sha-${REVISION}-{amd64,arm64}` platform tags instead.
+
 ## Post-Push Verification
 
 - Check GitHub Actions for CI, CodeQL, dependency review, container scans, and
@@ -244,6 +314,12 @@ docker pull "ghcr.io/composebastion-admin/composebastion-agent:v${VERSION}"
   lag until the target branch is rescanned.
 - For every `v${VERSION}` release, verify CI, CodeQL, Container Scan, Publish Images,
   and code-scanning alerts after the scan refresh.
+- Verify digest-qualified app and agent index provenance with
+  `gh attestation verify oci://IMAGE@DIGEST --repo
+  composebastion-admin/composebastion`. Verify each platform SPDX attestation
+  separately with the same command plus
+  `--predicate-type https://spdx.dev/Document/v2.3`; also constrain the signer
+  workflow and source commit as the publication workflow does.
 - Distinguish Dependabot or bot PRs opened after a release push from actual
   release failures.
 - Close linked issues only after the fix is released or merged to the intended

@@ -12,6 +12,7 @@ export type OpenApiPath = {
   auth: "public" | "session" | "viewer" | "operator" | "admin";
   requestSchema?: Record<string, unknown>;
   responseSchema?: Record<string, unknown>;
+  successStatus?: 101 | 200 | 201 | 202;
   streaming?: boolean;
   download?: boolean;
   websocket?: boolean;
@@ -82,6 +83,7 @@ export const openApiRoutes: OpenApiPath[] = [
     summary: "Interactive host terminal websocket",
     tags: ["Streams"],
     auth: "admin",
+    successStatus: 101,
     websocket: true,
     notes: ["WebSocket route for owner/admin shell access on SSH-capable hosts.", "Authentication and authorization failures are returned before upgrade with the standard error envelope."]
   },
@@ -133,16 +135,16 @@ export const openApiRoutes: OpenApiPath[] = [
   { method: "put", path: "/api/v1/github/repos/{id}", summary: "Update a tracked GitHub repository", tags: ["GitHub"], auth: "operator", requestSchema: schemaRef("GithubRepositoryUpdateRequest"), responseSchema: schemaRef("GithubRepositoryResponse") },
   { method: "delete", path: "/api/v1/github/repos/{id}", summary: "Delete a tracked GitHub repository", tags: ["GitHub"], auth: "operator", responseSchema: schemaRef("OkResponse") },
   { method: "post", path: "/api/v1/github/repos/{id}/deploy", summary: "Deploy a saved GitHub repository Compose file", tags: ["GitHub"], auth: "operator", requestSchema: schemaRef("GithubDeployRequest"), responseSchema: schemaRef("GithubDeployResponse") },
-  { method: "post", path: "/api/v1/deploy/analyses", summary: "Analyze a Git, Compose, or image deployment source", tags: ["Deploy"], auth: "operator", requestSchema: schemaRef("DeploymentAnalysisCreateRequest"), responseSchema: schemaRef("DeploymentAnalysisJobResponse"), notes: ["Git source URLs reject embedded credentials, query parameters, and fragments; use the encrypted credential fields for HTTPS Git authentication.", "Compose URLs must be public credential-free HTTP(S) URLs without query parameters or fragments. For private Compose content, upload the file instead."] },
+  { method: "post", path: "/api/v1/deploy/analyses", summary: "Analyze a Git, Compose, or image deployment source", tags: ["Deploy"], auth: "operator", requestSchema: schemaRef("DeploymentAnalysisCreateRequest"), responseSchema: schemaRef("DeploymentAnalysisJobResponse"), successStatus: 202, notes: ["Returns 202 Accepted after the analysis job is durably queued.", "Git source URLs reject embedded credentials, query parameters, and fragments; use the encrypted credential fields for HTTPS Git authentication.", "Compose URLs must be public credential-free HTTP(S) URLs without query parameters or fragments. For private Compose content, upload the file instead."] },
   { method: "get", path: "/api/v1/deploy/analyses/{id}", summary: "Read a durable deployment analysis", tags: ["Deploy"], auth: "operator", responseSchema: schemaRef("DeploymentAnalysisResponse") },
-  { method: "post", path: "/api/v1/deploy/analyses/{id}/deploy", summary: "Deploy an analyzed source and save it to My Library", tags: ["Deploy"], auth: "operator", requestSchema: schemaRef("DeploymentExecuteRequest"), responseSchema: schemaRef("DeploymentAnalysisJobResponse") },
+  { method: "post", path: "/api/v1/deploy/analyses/{id}/deploy", summary: "Deploy an analyzed source and save it to My Library", tags: ["Deploy"], auth: "operator", requestSchema: schemaRef("DeploymentExecuteRequest"), responseSchema: schemaRef("DeploymentAnalysisJobResponse"), successStatus: 202, notes: ["Returns 202 Accepted after the deployment job is durably queued."] },
   { method: "get", path: "/api/v1/deployment-sources", summary: "List reusable My Library deployment sources", tags: ["Deploy"], auth: "operator", responseSchema: schemaRef("DeploymentSourcesResponse") },
   { method: "post", path: "/api/v1/deployment-sources", summary: "Add a reusable source to My Library", tags: ["Deploy"], auth: "operator", requestSchema: schemaRef("DeploymentSourceCreateRequest"), responseSchema: schemaRef("DeploymentSourceResponse"), notes: ["Git URLs must keep credentials in the encrypted credential fields. Compose URL credentials are not supported; upload private Compose content."] },
   { method: "get", path: "/api/v1/deployment-sources/{id}", summary: "Read one reusable deployment source", tags: ["Deploy"], auth: "operator", responseSchema: schemaRef("DeploymentSourceResponse") },
   { method: "put", path: "/api/v1/deployment-sources/{id}", summary: "Update safe defaults or credentials for a deployment source", tags: ["Deploy"], auth: "operator", requestSchema: schemaRef("DeploymentSourceUpdateRequest"), responseSchema: schemaRef("DeploymentSourceResponse") },
   { method: "delete", path: "/api/v1/deployment-sources/{id}", summary: "Remove a source from My Library without removing services", tags: ["Deploy"], auth: "operator", responseSchema: schemaRef("OkResponse") },
   { method: "post", path: "/api/v1/hosts/{hostId}/registry-trust/check", summary: "Check Docker daemon trust for an HTTP registry", tags: ["Deploy", "Hosts"], auth: "operator", requestSchema: schemaRef("RegistryTrustRequest"), responseSchema: schemaRef("RegistryTrustResponse"), notes: ["Accepts a validated DNS name, IPv4 address, or bracketed IPv6 address with an optional port; an optional http(s) origin may end in `/`."] },
-  { method: "post", path: "/api/v1/hosts/{hostId}/registry-trust/apply", summary: "Safely configure Docker daemon trust for an HTTP registry", tags: ["Deploy", "Hosts"], auth: "admin", requestSchema: schemaRef("RegistryTrustRequest"), responseSchema: schemaRef("JobResponse"), notes: ["Accepts a validated DNS name, IPv4 address, or bracketed IPv6 address with an optional port. Credentials, paths, query parameters, fragments, and non-HTTP(S) schemes are rejected."] },
+  { method: "post", path: "/api/v1/hosts/{hostId}/registry-trust/apply", summary: "Safely configure Docker daemon trust for an HTTP registry", tags: ["Deploy", "Hosts"], auth: "admin", requestSchema: schemaRef("RegistryTrustRequest"), responseSchema: schemaRef("JobResponse"), successStatus: 202, notes: ["Returns 202 Accepted after the registry-trust job is durably queued.", "Accepts a validated DNS name, IPv4 address, or bracketed IPv6 address with an optional port. Credentials, paths, query parameters, fragments, and non-HTTP(S) schemes are rejected."] },
   { method: "get", path: "/api/v1/image-updates", summary: "List image update intelligence", tags: ["Images"], auth: "viewer", responseSchema: schemaRef("ImageUpdatesResponse") },
   { method: "get", path: "/api/v1/image-updates/preview", summary: "Preview an image update action", tags: ["Images"], auth: "viewer", responseSchema: schemaRef("ImageUpdatePreviewResponse") },
   { method: "get", path: "/api/v1/image-scanner/status", summary: "Read vulnerability scanner availability", tags: ["Images"], auth: "viewer", responseSchema: schemaRef("ImageScannerStatusResponse") },
@@ -1583,6 +1585,7 @@ export function buildOpenApiDocument() {
   const paths: Record<string, Record<string, unknown>> = {};
   for (const route of openApiRoutes) {
     const item = paths[route.path] ?? {};
+    const successStatus = String(route.successStatus ?? 200);
     item[route.method] = {
       summary: route.summary,
       tags: route.tags,
@@ -1594,17 +1597,21 @@ export function buildOpenApiDocument() {
         }
       } : {}),
       responses: {
-        "200": route.streaming
+        [successStatus]: route.streaming
           ? { description: "Event stream" }
           : route.download
             ? { description: "File download stream" }
             : route.websocket
               ? { description: "WebSocket upgrade" }
-          : response("Successful response", route.responseSchema ?? { type: "object" }),
+          : response(
+              successStatus === "202" ? "Accepted for asynchronous processing" : "Successful response",
+              route.responseSchema ?? { type: "object" }
+            ),
         "400": response("Validation failed", { $ref: "#/components/schemas/Error" }),
         "401": response("Authentication required", { $ref: "#/components/schemas/Error" }),
         "403": response("Insufficient permissions", { $ref: "#/components/schemas/Error" }),
         "404": response("Not found", { $ref: "#/components/schemas/Error" }),
+        "429": response("Rate limit exceeded", { $ref: "#/components/schemas/Error" }),
         ...(route.conflict ? {
           "409": response(route.conflictDescription ?? "Conflict", { $ref: "#/components/schemas/Error" })
         } : {}),

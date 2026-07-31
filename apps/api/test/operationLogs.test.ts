@@ -5,6 +5,7 @@ describe("operation log helpers", () => {
   it("maps status and explicit errors to stable codes", () => {
     expect(errorCode({ code: "CUSTOM_CODE" })).toBe("CUSTOM_CODE");
     expect(errorCode({ statusCode: 403 })).toBe("FORBIDDEN");
+    expect(errorCode({ statusCode: 429 })).toBe("RATE_LIMITED");
     expect(errorCode({ status: 500 })).toBe("INTERNAL_ERROR");
     expect(errorCode(new Error("boom"))).toBe("OPERATION_ERROR");
   });

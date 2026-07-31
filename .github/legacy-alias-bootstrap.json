@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "entries": [
+    {
+      "status": "pending",
+      "expiresOn": "2026-08-31",
+      "targetRef": "refs/heads/beta",
+      "alias": "beta",
+      "revision": "5ef8ded5da914aa29c3caca5854fe2840dc7eb7f",
+      "appImage": "ghcr.io/composebastion-admin/composebastion-app",
+      "appDigest": "sha256:3eca4a8405650896b82c9557b624828099c59ba45627571e00a8a519af74f431",
+      "agentImage": "ghcr.io/composebastion-admin/composebastion-agent",
+      "agentDigest": "sha256:7cd3358d80be4a0663f6cff51ca8b7cf325d831aea8b0a57dc7a36d8f6eb0f0d"
+    },
+    {
+      "status": "pending",
+      "expiresOn": "2026-08-31",
+      "targetRef": "refs/heads/main",
+      "alias": "main",
+      "revision": "4ec6871a20ce7014272b8f1390e74b5e9b958779",
+      "appImage": "ghcr.io/composebastion-admin/composebastion-app",
+      "appDigest": "sha256:795d0c92953466a76f032ad46a8f652a68905a618e7ac01b7ff0f29f4da949d3",
+      "agentImage": "ghcr.io/composebastion-admin/composebastion-agent",
+      "agentDigest": "sha256:071df334ae03317eedf44a0dcd61ee0b7ebae4d265927471fce487f97bf00ac4"
+    },
+    {
+      "status": "pending",
+      "expiresOn": "2026-08-31",
+      "targetRef": "refs/tags/v1.2.0",
+      "alias": "latest",
+      "revision": "6127ddb16cbfc9cf13a3241bd80c96001e2df29f",
+      "appImage": "ghcr.io/composebastion-admin/composebastion-app",
+      "appDigest": "sha256:53cceea331c04260ef30aba495ef912dc923e3636f0b5b70e66bfad02f284674",
+      "agentImage": "ghcr.io/composebastion-admin/composebastion-agent",
+      "agentDigest": "sha256:e517d9fe5a46f8cce16b7e5c491256e1b459df784f86107b0f42725b2ed55cba"
+    }
+  ]
+}

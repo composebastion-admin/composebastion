@@ -20,29 +20,35 @@ every production update.
 3. Preserve `POSTGRES_PASSWORD` and any non-empty `DATABASE_URL`; never
    regenerate either value during a routine update.
 4. Confirm recent backups and at least one recent successful drill for critical data.
-5. For image installs, either start the in-app self-update from Admin ->
-   Operations or pull the new image manually.
+5. For production image installs, resolve one reviewed release revision and
+   manually pin both app and agent images to its immutable
+   `sha-<40-character-sha>` tags. Do not use in-app self-update for the
+   production handoff yet.
 6. For source installs, pull the source update.
 7. Validate the Compose configuration when updating manually.
-8. Start the stack or wait for the self-update handoff to restart `app` and
-   `worker`.
+8. Start the stack and confirm the pinned app and worker services restart.
 9. Watch `app` and `worker` logs until migrations and worker startup complete.
 10. Open Admin -> Operations and confirm readiness checks are healthy.
 
-For image installs managed over SSH, use Admin -> Operations ->
-ComposeBastion self-update. Set the manager host, Compose directory, Compose
-file, and release mode, then start the update. V1 self-update supports image
-installs only; source checkouts and agent-only manager hosts use the manual
+Admin -> Operations -> ComposeBastion self-update is available for disposable
+evaluation and homelab image installs managed over SSH. It currently accepts
+`latest` or a SemVer tag and does not consume a durable signed app/agent
+release-pair manifest, so it is not the production-qualified update path.
+Production, source-checkout, and agent-host updates use the manual pinned
 commands below.
 
 Manual image install:
 
 ```bash
 cd ~/composebastion
-export COMPOSEBASTION_VERSION=1.1.2
+export REVIEWED_REVISION="REPLACE_WITH_REVIEWED_40_CHARACTER_COMMIT"
+export COMPOSEBASTION_VERSION="sha-${REVIEWED_REVISION}"
 docker compose -f docker-compose.image.yml pull
 docker compose -f docker-compose.image.yml up -d
 ```
+
+Pin every separately deployed ComposeBastion agent to the same reviewed
+revision before calling the production update complete.
 
 For source installs:
 

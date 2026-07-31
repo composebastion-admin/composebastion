@@ -150,17 +150,25 @@ docker compose up -d --build
 
 ## Update Commands
 
-Image installs can update from Admin -> Operations -> ComposeBastion
-self-update. Choose the SSH host that runs the ComposeBastion stack, save the
-Compose directory and Compose file, then start the handoff. ComposeBastion
-writes a short host-side update script, pulls the selected app and worker
-images, restarts them, and shows the latest handoff job so you can confirm the
-update completed.
+Disposable evaluation and homelab image installs can update from Admin ->
+Operations -> ComposeBastion self-update. Choose the SSH host that runs the
+ComposeBastion stack, save the Compose directory and Compose file, then start
+the handoff. ComposeBastion writes a short host-side update script, pulls the
+selected app and worker images, restarts them, and shows the latest handoff job
+so you can confirm the update completed.
+
+In-app self-update currently accepts `latest` or a SemVer tag; it does not
+consume a durable signed app/agent release-pair manifest. Production updates
+must instead resolve one reviewed release revision, pin every participating
+app and agent image to that revision's `sha-<40-character-sha>` index, and use
+the manual procedure in the [upgrade guide](docs/upgrade-guide.md).
 
 Manual image update fallback:
 
 ```bash
 cd ~/composebastion
+export REVIEWED_REVISION="REPLACE_WITH_REVIEWED_40_CHARACTER_COMMIT"
+export COMPOSEBASTION_VERSION="sha-${REVIEWED_REVISION}"
 docker compose -f docker-compose.image.yml pull
 docker compose -f docker-compose.image.yml up -d
 ```

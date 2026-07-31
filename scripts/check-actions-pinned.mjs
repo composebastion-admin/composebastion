@@ -7,6 +7,7 @@ import path from "node:path";
 // and the workflow reference in the same reviewed change.
 const reviewedReferences = new Map([
   ["actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0", "v7.0.0"],
+  ["actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d", "v4.2.1"],
   ["actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294", "v5.0.0"],
   ["actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", "v8.0.1"],
   ["actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e", "v6.4.0"],

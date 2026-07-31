@@ -1,12 +1,26 @@
 #!/usr/bin/env node
 
 import { createHash } from "node:crypto";
-import { createReadStream, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  createReadStream,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync
+} from "node:fs";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { isStrictSemVer } from "./release-semver.mjs";
 import { assertSafeTestResultsPath, digestGitBuildContext, materializeGitBuildContext } from "./materialize-git-context.mjs";
+import {
+  addLayerEntry,
+  normalizeLayerPath,
+  resolveLayerTarget
+} from "./oci-rootfs.mjs";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const safeResultPath = (name, label) => assertSafeTestResultsPath({
@@ -64,6 +78,11 @@ const builds = [
   { component: "agent", title: "ComposeBastion Agent", architecture: "arm64", platform: "linux/arm64", dockerfile: "Dockerfile.agent" }
 ];
 
+process.chdir(repositoryRoot);
+// Clear prior ignored evidence before argument validation or any preflight can
+// fail so a stale passing report is never discoverable after an invocation.
+rmSync(reportDirectory, { recursive: true, force: true });
+
 if (process.argv.includes("--help")) {
   console.log(`Usage: npm run release:verify-images
 
@@ -76,8 +95,6 @@ Reports are written below test-results/release-images/.`);
 if (process.argv.length > 2) {
   throw new Error(`Unknown argument: ${process.argv.slice(2).join(" ")}`);
 }
-
-process.chdir(repositoryRoot);
 
 function commandText(command, args) {
   return [command, ...args].map((value) => (/^[A-Za-z0-9_./:@=,+-]+$/.test(value) ? value : JSON.stringify(value))).join(" ");
@@ -173,18 +190,9 @@ function requireSha256Digest(value, description) {
 function assertSafeArchivePaths(archive) {
   const listing = capture("tar", ["-tf", archive]);
   for (const entry of listing.split(/\r?\n/)) {
-    const normalized = entry.replaceAll("\\", "/");
-    const segments = normalized.split("/");
-    assert(!normalized.startsWith("/") && !segments.includes(".."), `${path.basename(archive)} contains unsafe archive path ${JSON.stringify(entry)}`);
+    const segments = entry.split("/");
+    assert(!entry.startsWith("/") && !segments.includes(".."), `${path.basename(archive)} contains unsafe archive path ${JSON.stringify(entry)}`);
   }
-}
-
-function normalizeLayerPath(value) {
-  return value
-    .replaceAll("\\", "/")
-    .replace(/^\.\/+/, "")
-    .replace(/^\/+/, "")
-    .replace(/\/+$/, "");
 }
 
 function layerEntries(layerBlob, cache) {
@@ -193,8 +201,7 @@ function layerEntries(layerBlob, cache) {
   const entries = new Map();
   for (const entry of capture("tar", ["-tf", layerBlob]).split(/\r?\n/)) {
     if (!entry) continue;
-    const normalized = normalizeLayerPath(entry);
-    if (normalized) entries.set(normalized, entry);
+    addLayerEntry(entries, entry);
   }
   cache.set(layerBlob, entries);
   return entries;
@@ -210,9 +217,14 @@ function rootfsFile(layout, layerDigests, target, cache) {
       digest.slice("sha256:".length)
     );
     const entries = layerEntries(layerBlob, cache);
-    const entry = entries.get(normalizedTarget);
-    if (!entry) continue;
-    const result = spawnSync("tar", ["-xOf", layerBlob, entry], {
+    const resolution = resolveLayerTarget(entries, normalizedTarget);
+    if (!resolution.entry) {
+      if (resolution.whiteout) {
+        throw new Error(`Image root filesystem hides /${normalizedTarget} with OCI whiteout ${resolution.whiteout}`);
+      }
+      continue;
+    }
+    const result = spawnSync("tar", ["-xOf", layerBlob, resolution.entry], {
       cwd: repositoryRoot,
       encoding: null,
       maxBuffer: 128 * 1024 * 1024,
@@ -426,8 +438,8 @@ for (const platform of new Set(builds.map((build) => build.platform))) {
 }
 console.log(builderInformation);
 
-rmSync(reportDirectory, { recursive: true, force: true });
 mkdirSync(reportDirectory, { recursive: true });
+rmSync(trivyCacheDirectory, { recursive: true, force: true });
 mkdirSync(trivyCacheDirectory, { recursive: true });
 const sourceContext = materializeGitBuildContext({
   repositoryRoot,
@@ -482,31 +494,36 @@ try {
     const scanFilename = `trivy-${image.component}-${image.architecture}.json`;
     const scanPath = path.join(reportDirectory, scanFilename);
     const scanInput = path.join(reportDirectory, `scan-input-${image.component}-${image.architecture}`);
+    const scanOutputDirectory = mkdtempSync(
+      path.join(reportDirectory, `.trivy-output-${image.component}-${image.architecture}-`)
+    );
+    const generatedScanPath = path.join(scanOutputDirectory, scanFilename);
+    rmSync(scanPath, { force: true });
     rmSync(scanInput, { recursive: true, force: true });
     mkdirSync(scanInput, { recursive: true });
-    // Trivy 0.72 accepts an OCI layout directory, not a tarred OCI archive.
-    // The archive and every referenced blob were verified immediately above;
-    // extract that exact archive into a fresh, read-only scan input directory.
-    assertSafeArchivePaths(path.join(repositoryRoot, image.archive));
-    run("tar", ["-xf", path.join(repositoryRoot, image.archive), "-C", scanInput]);
-    try {
-      image.legalArtifacts = verifyLegalArtifacts(image, scanInput);
-      image.legalArtifactsStatus = "passed";
-    } catch (error) {
-      image.legalArtifacts = [];
-      image.legalArtifactsStatus = "failed";
-      report.failures.push(
-        `${image.component} ${image.platform}: legal artifact verification failed `
-          + `(${error instanceof Error ? error.message : String(error)})`
-      );
-    }
-    console.log(`\nScanning the exact verified OCI layout from ${image.archive}...`);
     let scan;
     try {
+      // Trivy 0.72 accepts an OCI layout directory, not a tarred OCI archive.
+      // The archive and every referenced blob were verified immediately above;
+      // extract that exact archive into a fresh, read-only scan input directory.
+      assertSafeArchivePaths(path.join(repositoryRoot, image.archive));
+      run("tar", ["-xf", path.join(repositoryRoot, image.archive), "-C", scanInput]);
+      try {
+        image.legalArtifacts = verifyLegalArtifacts(image, scanInput);
+        image.legalArtifactsStatus = "passed";
+      } catch (error) {
+        image.legalArtifacts = [];
+        image.legalArtifactsStatus = "failed";
+        report.failures.push(
+          `${image.component} ${image.platform}: legal artifact verification failed `
+            + `(${error instanceof Error ? error.message : String(error)})`
+        );
+      }
+      console.log(`\nScanning the exact verified OCI layout from ${image.archive}...`);
       scan = run("docker", [
         "run", "--rm",
         "--volume", `${repositoryRoot}:/workspace:ro`,
-        "--volume", `${reportDirectory}:/reports`,
+        "--volume", `${scanOutputDirectory}:/scan-output`,
         "--volume", `${trivyCacheDirectory}:/trivy-cache`,
         trivyImage,
         "image",
@@ -514,15 +531,19 @@ try {
         "--cache-dir", "/trivy-cache",
         "--ignorefile", "/workspace/.trivyignore.yaml",
         "--format", "json",
-        "--output", `/reports/${scanFilename}`,
+        "--output", `/scan-output/${scanFilename}`,
         "--exit-code", "1",
         "--ignore-unfixed=false",
         "--scanners", "vuln",
         "--pkg-types", "os,library",
         "--severity", "HIGH,CRITICAL"
       ], { allowFailure: true });
+      if (existsSync(generatedScanPath)) {
+        copyFileSync(generatedScanPath, scanPath);
+      }
     } finally {
       rmSync(scanInput, { recursive: true, force: true });
+      rmSync(scanOutputDirectory, { recursive: true, force: true });
     }
 
     if (!existsSync(scanPath)) {
@@ -553,6 +574,13 @@ try {
   const finalContext = digestGitBuildContext(buildContextDirectory);
   assert(finalContext.digest === sourceContext.contextDigest && finalContext.fileCount === sourceContext.fileCount,
     "Exact Git-derived Docker build context changed during release image verification");
+  for (const image of report.images) {
+    const finalArchiveDigest = await sha256File(path.join(repositoryRoot, image.archive));
+    assert(
+      finalArchiveDigest === image.archiveDigest,
+      `${image.component} ${image.platform} archive changed after verification or scanning`
+    );
+  }
   const finalDirty = capture("git", ["status", "--porcelain=v1", "--untracked-files=all"]);
   assert(finalDirty === "", `Checkout changed during release image verification:\n${finalDirty}`);
   if (report.failures.length > 0) throw new Error(report.failures.join("\n"));

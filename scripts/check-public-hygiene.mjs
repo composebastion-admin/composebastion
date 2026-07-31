@@ -13,6 +13,9 @@ const allowedGhcrOwners = new Set([
   "composebastion-admin",
   "composebastion-tests",
   "example",
+  // Digest-pinned upstream release and security tooling.
+  "anchore",
+  "gitleaks",
   // Reviewed upstream images used by the built-in application catalog.
   "home-assistant",
   "open-webui"

@@ -72,7 +72,17 @@ export async function buildServer() {
     const safeMessage = env.NODE_ENV === "production" && statusCode >= 500
       ? "Internal server error"
       : error instanceof Error ? error.message : "Internal server error";
-    const code = statusCode === 409 ? "CONFLICT" : statusCode === 403 ? "FORBIDDEN" : statusCode === 401 ? "AUTH_REQUIRED" : statusCode >= 500 ? "INTERNAL_ERROR" : "VALIDATION_FAILED";
+    const code = statusCode === 429
+      ? "RATE_LIMITED"
+      : statusCode === 409
+        ? "CONFLICT"
+        : statusCode === 403
+          ? "FORBIDDEN"
+          : statusCode === 401
+            ? "AUTH_REQUIRED"
+            : statusCode >= 500
+              ? "INTERNAL_ERROR"
+              : "VALIDATION_FAILED";
     reply.code(statusCode).send({ error: safeMessage, code, requestId: request.id });
   });
 

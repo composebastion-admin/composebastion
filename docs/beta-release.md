@@ -42,6 +42,11 @@ docker compose -f docker-compose.image.yml up -d
 
 For each image-installed agent, use `agent-compose.image.example.yml`, set
 `COMPOSEBASTION_AGENT_VERSION=beta`, then pull and recreate that agent.
+Because app and agent aliases are stored in separate GHCR repositories, they
+have a brief non-atomic update window. For paired testing, resolve the beta
+release revision from the recorded publication evidence and set both image
+versions to the same immutable `sha-<40-character-sha>` index instead of
+independently following `beta`.
 
 ## What to verify
 

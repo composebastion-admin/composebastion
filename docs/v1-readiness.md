@@ -42,6 +42,8 @@ gate and applicable manual gate has passed.
 - exact app and agent OCI builds for `linux/amd64` and `linux/arm64` with matching
   version, full-revision, created labels, and deterministic platform tags;
 - `npm run release:verify-images` from the final clean candidate commit.
+- signed build provenance for both immutable indexes and signed SPDX SBOM
+  attestations for every published platform digest.
 
 The acceptance report must record one stable HEAD/tree/context digest and say
 `automatedAcceptanceQualifying: true`. Dirty, changed, skipped, or reused-build
@@ -61,11 +63,27 @@ release evidence below `test-results/release-images/`.
   loopback acceptance stack.
 - Review the linked Go-module manifest, license expressions, upstream sources,
   required texts, and checksums. Record qualified legal approval and its date;
-  pending attribution is a release blocker.
+  pending attribution blocks `beta`, `main`, and stable image publication.
 - Verify Admin -> About shows the intended version, copyright, license summary,
   and `support@composebastion.com`.
 - Verify unauthenticated pulls, image labels, multi-architecture indexes,
   deterministic platform tags, and the GitHub Release attestation.
+- Verify app and agent moving aliases resolve to the same recorded release pair;
+  a failed reconciliation is a release blocker even if one alias already moved.
+  Inspect the paired reconciliation artifact and require a verified rollback to
+  both genuine prior digests, or `partial-blocked` evidence for a newly created
+  alias, before any announcement. `failed-retained-new-pair` means a complete
+  new exact/minor pair remains at the target while older moving aliases were
+  restored; it still blocks announcement until a paired-digest check passes.
+- Audit and retire the exact, expiring entries in
+  `.github/legacy-alias-bootstrap.json` after the first attestation-aware
+  `beta`, `main`, and stable migrations. Any `legacy-unattested` evidence not
+  matching that file exactly is a release blocker.
+- Treat the brief cross-repository alias mismatch window as unavoidable. Use the
+  same reviewed `sha-<40-character-sha>` app and agent indexes for production;
+  never combine two independently resolved moving aliases. A durable signed
+  release-pair manifest and self-update consumption of it remain required
+  before moving-alias self-update is production-qualified.
 
 Real NAS and cloud/S3 capture-and-restore tests are production-approval evidence.
 They do not block publication for homelab use. Local Samba and MinIO remain the

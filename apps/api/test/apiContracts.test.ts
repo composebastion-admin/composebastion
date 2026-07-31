@@ -205,6 +205,7 @@ describe("API contracts", () => {
     const setup = (document.paths["/api/v1/auth/setup"] as any).post;
     const githubCreate = (document.paths["/api/v1/github/repos"] as any).post;
     const deploymentCreate = (document.paths["/api/v1/deploy/analyses"] as any).post;
+    const registryTrustApply = (document.paths["/api/v1/hosts/{hostId}/registry-trust/apply"] as any).post;
     const backupTargetCreate = (document.paths["/api/v1/recovery/targets"] as any).post;
     const backupTargetUpdate = (document.paths["/api/v1/recovery/targets/{id}"] as any).patch;
     const jobRetry = (document.paths["/api/v1/jobs/{id}/retry"] as any).post;
@@ -240,6 +241,10 @@ describe("API contracts", () => {
       .toEqual({ $ref: "#/components/schemas/DeploymentAnalysisCreateRequest" });
     expect((document.components.schemas as any).DeploymentAnalysisCreateRequest.properties.source.description)
       .toContain("reject embedded credentials");
+    expect(registryTrustApply.responses["202"].content["application/json"].schema)
+      .toEqual({ $ref: "#/components/schemas/JobResponse" });
+    expect(registryTrustApply.responses["202"].description).toBe("Accepted for asynchronous processing");
+    expect(registryTrustApply.responses["200"]).toBeUndefined();
     expect(backupTargetCreate.requestBody.content["application/json"].schema)
       .toEqual({ $ref: "#/components/schemas/BackupTargetCreateRequest" });
     expect(backupTargetUpdate.requestBody.content["application/json"].schema)
@@ -282,6 +287,18 @@ describe("API contracts", () => {
     expect((document.components.schemas as any).RegistryTrustRequest.properties.registry.examples)
       .toContain("[2001:db8::1]:5000");
     expect(jobRetry.responses["409"].description).toContain("WORKER_LOST");
+    for (const pathItem of Object.values(document.paths) as any[]) {
+      for (const operation of Object.values(pathItem) as any[]) {
+        expect(operation.responses["429"]).toMatchObject({
+          description: "Rate limit exceeded",
+          content: {
+            "application/json": {
+              schema: { $ref: "#/components/schemas/Error" }
+            }
+          }
+        });
+      }
+    }
     expect(document.info.version).toBe(packageJson.version);
     expect(document.components.schemas).toHaveProperty("AlertChannelTestEvent");
   });
@@ -418,6 +435,49 @@ describe("API contracts", () => {
       });
     } finally {
       await app.close();
+    }
+  });
+
+  it("returns the standard typed error envelope when a route rate limit is exceeded", async () => {
+    const app = await buildServer();
+    try {
+      const url = "/api/v1/hosts/11111111-1111-4111-8111-111111111111/terminal";
+      let response;
+      for (let request = 1; request <= 9; request += 1) {
+        response = await app.inject({
+          method: "GET",
+          url,
+          headers: { "x-request-id": `contract-rate-limit-${request}` }
+        });
+      }
+      expect(response?.statusCode).toBe(429);
+      expect(response?.json()).toMatchObject({
+        code: "RATE_LIMITED",
+        requestId: "contract-rate-limit-9"
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("documents the terminal transport as a websocket switching-protocols response", () => {
+    const document = buildOpenApiDocument() as any;
+    const terminal = document.paths["/api/v1/hosts/{hostId}/terminal"].get;
+    expect(terminal.responses["101"]).toEqual({ description: "WebSocket upgrade" });
+    expect(terminal.responses["200"]).toBeUndefined();
+  });
+
+  it("documents deployment analysis and execution as accepted asynchronous operations", () => {
+    const document = buildOpenApiDocument() as any;
+    for (const route of [
+      "/api/v1/deploy/analyses",
+      "/api/v1/deploy/analyses/{id}/deploy"
+    ]) {
+      const operation = document.paths[route].post;
+      expect(operation.responses["202"], route).toMatchObject({
+        description: "Accepted for asynchronous processing"
+      });
+      expect(operation.responses["200"], route).toBeUndefined();
     }
   });
 

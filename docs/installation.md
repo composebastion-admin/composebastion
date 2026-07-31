@@ -104,8 +104,13 @@ docker compose -f docker-compose.image.yml up -d
 Open `http://<manager-ip>:8080`, create the first owner account, then add a
 Docker host. The `SECURE_COOKIES=false` setting is only for this trusted
 direct-HTTP evaluation path; do not expose it to an untrusted network, and set
-it back to `true` when HTTPS is configured. For production change control, pin
-`COMPOSEBASTION_VERSION` to a release tag such as `1.1.2` instead of `latest`.
+it back to `true` when HTTPS is configured. For production change control,
+resolve one reviewed release record to its full commit and pin
+`COMPOSEBASTION_VERSION` to the corresponding
+`sha-<40-character-sha>` index instead of `latest` or a moving version alias.
+For a deployment that also runs the agent, pin both images to that same
+revision. App and agent moving aliases live in separate GHCR repositories and
+cannot change atomically.
 
 ## Source Build Install
 
@@ -262,6 +267,12 @@ or a pinned release tag, then start the update handoff. The app writes
 Compose directory, starts the script detached from the worker, pulls the app and
 worker images, and restarts those services. The browser may disconnect briefly
 while the new app container starts.
+
+Following `latest` is a homelab convenience, not the production-qualified
+paired update path. Until self-update consumes a durable signed app/agent
+release-pair manifest, production updates must resolve one reviewed release
+revision and pin every participating image to its `sha-<40-character-sha>`
+index before pulling.
 
 Use the manual commands below when the manager host is not managed over SSH,
 when running a source checkout, or when you want to inspect each step yourself.
