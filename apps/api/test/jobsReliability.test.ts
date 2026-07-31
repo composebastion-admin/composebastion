@@ -77,7 +77,10 @@ function arrangeTransaction(
     sql: string,
     values: unknown[] = []
   ) => {
-    if (sql.includes("FROM docker_hosts")) {
+    if (
+      sql.includes("FROM docker_hosts")
+      && !sql.includes("SELECT tags")
+    ) {
       const ids = Array.isArray(values[0]) ? values[0] as string[] : [hostId];
       return { rows: ids.map((id) => ({ id })), rowCount: ids.length };
     }
@@ -178,6 +181,424 @@ describe("durable job enqueue", () => {
     expect(completion?.[0]).not.toContain("COALESCE(result");
     expect(JSON.stringify(completion?.[1]?.[1]))
       .not.toContain("composeStackDeploymentIntent");
+  });
+
+  it("atomically retains a successful restore attempt before publishing job completion", async () => {
+    const recoveryPointId = "44444444-4444-4444-8444-444444444444";
+    const attemptId = "55555555-5555-4555-8555-555555555555";
+    arrangeTransaction(async (sql) => {
+      if (
+        sql.includes("UPDATE operation_jobs")
+        && sql.includes("SET status = 'completed'")
+      ) {
+        return {
+          rows: [{
+            id: jobId,
+            type: "recovery.restore",
+            host_id: hostId,
+            payload: { recoveryPointId, drill: false }
+          }],
+          rowCount: 1
+        };
+      }
+      if (
+        sql.includes("FROM recovery_restore_attempts")
+        && sql.includes("FOR UPDATE")
+      ) {
+        return {
+          rows: [{
+            id: attemptId,
+            recovery_point_id: recoveryPointId,
+            backup_id: null,
+            target_host_id: hostId,
+            operation_job_id: jobId,
+            migration_run_id: null,
+            restore_scope: recoveryPointId,
+            retain_on_success: true,
+            status: "awaiting_disposition"
+          }],
+          rowCount: 1
+        };
+      }
+      if (sql.includes("UPDATE recovery_restore_attempts")) {
+        return { rows: [{ id: attemptId }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+
+    await expect(completeJob(
+      jobId,
+      { composeRestored: true },
+      { workerId, attemptCount: 1 }
+    )).resolves.toBe(true);
+
+    const completionIndex = transactionQuery.mock.calls.findIndex(([sql]) =>
+      String(sql).includes("SET status = 'completed'")
+    );
+    const attemptIndex = transactionQuery.mock.calls.findIndex(([sql]) =>
+      String(sql).includes("UPDATE recovery_restore_attempts")
+    );
+    const identityIndex = transactionQuery.mock.calls.findIndex(([sql]) =>
+      String(sql).includes("FROM recovery_restore_attempts")
+      && String(sql).includes("FOR UPDATE")
+    );
+    expect(completionIndex).toBeGreaterThanOrEqual(0);
+    expect(identityIndex).toBeGreaterThan(completionIndex);
+    expect(attemptIndex).toBeGreaterThan(identityIndex);
+    expect(transactionQuery.mock.calls[attemptIndex]?.[0]).toContain(
+      "SET status = 'retained'"
+    );
+    expect(transactionQuery.mock.calls[attemptIndex]?.[0]).toContain(
+      "retain_on_success = true"
+    );
+    expect(transactionQuery.mock.calls[attemptIndex]?.[0]).toContain(
+      "status = 'awaiting_disposition'"
+    );
+    expect(transactionQuery.mock.calls[attemptIndex]?.[1]).toEqual([
+      attemptId,
+      jobId,
+      recoveryPointId,
+      null
+    ]);
+  });
+
+  it.each([
+    {
+      type: "volume.restore",
+      hostId,
+      payload: {
+        backupId: "88888888-8888-4888-8888-888888888888",
+        targetVolumeName: "restored_data",
+        overwrite: false
+      },
+      result: { stdout: "restored" },
+      disposition: "retained"
+    },
+    {
+      type: "hostPath.restore",
+      hostId,
+      payload: {
+        backupId: "88888888-8888-4888-8888-888888888888",
+        targetPath: "/srv/restored",
+        overwrite: false
+      },
+      result: { stdout: "restored" },
+      disposition: "retained"
+    },
+    {
+      type: "volume.clone",
+      hostId,
+      payload: {
+        backupId: "88888888-8888-4888-8888-888888888888",
+        targetHostId: "99999999-9999-4999-8999-999999999999",
+        sourceVolumeName: "source_data",
+        targetVolumeName: "cloned_data",
+        overwrite: false
+      },
+      result: {
+        backupId: "88888888-8888-4888-8888-888888888888",
+        targetHostId: "99999999-9999-4999-8999-999999999999"
+      },
+      disposition: "retained"
+    },
+    {
+      type: "backup.drill",
+      hostId,
+      payload: {
+        backupId: "88888888-8888-4888-8888-888888888888",
+        drillId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+      },
+      result: {
+        backupId: "88888888-8888-4888-8888-888888888888",
+        status: "completed"
+      },
+      disposition: "cleaned"
+    }
+  ])(
+    "requires an exact durable backup attempt for $type completion",
+    async ({ type, hostId: sourceHostId, payload, result, disposition }) => {
+      const backupId = "88888888-8888-4888-8888-888888888888";
+      const targetHostId = type === "volume.clone"
+        ? "99999999-9999-4999-8999-999999999999"
+        : sourceHostId;
+      const attemptId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab";
+      arrangeTransaction(async (sql) => {
+        if (
+          sql.includes("UPDATE operation_jobs")
+          && sql.includes("SET status = 'completed'")
+        ) {
+          return {
+            rows: [{
+              id: jobId,
+              type,
+              host_id: sourceHostId,
+              payload
+            }],
+            rowCount: 1
+          };
+        }
+        if (
+          sql.includes("FROM recovery_restore_attempts")
+          && sql.includes("FOR UPDATE")
+        ) {
+          return {
+            rows: [{
+              id: attemptId,
+              recovery_point_id: null,
+              backup_id: backupId,
+              target_host_id: targetHostId,
+              operation_job_id: jobId,
+              migration_run_id: null,
+              restore_scope: `backup:${backupId}`,
+              retain_on_success: disposition === "retained",
+              status: disposition === "retained"
+                ? "awaiting_disposition"
+                : "cleaned"
+            }],
+            rowCount: 1
+          };
+        }
+        if (sql.includes("SELECT tags")) {
+          return { rows: [{ tags: [] }], rowCount: 1 };
+        }
+        if (sql.includes("UPDATE recovery_restore_attempts")) {
+          return { rows: [{ id: attemptId }], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
+      });
+
+      await expect(completeJob(
+        jobId,
+        result,
+        { workerId, attemptCount: 1 }
+      )).resolves.toBe(true);
+
+      const attemptUpdates = transactionQuery.mock.calls.filter(([sql]) =>
+        String(sql).includes("UPDATE recovery_restore_attempts")
+      );
+      expect(attemptUpdates).toHaveLength(
+        disposition === "retained" ? 1 : 0
+      );
+      if (disposition === "retained") {
+        expect(attemptUpdates[0]?.[1]).toEqual([
+          attemptId,
+          jobId,
+          backupId,
+          targetHostId
+        ]);
+      }
+    }
+  );
+
+  it("allows a verified demo backup restore to complete without a remote attempt", async () => {
+    const backupId = "88888888-8888-4888-8888-888888888888";
+    arrangeTransaction(async (sql) => {
+      if (
+        sql.includes("UPDATE operation_jobs")
+        && sql.includes("SET status = 'completed'")
+      ) {
+        return {
+          rows: [{
+            id: jobId,
+            type: "volume.restore",
+            host_id: hostId,
+            payload: {
+              backupId,
+              targetVolumeName: "demo_restore",
+              overwrite: false
+            }
+          }],
+          rowCount: 1
+        };
+      }
+      if (
+        sql.includes("FROM recovery_restore_attempts")
+        && sql.includes("FOR UPDATE")
+      ) {
+        return { rows: [], rowCount: 0 };
+      }
+      if (sql.includes("SELECT tags")) {
+        return { rows: [{ tags: ["demo"] }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+
+    await expect(completeJob(
+      jobId,
+      { stdout: "demo restored", demo: true },
+      { workerId, attemptCount: 1 }
+    )).resolves.toBe(true);
+    expect(transactionQuery.mock.calls.some(([sql]) =>
+      String(sql).includes("UPDATE recovery_restore_attempts")
+    )).toBe(false);
+  });
+
+  it("does not disposition a restore attempt when fenced completion loses its lease", async () => {
+    arrangeTransaction(async (sql) => (
+      sql.includes("SET status = 'completed'")
+        ? { rows: [], rowCount: 0 }
+        : { rows: [], rowCount: 1 }
+    ));
+
+    await expect(completeJob(
+      jobId,
+      { composeRestored: true },
+      { workerId, attemptCount: 1 }
+    )).resolves.toBe(false);
+
+    expect(transactionQuery.mock.calls.some(([sql]) =>
+      String(sql).includes("UPDATE recovery_restore_attempts")
+    )).toBe(false);
+  });
+
+  it("atomically publishes a successful migration and stopped-source disposition", async () => {
+    const migrationRunId = "44444444-4444-4444-8444-444444444444";
+    const recoveryPointId = "55555555-5555-4555-8555-555555555555";
+    const attemptId = "66666666-6666-4666-8666-666666666666";
+    const sourceContainerIds = ["source-web"];
+    arrangeTransaction(async (sql) => {
+      if (
+        sql.includes("UPDATE operation_jobs")
+        && sql.includes("SET status = 'completed'")
+      ) {
+        return {
+          rows: [{
+            id: jobId,
+            type: "migration.execute",
+            host_id: hostId,
+            payload: {
+              migrationRunId,
+              strategy: "safe_move"
+            }
+          }],
+          rowCount: 1
+        };
+      }
+      if (
+        sql.includes("FROM recovery_restore_attempts")
+        && sql.includes("FOR UPDATE")
+      ) {
+        return {
+          rows: [{
+            id: attemptId,
+            recovery_point_id: recoveryPointId,
+            backup_id: null,
+            target_host_id: "77777777-7777-4777-8777-777777777777",
+            operation_job_id: jobId,
+            migration_run_id: migrationRunId,
+            restore_scope: recoveryPointId,
+            retain_on_success: true,
+            status: "awaiting_disposition"
+          }],
+          rowCount: 1
+        };
+      }
+      if (sql.includes("UPDATE recovery_restore_attempts")) {
+        return { rows: [{ id: attemptId }], rowCount: 1 };
+      }
+      if (sql.includes("UPDATE migration_runs")) {
+        return {
+          rows: [{
+            id: migrationRunId,
+            target_host_id:
+              "77777777-7777-4777-8777-777777777777"
+          }],
+          rowCount: 1
+        };
+      }
+      if (
+        sql.includes("FROM recovery_points")
+        && sql.includes("FOR UPDATE")
+      ) {
+        return {
+          rows: [{
+            id: recoveryPointId,
+            metadata: {
+              sourceRestartPending: true,
+              sourceRestartContainerIds: sourceContainerIds,
+              sourceRestartReconciliationState: "blocked_target_cleanup",
+              sourceRestartTargetCleanupBlocked: true
+            }
+          }],
+          rowCount: 1
+        };
+      }
+      if (
+        sql.includes("UPDATE recovery_points")
+        && sql.includes("sourceRestartResolution")
+      ) {
+        return { rows: [{ id: recoveryPointId }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 1 };
+    });
+
+    await expect(completeJob(
+      jobId,
+      {
+        migrationRunId,
+        recoveryPointId,
+        strategy: "safe_move",
+        sourceLeftStopped: true
+      },
+      { workerId, attemptCount: 1 }
+    )).resolves.toBe(true);
+
+    const completionIndex = transactionQuery.mock.calls.findIndex(([sql]) =>
+      String(sql).includes("UPDATE operation_jobs")
+      && String(sql).includes("SET status = 'completed'")
+    );
+    const attemptIndex = transactionQuery.mock.calls.findIndex(([sql]) =>
+      String(sql).includes("UPDATE recovery_restore_attempts")
+    );
+    const migrationIndex = transactionQuery.mock.calls.findIndex(([sql]) =>
+      String(sql).includes("UPDATE migration_runs")
+    );
+    const obligationIndex = transactionQuery.mock.calls.findIndex(([sql]) =>
+      String(sql).includes("UPDATE recovery_points")
+      && String(sql).includes("sourceRestartResolution")
+    );
+    expect(completionIndex).toBeGreaterThanOrEqual(0);
+    expect(attemptIndex).toBeGreaterThan(completionIndex);
+    expect(migrationIndex).toBeGreaterThan(attemptIndex);
+    expect(obligationIndex).toBeGreaterThan(migrationIndex);
+    expect(transactionQuery.mock.calls[migrationIndex]?.[1]).toEqual([
+      migrationRunId,
+      recoveryPointId
+    ]);
+    expect(transactionQuery.mock.calls[obligationIndex]?.[0]).toContain(
+      "sourceRestartPending' = 'true'"
+    );
+    expect(transactionQuery.mock.calls[obligationIndex]?.[0]).toContain(
+      "WHERE id = $1"
+    );
+    expect(transactionQuery.mock.calls[obligationIndex]?.[1]?.slice(0, 2))
+      .toEqual([recoveryPointId, migrationRunId]);
+  });
+
+  it("does not publish linked migration state after fenced completion loses its lease", async () => {
+    arrangeTransaction(async (sql) => (
+      sql.includes("UPDATE operation_jobs")
+      && sql.includes("SET status = 'completed'")
+        ? { rows: [], rowCount: 0 }
+        : { rows: [], rowCount: 1 }
+    ));
+
+    await expect(completeJob(
+      jobId,
+      {
+        migrationRunId: "44444444-4444-4444-8444-444444444444",
+        recoveryPointId: "55555555-5555-4555-8555-555555555555",
+        sourceLeftStopped: true
+      },
+      { workerId, attemptCount: 1 }
+    )).resolves.toBe(false);
+
+    expect(transactionQuery.mock.calls.some(([sql]) =>
+      String(sql).includes("UPDATE migration_runs")
+    )).toBe(false);
+    expect(transactionQuery.mock.calls.some(([sql]) =>
+      String(sql).includes("sourceRestartResolution")
+    )).toBe(false);
   });
 
   it.each([

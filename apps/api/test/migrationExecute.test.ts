@@ -487,7 +487,94 @@ describe("migration execute standalone restore verification", () => {
     );
     expect(result.recoveryPointId).toBe(finalRecoveryPointId);
     expect(result.sourceLeftStopped).toBe(true);
+    expect(query.mock.calls.some(([sql]) =>
+      String(sql).includes("SET status = 'completed'")
+    )).toBe(true);
   });
+
+  it("defers worker-bound migration publication to fenced job completion", async () => {
+    const operationJobId = "66666666-6666-4666-8666-666666666666";
+    createMigrationRecoveryPoint.mockResolvedValueOnce({ id: finalRecoveryPointId });
+    runSshCommand.mockImplementation(async (_ssh: unknown, command: string) => {
+      if (command.includes("docker inspect 'source-web'")) {
+        return { code: 0, stdout: inspectPayload("web", true), stderr: "" };
+      }
+      if (command.includes(`docker inspect '${restoredName}'`)) {
+        return { code: 0, stdout: inspectPayload(restoredName, true), stderr: "" };
+      }
+      return unexpectedCommand(command);
+    });
+    const executionFence = {
+      jobId: operationJobId,
+      attemptCount: 1,
+      assertActive: vi.fn(async () => undefined),
+      withActiveLease: async <T>(
+        callback: (client: import("pg").PoolClient) => Promise<T>
+      ) => callback({
+        query: (...args: Parameters<typeof query>) => query(...args)
+      } as unknown as import("pg").PoolClient)
+    };
+
+    const { runMigrationExecute } = await import("../src/services/migrationExecute.js");
+    const result = await runMigrationExecute(sourceHostId, migrationRunId, {
+      strategy: "safe_move",
+      stopSource: false,
+      remapPorts: true,
+      executionFence,
+      operationJobId
+    });
+
+    expect(result).toMatchObject({
+      migrationRunId,
+      recoveryPointId: finalRecoveryPointId,
+      sourceLeftStopped: true
+    });
+    expect(runRecoveryRestore).toHaveBeenCalledWith(
+      targetHostId,
+      expect.objectContaining({ recoveryPointId: finalRecoveryPointId }),
+      executionFence,
+      expect.objectContaining({
+        operationJobId,
+        migrationRunId,
+        beforeRemoteMutation: expect.any(Function)
+      })
+    );
+    expect(resolveRecoverySourceRestartObligation).not.toHaveBeenCalled();
+    expect(query.mock.calls.some(([sql]) =>
+      String(sql).includes("SET status = 'completed'")
+    )).toBe(false);
+    expect(cleanupCompletedRestore).not.toHaveBeenCalled();
+    expect(retainCompletedRestore).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["without an execution fence", undefined],
+    ["with a different job fence", {
+      jobId: "77777777-7777-4777-8777-777777777777",
+      attemptCount: 1,
+      assertActive: vi.fn(async () => undefined),
+      withActiveLease: vi.fn()
+    }]
+  ])(
+    "rejects worker-bound migration publication %s",
+    async (_description, executionFence) => {
+      const operationJobId = "66666666-6666-4666-8666-666666666666";
+      const { runMigrationExecute } = await import("../src/services/migrationExecute.js");
+
+      await expect(runMigrationExecute(sourceHostId, migrationRunId, {
+        strategy: "safe_move",
+        stopSource: false,
+        remapPorts: true,
+        operationJobId,
+        ...(executionFence ? { executionFence } : {})
+      })).rejects.toThrow(
+        "A worker-bound migration requires an execution fence for the same operation job"
+      );
+
+      expect(query).not.toHaveBeenCalled();
+      expect(runRecoveryRestore).not.toHaveBeenCalled();
+    }
+  );
 
   it("creates a final stop-first capture for safe moves without an eager source stop", async () => {
     query.mockImplementation(async (sql: string) => {

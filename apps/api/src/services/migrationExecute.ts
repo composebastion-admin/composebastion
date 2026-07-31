@@ -661,6 +661,17 @@ export async function runMigrationExecute(
   migrationRunId: string,
   config: ExecuteConfig = { strategy: "clone", stopSource: false, remapPorts: true, networkMode: "clone" }
 ) {
+  if (
+    config.operationJobId
+    && (
+      !config.executionFence
+      || config.executionFence.jobId !== config.operationJobId
+    )
+  ) {
+    throw new Error(
+      "A worker-bound migration requires an execution fence for the same operation job"
+    );
+  }
   const run = await getMigrationRun(migrationRunId);
   if (!run || run.sourceHostId !== sourceHostId) throw new Error("Migration run not found");
 
@@ -936,8 +947,27 @@ export async function runMigrationExecute(
     });
     await persistMigrationReconciliationEvidence(config, migrationRunId, reconciliationEvidence);
 
+    const result = {
+      migrationRunId,
+      recoveryPointId,
+      strategy: config.strategy,
+      restore,
+      inventory,
+      sourceLeftStopped: config.strategy !== "clone" && sourceWasStopped
+    };
+
+    if (config.operationJobId) {
+      // The durable restore attempt owns the verified target until completeJob
+      // atomically publishes the job, migration run, retained target, and
+      // stopped-source disposition. A crash in this handoff window therefore
+      // leaves every compensation safeguard armed for worker-loss recovery.
+      restoreCleanup = null;
+      return result;
+    }
+
     if (config.strategy === "safe_move" || config.strategy === "warm_move") {
-      // Source is intentionally left stopped after a successful move.
+      // Direct service executions have no operation-job publication boundary,
+      // so retain their existing terminal transition here.
       if (sourceWasStopped && recoveryPointId) {
         await resolveRecoverySourceRestartObligation(
           recoveryPointId,
@@ -950,15 +980,6 @@ export async function runMigrationExecute(
         );
       }
     }
-
-    const result = {
-      migrationRunId,
-      recoveryPointId,
-      strategy: config.strategy,
-      restore,
-      inventory,
-      sourceLeftStopped: config.strategy !== "clone" && sourceWasStopped
-    };
 
     try {
       const completed = await executionQuery(

@@ -1528,14 +1528,543 @@ export async function completeJob(id: string, resultValue: Record<string, unknow
        SET status = 'completed', result = $2, error = null, completed_at = now(),
            lease_owner = NULL, lease_expires_at = NULL, updated_at = now()
        WHERE id = $1${predicate.sql}
-       RETURNING id`,
+       RETURNING id, type, host_id, payload`,
       [id, safeResult, ...predicate.values]
     );
     if (result.rowCount !== 1) return false;
+    const completionRow = result.rows[0] as SuccessfulJobCompletionRow;
+    const migrationIdentity = parseMigrationCompletionIdentity(
+      completionRow,
+      safeResult
+    );
+    const backupRestoreIdentity = parseBackupRestoreCompletionIdentity(
+      completionRow,
+      safeResult
+    );
+    const completedRestoreAttempt = await finalizeSuccessfulRestoreAttempt(
+      client,
+      completionRow,
+      migrationIdentity,
+      backupRestoreIdentity
+    );
+    if (migrationIdentity) {
+      await finalizeLinkedMigrationSuccess(
+        client,
+        migrationIdentity,
+        completedRestoreAttempt?.target_host_id ?? null
+      );
+    }
     await applyGithubDeploymentBinding(client, id);
     await applyGithubCloneDeploymentBinding(client, id);
     return true;
   });
+}
+
+type SuccessfulJobCompletionRow = {
+  id: string;
+  type: string;
+  host_id: string | null;
+  payload: unknown;
+};
+
+type RestoreAttemptCompletionRow = {
+  id: string;
+  recovery_point_id: string | null;
+  backup_id: string | null;
+  target_host_id: string;
+  operation_job_id: string | null;
+  migration_run_id: string | null;
+  restore_scope: string;
+  retain_on_success: boolean;
+  status: string;
+};
+
+type MigrationCompletionIdentity = {
+  migrationRunId: string;
+  recoveryPointId: string;
+  sourceLeftStopped: boolean;
+};
+
+type BackupRestoreCompletionIdentity = {
+  backupId: string;
+  targetHostId: string;
+  disposition: "retained" | "cleaned";
+};
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function parseMigrationCompletionIdentity(
+  row: SuccessfulJobCompletionRow,
+  resultValue: Record<string, unknown>
+): MigrationCompletionIdentity | null {
+  if (row.type !== "migration.execute") return null;
+  const payload = recordValue(row.payload);
+  const migrationRunId = payload.migrationRunId;
+  const recoveryPointId = resultValue.recoveryPointId;
+  const resultMigrationRunId = resultValue.migrationRunId;
+  const sourceLeftStopped = resultValue.sourceLeftStopped;
+  const strategy = payload.strategy;
+  if (
+    typeof migrationRunId !== "string"
+    || resultMigrationRunId !== migrationRunId
+    || typeof recoveryPointId !== "string"
+    || typeof sourceLeftStopped !== "boolean"
+    || typeof strategy !== "string"
+    || resultValue.strategy !== strategy
+  ) {
+    throw new Error(
+      "Migration completion result does not match its linked operation"
+    );
+  }
+  return {
+    migrationRunId,
+    recoveryPointId,
+    sourceLeftStopped
+  };
+}
+
+function parseBackupRestoreCompletionIdentity(
+  row: SuccessfulJobCompletionRow,
+  resultValue: Record<string, unknown>
+): BackupRestoreCompletionIdentity | null {
+  if (
+    row.type !== "volume.restore"
+    && row.type !== "hostPath.restore"
+    && row.type !== "volume.clone"
+    && row.type !== "backup.drill"
+  ) {
+    return null;
+  }
+  const payload = recordValue(row.payload);
+  const payloadBackupId = payload.backupId;
+  const backupId = row.type === "volume.clone"
+    ? resultValue.backupId
+    : payloadBackupId;
+  const targetHostId = row.type === "volume.clone"
+    ? payload.targetHostId
+    : row.host_id;
+  if (
+    typeof backupId !== "string"
+    || typeof targetHostId !== "string"
+    || (
+      typeof payloadBackupId === "string"
+      && payloadBackupId !== backupId
+    )
+    || (
+      row.type === "volume.clone"
+      && resultValue.targetHostId !== targetHostId
+    )
+    || (
+      row.type === "backup.drill"
+      && resultValue.backupId !== backupId
+    )
+  ) {
+    throw new Error(
+      "Backup restore completion result does not match its linked operation"
+    );
+  }
+  return {
+    backupId,
+    targetHostId,
+    disposition: row.type === "backup.drill"
+      ? "cleaned"
+      : "retained"
+  };
+}
+
+function assertExactlyOneRestoreAttempt(
+  attempts: RestoreAttemptCompletionRow[],
+  description: string
+) {
+  if (attempts.length !== 1) {
+    throw new Error(
+      `${description} requires exactly one authoritative restore attempt`
+    );
+  }
+  return attempts[0]!;
+}
+
+async function retainExactRestoreAttempt(
+  client: PoolClient,
+  attempt: RestoreAttemptCompletionRow,
+  input: {
+    jobId: string;
+    recoveryPointId: string;
+    migrationRunId: string | null;
+  }
+) {
+  const retained = await client.query(
+    `UPDATE recovery_restore_attempts
+     SET status = 'retained',
+         cleanup_not_before = NULL,
+         reconciliation_token = NULL,
+         reconciliation_started_at = NULL,
+         last_error = NULL,
+         completed_at = now(),
+         updated_at = now()
+     WHERE id = $1
+       AND operation_job_id = $2
+       AND recovery_point_id = $3
+       AND backup_id IS NULL
+       AND migration_run_id IS NOT DISTINCT FROM $4::uuid
+       AND retain_on_success = true
+       AND status = 'awaiting_disposition'
+     RETURNING id`,
+    [
+      attempt.id,
+      input.jobId,
+      input.recoveryPointId,
+      input.migrationRunId
+    ]
+  );
+  if (retained.rowCount !== 1) {
+    throw new Error(
+      "Successful restore attempt could not be durably retained"
+    );
+  }
+}
+
+async function retainExactBackupRestoreAttempt(
+  client: PoolClient,
+  attempt: RestoreAttemptCompletionRow,
+  input: {
+    jobId: string;
+    backupId: string;
+    targetHostId: string;
+  }
+) {
+  const retained = await client.query(
+    `UPDATE recovery_restore_attempts
+     SET status = 'retained',
+         cleanup_not_before = NULL,
+         reconciliation_token = NULL,
+         reconciliation_started_at = NULL,
+         last_error = NULL,
+         completed_at = now(),
+         updated_at = now()
+     WHERE id = $1
+       AND operation_job_id = $2
+       AND recovery_point_id IS NULL
+       AND backup_id = $3
+       AND target_host_id = $4
+       AND migration_run_id IS NULL
+       AND retain_on_success = true
+       AND status = 'awaiting_disposition'
+     RETURNING id`,
+    [
+      attempt.id,
+      input.jobId,
+      input.backupId,
+      input.targetHostId
+    ]
+  );
+  if (retained.rowCount !== 1) {
+    throw new Error(
+      "Successful backup restore attempt could not be durably retained"
+    );
+  }
+}
+
+async function finalizeSuccessfulRestoreAttempt(
+  client: PoolClient,
+  row: SuccessfulJobCompletionRow,
+  migrationIdentity: MigrationCompletionIdentity | null,
+  backupRestoreIdentity: BackupRestoreCompletionIdentity | null
+) {
+  const attemptsResult = await client.query<RestoreAttemptCompletionRow>(
+    `SELECT
+       id,
+       recovery_point_id,
+       backup_id,
+       target_host_id,
+       operation_job_id,
+       migration_run_id,
+       restore_scope,
+       retain_on_success,
+       status
+     FROM recovery_restore_attempts
+     WHERE operation_job_id = $1
+     ORDER BY created_at ASC, id ASC
+     FOR UPDATE`,
+    [row.id]
+  );
+  if (
+    row.type !== "recovery.restore"
+    && row.type !== "migration.execute"
+    && !backupRestoreIdentity
+  ) {
+    if (attemptsResult.rows.length !== 0) {
+      throw new Error(
+        "Operation job type does not support a bound restore attempt"
+      );
+    }
+    return null;
+  }
+
+  if (backupRestoreIdentity) {
+    const targetHost = await client.query<{ tags: string[] }>(
+      `SELECT tags
+       FROM docker_hosts
+       WHERE id = $1`,
+      [backupRestoreIdentity.targetHostId]
+    );
+    if (targetHost.rowCount !== 1) {
+      throw new Error(
+        "Backup restore completion target host is no longer authoritative"
+      );
+    }
+    const targetTags = targetHost.rows[0]?.tags;
+    const isDemoTarget = Array.isArray(targetTags)
+      && targetTags.includes("demo");
+    if (isDemoTarget) {
+      if (attemptsResult.rows.length !== 0) {
+        throw new Error(
+          "Demo backup restore completion must not have a durable remote attempt"
+        );
+      }
+      return null;
+    }
+    const attempt = assertExactlyOneRestoreAttempt(
+      attemptsResult.rows,
+      "Backup restore completion"
+    );
+    if (
+      attempt.recovery_point_id !== null
+      || attempt.backup_id !== backupRestoreIdentity.backupId
+      || attempt.target_host_id !== backupRestoreIdentity.targetHostId
+      || attempt.operation_job_id !== row.id
+      || attempt.migration_run_id !== null
+      || attempt.restore_scope !== `backup:${backupRestoreIdentity.backupId}`
+    ) {
+      throw new Error(
+        "Backup restore attempt does not match its exact operation identity"
+      );
+    }
+    if (backupRestoreIdentity.disposition === "cleaned") {
+      if (
+        attempt.retain_on_success
+        || attempt.status !== "cleaned"
+      ) {
+        throw new Error(
+          "Backup drill completion requires its exact restore attempt to be cleaned"
+        );
+      }
+      return attempt;
+    }
+    if (
+      !attempt.retain_on_success
+      || attempt.status !== "awaiting_disposition"
+    ) {
+      throw new Error(
+        "Backup restore completion requires its exact attempt to await retention"
+      );
+    }
+    await retainExactBackupRestoreAttempt(
+      client,
+      attempt,
+      {
+        jobId: row.id,
+        backupId: backupRestoreIdentity.backupId,
+        targetHostId: backupRestoreIdentity.targetHostId
+      }
+    );
+    return attempt;
+  }
+
+  const attempt = assertExactlyOneRestoreAttempt(
+    attemptsResult.rows,
+    row.type === "migration.execute"
+      ? "Migration completion"
+      : "Recovery restore completion"
+  );
+
+  if (row.type === "migration.execute") {
+    if (
+      !migrationIdentity
+      || attempt.recovery_point_id !== migrationIdentity.recoveryPointId
+      || attempt.backup_id !== null
+      || attempt.operation_job_id !== row.id
+      || attempt.migration_run_id !== migrationIdentity.migrationRunId
+      || attempt.restore_scope !== migrationIdentity.recoveryPointId
+      || !attempt.retain_on_success
+      || attempt.status !== "awaiting_disposition"
+    ) {
+      throw new Error(
+        "Migration completion restore attempt does not match its exact operation identity"
+      );
+    }
+    await retainExactRestoreAttempt(client, attempt, {
+      jobId: row.id,
+      recoveryPointId: migrationIdentity.recoveryPointId,
+      migrationRunId: migrationIdentity.migrationRunId
+    });
+    return attempt;
+  }
+
+  const payload = recordValue(row.payload);
+  const recoveryPointId = payload.recoveryPointId;
+  const drill = payload.drill === true;
+  if (
+    typeof recoveryPointId !== "string"
+    || attempt.recovery_point_id !== recoveryPointId
+    || attempt.backup_id !== null
+    || attempt.target_host_id !== row.host_id
+    || attempt.operation_job_id !== row.id
+    || attempt.migration_run_id !== null
+    || attempt.restore_scope !== recoveryPointId
+  ) {
+    throw new Error(
+      "Recovery restore attempt does not match its exact operation identity"
+    );
+  }
+  if (drill) {
+    if (
+      attempt.retain_on_success
+      || attempt.status !== "cleaned"
+    ) {
+      throw new Error(
+        "Recovery drill completion requires its exact restore attempt to be cleaned"
+      );
+    }
+    return attempt;
+  }
+  if (
+    !attempt.retain_on_success
+    || attempt.status !== "awaiting_disposition"
+  ) {
+    throw new Error(
+      "Recovery restore completion requires its exact attempt to await retention"
+    );
+  }
+  await retainExactRestoreAttempt(client, attempt, {
+    jobId: row.id,
+    recoveryPointId,
+    migrationRunId: null
+  });
+  return attempt;
+}
+
+async function finalizeLinkedMigrationSuccess(
+  client: PoolClient,
+  identity: MigrationCompletionIdentity,
+  restoreTargetHostId: string | null
+) {
+  const migration = await client.query(
+    `UPDATE migration_runs
+     SET status = 'completed',
+         error = NULL,
+         completed_at = now()
+     WHERE id = $1
+       AND mode = 'execute'
+       AND status = 'running'
+       AND recovery_point_id = $2
+     RETURNING id, target_host_id`,
+    [identity.migrationRunId, identity.recoveryPointId]
+  );
+  if (migration.rowCount !== 1) {
+    throw new Error("Migration completion did not update its active linked run");
+  }
+  if (
+    typeof restoreTargetHostId !== "string"
+    || migration.rows[0]?.target_host_id !== restoreTargetHostId
+  ) {
+    throw new Error(
+      "Migration restore attempt target does not match its linked migration run"
+    );
+  }
+
+  const pendingObligations = await client.query<{
+    id: string;
+    metadata: unknown;
+  }>(
+    `SELECT id, metadata
+     FROM recovery_points
+     WHERE migration_run_id = $1
+       AND metadata->>'sourceRestartPending' = 'true'
+     ORDER BY id
+     FOR UPDATE`,
+    [identity.migrationRunId]
+  );
+  if (!identity.sourceLeftStopped) {
+    if (pendingObligations.rowCount !== 0) {
+      throw new Error(
+        "Migration reported no stopped source but has a pending restart obligation"
+      );
+    }
+    return;
+  }
+  if (
+    pendingObligations.rowCount !== 1
+    || pendingObligations.rows[0]?.id !== identity.recoveryPointId
+  ) {
+    throw new Error(
+      "Migration stopped-source disposition is not bound to its exact final recovery point"
+    );
+  }
+  const obligationMetadata = recordValue(
+    pendingObligations.rows[0]?.metadata
+  );
+  if (
+    obligationMetadata.sourceRestartReconciliationState
+      !== "blocked_target_cleanup"
+    || obligationMetadata.sourceRestartTargetCleanupBlocked !== true
+    || !Array.isArray(obligationMetadata.sourceRestartContainerIds)
+    || obligationMetadata.sourceRestartContainerIds.length === 0
+  ) {
+    throw new Error(
+      "Migration stopped-source obligation is not safely blocked on target cleanup"
+    );
+  }
+
+  const resolvedAt = new Date().toISOString();
+  const obligations = await client.query(
+    `UPDATE recovery_points
+     SET metadata = (
+       metadata
+       - 'sourceRestartReconciliationToken'
+       - 'sourceRestartReconciliationStartedAt'
+       - 'sourceRestartReconciliationError'
+       - 'sourceRestartReconciliationFailedAt'
+       - 'sourceRestartTargetCleanupBlocked'
+       - 'sourceRestartTargetCleanupBlockedAt'
+       - 'sourceRestartTargetCleanupError'
+       - 'sourceRestartTargetCleanupCompletedAt'
+       - 'sourceRestartRearmedAt'
+     ) || jsonb_build_object(
+       'sourceRestartPending', false,
+       'sourceRestartContainerIds', '[]'::jsonb,
+       'sourceLeftStopped', true,
+       'sourceStoppedIds', COALESCE(metadata->'sourceRestartContainerIds', '[]'::jsonb),
+       'stoppedContainerIds', COALESCE(metadata->'sourceRestartContainerIds', '[]'::jsonb),
+       'restartFailedIds', '[]'::jsonb,
+       'sourceRestartResolvedAt', $3::text,
+       'sourceRestartResolution', 'intentionally_left_stopped',
+       'sourceRestartReconciliationState', 'completed'
+     )
+     WHERE id = $1
+       AND migration_run_id = $2
+       AND metadata->>'sourceRestartPending' = 'true'
+       AND metadata->>'sourceRestartReconciliationState'
+         = 'blocked_target_cleanup'
+       AND metadata->>'sourceRestartTargetCleanupBlocked' = 'true'
+       AND jsonb_typeof(metadata->'sourceRestartContainerIds') = 'array'
+       AND jsonb_array_length(metadata->'sourceRestartContainerIds') > 0
+     RETURNING id`,
+    [
+      identity.recoveryPointId,
+      identity.migrationRunId,
+      resolvedAt
+    ]
+  );
+  if (obligations.rowCount !== 1) {
+    throw new Error(
+      "Migration stopped-source disposition could not resolve its exact obligation"
+    );
+  }
 }
 
 export async function markSelfUpdateHandoffPending(id: string, handoff: SelfUpdateHandoff, lease: JobLease) {
