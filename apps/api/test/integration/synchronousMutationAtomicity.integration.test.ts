@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { CONFIG_BACKUP_FORMAT_VERSION } from "@composebastion/shared";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runMigrations } from "../../src/db/migrate.js";
 import { pool } from "../../src/db/pool.js";
@@ -8,9 +9,9 @@ import {
   saveCustomCatalogTemplate
 } from "../../src/services/catalog.js";
 import {
-  exportConfigBackup,
   importConfigBackup
 } from "../../src/services/configBackup.js";
+import { encryptConfigPayload } from "../../src/services/crypto.js";
 import { createDeploymentSource } from "../../src/services/deployments.js";
 import { createFavoriteImage } from "../../src/services/favorites.js";
 import { createGithubRepository } from "../../src/services/github.js";
@@ -247,8 +248,32 @@ describe.skipIf(!integrationEnabled)("synchronous mutation audit atomicity", () 
   it("rolls back a config import when its audit callback fails", async () => {
     const image = `${prefix}/config:${randomUUID()}`;
     const passphrase = "Atomic-Config-Passphrase-1!";
-    await createFavoriteImage({ image, name: "Exported name", notes: "" });
-    const backup = await exportConfigBackup(passphrase);
+    const exported = await createFavoriteImage({
+      image,
+      name: "Exported name",
+      notes: ""
+    });
+    const backup = encryptConfigPayload({
+      app: "ComposeBastion",
+      formatVersion: CONFIG_BACKUP_FORMAT_VERSION,
+      version: "1.2.0-beta.1",
+      exportedAt: "2026-07-30T12:00:00.000Z",
+      hosts: [],
+      composeStacks: [],
+      registries: [],
+      notificationChannels: [],
+      alertRules: [],
+      favoriteImages: [{
+        id: exported.id,
+        image: exported.image,
+        name: exported.name,
+        notes: exported.notes
+      }],
+      githubRepositories: [],
+      deploymentSources: [],
+      appSourceLinks: [],
+      backupTargets: []
+    }, passphrase);
     await createFavoriteImage({ image, name: "Current name", notes: "" });
 
     await expect(importConfigBackup(

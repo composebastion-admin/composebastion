@@ -100,6 +100,7 @@ describe.skipIf(!integrationEnabled)(
 
     beforeAll(async () => {
       await runMigrations();
+      await pool.query("DELETE FROM operation_jobs");
     });
 
     beforeEach(async () => {

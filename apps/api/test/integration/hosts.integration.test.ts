@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../../src/server.js";
 import { runMigrations } from "../../src/db/migrate.js";
@@ -15,6 +15,7 @@ describe.skipIf(!integrationEnabled)("host API integration", () => {
     await runMigrations();
     app = await buildServer();
     await app.ready();
+    await pool.query("DELETE FROM operation_jobs");
     await pool.query("DELETE FROM sessions");
     await pool.query("DELETE FROM admin_users");
     await pool.query("DELETE FROM docker_hosts");
@@ -27,7 +28,15 @@ describe.skipIf(!integrationEnabled)("host API integration", () => {
     sessionCookie = setup.headers["set-cookie"] as string;
   });
 
+  beforeEach(async () => {
+    await pool.query("DELETE FROM operation_jobs");
+  });
+
   afterAll(async () => {
+    await pool.query("DELETE FROM operation_jobs");
+    await pool.query("DELETE FROM docker_hosts");
+    await pool.query("DELETE FROM sessions");
+    await pool.query("DELETE FROM admin_users");
     await app.close();
   });
 

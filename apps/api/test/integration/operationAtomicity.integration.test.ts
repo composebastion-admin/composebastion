@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { v4 as uuid } from "uuid";
 import { runMigrations } from "../../src/db/migrate.js";
 import { pool } from "../../src/db/pool.js";
@@ -10,6 +10,35 @@ import { updateApp } from "../../src/services/apps.js";
 
 const integrationEnabled = process.env.COMPOSEBASTION_INTEGRATION === "1";
 const prefix = "atomic-fail-";
+const githubCommitSha = "a".repeat(40);
+const githubComposeYaml = "services:\n  app:\n    image: nginx:alpine\n";
+
+function stubGithubHostCloneSource() {
+  vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+    const url = typeof input === "string"
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input.url;
+    if (url.includes("/commits/")) {
+      return new Response(JSON.stringify({ sha: githubCommitSha }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    }
+    if (url.includes("/contents/")) {
+      return new Response(JSON.stringify({
+        content: Buffer.from(githubComposeYaml).toString("base64"),
+        encoding: "base64",
+        sha: githubCommitSha
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    }
+    throw new Error(`Unexpected GitHub fixture request: ${url}`);
+  }));
+}
 
 function hostInput(name: string) {
   return {
@@ -26,6 +55,7 @@ function hostInput(name: string) {
 
 describe.skipIf(!integrationEnabled)("operation domain/job atomicity", () => {
   let hostId: string;
+  const repositoryIds = new Set<string>();
 
   beforeAll(async () => {
     await runMigrations();
@@ -64,12 +94,22 @@ describe.skipIf(!integrationEnabled)("operation domain/job atomicity", () => {
     hostId = host.id;
   });
 
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   afterAll(async () => {
     vi.unstubAllGlobals();
     await pool.query("DROP TRIGGER IF EXISTS operation_jobs_atomicity_test_trigger ON operation_jobs");
     await pool.query("DROP FUNCTION IF EXISTS operation_jobs_atomicity_test_reject()");
     if (hostId) {
       await pool.query("DELETE FROM operation_jobs WHERE host_id = $1", [hostId]);
+      if (repositoryIds.size) {
+        await pool.query(
+          "DELETE FROM github_repositories WHERE id = ANY($1::uuid[])",
+          [[...repositoryIds]]
+        );
+      }
       await pool.query("DELETE FROM docker_hosts WHERE id = $1", [hostId]);
     }
   });
@@ -136,6 +176,8 @@ describe.skipIf(!integrationEnabled)("operation domain/job atomicity", () => {
       env: "",
       defaultHostId: hostId
     });
+    repositoryIds.add(repository.id);
+    stubGithubHostCloneSource();
 
     await expect(deployGithubRepository(repository.id, {
       mode: "host_clone",
@@ -164,6 +206,8 @@ describe.skipIf(!integrationEnabled)("operation domain/job atomicity", () => {
       env: "",
       defaultHostId: hostId
     });
+    repositoryIds.add(repository.id);
+    stubGithubHostCloneSource();
     const auditFailure = new Error("intentional audit insert failure");
 
     await expect(deployGithubRepository(repository.id, {
@@ -211,12 +255,8 @@ describe.skipIf(!integrationEnabled)("operation domain/job atomicity", () => {
       env: "",
       defaultHostId: hostId
     });
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
-      sha: "a".repeat(40)
-    }), {
-      status: 200,
-      headers: { "content-type": "application/json" }
-    })));
+    repositoryIds.add(repository.id);
+    stubGithubHostCloneSource();
 
     await expect(deployGithubRepository(repository.id, {
       mode: "api",
@@ -229,7 +269,6 @@ describe.skipIf(!integrationEnabled)("operation domain/job atomicity", () => {
     const saved = await pool.query("SELECT last_deployed_at FROM github_repositories WHERE id = $1", [repository.id]);
     expect(stacks.rowCount).toBe(0);
     expect(saved.rows[0]?.last_deployed_at).toBeNull();
-    vi.unstubAllGlobals();
   });
 
   it("rolls back stack content and both rollback snapshots when deploy enqueue fails", async () => {
