@@ -24,6 +24,30 @@ function loadWorkflow(file) {
 }
 
 const workflows = Object.fromEntries(workflowFiles.map((file) => [file, loadWorkflow(file)]));
+
+function requireBranches(file, eventName, expectedBranches) {
+  const branches = workflows[file]?.on?.[eventName]?.branches ?? [];
+  if (JSON.stringify([...branches].sort()) !== JSON.stringify([...expectedBranches].sort())) {
+    fail(
+      `${file}: ${eventName} branches must be exactly ${expectedBranches.join(", ")}, got ${JSON.stringify(branches)}`
+    );
+  }
+}
+
+for (const file of [
+  ".github/workflows/codeql.yml",
+  ".github/workflows/container-scan.yml",
+  ".github/workflows/publish-images.yml"
+]) {
+  requireBranches(file, "push", ["main", "beta"]);
+  requireBranches(file, "pull_request", ["main", "beta", "dev"]);
+}
+requireBranches(
+  ".github/workflows/dependency-review.yml",
+  "pull_request",
+  ["main", "beta", "dev"]
+);
+
 for (const [file, workflow] of Object.entries(workflows)) {
   const pullRequest = workflow?.on?.pull_request;
   if (pullRequest && typeof pullRequest === "object" && "paths" in pullRequest) {
