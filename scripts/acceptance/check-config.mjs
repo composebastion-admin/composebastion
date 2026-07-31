@@ -186,7 +186,14 @@ for (const unsafeFragment of [
     throw new Error(`Acceptance relative-bind marker must not be seeded through a daemon-only path: ${unsafeFragment}`);
   }
 }
-const expectedScenarioIds = ["candidate-images", "fresh-image-install", "source-production-install", "hardened-overlays", "public-upgrade"];
+const expectedScenarioIds = [
+  "candidate-images",
+  "fresh-image-install",
+  "source-production-install",
+  "hardened-overlays",
+  "current-stable-upgrade",
+  "legacy-upgrade"
+];
 if (JSON.stringify(acceptanceScenarioManifest.map((entry) => entry.id)) !== JSON.stringify(expectedScenarioIds)) {
   throw new Error("Acceptance scenario manifest IDs changed without updating the release contract");
 }

@@ -63,7 +63,11 @@ export function acceptanceNonqualifyingReasons({
   const reasons = [];
   if (worktreeDirty) reasons.push("The working tree was dirty, so the built context is not identical to the recorded commit");
   if (skipBuild) reasons.push("Candidate image builds were skipped and existing local images were reused");
-  if (skipUpgrade) reasons.push("The public 1.0.6 upgrade scenario was explicitly skipped");
+  if (skipUpgrade) {
+    reasons.push(
+      "The required public 1.1.2 current-stable and 1.0.6 legacy upgrade scenarios were explicitly skipped"
+    );
+  }
   if (allowNonqualifying) reasons.push("Developer --allow-nonqualifying opt-out requested; this report cannot qualify a release");
   if (keep) reasons.push("Disposable acceptance infrastructure was retained with --keep; this report cannot qualify a release");
   return reasons;

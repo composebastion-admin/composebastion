@@ -14,6 +14,7 @@ import {
   requireImageComposeProject
 } from "./qualification-policy.mjs";
 import { acceptanceScenarioManifest } from "./scenario-manifest.mjs";
+import { acceptanceUpgradeBaselines } from "./upgrade-baselines.mjs";
 import { assertSafeTestResultsPath, digestGitBuildContext, materializeGitBuildContext } from "../materialize-git-context.mjs";
 import { validateGoAttributionReview } from "../go-attribution-review.mjs";
 
@@ -66,10 +67,8 @@ function goModuleLegalReviewGate(review) {
   };
 }
 const goLegalReviewGate = goModuleLegalReviewGate(goAttributionManifest.review);
-const publicImage = "ghcr.io/composebastion-admin/composebastion-app:1.0.6";
-const publicImagePinned = "ghcr.io/composebastion-admin/composebastion-app@sha256:8bbff7cac90e0e6ec77b872f112dd52185c9033e5124e42c3e63a74f9ec42770";
 const externalImageReferences = Object.freeze([
-  publicImagePinned,
+  ...acceptanceUpgradeBaselines.map((baseline) => baseline.pinnedImage),
   "node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a",
   "golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2",
   "alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b",
@@ -260,7 +259,8 @@ const report = {
       fresh: projectName("fresh"),
       source: projectName("source"),
       hardened: projectName("hardened"),
-      upgrade: projectName("upgrade")
+      currentStableUpgrade: projectName("upgrade-current-stable"),
+      legacyUpgrade: projectName("upgrade-legacy")
     }
   },
   scenarios: []
@@ -978,19 +978,31 @@ async function inspectCandidateImage(image, expectedTitle) {
   };
 }
 
-async function inspectPublicUpgradeImage() {
-  const inspected = await run("docker", ["image", "inspect", publicImagePinned, "--format", "{{json .}}"]);
+async function inspectPublicUpgradeImage(baseline) {
+  const inspected = await run(
+    "docker",
+    ["image", "inspect", baseline.pinnedImage, "--format", "{{json .}}"]
+  );
   const details = JSON.parse(inspected.stdout);
   const repoDigest = (details.RepoDigests ?? []).find((value) =>
     /^ghcr\.io\/composebastion-admin\/composebastion-app@sha256:[a-f0-9]{64}$/i.test(value)
   );
-  assert(repoDigest, "public 1.0.6 image did not expose an immutable GHCR digest");
-  assert(repoDigest === publicImagePinned, `public 1.0.6 digest is ${repoDigest}, expected ${publicImagePinned}`);
+  assert(
+    repoDigest,
+    `public ${baseline.version} image did not expose an immutable GHCR digest`
+  );
+  assert(
+    repoDigest === baseline.pinnedImage,
+    `public ${baseline.version} digest is ${repoDigest}, expected ${baseline.pinnedImage}`
+  );
   const version = details.Config?.Labels?.["org.opencontainers.image.version"] ?? null;
-  assert(version === "1.0.6", `public upgrade image label is ${version ?? "missing"}`);
+  assert(
+    version === baseline.version,
+    `public upgrade image label is ${version ?? "missing"}, expected ${baseline.version}`
+  );
   return {
-    reference: publicImagePinned,
-    releaseTag: publicImage,
+    reference: baseline.pinnedImage,
+    releaseTag: baseline.releaseTag,
     id: details.Id,
     repoDigest,
     architecture: details.Architecture,
@@ -2326,10 +2338,14 @@ async function hardenedContainersScenario() {
   }
 }
 
-async function upgradeScenario() {
-  const project = projectName("upgrade");
-  const upgradeOverrides = { ACCEPTANCE_SCENARIO: "upgrade", ACCEPTANCE_HTTP_PORT: String(portBase + 380) };
-  let oldEnv = acceptanceEnv(publicImagePinned, upgradeOverrides);
+async function upgradeScenario(baseline) {
+  const scenarioName = `upgrade-${baseline.key}`;
+  const project = projectName(scenarioName);
+  const upgradeOverrides = {
+    ACCEPTANCE_SCENARIO: scenarioName,
+    ACCEPTANCE_HTTP_PORT: String(portBase + baseline.portOffset)
+  };
+  let oldEnv = acceptanceEnv(baseline.pinnedImage, upgradeOverrides);
   const newEnv = acceptanceEnv(candidateImage, upgradeOverrides);
   await mkdir(oldEnv.COMPOSEBASTION_BACKUP_DIR, { recursive: true });
   activeProject = project;
@@ -2339,9 +2355,18 @@ async function upgradeScenario() {
   const upgradeLocalTargetId = randomUUID();
   const upgradeRepositoryId = randomUUID();
   const upgradeEnvironmentSecret = runtimeSecret(20);
+  const upgradeMarker = `${fixture.publicMarker}-${baseline.key}`;
+  const projectVolumeNames = async () => {
+    const result = await run("docker", [
+      "volume", "ls",
+      "--filter", `label=com.docker.compose.project=${project}`,
+      "--format", "{{.Name}}"
+    ]);
+    return result.stdout.split(/\r?\n/).map((value) => value.trim()).filter(Boolean).sort();
+  };
   try {
-    await run("docker", ["pull", publicImagePinned], { inherit: true });
-    const publicImageEvidence = await inspectPublicUpgradeImage();
+    await run("docker", ["pull", baseline.pinnedImage], { inherit: true });
+    const publicImageEvidence = await inspectPublicUpgradeImage(baseline);
     oldEnv = acceptanceEnv(publicImageEvidence.repoDigest, upgradeOverrides);
     activeEnv = oldEnv;
     await compose(project, oldEnv, ["up", "--detach", "postgres", "redis", "registry", "app", "worker"], { inherit: true });
@@ -2357,17 +2382,19 @@ async function upgradeScenario() {
         { expectedId: publicImageEvidence.id, expectedReference: publicImageEvidence.repoDigest }
       )
     };
-    await waitForApiVersion("1.0.6");
+    const initialVolumeNames = await projectVolumeNames();
+    assert(initialVolumeNames.length > 0, "upgrade fixture did not create persistent Compose volumes");
+    await waitForApiVersion(baseline.version);
     await seedRegistry();
     await setupOwner();
     await api("/api/alerts/channels", {
       method: "POST",
-      body: { name: fixture.publicMarker, type: "email", emailTo: "upgrade@composebastion.invalid", enabled: true }
+      body: { name: upgradeMarker, type: "email", emailTo: "upgrade@composebastion.invalid", enabled: true }
     });
     const savedRegistry = await api("/api/registries", {
       method: "POST",
       body: {
-        name: `${fixture.publicMarker}-registry`,
+        name: `${upgradeMarker}-registry`,
         url: "http://registry:5000",
         username: fixture.registryUser,
         password: fixture.registryPassword,
@@ -2386,7 +2413,7 @@ async function upgradeScenario() {
         sshAuthType: "password",
         sshPassword: upgradeDemoPassword,
         dockerSocketPath: "/var/run/docker.sock",
-        tags: ["demo", "acceptance", "upgrade"]
+        tags: ["demo", "acceptance", scenarioName]
       }
     });
     const demoHost = demoHostResponse.data.host;
@@ -2399,20 +2426,20 @@ async function upgradeScenario() {
     const queuedJobId = queued.data.job.id;
     const queuedBeforeUpgrade = await api(`/api/jobs/${queuedJobId}`);
     assert(queuedBeforeUpgrade.data.job.status === "queued", "pre-upgrade API job was not queued while the worker was stopped");
-    assert(/^[a-z0-9-]+$/i.test(fixture.publicMarker), "upgrade marker is not SQL-fixture safe");
+    assert(/^[a-z0-9-]+$/i.test(upgradeMarker), "upgrade marker is not SQL-fixture safe");
     await compose(project, oldEnv, [
       "exec", "-T", "postgres",
       "psql", "-v", "ON_ERROR_STOP=1", "-U", "composebastion", "-d", "composebastion", "-c",
       `INSERT INTO operation_jobs (id, type, status, payload, result, created_at, updated_at, started_at, completed_at)
        VALUES ('${upgradeJobId}', 'host.check', 'completed',
-         jsonb_build_object('acceptanceMarker', '${fixture.publicMarker}'),
+         jsonb_build_object('acceptanceMarker', '${upgradeMarker}'),
          jsonb_build_object('preserved', true),
          now() - interval '1 minute', now(), now() - interval '30 seconds', now());
        INSERT INTO backup_targets (
          id, name, kind, enabled, config, local_cache_policy,
          health_status, health_checked_at, health_error, created_at, updated_at
        ) VALUES (
-         '${upgradeLocalTargetId}', '${fixture.publicMarker}-legacy-local', 'local', true,
+         '${upgradeLocalTargetId}', '${upgradeMarker}-legacy-local', 'local', true,
          jsonb_build_object('basePath', '/legacy/unsupported/path'), 'remote_only',
          'healthy', now(), 'legacy probe did not perform I/O', now(), now()
        );
@@ -2420,12 +2447,12 @@ async function upgradeScenario() {
          id, name, repository_url, owner, repo, branch, compose_path, project_name,
          env, default_host_id, host_clone_url, host_clone_directory, created_at, updated_at
        ) VALUES (
-         '${upgradeRepositoryId}', '${fixture.publicMarker}-repository',
+         '${upgradeRepositoryId}', '${upgradeMarker}-repository',
          'https://github.com/composebastion/example.git', 'composebastion', 'example',
-         'main', 'compose.yml', '${fixture.publicMarker}-project',
+         'main', 'compose.yml', '${upgradeMarker}-project',
          E'PUBLIC_SETTING=upgrade-preserved\\nSECRET_TOKEN=${upgradeEnvironmentSecret}',
          '${demoHost.id}', 'https://github.com/composebastion/example.git',
-         '/tmp/${fixture.publicMarker}-repository', now(), now()
+         '/tmp/${upgradeMarker}-repository', now(), now()
        )`
     ]);
     await compose(project, oldEnv, ["stop", "app"]);
@@ -2460,7 +2487,7 @@ async function upgradeScenario() {
     sessionCookie = "";
     await loginOwner();
     const channels = await api("/api/alerts/channels");
-    assert(channels.data.channels.some((channel) => channel.name === fixture.publicMarker), "configuration did not survive the image upgrade");
+    assert(channels.data.channels.some((channel) => channel.name === upgradeMarker), "configuration did not survive the image upgrade");
     const registries = await api("/api/registries");
     assert(registries.data.registries.some((registry) => registry.id === savedRegistry.data.registry.id), "encrypted registry configuration did not survive the upgrade");
     const encryptedRegistryTags = await api(`/api/image-tags?image=${encodeURIComponent("registry:5000/acceptance/test")}`);
@@ -2503,7 +2530,7 @@ async function upgradeScenario() {
     const preservedJob = JSON.parse(preservedJobResult.stdout);
     assert(preservedJob.id === upgradeJobId, "pre-upgrade operation job was not preserved");
     assert(preservedJob.type === "host.check" && preservedJob.status === "completed", "pre-upgrade operation job changed state");
-    assert(preservedJob.payload?.acceptanceMarker === fixture.publicMarker, "pre-upgrade operation job payload changed");
+    assert(preservedJob.payload?.acceptanceMarker === upgradeMarker, "pre-upgrade operation job payload changed");
     assert(preservedJob.result?.preserved === true, "pre-upgrade operation job result changed");
     assert(preservedJob.attemptCount === 0 && preservedJob.leaseOwner === null && preservedJob.leaseExpiresAt === null,
       "worker reliability migration did not preserve legacy job defaults");
@@ -2677,7 +2704,7 @@ async function upgradeScenario() {
       migrated.legacyDeploymentSource?.id === upgradeRepositoryId
         && migrated.legacyDeploymentSource?.legacyId === upgradeRepositoryId
         && migrated.legacyDeploymentSource?.sourceLocator === "https://github.com/composebastion/example.git"
-        && migrated.legacyDeploymentSource?.projectName === `${fixture.publicMarker}-project`
+        && migrated.legacyDeploymentSource?.projectName === `${upgradeMarker}-project`
         && migrated.legacyDeploymentSource?.environmentEncrypted === true
         && migrated.legacyDeploymentSource?.ciphertextContainsPlaintextSecret === false,
       "legacy GitHub repository was not preserved and backfilled as a deployment source"
@@ -2691,8 +2718,93 @@ async function upgradeScenario() {
         && migrated.legacyLocalTarget?.healthError === null,
       "legacy local backup target was not canonicalized without losing the row"
     );
+    let rollbackEvidence = {};
+    if (baseline.rollbackRehearsal) {
+      await compose(project, newEnv, ["stop", "worker", "app"]);
+      activeEnv = oldEnv;
+      sessionCookie = "";
+      await compose(project, oldEnv, ["up", "--detach", "app", "worker"], { inherit: true });
+      imageBindings.rollbackApp = await inspectComposeServiceImage(
+        (args, options) => compose(project, oldEnv, args, options),
+        "app",
+        { expectedId: publicImageEvidence.id, expectedReference: publicImageEvidence.repoDigest }
+      );
+      imageBindings.rollbackWorker = await inspectComposeServiceImage(
+        (args, options) => compose(project, oldEnv, args, options),
+        "worker",
+        { expectedId: publicImageEvidence.id, expectedReference: publicImageEvidence.repoDigest }
+      );
+      await waitForApiVersion(baseline.version);
+      await waitForReadiness("rolled-back stable readiness");
+      await loginOwner();
+      const rollbackChannels = await api("/api/alerts/channels");
+      assert(
+        rollbackChannels.data.channels.some((channel) => channel.name === upgradeMarker),
+        "configuration did not survive rollback to current stable"
+      );
+      const rollbackState = await api("/api/auth/setup-state");
+      assert(rollbackState.data.needsSetup === false, "database state did not survive rollback");
+      const rollbackVolumes = await projectVolumeNames();
+      assert(
+        JSON.stringify(rollbackVolumes) === JSON.stringify(initialVolumeNames),
+        "rollback replaced or removed persistent Compose volumes"
+      );
+
+      await compose(project, oldEnv, ["stop", "worker", "app"]);
+      activeEnv = newEnv;
+      sessionCookie = "";
+      await compose(project, newEnv, ["up", "--detach", "app", "worker"], { inherit: true });
+      imageBindings.reupgradeApp = await inspectComposeServiceImage(
+        (args, options) => compose(project, newEnv, args, options),
+        "app",
+        {
+          expectedId: report.candidateImages.app.id,
+          expectedReference: candidateImage,
+          expectedRevision: candidateRevision,
+          expectedCreated: candidateBuildDate
+        }
+      );
+      imageBindings.reupgradeWorker = await inspectComposeServiceImage(
+        (args, options) => compose(project, newEnv, args, options),
+        "worker",
+        {
+          expectedId: report.candidateImages.app.id,
+          expectedReference: candidateImage,
+          expectedRevision: candidateRevision,
+          expectedCreated: candidateBuildDate
+        }
+      );
+      await waitForApiVersion(candidateVersion);
+      await waitForReadiness("re-upgraded candidate readiness");
+      await loginOwner();
+      const reupgradeChannels = await api("/api/alerts/channels");
+      assert(
+        reupgradeChannels.data.channels.some((channel) => channel.name === upgradeMarker),
+        "configuration did not survive candidate re-upgrade"
+      );
+      const reupgradeSource = await api(`/api/deployment-sources/${upgradeRepositoryId}`);
+      assert(
+        reupgradeSource.data.source.safeEnvironment?.PUBLIC_SETTING === "upgrade-preserved",
+        "deployment source did not survive rollback and re-upgrade"
+      );
+      const reupgradeVolumes = await projectVolumeNames();
+      assert(
+        JSON.stringify(reupgradeVolumes) === JSON.stringify(initialVolumeNames),
+        "re-upgrade replaced or removed persistent Compose volumes"
+      );
+      rollbackEvidence = {
+        rollbackVersion: baseline.version,
+        rollbackPreservedConfiguration: true,
+        rollbackPreservedDatabase: true,
+        reupgradeVersion: candidateVersion,
+        reupgradePreservedConfiguration: true,
+        reupgradePreservedDatabase: true,
+        volumesRetained: true,
+        rollbackReupgradeHealthy: true
+      };
+    }
     return {
-      from: "1.0.6",
+      from: baseline.version,
       to: candidateVersion,
       publicImage: publicImageEvidence,
       imageBindings,
@@ -2722,7 +2834,8 @@ async function upgradeScenario() {
       legacyRepositoryBackfilled: true,
       legacySourceEnvironmentEncrypted: true,
       legacySourceEnvironmentApiRedacted: true,
-      legacyLocalTargetCanonicalized: true
+      legacyLocalTargetCanonicalized: true,
+      ...rollbackEvidence
     };
   } catch (error) {
     await captureFailureLogs();
@@ -2780,7 +2893,7 @@ async function writeReport() {
 - Required scenario manifest complete: **${report.releaseQualification.manifestComplete ? "yes" : "no"}**
 - Disposable cleanup verified: **${report.cleanup.verified ? "yes" : "no"}**
 - Port base: \`${portBase}\`; workload subnet: \`${configuredSubnet}\`
-- Projects: \`${projectName("fresh")}\`, \`${projectName("source")}\`, \`${projectName("hardened")}\`, \`${projectName("upgrade")}\`
+- Projects: ${Object.values(report.environment.projects).map((project) => `\`${project}\``).join(", ")}
 - Fixture credentials: redacted and not retained in this report
 
 ## Automated qualification notes
@@ -3050,7 +3163,12 @@ async function performFinalCleanup() {
     if (await pathExists(location)) report.cleanup.runtimeInputFiles.push(location);
   }
   report.cleanup.backupArtifacts = [];
-  for (const scenario of ["fresh", "source", "hardened", "upgrade"]) {
+  for (const scenario of [
+    "fresh",
+    "source",
+    "hardened",
+    ...acceptanceUpgradeBaselines.map((baseline) => `upgrade-${baseline.key}`)
+  ]) {
     const location = scenarioBackupDir(scenario);
     if (await pathExists(location)) report.cleanup.backupArtifacts.push(location);
   }
@@ -3077,6 +3195,7 @@ async function main() {
     portBase + 550,
     portBase + 580,
     portBase + 590,
+    portBase + 680,
     portBase + 1000
   ].map(assertPortAvailable));
   for (const location of [runtimeDir, acceptanceBindDir, liveBrowserEvidencePath]) {
@@ -3106,17 +3225,26 @@ async function main() {
   await record("source-production-install", sourceProductionScenario);
   await record("hardened-overlays", hardenedContainersScenario);
   if (!skipUpgrade) {
-    await record("public-upgrade", upgradeScenario);
+    for (const baseline of acceptanceUpgradeBaselines) {
+      await record(
+        baseline.scenarioId,
+        () => upgradeScenario(baseline)
+      );
+    }
   } else {
-    const manifestEntry = acceptanceScenarioManifest.find((entry) => entry.id === "public-upgrade");
-    report.scenarios.push({
-      id: "public-upgrade",
-      name: manifestEntry.name,
-      status: "skipped",
-      startedAt: new Date().toISOString(),
-      durationMs: 0,
-      detail: "Explicit --skip-upgrade; this report is not automated-release-qualifying"
-    });
+    for (const baseline of acceptanceUpgradeBaselines) {
+      const manifestEntry = acceptanceScenarioManifest.find(
+        (entry) => entry.id === baseline.scenarioId
+      );
+      report.scenarios.push({
+        id: baseline.scenarioId,
+        name: manifestEntry.name,
+        status: "skipped",
+        startedAt: new Date().toISOString(),
+        durationMs: 0,
+        detail: "Explicit --skip-upgrade; this report is not automated-release-qualifying"
+      });
+    }
   }
   validateScenarioManifest();
   report.releaseQualification.automatedAcceptanceQualifying = report.releaseQualification.manifestComplete

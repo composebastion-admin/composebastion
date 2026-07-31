@@ -8,6 +8,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { acceptanceScenarioManifest } from "./scenario-manifest.mjs";
 import { cleanupEmptyFields, cleanupTrueFields } from "./qualification-policy.mjs";
+import { acceptanceUpgradeBaselines } from "./upgrade-baselines.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const assertionScript = path.join(root, "scripts/acceptance/assert-report.mjs");
@@ -64,6 +65,20 @@ function passingReport() {
     },
     rawSecretBearingArtifactsExcluded: true
   };
+  for (const baseline of acceptanceUpgradeBaselines) {
+    const upgrade = scenarios.find((item) => item.id === baseline.scenarioId);
+    upgrade.detail.from = baseline.version;
+    upgrade.detail.to = "1.2.0-beta.1";
+    upgrade.detail.publicImage.version = baseline.version;
+    upgrade.detail.publicImage.releaseTag = baseline.releaseTag;
+    upgrade.detail.publicImage.repoDigest = baseline.pinnedImage;
+    if (baseline.rollbackRehearsal) {
+      upgrade.detail.rollbackVersion = baseline.version;
+      upgrade.detail.reupgradeVersion = "1.2.0-beta.1";
+      upgrade.detail.volumesRetained = true;
+      upgrade.detail.rollbackReupgradeHealthy = true;
+    }
+  }
   const goGate = goManifest.review?.status === "approved"
     ? {
         id: "go-module-legal-review",
@@ -76,6 +91,7 @@ function passingReport() {
         detail: "Review linked Go module inventories"
       };
   return {
+    candidateVersion: "1.2.0-beta.1",
     status: "passed",
     releaseQualification: {
       automatedAcceptanceQualifying: true,
@@ -212,4 +228,22 @@ test("release assertion rejects symlinked live browser evidence", async () => {
   const result = await assertReport(passingReport(), "symlink");
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /live browser evidence is invalid/);
+});
+
+test("release assertion rejects an upgrade scenario bound to the wrong public image", async () => {
+  const report = passingReport();
+  const scenario = report.scenarios.find((item) => item.id === "current-stable-upgrade");
+  scenario.detail.publicImage.repoDigest = acceptanceUpgradeBaselines[1].pinnedImage;
+  const result = await assertReport(report);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /not bound to exact public 1\.1\.2 image evidence/);
+});
+
+test("release assertion rejects current-stable upgrade without retained-volume rollback proof", async () => {
+  const report = passingReport();
+  const scenario = report.scenarios.find((item) => item.id === "current-stable-upgrade");
+  scenario.detail.volumesRetained = false;
+  const result = await assertReport(report);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /does not prove rollback and re-upgrade on retained volumes/);
 });

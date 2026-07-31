@@ -31,6 +31,19 @@ test("keep is always a release-nonqualifying acceptance option", () => {
   ]);
 });
 
+test("skipping upgrades names both required public baselines", () => {
+  const reasons = acceptanceNonqualifyingReasons({
+    worktreeDirty: false,
+    skipBuild: false,
+    skipUpgrade: true,
+    allowNonqualifying: false,
+    keep: false
+  });
+  assert.deepEqual(reasons, [
+    "The required public 1.1.2 current-stable and 1.0.6 legacy upgrade scenarios were explicitly skipped"
+  ]);
+});
+
 test("cleanup evidence fails closed for residual state and omitted checks", () => {
   const cleanup = passingCleanup();
   cleanup.verified = false;

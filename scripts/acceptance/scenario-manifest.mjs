@@ -1,3 +1,42 @@
+import { acceptanceUpgradeBaselines } from "./upgrade-baselines.mjs";
+
+const upgradeRequiredEvidence = Object.freeze([
+  "from",
+  "to",
+  "publicImage.id",
+  "publicImage.repoDigest",
+  "publicImage.version",
+  "imageBindings.publicApp.id",
+  "imageBindings.publicWorker.id",
+  "imageBindings.candidateApp.id",
+  "imageBindings.candidateWorker.id",
+  "preservedConfiguration",
+  "preservedEncryptedConfiguration",
+  "preservedDatabase",
+  "preservedCompletedJob",
+  "preservedQueuedJob",
+  "workerMigrationHealthy",
+  "recoveryRestoreAttemptMigrationHealthy",
+  "deploymentAnalysisBindingMigrationHealthy",
+  "stackSourceEnvironmentBindingMigrationHealthy",
+  "githubCloneDeploymentBindingMigrationHealthy"
+]);
+
+const rollbackRequiredEvidence = Object.freeze([
+  "imageBindings.rollbackApp.id",
+  "imageBindings.rollbackWorker.id",
+  "imageBindings.reupgradeApp.id",
+  "imageBindings.reupgradeWorker.id",
+  "rollbackVersion",
+  "rollbackPreservedConfiguration",
+  "rollbackPreservedDatabase",
+  "reupgradeVersion",
+  "reupgradePreservedConfiguration",
+  "reupgradePreservedDatabase",
+  "volumesRetained",
+  "rollbackReupgradeHealthy"
+]);
+
 export const acceptanceScenarioManifest = Object.freeze([
   {
     id: "candidate-images",
@@ -127,28 +166,11 @@ export const acceptanceScenarioManifest = Object.freeze([
       "agentRegistryLoginPersistence"
     ]
   },
-  {
-    id: "public-upgrade",
-    name: "Upgrade from public 1.0.6 with state preservation",
-    requiredEvidence: [
-      "from",
-      "to",
-      "publicImage.id",
-      "publicImage.repoDigest",
-      "imageBindings.publicApp.id",
-      "imageBindings.publicWorker.id",
-      "imageBindings.candidateApp.id",
-      "imageBindings.candidateWorker.id",
-      "preservedConfiguration",
-      "preservedEncryptedConfiguration",
-      "preservedDatabase",
-      "preservedCompletedJob",
-      "preservedQueuedJob",
-      "workerMigrationHealthy",
-      "recoveryRestoreAttemptMigrationHealthy",
-      "deploymentAnalysisBindingMigrationHealthy",
-      "stackSourceEnvironmentBindingMigrationHealthy",
-      "githubCloneDeploymentBindingMigrationHealthy"
-    ]
-  }
+  ...acceptanceUpgradeBaselines.map((baseline) => Object.freeze({
+    id: baseline.scenarioId,
+    name: baseline.name,
+    requiredEvidence: baseline.rollbackRehearsal
+      ? [...upgradeRequiredEvidence, ...rollbackRequiredEvidence]
+      : [...upgradeRequiredEvidence]
+  }))
 ]);

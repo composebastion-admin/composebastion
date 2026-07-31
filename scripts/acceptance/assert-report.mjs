@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { cleanupEvidenceFailures } from "./qualification-policy.mjs";
 import { acceptanceScenarioManifest } from "./scenario-manifest.mjs";
+import { acceptanceUpgradeBaselines } from "./upgrade-baselines.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const acceptanceResultsDir = path.join(root, "test-results", "acceptance");
@@ -82,6 +83,29 @@ for (const expected of acceptanceScenarioManifest) {
     if (!hasEvidence(evidenceValue(items[0].detail, evidencePath))) {
       failures.push(`${expected.id} is missing ${evidencePath}`);
     }
+  }
+}
+for (const baseline of acceptanceUpgradeBaselines) {
+  const scenario = (report.scenarios ?? []).find(
+    (item) => item.id === baseline.scenarioId
+  );
+  if (scenario?.detail?.from !== baseline.version
+      || scenario?.detail?.to !== report.candidateVersion
+      || scenario?.detail?.publicImage?.version !== baseline.version
+      || scenario?.detail?.publicImage?.releaseTag !== baseline.releaseTag
+      || scenario?.detail?.publicImage?.repoDigest !== baseline.pinnedImage) {
+    failures.push(
+      `${baseline.scenarioId} is not bound to exact public ${baseline.version} image evidence`
+    );
+  }
+  if (baseline.rollbackRehearsal
+      && (scenario?.detail?.rollbackVersion !== baseline.version
+        || scenario?.detail?.reupgradeVersion !== report.candidateVersion
+        || scenario?.detail?.volumesRetained !== true
+        || scenario?.detail?.rollbackReupgradeHealthy !== true)) {
+    failures.push(
+      `${baseline.scenarioId} does not prove rollback and re-upgrade on retained volumes`
+    );
   }
 }
 const candidateScenario = (report.scenarios ?? []).find((item) => item.id === "candidate-images");
