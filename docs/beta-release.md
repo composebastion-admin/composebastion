@@ -63,6 +63,17 @@ independently following `beta`.
 6. As an owner/admin on a supported passwordless-sudo SSH host, confirm the
    registry repair backs up and merges `daemon.json`, restarts Docker, verifies
    engine health, resumes deployment, and records the audit event.
+7. Interrupt an analysis or deployment worker, restart it, and confirm the
+   source revision and Compose/environment digests remain bound to one durable
+   job without duplicate remote deployment.
+8. Exercise local, S3-compatible, and SMB recovery targets, including
+   remote-only recovery, clone restore, failed cleanup, and preservation of
+   volumes, binds, databases, custom networks, and static addresses.
+9. Compare owner, operator, and viewer output for credentials and job details;
+   revoke an active session and confirm streaming or terminal access is
+   reauthorized.
+10. Watch host usage while containers start, stop, disappear, and reconnect,
+    including desktop and mobile navigation while host identity is loading.
 
 When reporting feedback, include the analysis and job IDs, Jobs progress,
 relevant Audit entry, and screenshots of the compact review or Services drawer.
@@ -89,6 +100,19 @@ COMPOSEBASTION_AGENT_VERSION=1.1.2
 ```
 
 Do not run `docker compose down -v`; keep PostgreSQL, Redis, backups, and other
-volumes. Migration 031 is additive, so the stable app ignores its new tables
-and nullable source link. Keep the backup for restoring encrypted beta source
-configuration if you return to the beta later.
+volumes. The tested rollback leaves migrations `031` through `038` applied:
+
+- `031` adds deployment-source and analysis records plus stack source links.
+- `032` normalizes local recovery targets to managed storage, sets their cache
+  policy to `keep`, and resets stored target health to `unknown`.
+- `033`–`035` add remote-orphan, GitHub deployment-job, restore-attempt, and
+  restore-resource ledgers.
+- `036`–`038` add analysis revision/digest bindings, encrypted stack
+  environment bindings, and clone-deployment job records.
+
+The `1.1.2` app ignores the additive tables and columns while using the same
+PostgreSQL, Redis, configuration, backup, and application volumes. Qualification
+verifies readiness and preserved state on that rollback, then re-upgrades those
+same volumes to the candidate. The `032` data normalization is not reversed.
+Keep the pre-upgrade backup for restoring encrypted beta source configuration
+if you return to the beta later.

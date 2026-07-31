@@ -3,7 +3,10 @@
 The local acceptance harness layers pinned Postgres, Redis, Mailpit, MinIO,
 Samba, registry, agent, and SSH Docker-host fixtures over the shipped
 `docker-compose.image.yml`, so the fresh-image and public-upgrade scenarios use
-the real production image Compose wiring. It creates runtime-only credentials,
+the real production image Compose wiring. Upgrade qualification has two
+required baselines: current stable `1.1.2`, including rollback and re-upgrade
+on retained volumes, and legacy `1.0.6` for the long-hop compatibility
+guarantee. It creates runtime-only credentials,
 builds the candidate from the current checkout, and
 writes redacted JSON and Markdown results under the ignored
 `test-results/acceptance/` directory. Every report records the full HEAD SHA,
@@ -64,8 +67,8 @@ credentials for inspection. Retention always marks the report nonqualifying,
 even when `--allow-nonqualifying` is also used. `--skip-build` reuses local images only after their
 OCI title/version/revision/created labels are verified, but marks the report
 `passed_nonqualifying`; a reused build is never accepted as automated release
-evidence. `--skip-upgrade` is available when the public `1.0.6` image is
-unreachable and has the same non-qualifying result. Validate both fixture
+evidence. `--skip-upgrade` is available when either required public `1.1.2` or
+`1.0.6` image is unreachable and has the same non-qualifying result. Validate both fixture
 definitions and their immutable third-party image pins with
 `npm run acceptance:config`.
 
@@ -84,7 +87,8 @@ values that may contain credentials are registered for output redaction.
 `64535`, keeping the highest reserved port within the TCP/UDP range. The harness reserves offsets `+25`
 (Mailpit), `+50` (registry), `+80` (fresh manager), `+90` (agent), `+180`
 (source-production manager), `+380` (upgrade manager), `+550` (hardened
-registry), `+580` (hardened manager), `+590` (hardened agent), and `+1000`
+registry), `+580` (hardened manager), `+590` (hardened agent), `+680` (legacy
+upgrade manager), and `+1000`
 (MinIO).
 Compose project names, the bind fixture, and runtime secrets also include this
 base, so retained runs can coexist when they use different bases. Override
@@ -102,9 +106,11 @@ durable enqueue while readiness remains healthy, Redis diagnostics and worker
 subscription recovery, safe-job lease recovery after a killed worker, a disposable
 Compose workload, S3 and SMB target checks, remote-only capture metadata and
 local-cache eviction, clone restore with volume/bind/database/network behavior
-verification and cleanup, public-image upgrade state preservation (including a
-queued API job, encrypted registry credentials, and the resolved public image
-digest), all ten release-candidate migrations `029` through `038` (including
+verification and cleanup, current-stable `1.1.2` upgrade, rollback, and
+re-upgrade on retained volumes, legacy `1.0.6` long-hop upgrade state
+preservation (including a queued API job, encrypted registry credentials, and
+the exact resolved public image digests), all ten release-candidate migrations
+`029` through `038` (including
 the GitHub API and clone-deployment revision/environment bindings), and a fresh
 production source build with login, configuration-write,
 and shared backup-write checks using pinned fixtures. A separate hardening

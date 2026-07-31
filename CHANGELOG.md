@@ -38,6 +38,19 @@
 - Established the GitHub `beta` branch as a scanned app-and-agent publication
   channel. Both images publish `beta` plus immutable per-commit multi-platform
   tags without changing stable aliases.
+- Deployment analyses and jobs are now bound to the selected Git revision,
+  Compose content, environment content, host lock, and lease. Worker restarts
+  reconcile durable outcomes instead of starting a duplicate deployment.
+- Backup and recovery now retain remote-orphan and restore-resource ledgers so
+  interrupted uploads, probes, restores, clone restores, and cleanup can be
+  reconciled without deleting unrelated resources.
+- Docker Desktop bind remapping, Docker 29 cleanup behavior, exact Git-context
+  materialization, host identity reconciliation, Docker stats lifecycle
+  handling, viewer redaction, session reauthorization, and audit atomicity are
+  hardened across manager and agent workflows.
+- The release toolchain is pinned to Node 24 and npm 11, install scripts are
+  policy-controlled, bundled Go tools are rebuilt from reviewed sources, and
+  all four app/agent architecture archives are verified before publication.
 
 ### Security
 - Git credentials are encrypted per source and materialized only through
@@ -61,7 +74,25 @@
   gRPC versions without changing either tool's user-facing feature version.
 
 ### Migration and compatibility
-- Adds the additive `031_universal_deployments.sql` migration.
+- Adds migrations `031` through `038`:
+  - `031_universal_deployments.sql` adds reusable deployment sources, durable
+    analyses, source-linked stacks, and backfills existing Git/host-file
+    deployments.
+  - `032_normalize_local_backup_targets.sql` converts local recovery targets to
+    the managed recovery-points location with `keep` cache policy and resets all
+    stored target health to `unknown` so the stronger probe must run again.
+  - `033_remote_artifact_orphans.sql` records exact remote objects whose
+    compensating cleanup could not be confirmed.
+  - `034_github_deployment_jobs.sql` binds GitHub deployment jobs to an immutable
+    source revision and Compose digest.
+  - `035_recovery_restore_attempts.sql` adds restore-attempt and resource
+    ledgers and extends orphan tracking to target-health probes.
+  - `036_deployment_analysis_binding.sql` binds analyses to source revision,
+    Compose digest, and environment digest.
+  - `037_stack_source_environment_binding.sql` stores the encrypted qualified
+    runtime environment and its server-keyed binding on deployed stacks.
+  - `038_github_clone_deployment_jobs.sql` records immutable clone-deployment
+    inputs, destinations, and environment bindings.
 - Existing GitHub deployment endpoints remain available as compatibility
   adapters for this beta cycle.
 - Configuration exports now include the source library and encrypted deployment
@@ -84,8 +115,11 @@
   and passwordless sudo. Unsupported hosts retain the review and receive manual
   instructions.
 - To roll back, pin both app and agent to `1.1.2`, pull, and recreate the
-  services without deleting volumes. Migration 031 is additive; retain the
-  database and configuration backup for a later beta retry.
+  services without deleting PostgreSQL, Redis, configuration, backup, or other
+  volumes. Qualification keeps migrations `031` through `038` in the database,
+  verifies stable readiness and preserved state, then re-upgrades the same
+  volumes. Migration `032` normalization is retained after rollback. Never use
+  `docker compose down -v`; keep the pre-upgrade backup for a later beta retry.
 
 ## [v1.1.3] - 2026-07-19
 

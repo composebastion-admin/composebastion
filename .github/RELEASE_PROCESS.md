@@ -13,6 +13,9 @@ deployment, and runtime Docker images.
 - `beta` is the established staging/test branch. It receives push CI, CodeQL,
   container scans, and isolated app/agent image publication. Promote to `main`
   only after beta verification passes.
+- Pull requests targeting `dev` receive CodeQL, dependency review, container
+  scanning, and non-publishing image-build checks. Push publication remains
+  restricted to `main` and `beta`; a `dev` push must never publish images.
 
 ## Required Checks
 
@@ -46,11 +49,19 @@ Run the same gates CI expects before release:
 - `npm audit --audit-level=high`
 - the serial PostgreSQL integration/concurrency suite, ephemeral SSH integration,
   and full live-stack acceptance
+- both exact public upgrade baselines: `1.1.2` current-stable
+  upgrade/rollback/re-upgrade on retained volumes, and the `1.0.6` legacy
+  long-hop upgrade
 - `npm run release:verify-images` from the final clean candidate commit
 - Docker compose config validation and runtime image builds when Docker or
   deployment files changed
 - CodeQL, dependency review, container/image scanning, secret scanning, and
   image publishing checks when configured
+
+Go-module legal approval and evidence from real NAS/cloud infrastructure remain
+mandatory before beta, main, or public image publication. They are explicitly
+deferred for a non-publishing `dev` qualification and do not make that evidence
+valid for a public release.
 
 ## Version Bumps
 

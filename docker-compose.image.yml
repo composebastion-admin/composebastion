@@ -8,9 +8,8 @@
 #
 # For production, pin COMPOSEBASTION_VERSION in .env to one reviewed
 # sha-<40-character-commit> index. For homelab/NAS convenience updates, leave
-# it as latest and run pull before up.
-# 1.1.2. For homelab/NAS auto-updates, that published stable alias remains
-# available as a moving, non-production convenience.
+# it as latest and run pull before up. The currently published stable release
+# is 1.1.2; latest remains a moving, non-production convenience.
 services:
   app:
     image: ${COMPOSEBASTION_IMAGE:-ghcr.io/composebastion-admin/composebastion-app}:${COMPOSEBASTION_VERSION:-latest}
