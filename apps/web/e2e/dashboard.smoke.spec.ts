@@ -1753,7 +1753,10 @@ test("registry and user mutation failures are visible without unhandled browser 
   await page.getByRole("row", { name: /Private registry/ }).getByRole("button", { name: "Login" }).click();
   await expect.poll(() => mock.requests).toContain(`POST /api/hosts/${host.id}/registries/${registry.id}/login`);
 
-  await gotoApp(page, "/users");
+  // Stay inside the SPA so WebKit does not surface the dashboard's in-flight
+  // registry refreshes as cross-origin page errors while a full navigation
+  // tears down the previous document.
+  await page.getByRole("button", { name: "Users" }).click();
   await page.getByLabel(`Role for ${managedUser.email}`).selectOption("viewer");
   await expect.poll(() => mock.requestBodies[`PUT /api/users/${managedUser.id}`]?.at(-1)).toEqual({ role: "viewer" });
 
