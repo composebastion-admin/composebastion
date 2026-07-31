@@ -207,6 +207,16 @@ function directoryTraversalIdentitySummary(stat) {
   };
 }
 
+function metadataRetryIdentitySummary(identity) {
+  return {
+    dev: identity.dev,
+    ino: identity.ino,
+    mode: identity.mode,
+    size: identity.size,
+    mtimeMs: identity.mtimeMs
+  };
+}
+
 function assertStableDirectoryNode(absolute, expectedStat, label) {
   const currentStat = lstatSync(absolute);
   if (!currentStat.isDirectory() || currentStat.isSymbolicLink()
@@ -365,6 +375,7 @@ function updateLengthPrefixedHash(hash, value) {
 
 function contextTraversalSnapshot(root, testHooks = {}) {
   const rootStat = lstatSync(root);
+  const rootIdentity = directoryTraversalIdentitySummary(rootStat);
   const traversalState = { directoryCtimeChanged: false };
   const entries = contextEntries(
     root,
@@ -380,13 +391,16 @@ function contextTraversalSnapshot(root, testHooks = {}) {
   );
   updateLengthPrefixedHash(
     hash,
-    JSON.stringify(directoryTraversalIdentitySummary(rootStat))
+    JSON.stringify(rootIdentity)
   );
   for (const entry of entries) {
     updateLengthPrefixedHash(hash, entry.type);
     updateLengthPrefixedHash(hash, entry.relative);
     updateLengthPrefixedHash(hash, String(entry.mode));
-    updateLengthPrefixedHash(hash, JSON.stringify(entry.identity));
+    updateLengthPrefixedHash(
+      hash,
+      JSON.stringify(metadataRetryIdentitySummary(entry.identity))
+    );
     if (entry.type === "file") {
       updateLengthPrefixedHash(hash, entry.contents);
     } else if (entry.type === "symlink") {
@@ -398,8 +412,40 @@ function contextTraversalSnapshot(root, testHooks = {}) {
   return {
     entries,
     directoryCtimeChanged: traversalState.directoryCtimeChanged,
+    rootIdentity,
     snapshotDigest: `sha256:${hash.digest("hex")}`
   };
+}
+
+function describeTraversalDifference(first, second) {
+  if (JSON.stringify(first.rootIdentity) !== JSON.stringify(second.rootIdentity)) {
+    return `root identity changed: before=${JSON.stringify(first.rootIdentity)}; after=${JSON.stringify(second.rootIdentity)}`;
+  }
+  const count = Math.max(first.entries.length, second.entries.length);
+  for (let index = 0; index < count; index += 1) {
+    const before = first.entries[index];
+    const after = second.entries[index];
+    if (!before || !after) {
+      return `entry count changed: before=${first.entries.length}; after=${second.entries.length}`;
+    }
+    for (const field of ["relative", "type", "mode"]) {
+      if (before[field] !== after[field]) {
+        return `${before.relative || after.relative}: ${field} changed from ${JSON.stringify(before[field])} to ${JSON.stringify(after[field])}`;
+      }
+    }
+    const beforeRetryIdentity = metadataRetryIdentitySummary(before.identity);
+    const afterRetryIdentity = metadataRetryIdentitySummary(after.identity);
+    if (JSON.stringify(beforeRetryIdentity) !== JSON.stringify(afterRetryIdentity)) {
+      return `${before.relative}: identity changed from ${JSON.stringify(beforeRetryIdentity)} to ${JSON.stringify(afterRetryIdentity)}`;
+    }
+    if (before.type === "file" && !before.contents.equals(after.contents)) {
+      return `${before.relative}: contents changed from sha256:${createHash("sha256").update(before.contents).digest("hex")} to sha256:${createHash("sha256").update(after.contents).digest("hex")}`;
+    }
+    if (before.type === "symlink" && before.target !== after.target) {
+      return `${before.relative}: symlink target changed`;
+    }
+  }
+  return "snapshot digest changed without an entry-level difference";
 }
 
 function stableContextTraversal(root, testHooks = {}) {
@@ -412,7 +458,7 @@ function stableContextTraversal(root, testHooks = {}) {
   const second = contextTraversalSnapshot(root, testHooks);
   if (first.snapshotDigest !== second.snapshotDigest) {
     throw new Error(
-      `Git context entries changed across a directory metadata retry: ${root}`
+      `Git context entries changed across a directory metadata retry: ${root}; ${describeTraversalDifference(first, second)}`
     );
   }
   return second;

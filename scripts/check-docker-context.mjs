@@ -318,11 +318,14 @@ try {
 
   const directoryMetadataContext = path.join(root, "directory-metadata-context");
   mkdirSync(directoryMetadataContext);
-  writeFileSync(path.join(directoryMetadataContext, "payload.txt"), "stable contents\n");
+  const directoryMetadataPayload = path.join(directoryMetadataContext, "payload.txt");
+  writeFileSync(directoryMetadataPayload, "stable contents\n");
   const directoryMetadataBaseline = digestGitBuildContext(directoryMetadataContext);
   let directoryMetadataChurnApplied = false;
   let directoryMetadataCtimeAdvanced = false;
   let directoryMetadataSemanticsStable = false;
+  let leafMetadataCtimeAdvanced = false;
+  let leafMetadataSemanticsStable = false;
   let directoryMetadataRetryObserved = false;
   const directoryMetadataAfterChurn = digestGitBuildContext(
     directoryMetadataContext,
@@ -348,16 +351,97 @@ try {
       },
       beforeDirectoryMetadataRetry: () => {
         directoryMetadataRetryObserved = true;
+        const before = statSync(directoryMetadataPayload);
+        const originalMode = before.mode & 0o777;
+        chmodSync(directoryMetadataPayload, originalMode);
+        let after = statSync(directoryMetadataPayload);
+        if (after.ctimeMs === before.ctimeMs) {
+          chmodSync(directoryMetadataPayload, originalMode ^ 0o100);
+          chmodSync(directoryMetadataPayload, originalMode);
+          after = statSync(directoryMetadataPayload);
+        }
+        leafMetadataCtimeAdvanced = after.ctimeMs !== before.ctimeMs;
+        leafMetadataSemanticsStable = after.dev === before.dev
+          && after.ino === before.ino
+          && after.mode === before.mode
+          && after.size === before.size
+          && after.mtimeMs === before.mtimeMs;
       }
     }
   );
   if (!directoryMetadataChurnApplied
       || !directoryMetadataCtimeAdvanced
       || !directoryMetadataSemanticsStable
+      || !leafMetadataCtimeAdvanced
+      || !leafMetadataSemanticsStable
       || !directoryMetadataRetryObserved
       || directoryMetadataAfterChurn.digest !== directoryMetadataBaseline.digest
       || directoryMetadataAfterChurn.fileCount !== directoryMetadataBaseline.fileCount) {
     failures.push("directory ctime-only metadata churn changed or blocked the exact Git context digest");
+  }
+
+  const retryReplacementContext = path.join(root, "retry-replacement-context");
+  mkdirSync(retryReplacementContext);
+  const retryReplacementPayload = path.join(retryReplacementContext, "payload.txt");
+  const retryReplacementSource = path.join(root, "retry-replacement-source.txt");
+  writeFileSync(retryReplacementPayload, "identical contents\n");
+  writeFileSync(retryReplacementSource, "identical contents\n");
+  const retryReplacementOriginal = statSync(retryReplacementPayload);
+  chmodSync(retryReplacementSource, retryReplacementOriginal.mode & 0o777);
+  utimesSync(
+    retryReplacementSource,
+    retryReplacementOriginal.atimeMs / 1_000,
+    retryReplacementOriginal.mtimeMs / 1_000
+  );
+  let retryReplacementChurnApplied = false;
+  let retryReplacementIdentityChangedOnly = false;
+  let retryReplacementParentMtimeRestored = false;
+  let retryReplacementRejected = false;
+  try {
+    digestGitBuildContext(retryReplacementContext, {
+      afterDirectorySnapshot: ({ current }) => {
+        if (current !== retryReplacementContext || retryReplacementChurnApplied) return;
+        const before = statSync(current);
+        const originalMode = before.mode & 0o777;
+        chmodSync(current, originalMode);
+        if (statSync(current).ctimeMs === before.ctimeMs) {
+          chmodSync(current, originalMode ^ 0o100);
+          chmodSync(current, originalMode);
+        }
+        retryReplacementChurnApplied = true;
+      },
+      beforeDirectoryMetadataRetry: () => {
+        const parentStat = statSync(retryReplacementContext);
+        renameSync(retryReplacementSource, retryReplacementPayload);
+        utimesSync(
+          retryReplacementContext,
+          parentStat.atimeMs / 1_000,
+          parentStat.mtimeMs / 1_000
+        );
+        const replacementStat = statSync(retryReplacementPayload);
+        const restoredParentStat = statSync(retryReplacementContext);
+        retryReplacementIdentityChangedOnly =
+          replacementStat.dev === retryReplacementOriginal.dev
+          && replacementStat.ino !== retryReplacementOriginal.ino
+          && replacementStat.mode === retryReplacementOriginal.mode
+          && replacementStat.size === retryReplacementOriginal.size
+          && replacementStat.mtimeMs === retryReplacementOriginal.mtimeMs;
+        retryReplacementParentMtimeRestored =
+          restoredParentStat.mtimeMs === parentStat.mtimeMs;
+      }
+    });
+  } catch (error) {
+    retryReplacementRejected = String(error).includes(
+      "entries changed across a directory metadata retry"
+    );
+  }
+  if (!retryReplacementChurnApplied
+      || !retryReplacementIdentityChangedOnly
+      || !retryReplacementParentMtimeRestored
+      || !retryReplacementRejected) {
+    failures.push(
+      "an identical same-name inode replacement was accepted across a directory metadata retry"
+    );
   }
 
   const directoryEntryMutationContext = path.join(root, "directory-entry-mutation-context");
