@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { EventEmitter } from "node:events";
 import { constants as fsConstants } from "node:fs";
 import {
+  chmod,
   mkdir,
   mkdtemp,
   open,
@@ -317,29 +318,22 @@ describe("agent server", () => {
     expect(await readFile(target, "utf8")).toBe(payload.content);
     expect((await stat(target)).mode & 0o777).toBe(0o600);
 
-    // Replacing the target with a sentinel makes a replay observable. An exact
-    // duplicate must return the retained receipt without executing the write
-    // a second time.
-    await rm(target);
-    await writeFile(target, "retained-replay-sentinel\n", { mode: 0o600 });
-    const duplicateReply = createReply();
-    await expect(
-      route("POST", "/api/files/write")(
-        { body: payload },
-        duplicateReply
-      )
-    ).resolves.toMatchObject({
-      operation: { operationId, status: "completed" }
-    });
-    const replayTarget = await open(
-      target,
-      fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW
-    );
+    // A fresh execution needs to create a temporary file in the parent. Making
+    // that parent read-only makes a replay fail while a retained receipt still
+    // succeeds, without introducing a check/use window around the target path.
+    await chmod(directory, 0o500);
     try {
-      expect(await replayTarget.readFile("utf8"))
-        .toBe("retained-replay-sentinel\n");
+      const duplicateReply = createReply();
+      await expect(
+        route("POST", "/api/files/write")(
+          { body: payload },
+          duplicateReply
+        )
+      ).resolves.toMatchObject({
+        operation: { operationId, status: "completed" }
+      });
     } finally {
-      await replayTarget.close();
+      await chmod(directory, 0o700);
     }
 
     const statusReply = createReply();
