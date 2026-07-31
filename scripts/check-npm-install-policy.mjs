@@ -17,8 +17,7 @@ const expectedAllowScripts = {
   fsevents: false,
   "ssh2@1.17.0": true
 };
-const expectedPackageManager =
-  "npm@11.19.0+sha512.SDd/hHg3KqHE5Ht2NHWxNYNtqCQ2pXAPLl6OtQhPyED5PHsRfrOtO199MZTIG2cQoQ1ZRI9t28shrD+2cr3AAw==";
+const expectedPackageManager = "npm@11.19.0";
 const expectedNpmIntegrity =
   "sha512-SDd/hHg3KqHE5Ht2NHWxNYNtqCQ2pXAPLl6OtQhPyED5PHsRfrOtO199MZTIG2cQoQ1ZRI9t28shrD+2cr3AAw==";
 
@@ -27,7 +26,17 @@ assert.deepEqual(
   expectedAllowScripts,
   "package.json must retain the reviewed, version-pinned install-script policy"
 );
-assert.equal(packageJson.packageManager, expectedPackageManager);
+assert.equal(
+  packageJson.packageManager,
+  expectedPackageManager,
+  "packageManager must remain a Corepack-compatible exact npm version"
+);
+assert.match(packageJson.packageManager, /^npm@\d+\.\d+\.\d+$/);
+assert.doesNotMatch(
+  packageJson.packageManager,
+  /\+/,
+  "npm tarball integrity belongs in bootstrap-npm.mjs, not packageManager"
+);
 assert.deepEqual(packageJson.engines, {
   node: ">=24.0.0 <25",
   npm: ">=11.19.0 <12"
