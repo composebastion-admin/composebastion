@@ -104,6 +104,7 @@ describe("self update service", () => {
     expect(script).toContain("restore-legacy");
     expect(script).toContain("PREVIOUS_APP_IMAGE_ID");
     expect(script).toContain("pull_policy: never");
+    expect(script).toContain("POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}");
     const preflight = String(runSshCommand.mock.calls[0]?.[1]);
     expect(preflight).toContain("readlink -f");
     expect(preflight).toContain("grep -Fx app");

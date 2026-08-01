@@ -61,6 +61,8 @@ if [ "$1" = "compose" ]; then
       esac
       ;;
     *" up -d "*" app worker "*)
+      candidate_path="$(printf '%s\\n' "$*" | sed -n 's/.*-f \\([^ ]*candidate\\.yml\\).*/\\1/p')"
+      if [ -n "$candidate_path" ]; then cp "$candidate_path" "$MOCK_STATE_DIR/candidate.yml"; fi
       case " $* " in
         *".rollback.yml"*)
           cp "$(printf '%s\\n' "$*" | sed -n 's/.*-f \\([^ ]*\\.rollback\\.yml\\).*/\\1/p')" "$MOCK_STATE_DIR/rollback.yml"
@@ -187,6 +189,7 @@ async function runGeneratedUpdate(
     environment: await readFile(path.join(directory, ".env"), "utf8"),
     originalEnvironment,
     commands: await readFile(path.join(stateDirectory, "commands.log"), "utf8"),
+    candidate: await readFile(path.join(stateDirectory, "candidate.yml"), "utf8").catch(() => ""),
     rollback: await readFile(path.join(stateDirectory, "rollback.yml"), "utf8").catch(() => ""),
     rollbackComposePath,
     envBackupPath,
@@ -206,6 +209,7 @@ describe("generated self-update shell program", () => {
     expect(result.commands).toContain("prepare-compose-upgrade.mjs reconcile");
     expect(result.commands).toContain("candidate.yml run --rm --no-deps --user 0:0");
     expect(result.commands).toContain("up -d --pull never --no-deps --force-recreate app worker");
+    expect(result.candidate).toContain("POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}");
     await expect(stat(result.lockPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
