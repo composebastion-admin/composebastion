@@ -72,6 +72,7 @@ function passingReport() {
     upgrade.detail.publicImage.version = baseline.version;
     upgrade.detail.publicImage.releaseTag = baseline.releaseTag;
     upgrade.detail.publicImage.repoDigest = baseline.pinnedImage;
+    upgrade.detail.legacyManagedCredentialReconciled = baseline.key === "legacy";
     if (baseline.rollbackRehearsal) {
       upgrade.detail.rollbackVersion = baseline.version;
       upgrade.detail.reupgradeVersion = "1.2.0-beta.1";
@@ -246,4 +247,31 @@ test("release assertion rejects current-stable upgrade without retained-volume r
   const result = await assertReport(report);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /does not prove rollback and re-upgrade on retained volumes/);
+});
+
+test("release assertion rejects an upgrade without legacy environment compatibility proof", async () => {
+  const report = passingReport();
+  const scenario = report.scenarios.find((item) => item.id === "current-stable-upgrade");
+  scenario.detail.legacyEnvironmentPlaceholderHandled = false;
+  const result = await assertReport(report);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /is missing legacyEnvironmentPlaceholderHandled/);
+});
+
+test("release assertion rejects an upgrade without backup ownership migration proof", async () => {
+  const report = passingReport();
+  const scenario = report.scenarios.find((item) => item.id === "legacy-upgrade");
+  scenario.detail.legacyBackupOwnershipMigrated = false;
+  const result = await assertReport(report);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /is missing legacyBackupOwnershipMigrated/);
+});
+
+test("release assertion rejects a long-hop upgrade without managed credential reconciliation", async () => {
+  const report = passingReport();
+  const scenario = report.scenarios.find((item) => item.id === "legacy-upgrade");
+  scenario.detail.legacyManagedCredentialReconciled = false;
+  const result = await assertReport(report);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /does not prove legacy managed database credential reconciliation/);
 });

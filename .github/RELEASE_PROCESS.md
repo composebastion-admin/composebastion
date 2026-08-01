@@ -36,6 +36,8 @@ Run the same gates CI expects before release:
 - `npm run test:release-image-policy`
 - `npm run test:release-alias-policy`
 - `npm run test:acceptance-policy`
+- `npm run test:upgrade-preparation`
+- `npm run test:source-upgrade`
 - `npm run notices:check`
 - `npm run check:actions-pinned`
 - `npm run check:release-workflows`
@@ -51,7 +53,8 @@ Run the same gates CI expects before release:
   and full live-stack acceptance
 - both exact public upgrade baselines: `1.1.2` current-stable
   upgrade/rollback/re-upgrade on retained volumes, and the `1.0.6` legacy
-  long-hop upgrade
+  long-hop upgrade/credential-rollback/re-upgrade through the candidate
+  compatibility entrypoint with the exact pre-1.2 Compose definition
 - `npm run release:verify-images` from the final clean candidate commit
 - Docker compose config validation and runtime image builds when Docker or
   deployment files changed
@@ -220,6 +223,8 @@ npm run test:container-config-policy
 npm run test:release-image-policy
 npm run test:release-alias-policy
 npm run test:acceptance-policy
+npm run test:upgrade-preparation
+npm run test:source-upgrade
 npm run notices:check
 npm run check:actions-pinned
 npm run check:release-workflows

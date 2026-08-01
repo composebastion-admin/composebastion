@@ -62,6 +62,10 @@ jobs:
         run: npm run test:release-alias-policy
       - name: Acceptance qualification policy tests
         run: npm run test:acceptance-policy
+      - name: Upgrade preparation safety tests
+        run: npm run test:upgrade-preparation
+      - name: Source upgrade rollback tests
+        run: npm run test:source-upgrade
       - name: Third-party notices
         run: npm run notices:check
       - name: Immutable workflow actions

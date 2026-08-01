@@ -31,6 +31,35 @@ if [ "$1" = "compose" ]; then
       if [ "$MOCK_FAIL" = "pull" ]; then exit 1; fi
       exit 0
       ;;
+    *" config --format json "*)
+      printf '%s\n' '{"services":{"app":{"environment":{"DATABASE_URL":"postgres://composebastion:managed@postgres:5432/composebastion"}},"worker":{"environment":{"DATABASE_URL":"postgres://composebastion:managed@postgres:5432/composebastion"}},"postgres":{"environment":{"POSTGRES_PASSWORD":"managed"}}}}'
+      exit 0
+      ;;
+    *" config "*)
+      printf '%s\n' 'services:' '  app:' '    image: candidate-app:latest' '  worker:' '    image: candidate-worker:latest'
+      exit 0
+      ;;
+    *" stop app worker "*) exit 0 ;;
+    *"prepare-compose-upgrade.mjs"*)
+      case " $* " in *"candidate.yml"*) ;; *) exit 93 ;; esac
+      state_mount="$(printf '%s\n' "$*" | sed -n 's#.*--volume \\([^ ]*\\):/run/composebastion-upgrade .*#\\1#p')"
+      case " $* " in
+        *"prepare-compose-upgrade.mjs"*"reconcile"*)
+          if [ "$MOCK_FAIL" = "prepare" ]; then exit 1; fi
+          if [ "$MOCK_CREDENTIAL_CHANGED" = "true" ]; then
+            printf '%s\n' '{"schema":1,"transition":"legacy-managed-database-credential","status":"reconciled","changed":true}' > "$state_mount/database-transition.json"
+          else
+            printf '%s\n' '{"schema":1,"transition":"legacy-managed-database-credential","status":"unchanged","changed":false}' > "$state_mount/database-transition.json"
+          fi
+          exit 0
+          ;;
+        *"prepare-compose-upgrade.mjs"*"restore-legacy"*)
+          : > "$MOCK_STATE_DIR/credential-restored"
+          if [ "$MOCK_RESTORE_FAIL" = "true" ]; then exit 1; fi
+          exit 0
+          ;;
+      esac
+      ;;
     *" up -d "*" app worker "*)
       case " $* " in
         *".rollback.yml"*)
@@ -57,7 +86,9 @@ if [ "$1" = "inspect" ]; then
   printf 'inspect-state=%s container=%s format=%s\\n' "$phase" "$container" "$format" >> "$MOCK_STATE_DIR/commands.log"
   case "$format" in
     *".State.Running"*) printf '%s\\n' true ;;
-    *".State.Health.Status"*) printf '%s\\n' healthy ;;
+    *".State.Health.Status"*)
+      if [ "$phase" = "new" ] && [ "$MOCK_FAIL" = "verification" ]; then printf '%s\\n' unhealthy; else printf '%s\\n' healthy; fi
+      ;;
     *"org.opencontainers.image.title"*) printf '%s\\n' ComposeBastion ;;
     *"org.opencontainers.image.source"*) printf '%s\\n' https://github.com/composebastion-admin/composebastion ;;
     *"org.opencontainers.image.version"*)
@@ -75,11 +106,17 @@ if [ "$1" = "inspect" ]; then
   esac
   exit 0
 fi
+if [ "$1" = "image" ] && [ "$2" = "inspect" ]; then printf '%s\n' sha256:cccccccc; exit 0; fi
 if [ "$1" = "image" ] && [ "$2" = "tag" ]; then exit 0; fi
 exit 1
 `;
 
-async function runGeneratedUpdate(failure: "" | "pull" | "up", targetVersion = "1.0.2") {
+async function runGeneratedUpdate(
+  failure: "" | "pull" | "prepare" | "up" | "verification",
+  targetVersion = "1.0.2",
+  credentialChanged = false,
+  restoreFails = false
+) {
   const directory = await temporaryDirectory();
   const stateDirectory = path.join(directory, "state");
   const lockPath = path.join(directory, "manager.lock");
@@ -133,7 +170,9 @@ async function runGeneratedUpdate(failure: "" | "pull" | "up", targetVersion = "
         COMPOSEBASTION_SELF_UPDATE_VERIFY_INTERVAL_SECONDS: "0",
         COMPOSEBASTION_SELF_UPDATE_GATE_ATTEMPTS: "1",
         MOCK_STATE_DIR: stateDirectory,
-        MOCK_FAIL: failure
+        MOCK_FAIL: failure,
+        MOCK_CREDENTIAL_CHANGED: String(credentialChanged),
+        MOCK_RESTORE_FAIL: String(restoreFails)
       }
     });
   } catch (error) {
@@ -149,6 +188,9 @@ async function runGeneratedUpdate(failure: "" | "pull" | "up", targetVersion = "
     originalEnvironment,
     commands: await readFile(path.join(stateDirectory, "commands.log"), "utf8"),
     rollback: await readFile(path.join(stateDirectory, "rollback.yml"), "utf8").catch(() => ""),
+    rollbackComposePath,
+    envBackupPath,
+    upgradeStateDirectory: path.join(directory, ".composebastion-self-update-shell-job.upgrade"),
     exitCode
   };
 }
@@ -161,10 +203,13 @@ describe("generated self-update shell program", () => {
     expect(result.outcome).toContain("status=passed\nstage=complete\nrollback=not_required");
     expect(result.environment).toContain("COMPOSEBASTION_VERSION=1.0.2");
     expect(result.environment).toContain("APP_SECRET=do-not-log-or-lose");
+    expect(result.commands).toContain("prepare-compose-upgrade.mjs reconcile");
+    expect(result.commands).toContain("candidate.yml run --rm --no-deps --user 0:0");
+    expect(result.commands).toContain("up -d --pull never --no-deps --force-recreate app worker");
     await expect(stat(result.lockPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it.each(["pull", "up"] as const)("restores the exact environment and immutable prior images after %s failure", async (failure) => {
+  it.each(["prepare", "up", "verification"] as const)("restores the exact environment and immutable prior images after %s failure", async (failure) => {
     const result = await runGeneratedUpdate(failure, "latest");
 
     expect(result.exitCode).toBe(1);
@@ -175,8 +220,38 @@ describe("generated self-update shell program", () => {
     expect(result.rollback).toContain("pull_policy: never");
     expect(result.commands).toContain("image tag sha256:aaaaaaaa ghcr.io/composebastion-admin/composebastion-app:latest");
     expect(result.commands).toContain("-f");
-    expect(result.commands).toContain(".rollback.yml up -d --pull never --force-recreate app worker");
+    expect(result.commands).toContain(".rollback.yml up -d --pull never --no-deps --force-recreate app worker");
     expect(await readFile(path.join(result.stateDirectory, "phase"), "utf8")).toBe("old\n");
+  });
+
+  it("restores a recorded legacy credential before recreating prior images", async () => {
+    const result = await runGeneratedUpdate("up", "latest", true);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.outcome).toContain("rollback=succeeded");
+    expect(result.commands).toContain("prepare-compose-upgrade.mjs restore-legacy");
+    await expect(stat(path.join(result.stateDirectory, "credential-restored"))).resolves.toBeTruthy();
+  });
+
+  it("retains protected recovery artifacts when credential rollback cannot finish", async () => {
+    const result = await runGeneratedUpdate("up", "latest", true, true);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.outcome).toContain("rollback=failed");
+    await expect(stat(result.rollbackComposePath)).resolves.toMatchObject({ mode: expect.any(Number) });
+    await expect(stat(result.envBackupPath)).resolves.toMatchObject({ mode: expect.any(Number) });
+    await expect(stat(path.join(result.upgradeStateDirectory, "database-transition.json"))).resolves.toBeTruthy();
+    expect((await stat(result.rollbackComposePath)).mode & 0o077).toBe(0);
+    expect((await stat(result.envBackupPath)).mode & 0o077).toBe(0);
+  });
+
+  it("restores the environment without recreating healthy services when pull fails", async () => {
+    const result = await runGeneratedUpdate("pull", "latest");
+
+    expect(result.exitCode).toBe(1);
+    expect(result.outcome).toContain("stage=pull\nrollback=succeeded");
+    expect(result.environment).toBe(result.originalEnvironment);
+    expect(result.commands).not.toContain(".rollback.yml up -d");
   });
 });
 

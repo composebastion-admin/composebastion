@@ -1,4 +1,44 @@
 services:
+  storage-init:
+    build:
+      context: .
+      target: runtime
+    user: "0:0"
+    command: ["node", "/app/scripts/prepare-backup-storage.mjs"]
+    environment:
+      COMPOSEBASTION_UID: "1000"
+      COMPOSEBASTION_GID: "1000"
+    volumes:
+      - backups:/data/backups
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+
+  database-init:
+    build:
+      context: .
+      target: runtime
+    user: "1000:1000"
+    command: ["node", "/app/scripts/prepare-database-upgrade.mjs", "reconcile"]
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+      DATABASE_URL: ${DATABASE_URL:-postgres://composebastion:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/composebastion}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+
   app:
     build:
       context: .
@@ -9,6 +49,7 @@ services:
       API_HOST: 0.0.0.0
       API_PORT: 8080
       APP_SECRET: ${APP_SECRET:?Set APP_SECRET to a unique random value of at least 32 characters}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
       DATABASE_URL: ${DATABASE_URL:-postgres://composebastion:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/composebastion}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       BACKUP_DIR: /data/backups
@@ -33,6 +74,10 @@ services:
     volumes:
       - backups:/data/backups
     depends_on:
+      storage-init:
+        condition: service_completed_successfully
+      database-init:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -54,6 +99,7 @@ services:
     environment:
       NODE_ENV: production
       APP_SECRET: ${APP_SECRET:?Set APP_SECRET to a unique random value of at least 32 characters}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
       DATABASE_URL: ${DATABASE_URL:-postgres://composebastion:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/composebastion}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       BACKUP_DIR: /data/backups
@@ -74,6 +120,10 @@ services:
     volumes:
       - backups:/data/backups
     depends_on:
+      storage-init:
+        condition: service_completed_successfully
+      database-init:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:

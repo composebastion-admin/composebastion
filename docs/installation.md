@@ -85,14 +85,24 @@ Leave `DATABASE_URL` blank for a new Compose-managed database. A non-empty value
 is an advanced/external-database or existing-install compatibility override and
 takes precedence for `app` and `worker`.
 
-The app and worker images run as numeric UID/GID `1000:1000`. Pre-create the
-bind-mounted backup directory with that ownership; allowing Compose to create a
-missing bind source produces a root-owned directory that backup and recovery
-jobs cannot write:
+The app and worker images run as numeric UID/GID `1000:1000`. The one-shot
+`storage-init` service runs before both services and safely brings an existing
+backup tree to that identity. Pre-creating the bind-mounted directory remains
+recommended so its host-side location and mode are explicit:
 
 ```bash
 sudo install -d -m 0750 -o 1000 -g 1000 /srv/composebastion/backups
 ```
+
+If the directory or historical recovery files are root-owned, `storage-init`
+repairs them automatically without deleting or rewriting backup contents. It
+fails closed with an actionable log if the mount cannot be prepared, such as a
+root-squashed remote filesystem.
+
+The companion `database-init` one-shot preserves real explicit/external URLs.
+For only the exact repository-managed legacy URL, it verifies
+`POSTGRES_PASSWORD` and rotates the old managed role credential when required
+before the app and worker start.
 
 Start the stack:
 
@@ -268,6 +278,12 @@ Compose directory, starts the script detached from the worker, pulls the app and
 worker images, and restarts those services. The browser may disconnect briefly
 while the new app container starts.
 
+Crossing from a pre-1.2 image install does not require replacing its Compose
+file first when using the in-app updater. The pulled candidate image performs
+the storage and managed-database compatibility work through `compose run`, then
+starts app and worker with dependency recreation disabled. Manual updates still
+require `docker-compose.image.yml` from the same target release.
+
 Following `latest` is a homelab convenience, not the production-qualified
 paired update path. Until self-update consumes a durable signed app/agent
 release-pair manifest, production updates must resolve one reviewed release
@@ -299,8 +315,14 @@ docker compose -f docker-compose.image.yml up -d
 ```bash
 cd ~/composebastion
 git pull --ff-only
-docker compose up -d --build app worker
+npm ci
+npm run upgrade:source
 ```
+
+The wrapper preserves the running app/worker image IDs, runs the same 1.2
+compatibility preparation as image updates, verifies the built candidate, and
+uses an immutable `--no-deps` rollback overlay on failure. It leaves the Git
+checkout unchanged and reports the exact source-revision rollback command.
 
 Before updating a production deployment, export a config backup from
 Admin -> Settings and confirm recent recovery points are usable.

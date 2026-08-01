@@ -11,6 +11,10 @@
 # Terminate TLS at a reverse proxy and set CORS_ORIGINS to the public origin
 # if browsers access the API from a different origin.
 services:
+  storage-init:
+    volumes:
+      - ${COMPOSEBASTION_BACKUP_DIR:-/srv/composebastion/backups}:/data/backups
+
   app:
     environment:
       NODE_ENV: production

@@ -52,6 +52,31 @@
   policy-controlled, bundled Go tools are rebuilt from reviewed sources, and
   all four app/agent architecture archives are verified before publication.
 
+### Fixed
+- Added a one-shot `storage-init` dependency that migrates existing backup and
+  recovery paths to the manager UID/GID before the app or worker starts. The
+  recursive same-filesystem pass skips all symlinks and removes the unsafe
+  ownership-marker shortcut. Base Compose remains fixed at `1000:1000`; the
+  hardening overlay applies custom identities consistently.
+- Recognize the exact managed `DATABASE_URL` used by older source installs and
+  shipped in the v1.1.0 environment template. A one-shot `database-init`
+  preflight first tests the preserved `POSTGRES_PASSWORD`, rotates only that
+  exact repository legacy role credential when required, and verifies the new
+  connection before app startup. Real explicit and external database URLs are
+  still preserved unchanged.
+- Hardened in-app updates so a pre-1.2 Compose file can bootstrap the candidate
+  compatibility entrypoint without initializer services. Updates retain prior
+  image IDs and protected transition state, verify app/worker identity and
+  readiness, restore a recorded legacy credential before rollback, and always
+  start historical images with `--no-deps`.
+- Added `npm run upgrade:source` for source deployments with candidate identity
+  verification and immutable prior-image rollback while leaving the Git
+  checkout untouched.
+- Expanded public-image upgrade qualification to retain the stale v1.1
+  environment value and root-owned recovery files, so database connectivity,
+  ownership migration, worker readiness, rollback, and re-upgrade all fail the
+  release gate if this compatibility path regresses.
+
 ### Security
 - Git credentials are encrypted per source and materialized only through
   protected temporary askpass files; credentials are excluded from remotes,

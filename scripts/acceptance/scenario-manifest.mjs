@@ -19,7 +19,12 @@ const upgradeRequiredEvidence = Object.freeze([
   "recoveryRestoreAttemptMigrationHealthy",
   "deploymentAnalysisBindingMigrationHealthy",
   "stackSourceEnvironmentBindingMigrationHealthy",
-  "githubCloneDeploymentBindingMigrationHealthy"
+  "githubCloneDeploymentBindingMigrationHealthy",
+  "legacyEnvironmentPlaceholderHandled",
+  "legacyBackupOwnershipMigrated",
+  "pre12ComposeInitializerServicesAbsent",
+  "candidateCompatibilityEntrypointUsed",
+  "recursiveOwnershipSymlinkSafe"
 ]);
 
 const rollbackRequiredEvidence = Object.freeze([
@@ -34,7 +39,9 @@ const rollbackRequiredEvidence = Object.freeze([
   "reupgradePreservedConfiguration",
   "reupgradePreservedDatabase",
   "volumesRetained",
-  "rollbackReupgradeHealthy"
+  "rollbackReupgradeHealthy",
+  "credentialRollbackVerified",
+  "rollbackDependenciesBypassed"
 ]);
 
 export const acceptanceScenarioManifest = Object.freeze([

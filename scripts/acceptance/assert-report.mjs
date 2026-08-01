@@ -107,6 +107,12 @@ for (const baseline of acceptanceUpgradeBaselines) {
       `${baseline.scenarioId} does not prove rollback and re-upgrade on retained volumes`
     );
   }
+  if (baseline.key === "legacy"
+      && scenario?.detail?.legacyManagedCredentialReconciled !== true) {
+    failures.push(
+      `${baseline.scenarioId} does not prove legacy managed database credential reconciliation`
+    );
+  }
 }
 const candidateScenario = (report.scenarios ?? []).find((item) => item.id === "candidate-images");
 if (candidateScenario?.detail?.exactGitContext !== true

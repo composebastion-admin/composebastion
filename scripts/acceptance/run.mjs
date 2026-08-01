@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, chmod, lstat, mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,6 +27,7 @@ const resultsDir = assertSafeTestResultsPath({
 const composeFile = path.join(root, "docker-compose.acceptance.yml");
 const productionImageComposeFile = path.join(root, "docker-compose.image.yml");
 const sourceAcceptanceComposeFile = path.join(root, "docker-compose.acceptance.source.yml");
+const upgradeAcceptanceComposeFile = path.join(root, "docker-compose.acceptance.upgrade.yml");
 const managerHardeningFile = path.join(root, "docker-compose.hardened.yml");
 const agentHardeningFile = path.join(root, "agent-compose.hardened.yml");
 const candidateVersion = JSON.parse(await readFile(path.join(root, "package.json"), "utf8")).version;
@@ -403,6 +404,11 @@ async function setManagerBackupDirectoryOwnership(backupDir, mode) {
 function compose(project, env, args, options = {}) {
   assertExplicitComposeControls(env, requiredImageComposeControls, "production image acceptance Compose");
   return composeWithFiles(project, env, [productionImageComposeFile, composeFile], args, options);
+}
+
+function upgradeCompose(project, env, publicComposeFile, args, options = {}) {
+  assertExplicitComposeControls(env, requiredImageComposeControls, "pre-1.2 upgrade acceptance Compose");
+  return composeWithFiles(project, env, [publicComposeFile, upgradeAcceptanceComposeFile], args, options);
 }
 
 function composeWithFiles(project, env, files, args, options = {}) {
@@ -2383,12 +2389,41 @@ async function hardenedContainersScenario() {
 async function upgradeScenario(baseline) {
   const scenarioName = `upgrade-${baseline.key}`;
   const project = projectName(scenarioName);
+  const publicComposeFile = path.join(runtimeDir, `${scenarioName}-docker-compose.image.yml`);
+  const upgradeStateDir = path.join(runtimeDir, `${scenarioName}-transition`);
+  const composeConfigPath = path.join(upgradeStateDir, "compose-config.json");
+  const databaseStatePath = path.join(upgradeStateDir, "database-transition.json");
+  const externalOwnershipTarget = path.join(runtimeDir, `${scenarioName}-external-owner`);
+  const backupSymlinkPath = path.join(scenarioBackupDir(scenarioName), ".composebastion-storage-owner");
+  const legacyDatabasePlaceholder = "postgres://composebastion:composebastion@postgres:5432/composebastion";
   const upgradeOverrides = {
     ACCEPTANCE_SCENARIO: scenarioName,
-    ACCEPTANCE_HTTP_PORT: String(portBase + baseline.portOffset)
+    ACCEPTANCE_HTTP_PORT: String(portBase + baseline.portOffset),
+    ACCEPTANCE_RUNTIME_DIR: runtimeDir
   };
-  let oldEnv = acceptanceEnv(baseline.pinnedImage, upgradeOverrides);
-  const newEnv = acceptanceEnv(candidateImage, upgradeOverrides);
+  const oldOverrides = { ...upgradeOverrides, DATABASE_URL: "" };
+  const newOverrides = { ...upgradeOverrides, DATABASE_URL: legacyDatabasePlaceholder };
+  let oldEnv = acceptanceEnv(baseline.pinnedImage, oldOverrides);
+  const newEnv = acceptanceEnv(candidateImage, newOverrides);
+  let rollbackEnv = oldEnv;
+  const scenarioCompose = (env, args, options = {}) => (
+    upgradeCompose(project, env, publicComposeFile, args, options)
+  );
+  const runCompatibilityPreparation = async (mode) => scenarioCompose(newEnv, [
+    "run", "--rm", "--no-deps", "--user", "0:0",
+    "--volume", `${upgradeStateDir}:/run/composebastion-upgrade`,
+    "app", "node", "/app/scripts/prepare-compose-upgrade.mjs", mode,
+    "--compose-config", "/run/composebastion-upgrade/compose-config.json",
+    "--state-file", "/run/composebastion-upgrade/database-transition.json"
+  ], { inherit: true });
+  const renderCandidateConfiguration = async () => {
+    const rendered = await scenarioCompose(newEnv, ["config", "--format", "json"]);
+    const configuration = JSON.parse(rendered.stdout);
+    assert(!configuration.services?.["storage-init"] && !configuration.services?.["database-init"],
+      "pre-1.2 acceptance Compose unexpectedly contains initializer services");
+    await writeFile(composeConfigPath, `${rendered.stdout}\n`, { mode: 0o600 });
+    await chmod(composeConfigPath, 0o600);
+  };
   await mkdir(oldEnv.COMPOSEBASTION_BACKUP_DIR, { recursive: true });
   await setManagerBackupDirectoryOwnership(
     oldEnv.COMPOSEBASTION_BACKUP_DIR,
@@ -2411,19 +2446,35 @@ async function upgradeScenario(baseline) {
     return result.stdout.split(/\r?\n/).map((value) => value.trim()).filter(Boolean).sort();
   };
   try {
+    const exactPublicCompose = gitCapture(["show", "v1.1.2:docker-compose.image.yml"]);
+    await writeFile(publicComposeFile, `${exactPublicCompose}\n`, { mode: 0o600 });
+    await writeFile(externalOwnershipTarget, "external ownership must remain unchanged\n", { mode: 0o600 });
+    const externalOwnerBefore = await stat(externalOwnershipTarget);
+    await rm(backupSymlinkPath, { force: true });
+    await symlink(`/acceptance-runtime/${path.basename(externalOwnershipTarget)}`, backupSymlinkPath);
     await run("docker", ["pull", baseline.pinnedImage], { inherit: true });
     const publicImageEvidence = await inspectPublicUpgradeImage(baseline);
-    oldEnv = acceptanceEnv(publicImageEvidence.repoDigest, upgradeOverrides);
+    oldEnv = acceptanceEnv(publicImageEvidence.repoDigest, oldOverrides);
+    rollbackEnv = baseline.key === "legacy"
+      ? acceptanceEnv(publicImageEvidence.repoDigest, {
+        ...upgradeOverrides,
+        DATABASE_URL: legacyDatabasePlaceholder
+      })
+      : oldEnv;
     activeEnv = oldEnv;
-    await compose(project, oldEnv, ["up", "--detach", "postgres", "redis", "registry", "app", "worker"], { inherit: true });
+    // Start the public image without the candidate-only initializers so
+    // it can create the same root-owned recovery directory found on real
+    // pre-1.2 installations. The candidate phase must repair it automatically.
+    await scenarioCompose(oldEnv, ["up", "--detach", "postgres", "redis", "registry"], { inherit: true });
+    await scenarioCompose(oldEnv, ["up", "--detach", "--no-deps", "app", "worker"], { inherit: true });
     const imageBindings = {
       publicApp: await inspectComposeServiceImage(
-        (args, options) => compose(project, oldEnv, args, options),
+        (args, options) => scenarioCompose(oldEnv, args, options),
         "app",
         { expectedId: publicImageEvidence.id, expectedReference: publicImageEvidence.repoDigest }
       ),
       publicWorker: await inspectComposeServiceImage(
-        (args, options) => compose(project, oldEnv, args, options),
+        (args, options) => scenarioCompose(oldEnv, args, options),
         "worker",
         { expectedId: publicImageEvidence.id, expectedReference: publicImageEvidence.repoDigest }
       )
@@ -2431,6 +2482,10 @@ async function upgradeScenario(baseline) {
     const initialVolumeNames = await projectVolumeNames();
     assert(initialVolumeNames.length > 0, "upgrade fixture did not create persistent Compose volumes");
     await waitForApiVersion(baseline.version);
+    await scenarioCompose(oldEnv, [
+      "exec", "-T", "app", "sh", "-ceu",
+      "mkdir -p /data/backups/recovery-points; touch /data/backups/recovery-points/.pre-1.2-owner"
+    ]);
     await seedRegistry();
     await setupOwner();
     await api("/api/alerts/channels", {
@@ -2464,7 +2519,7 @@ async function upgradeScenario(baseline) {
     });
     const demoHost = demoHostResponse.data.host;
     await waitForJob(demoHostResponse.data.job.id, { timeoutMs: 2 * 60_000 });
-    await compose(project, oldEnv, ["stop", "worker"]);
+    await scenarioCompose(oldEnv, ["stop", "worker"]);
     const queued = await api(`/api/hosts/${demoHost.id}/actions`, {
       method: "POST",
       body: { type: "host.check", payload: {} }
@@ -2473,7 +2528,7 @@ async function upgradeScenario(baseline) {
     const queuedBeforeUpgrade = await api(`/api/jobs/${queuedJobId}`);
     assert(queuedBeforeUpgrade.data.job.status === "queued", "pre-upgrade API job was not queued while the worker was stopped");
     assert(/^[a-z0-9-]+$/i.test(upgradeMarker), "upgrade marker is not SQL-fixture safe");
-    await compose(project, oldEnv, [
+    await scenarioCompose(oldEnv, [
       "exec", "-T", "postgres",
       "psql", "-v", "ON_ERROR_STOP=1", "-U", "composebastion", "-d", "composebastion", "-c",
       `INSERT INTO operation_jobs (id, type, status, payload, result, created_at, updated_at, started_at, completed_at)
@@ -2501,11 +2556,37 @@ async function upgradeScenario(baseline) {
          '/tmp/${upgradeMarker}-repository', now(), now()
        )`
     ]);
-    await compose(project, oldEnv, ["stop", "app"]);
+    await scenarioCompose(oldEnv, ["stop", "app"]);
+    if (baseline.key === "legacy") {
+      // The 1.0.6 source stack used the repository legacy password for both
+      // clients and PostgreSQL. Force that retained-volume state so the
+      // candidate database initializer must reconcile it to POSTGRES_PASSWORD.
+      await scenarioCompose(oldEnv, [
+        "exec", "-T", "postgres",
+        "psql", "-v", "ON_ERROR_STOP=1", "-U", "composebastion", "-d", "composebastion", "-c",
+        "ALTER ROLE composebastion PASSWORD 'composebastion'"
+      ]);
+    }
+    await mkdir(upgradeStateDir, { recursive: true, mode: 0o700 });
+    await chmod(upgradeStateDir, 0o700);
+    await renderCandidateConfiguration();
+    await scenarioCompose(oldEnv, ["stop", "app", "worker"]);
     activeEnv = newEnv;
-    await compose(project, newEnv, ["up", "--detach", "app"], { inherit: true });
+    await runCompatibilityPreparation("reconcile");
+    const transitionState = await scenarioCompose(newEnv, [
+      "run", "--rm", "--no-deps", "--user", "0:0",
+      "--volume", `${upgradeStateDir}:/run/composebastion-upgrade:ro`,
+      "app", "node", "-e",
+      "const r=JSON.parse(require('node:fs').readFileSync('/run/composebastion-upgrade/database-transition.json','utf8'));process.stdout.write(JSON.stringify({changed:r.changed,status:r.status}))"
+    ]);
+    const transitionReceipt = JSON.parse(transitionState.stdout);
+    assert(
+      transitionReceipt.changed === (baseline.key === "legacy"),
+      `unexpected database transition state for ${baseline.key}`
+    );
+    await scenarioCompose(newEnv, ["up", "--detach", "--no-deps", "--force-recreate", "app"], { inherit: true });
     imageBindings.candidateApp = await inspectComposeServiceImage(
-      (args, options) => compose(project, newEnv, args, options),
+      (args, options) => scenarioCompose(newEnv, args, options),
       "app",
       {
         expectedId: report.candidateImages.app.id,
@@ -2518,9 +2599,9 @@ async function upgradeScenario(baseline) {
     const queuedAfterMigration = await api(`/api/jobs/${queuedJobId}`);
     assert(queuedAfterMigration.data.job.status === "queued", "queued API job did not survive candidate migrations");
     assert(await jobAttemptCount(queuedJobId) === 0, "queued API job gained an attempt before the candidate worker started");
-    await compose(project, newEnv, ["up", "--detach", "worker"], { inherit: true });
+    await scenarioCompose(newEnv, ["up", "--detach", "--no-deps", "--force-recreate", "worker"], { inherit: true });
     imageBindings.candidateWorker = await inspectComposeServiceImage(
-      (args, options) => compose(project, newEnv, args, options),
+      (args, options) => scenarioCompose(newEnv, args, options),
       "worker",
       {
         expectedId: report.candidateImages.app.id,
@@ -2530,6 +2611,22 @@ async function upgradeScenario(baseline) {
       }
     );
     await waitForReadiness("upgraded candidate readiness");
+    await scenarioCompose(newEnv, [
+      "exec", "-T", "app", "node", "-e",
+      "const s=require('node:fs').lstatSync('/data/backups/recovery-points/.pre-1.2-owner');if(s.uid!==1000||s.gid!==1000)process.exit(1)"
+    ]);
+    const ownershipLink = await lstat(backupSymlinkPath);
+    const externalOwnerAfter = await stat(externalOwnershipTarget);
+    assert(ownershipLink.isSymbolicLink(), "backup ownership preparation replaced a marker-name symlink");
+    assert(
+      externalOwnerAfter.uid === externalOwnerBefore.uid
+        && externalOwnerAfter.gid === externalOwnerBefore.gid,
+      "backup ownership preparation changed an external symlink target"
+    );
+    assert(
+      await readFile(externalOwnershipTarget, "utf8") === "external ownership must remain unchanged\n",
+      "backup ownership preparation overwrote an external symlink target"
+    );
     sessionCookie = "";
     await loginOwner();
     const channels = await api("/api/alerts/channels");
@@ -2559,7 +2656,7 @@ async function upgradeScenario(baseline) {
       assert(worker.data.worker.queued === 0 && worker.data.worker.running === 0,
         `upgrade left ${worker.data.worker.queued} queued/${worker.data.worker.running} running jobs`);
     });
-    const preservedJobResult = await compose(project, newEnv, [
+    const preservedJobResult = await scenarioCompose(newEnv, [
       "exec", "-T", "postgres",
       "psql", "-v", "ON_ERROR_STOP=1", "-U", "composebastion", "-d", "composebastion", "-Atc",
       `SELECT json_build_object(
@@ -2580,7 +2677,7 @@ async function upgradeScenario(baseline) {
     assert(preservedJob.result?.preserved === true, "pre-upgrade operation job result changed");
     assert(preservedJob.attemptCount === 0 && preservedJob.leaseOwner === null && preservedJob.leaseExpiresAt === null,
       "worker reliability migration did not preserve legacy job defaults");
-    const migrationResult = await compose(project, newEnv, [
+    const migrationResult = await scenarioCompose(newEnv, [
       "exec", "-T", "postgres",
       "psql", "-v", "ON_ERROR_STOP=1", "-U", "composebastion", "-d", "composebastion", "-Atc",
       `SELECT json_build_object(
@@ -2766,17 +2863,21 @@ async function upgradeScenario(baseline) {
     );
     let rollbackEvidence = {};
     if (baseline.rollbackRehearsal) {
-      await compose(project, newEnv, ["stop", "worker", "app"]);
-      activeEnv = oldEnv;
+      await scenarioCompose(newEnv, ["stop", "worker", "app"]);
+      await runCompatibilityPreparation("restore-legacy");
+      activeEnv = rollbackEnv;
       sessionCookie = "";
-      await compose(project, oldEnv, ["up", "--detach", "app", "worker"], { inherit: true });
+      // The historical image predates candidate initializer scripts. Rollback
+      // reuses the already-reconciled volumes and intentionally bypasses those
+      // candidate-only dependencies.
+      await scenarioCompose(rollbackEnv, ["up", "--detach", "--no-deps", "--force-recreate", "app", "worker"], { inherit: true });
       imageBindings.rollbackApp = await inspectComposeServiceImage(
-        (args, options) => compose(project, oldEnv, args, options),
+        (args, options) => scenarioCompose(rollbackEnv, args, options),
         "app",
         { expectedId: publicImageEvidence.id, expectedReference: publicImageEvidence.repoDigest }
       );
       imageBindings.rollbackWorker = await inspectComposeServiceImage(
-        (args, options) => compose(project, oldEnv, args, options),
+        (args, options) => scenarioCompose(rollbackEnv, args, options),
         "worker",
         { expectedId: publicImageEvidence.id, expectedReference: publicImageEvidence.repoDigest }
       );
@@ -2796,12 +2897,14 @@ async function upgradeScenario(baseline) {
         "rollback replaced or removed persistent Compose volumes"
       );
 
-      await compose(project, oldEnv, ["stop", "worker", "app"]);
+      await scenarioCompose(rollbackEnv, ["stop", "worker", "app"]);
       activeEnv = newEnv;
       sessionCookie = "";
-      await compose(project, newEnv, ["up", "--detach", "app", "worker"], { inherit: true });
+      await renderCandidateConfiguration();
+      await runCompatibilityPreparation("reconcile");
+      await scenarioCompose(newEnv, ["up", "--detach", "--no-deps", "--force-recreate", "app", "worker"], { inherit: true });
       imageBindings.reupgradeApp = await inspectComposeServiceImage(
-        (args, options) => compose(project, newEnv, args, options),
+        (args, options) => scenarioCompose(newEnv, args, options),
         "app",
         {
           expectedId: report.candidateImages.app.id,
@@ -2811,7 +2914,7 @@ async function upgradeScenario(baseline) {
         }
       );
       imageBindings.reupgradeWorker = await inspectComposeServiceImage(
-        (args, options) => compose(project, newEnv, args, options),
+        (args, options) => scenarioCompose(newEnv, args, options),
         "worker",
         {
           expectedId: report.candidateImages.app.id,
@@ -2846,7 +2949,9 @@ async function upgradeScenario(baseline) {
         reupgradePreservedConfiguration: true,
         reupgradePreservedDatabase: true,
         volumesRetained: true,
-        rollbackReupgradeHealthy: true
+        rollbackReupgradeHealthy: true,
+        credentialRollbackVerified: baseline.key === "legacy" || transitionReceipt.changed === false,
+        rollbackDependenciesBypassed: true
       };
     }
     return {
@@ -2859,6 +2964,12 @@ async function upgradeScenario(baseline) {
       preservedDatabase: true,
       preservedCompletedJob: true,
       preservedQueuedJob: true,
+      legacyEnvironmentPlaceholderHandled: true,
+      legacyManagedCredentialReconciled: baseline.key === "legacy",
+      legacyBackupOwnershipMigrated: true,
+      pre12ComposeInitializerServicesAbsent: true,
+      candidateCompatibilityEntrypointUsed: true,
+      recursiveOwnershipSymlinkSafe: true,
       migrations: [
         "029_worker_reliability.sql",
         "030_migration_plan_binding.sql",
@@ -2889,7 +3000,7 @@ async function upgradeScenario(baseline) {
   } finally {
     if (!keep) {
       try {
-        await compose(project, newEnv, ["down", "--volumes", "--remove-orphans", "--rmi", "local"]);
+        await scenarioCompose(newEnv, ["down", "--volumes", "--remove-orphans", "--rmi", "local"]);
       } finally {
         try {
           await setManagerBackupDirectoryOwnership(
@@ -2897,6 +3008,9 @@ async function upgradeScenario(baseline) {
             "cleanup"
           );
         } finally {
+          await rm(upgradeStateDir, { recursive: true, force: true });
+          await rm(publicComposeFile, { force: true });
+          await rm(externalOwnershipTarget, { force: true });
           activeProject = null;
           activeEnv = null;
         }

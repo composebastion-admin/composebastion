@@ -21,6 +21,8 @@ builds.
 Use the Compose files from the same beta branch:
 
 ```bash
+[ ! -f docker-compose.image.yml ] || \
+  cp -p docker-compose.image.yml docker-compose.image.yml.pre-beta
 curl -fsSLO https://raw.githubusercontent.com/composebastion-admin/composebastion/beta/docker-compose.image.yml
 curl -fsSLO https://raw.githubusercontent.com/composebastion-admin/composebastion/beta/.env.example
 ```
@@ -39,6 +41,19 @@ Update the manager:
 docker compose -f docker-compose.image.yml pull
 docker compose -f docker-compose.image.yml up -d
 ```
+
+The refreshed Compose file runs `storage-init` automatically before the beta
+app and worker. It migrates root-owned 1.1 backup/recovery files to the 1.2
+non-root runtime identity. Its `database-init` companion tests the preserved
+password and, only for the exact repository legacy URL, rotates the managed
+role credential when required. Preserve `.env` and all volumes; neither
+compatibility repair requires a manual database or backup operation.
+
+For an existing homelab image install, the Admin -> Operations in-app updater
+can cross into 1.2 without replacing a pre-1.2 Compose file. It runs the same
+repairs from the pulled candidate image and retains protected credential/image
+rollback state until verification succeeds. The matching beta Compose file is
+still required for the manual `pull`/`up` procedure above.
 
 For each image-installed agent, use `agent-compose.image.example.yml`, set
 `COMPOSEBASTION_AGENT_VERSION=beta`, then pull and recreate that agent.
@@ -85,7 +100,7 @@ Do not include tokens, secrets, `.env` contents, or registry passwords.
   Compose and image inputs and return a Git capability blocker.
 - Registry trust automation requires an owner/admin, a supported Linux/systemd
   Docker host, and passwordless sudo. Other hosts receive exact manual steps.
-- This is a test channel and includes the pending 1.1.3 hardening work. It is
+- This is the `1.2.0-beta.1` test channel. It is
   not the supported stable release and is not covered by the `latest` tag.
 
 ## Roll back
@@ -116,3 +131,15 @@ verifies readiness and preserved state on that rollback, then re-upgrades those
 same volumes to the candidate. The `032` data normalization is not reversed.
 Keep the pre-upgrade backup for restoring encrypted beta source configuration
 if you return to the beta later.
+
+Before recreating `1.1.2`, restore the saved pre-beta Compose file so Docker
+does not ask the historical image to run beta initializer scripts:
+
+```bash
+cp -p docker-compose.image.yml.pre-beta docker-compose.image.yml
+docker compose -f docker-compose.image.yml up -d --no-deps --force-recreate app worker
+```
+
+If an in-app update was interrupted, use the job-specific receipt, environment
+backup, and immutable rollback overlay as documented in the
+[upgrade guide](upgrade-guide.md#interrupted-in-app-update-recovery).

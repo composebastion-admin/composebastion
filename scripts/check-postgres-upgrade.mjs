@@ -1,13 +1,25 @@
 import { execFileSync, spawnSync } from "node:child_process";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 const postgresImage = "postgres:16.6-alpine3.20@sha256:1e59919c179e296eaf3cc701f4d50bab5c393d7ed9746c188c9d519489c998dc";
+const nodeImage = "node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a";
+const alpineImage = "alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b";
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const suffix = `${process.pid}-${Date.now()}`;
 const container = `composebastion-postgres-upgrade-${suffix}`;
 const network = `${container}-network`;
 const volume = `${container}-data`;
+const backupVolume = `${container}-backups`;
+const externalVolume = `${container}-external`;
 const database = "composebastion";
 const user = "composebastion";
-const legacyPassword = "legacy-composebastion-password";
+const legacyPassword = "composebastion";
 const replacementPassword = "replacement-composebastion-password";
+const transitionDirectory = mkdtempSync(path.join(os.tmpdir(), "composebastion-postgres-transition-"));
+const composeConfigPath = path.join(transitionDirectory, "compose-config.json");
+const transitionStatePath = path.join(transitionDirectory, "database-transition.json");
 
 function docker(args, options = {}) {
   return execFileSync("docker", args, {
@@ -95,9 +107,27 @@ function assertLegacyConnectivity() {
   }
 }
 
+function runCompatibilityPreparation(mode) {
+  docker([
+    "run", "--rm", "--user", "0:0",
+    "--network", network,
+    "--volume", `${root}:/workspace:ro`,
+    "--volume", `${transitionDirectory}:/transition`,
+    "--volume", `${backupVolume}:/data/backups`,
+    "--volume", `${externalVolume}:/outside`,
+    "--workdir", "/workspace",
+    nodeImage,
+    "node", "scripts/prepare-compose-upgrade.mjs", mode,
+    "--compose-config", "/transition/compose-config.json",
+    "--state-file", "/transition/database-transition.json"
+  ]);
+}
+
 try {
   docker(["network", "create", network]);
   docker(["volume", "create", volume]);
+  docker(["volume", "create", backupVolume]);
+  docker(["volume", "create", externalVolume]);
   startPostgres(legacyPassword);
   await waitForPostgres();
 
@@ -131,9 +161,60 @@ try {
     }
   }
 
-  console.log("Existing PostgreSQL volumes retain connectivity through the DATABASE_URL compatibility override.");
+  writeFileSync(composeConfigPath, `${JSON.stringify({
+    services: {
+      app: {
+        user: "1000:1000",
+        environment: { DATABASE_URL: internalLegacyUrl }
+      },
+      worker: {
+        environment: { DATABASE_URL: internalLegacyUrl }
+      },
+      postgres: {
+        environment: { POSTGRES_PASSWORD: replacementPassword }
+      }
+    }
+  })}\n`, { mode: 0o600 });
+  chmodSync(composeConfigPath, 0o600);
+  docker([
+    "run", "--rm",
+    "--volume", `${backupVolume}:/data/backups`,
+    "--volume", `${externalVolume}:/outside`,
+    alpineImage,
+    "sh", "-ceu",
+    "mkdir -p /data/backups/recovery/nested; echo retained >/data/backups/recovery/nested/root-owned; chown -R 0:0 /data/backups; echo external >/outside/target; chown 123:456 /outside/target; ln -s /outside/target /data/backups/.composebastion-storage-owner"
+  ]);
+
+  runCompatibilityPreparation("reconcile");
+  if (query(replacementPassword).status !== 0 || query(legacyPassword).status === 0) {
+    throw new Error("Candidate compatibility entrypoint did not rotate and verify the exact managed legacy credential");
+  }
+  // A retry after rotation must retain the changed-state receipt so rollback
+  // remains authorized after an interrupted updater.
+  runCompatibilityPreparation("reconcile");
+  runCompatibilityPreparation("restore-legacy");
+  assertLegacyConnectivity();
+  // Reverse rotation is idempotent and verifies the already-restored state.
+  runCompatibilityPreparation("restore-legacy");
+
+  const backupEvidence = docker([
+    "run", "--rm",
+    "--volume", `${backupVolume}:/data/backups:ro`,
+    "--volume", `${externalVolume}:/outside:ro`,
+    alpineImage,
+    "sh", "-ceu",
+    "test \"$(stat -c %u:%g /data/backups/recovery/nested/root-owned)\" = 1000:1000; test -L /data/backups/.composebastion-storage-owner; test \"$(stat -c %u:%g /outside/target)\" = 123:456; test \"$(cat /outside/target)\" = external; printf safe"
+  ]).trim();
+  if (backupEvidence !== "safe") {
+    throw new Error("Recursive backup ownership compatibility evidence is incomplete");
+  }
+
+  console.log("Existing PostgreSQL volumes, credential rollback, and recursive storage preparation passed.");
 } finally {
   removeContainer();
   spawnSync("docker", ["volume", "rm", "-f", volume], { stdio: "ignore" });
+  spawnSync("docker", ["volume", "rm", "-f", backupVolume], { stdio: "ignore" });
+  spawnSync("docker", ["volume", "rm", "-f", externalVolume], { stdio: "ignore" });
   spawnSync("docker", ["network", "rm", network], { stdio: "ignore" });
+  rmSync(transitionDirectory, { recursive: true, force: true });
 }

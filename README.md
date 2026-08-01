@@ -112,6 +112,9 @@ the [installation guide](docs/installation.md).
 Use the published image install for NAS devices, Proxmox Docker VMs/LXCs,
 Portainer stacks, and home servers. Use the source build only when you are
 developing ComposeBastion or intentionally customizing the checkout.
+Normal users should update through a published `latest`, `beta`, version, or
+immutable `sha-*` image; they should not check out `dev` and compile the
+release toolchain on the server.
 
 Published images:
 
@@ -157,6 +160,13 @@ the handoff. ComposeBastion writes a short host-side update script, pulls the
 selected app and worker images, restarts them, and shows the latest handoff job
 so you can confirm the update completed.
 
+The in-app updater can cross into 1.2 while the host still has a pre-1.2
+`docker-compose.image.yml`. It pulls the candidate first, stops app and worker,
+runs the candidate compatibility entrypoint, and starts only those two services
+with dependency recreation disabled. Manual image updates must instead download
+the matching target-release Compose file so its `storage-init` and
+`database-init` services are available.
+
 In-app self-update currently accepts `latest` or a SemVer tag; it does not
 consume a durable signed app/agent release-pair manifest. Production updates
 must instead resolve one reviewed release revision, pin every participating
@@ -178,7 +188,8 @@ Source install:
 ```bash
 cd ~/composebastion
 git pull --ff-only
-docker compose up -d --build app worker
+npm ci
+npm run upgrade:source
 ```
 
 ## Why Operators Use It
