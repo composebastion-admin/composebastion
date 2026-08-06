@@ -43,6 +43,14 @@ export type ClaimedOperationJob = OperationJob & JobLease & {
   leaseExpiresAt: string;
 };
 
+export function shouldStopWorkerClaimsAfterHandoff(type: string, handoffPending: boolean) {
+  return type === "system.self_update" && handoffPending;
+}
+
+export function shouldResumeWorkerClaimsAfterReconciliation(result: { completed: number; failed: number; pending: number }) {
+  return result.pending === 0;
+}
+
 function mapClaimedJob(row: any): ClaimedOperationJob {
   return {
     ...mapJob(row),
@@ -247,7 +255,7 @@ export async function retryJob(id: string, createdBy?: string | null) {
 }
 
 export async function getWorkerStatus() {
-  const [result, queued, running, workers] = await Promise.all([
+  const [result, queued, running, workers, pendingSelfUpdates] = await Promise.all([
     query<{ completed_at: Date | string | null }>(
       `SELECT completed_at
        FROM operation_jobs
@@ -279,6 +287,13 @@ export async function getWorkerStatus() {
          ) AS heartbeat_fresh
        FROM worker_instances`,
       [WORKER_ACTIVE_WINDOW_SECONDS]
+    ),
+    query<{ count: string }>(
+      `SELECT count(*)::text AS count
+       FROM operation_jobs
+       WHERE type = 'system.self_update'
+         AND status = 'running'
+         AND result @> '{"handoffPending":true}'::jsonb`
     )
   ]);
   const last = result.rows[0]?.completed_at;
@@ -288,15 +303,18 @@ export async function getWorkerStatus() {
   const lastHeartbeat = workerRow?.last_heartbeat_at;
   const lastHeartbeatAt = lastHeartbeat ? new Date(lastHeartbeat).toISOString() : null;
   const lastHeartbeatIsFresh = workerRow?.heartbeat_fresh ?? false;
+  const claimsBlockedBySelfUpdate = Number(pendingSelfUpdates.rows[0]?.count ?? 0) > 0;
   return {
     queued: Number(queued.rows[0]?.count ?? 0),
     running: Number(running.rows[0]?.count ?? 0),
     lastJobCompletedAt: last ? new Date(last).toISOString() : null,
-    available: activeWorkers > 0,
+    available: activeWorkers > 0 && !claimsBlockedBySelfUpdate,
     activeWorkers,
     lastHeartbeatAt,
     state: activeWorkers > 0
-      ? "active" as const
+      ? claimsBlockedBySelfUpdate
+        ? "draining" as const
+        : "active" as const
       : recentDrainingWorkers > 0
         ? "draining" as const
         : lastHeartbeatIsFresh || !lastHeartbeatAt
@@ -453,6 +471,37 @@ export async function completeJob(id: string, resultValue: Record<string, unknow
   return result.rowCount === 1;
 }
 
+export async function markSelfUpdateHandoffPending(
+  id: string,
+  handoff: Record<string, unknown>,
+  lease: JobLease
+) {
+  const progress = buildJobProgress(
+    "system.self_update",
+    "running",
+    "reconnect",
+    "Waiting for the restarted bridge or target worker to report the authoritative update outcome"
+  );
+  const result = await query(
+    `UPDATE operation_jobs
+     SET result = $2::jsonb,
+         progress = $3::jsonb,
+         error = NULL,
+         lease_owner = NULL,
+         lease_expires_at = NULL,
+         updated_at = now()
+     WHERE id = $1
+       AND type = 'system.self_update'
+       AND status = 'running'
+       AND lease_owner = $4
+       AND attempt_count = $5
+       AND lease_expires_at > clock_timestamp()
+     RETURNING id`,
+    [id, JSON.stringify(handoff), JSON.stringify(progress), lease.workerId, lease.attemptCount]
+  );
+  return result.rowCount === 1;
+}
+
 async function finalizeLinkedOperationFailure(client: PoolClient, row: any, message: string) {
   const payload = row.payload && typeof row.payload === "object" ? row.payload as Record<string, unknown> : {};
   if ((row.type === "volume.backup" || row.type === "hostPath.backup" || row.type === "volume.clone") && typeof payload.backupId === "string") {
@@ -577,6 +626,10 @@ export async function recoverExpiredJobs() {
       `SELECT *
        FROM operation_jobs
        WHERE status = 'running'
+         AND NOT (
+           type = 'system.self_update'
+           AND result @> '{"handoffPending":true}'::jsonb
+         )
          AND (
            lease_expires_at <= now()
            OR (

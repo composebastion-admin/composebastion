@@ -27,8 +27,11 @@ const {
   enqueueJob,
   enqueueJobInTransaction,
   getWorkerStatus,
+  markSelfUpdateHandoffPending,
   recoverExpiredJobs,
   renewJobLease,
+  shouldResumeWorkerClaimsAfterReconciliation,
+  shouldStopWorkerClaimsAfterHandoff,
   updateJobProgress
 } = await import("../src/services/jobs.js");
 
@@ -137,9 +140,35 @@ describe("fenced job leases", () => {
       expect(call[0]).toContain("lease_expires_at > clock_timestamp()");
     }
   });
+
+  it("releases the lease while keeping a self-update running for outcome reconciliation", async () => {
+    query.mockResolvedValueOnce({ rows: [{ id: jobId }], rowCount: 1 });
+    const handoff = {
+      handoffStarted: true,
+      handoffPending: true,
+      outcomePath: "/srv/composebastion/.composebastion-self-update-job.outcome"
+    };
+
+    await expect(markSelfUpdateHandoffPending(jobId, handoff, { workerId, attemptCount: 1 })).resolves.toBe(true);
+
+    expect(query.mock.calls[0]?.[0]).toContain("status = 'running'");
+    expect(query.mock.calls[0]?.[0]).toContain("lease_owner = NULL");
+    expect(query.mock.calls[0]?.[1]?.[1]).toBe(JSON.stringify(handoff));
+    expect(shouldStopWorkerClaimsAfterHandoff("system.self_update", true)).toBe(true);
+    expect(shouldResumeWorkerClaimsAfterReconciliation({ completed: 0, failed: 1, pending: 0 })).toBe(true);
+    expect(shouldResumeWorkerClaimsAfterReconciliation({ completed: 0, failed: 0, pending: 1 })).toBe(false);
+  });
 });
 
 describe("expired lease recovery", () => {
+  it("excludes pending self-update handoffs from generic lease recovery", async () => {
+    transactionQuery.mockResolvedValueOnce({ rows: [] });
+
+    await expect(recoverExpiredJobs()).resolves.toEqual({ requeued: 0, failed: 0 });
+    expect(transactionQuery.mock.calls[0]?.[0]).toContain("type = 'system.self_update'");
+    expect(transactionQuery.mock.calls[0]?.[0]).toContain(`result @> '{"handoffPending":true}'::jsonb`);
+  });
+
   it("requeues only allowlisted idempotent work below the attempt limit", async () => {
     transactionQuery
       .mockResolvedValueOnce({ rows: [jobRow({ type: "host.sync", attempt_count: 2 })] })
@@ -180,7 +209,8 @@ describe("worker availability", () => {
       .mockResolvedValueOnce({ rows: [{ completed_at: null }] })
       .mockResolvedValueOnce({ rows: [{ count: "0" }] })
       .mockResolvedValueOnce({ rows: [{ count: "0" }] })
-      .mockResolvedValueOnce({ rows: [{ active_count: "1", recent_draining_count: "0", last_heartbeat_at: new Date() }] });
+      .mockResolvedValueOnce({ rows: [{ active_count: "1", recent_draining_count: "0", last_heartbeat_at: new Date() }] })
+      .mockResolvedValueOnce({ rows: [{ count: "0" }] });
 
     await expect(getWorkerStatus()).resolves.toMatchObject({
       available: true,
@@ -198,13 +228,43 @@ describe("worker availability", () => {
         active_count: "0",
         recent_draining_count: "0",
         last_heartbeat_at: new Date(Date.now() - 60_000)
-      }] });
+      }] })
+      .mockResolvedValueOnce({ rows: [{ count: "0" }] });
 
     await expect(getWorkerStatus()).resolves.toMatchObject({
       available: false,
       queued: 2,
       running: 1,
       state: "stale"
+    });
+  });
+
+  it("reports unavailable and draining while a pending handoff blocks claims", async () => {
+    query
+      .mockResolvedValueOnce({ rows: [{ completed_at: null }] })
+      .mockResolvedValueOnce({ rows: [{ count: "0" }] })
+      .mockResolvedValueOnce({ rows: [{ count: "1" }] })
+      .mockResolvedValueOnce({ rows: [{ active_count: "1", recent_draining_count: "0", last_heartbeat_at: new Date() }] })
+      .mockResolvedValueOnce({ rows: [{ count: "1" }] });
+
+    await expect(getWorkerStatus()).resolves.toMatchObject({
+      available: false,
+      activeWorkers: 1,
+      state: "draining"
+    });
+  });
+
+  it("reports available again after every pending handoff is reconciled", async () => {
+    query
+      .mockResolvedValueOnce({ rows: [{ completed_at: new Date() }] })
+      .mockResolvedValueOnce({ rows: [{ count: "0" }] })
+      .mockResolvedValueOnce({ rows: [{ count: "0" }] })
+      .mockResolvedValueOnce({ rows: [{ active_count: "1", recent_draining_count: "0", last_heartbeat_at: new Date() }] })
+      .mockResolvedValueOnce({ rows: [{ count: "0" }] });
+
+    await expect(getWorkerStatus()).resolves.toMatchObject({
+      available: true,
+      state: "active"
     });
   });
 });

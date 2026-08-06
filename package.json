@@ -1,6 +1,6 @@
 {
   "name": "composebastion",
-  "version": "1.1.2",
+  "version": "1.1.3",
   "private": true,
   "license": "SEE LICENSE IN LICENSE.md",
   "description": "Multi-host Docker management console deployed with Docker Compose.",
@@ -46,7 +46,7 @@
   },
   "devDependencies": {
     "@vitest/coverage-v8": "^4.1.10",
-    "concurrently": "^10.0.3",
+    "concurrently": "10.0.4",
     "yaml": "^2.9.0"
   },
   "engines": {

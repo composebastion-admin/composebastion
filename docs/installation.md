@@ -29,11 +29,11 @@ the base images all support the device.
 
 ## Current Published Release
 
-The most recent published stable release is `v1.1.2`.
+The most recent published stable release is `v1.1.3`.
 
 - App image: `ghcr.io/composebastion-admin/composebastion-app`
 - Agent image: `ghcr.io/composebastion-admin/composebastion-agent`
-- Exact release tags: `1.1.2` and `v1.1.2`
+- Exact release tags: `1.1.3` and `v1.1.3`
 - Moving `main` alias, stable-only `latest`, and full-commit `sha-*` indexes
 
 Use `main` only when you intentionally test protected-branch candidates.
@@ -92,7 +92,7 @@ Open `http://<manager-ip>:8080`, create the first owner account, then add a
 Docker host. The `SECURE_COOKIES=false` setting is only for this trusted
 direct-HTTP evaluation path; do not expose it to an untrusted network, and set
 it back to `true` when HTTPS is configured. For production change control, pin
-`COMPOSEBASTION_VERSION` to a release tag such as `1.1.2` instead of `latest`.
+`COMPOSEBASTION_VERSION` to a release tag such as `1.1.3` instead of `latest`.
 
 ## Source Build Install
 
@@ -245,10 +245,13 @@ Image installs can be updated in-app from Admin -> Operations ->
 ComposeBastion self-update. Configure the manager host as the SSH-mode host
 that runs ComposeBastion, set the Compose directory and file, choose `latest`
 or a pinned release tag, then start the update handoff. The app writes
-`.composebastion-self-update.sh` and `.composebastion-self-update.log` in the
-Compose directory, starts the script detached from the worker, pulls the app and
-worker images, and restarts those services. The browser may disconnect briefly
-while the new app container starts.
+job-specific protected script, log, outcome, environment-backup, and immutable
+rollback artifacts in the Compose directory, then starts the script detached
+from the worker. The browser may disconnect briefly while containers restart.
+
+Installations on 1.0.6 or 1.1.2 must target 1.1.3 first. After the bridge is
+healthy, use its updater to target 1.2. Direct pre-1.2-to-1.2 updates are not
+release-qualified, and `latest` remains on 1.1.3 during the bridge rollout.
 
 Use the manual commands below when the manager host is not managed over SSH,
 when running a source checkout, or when you want to inspect each step yourself.

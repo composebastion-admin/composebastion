@@ -212,6 +212,35 @@ describe.skipIf(!integrationEnabled)("worker reliability integration", () => {
     expect(rows.rows.find((row) => row.id === recentId)?.status).toBe("running");
   });
 
+  it("keeps old pending handoffs authoritative and blocks readiness until either outcome is reconciled", async () => {
+    await registerWorkerInstance({ id: randomUUID(), version: "1.1.3", hostname: "bridge-worker" });
+    for (const reconciledStatus of ["completed", "failed"]) {
+      const handoffId = await insertJob("system.self_update", {
+        status: "running",
+        legacyStartedAt: new Date(Date.now() - 31 * 60_000)
+      });
+      await pool.query(
+        `UPDATE operation_jobs
+         SET result = '{"handoffPending":true}'::jsonb
+         WHERE id = $1`,
+        [handoffId]
+      );
+
+      await expect(recoverExpiredJobs()).resolves.toEqual({ requeued: 0, failed: 0 });
+      await expect(pool.query("SELECT status FROM operation_jobs WHERE id = $1", [handoffId]))
+        .resolves.toMatchObject({ rows: [{ status: "running" }] });
+      await expect(getWorkerStatus()).resolves.toMatchObject({ available: false, state: "draining" });
+
+      await pool.query(
+        `UPDATE operation_jobs
+         SET status = $2, result = '{"handoffPending":false}'::jsonb, completed_at = now()
+         WHERE id = $1`,
+        [handoffId, reconciledStatus]
+      );
+      await expect(getWorkerStatus()).resolves.toMatchObject({ available: true, state: "active" });
+    }
+  });
+
   it("atomically permits one safe retry and rejects destructive retry", async () => {
     const hostId = await insertHost();
     const safeId = await insertJob("host.check", { status: "failed", attemptCount: 1, hostId });

@@ -10,3 +10,6 @@ coverage/
 data/
 playwright-report/
 test-results/
+.composebastion-image-upgrade-*
+.composebastion-source-upgrade-*
+.composebastion-self-update-*

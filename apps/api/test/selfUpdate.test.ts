@@ -25,6 +25,7 @@ vi.mock("../src/services/redis.js", () => ({
 }));
 
 vi.mock("../src/services/jobs.js", () => ({
+  buildJobProgress: (...args: unknown[]) => [{ id: "reconnect", args }],
   enqueueJob: (...args: unknown[]) => enqueueJob(...args)
 }));
 
@@ -58,23 +59,29 @@ describe("self update service", () => {
       composeFile: "docker-compose.image.yml",
       versionMode: "pinned",
       targetVersion: "1.0.2"
-    });
+    }, { jobId: "test-job" });
 
     expect(result).toMatchObject({
       handoffStarted: true,
+      handoffPending: true,
       pid: "4242",
       targetVersion: "1.0.2",
-      logPath: "/srv/composebastion/.composebastion-self-update.log"
+      logPath: "/srv/composebastion/.composebastion-self-update-test-job.log",
+      outcomePath: "/srv/composebastion/.composebastion-self-update-test-job.outcome",
+      gatePath: "/srv/composebastion/.composebastion-self-update-test-job.gate"
     });
     expect(writeRemoteFile).toHaveBeenCalledWith(
       expect.anything(),
-      "/srv/composebastion/.composebastion-self-update.sh",
-      expect.stringContaining("COMPOSEBASTION_VERSION=1.0.2")
+      "/srv/composebastion/.composebastion-self-update-test-job.sh",
+      expect.stringContaining("TARGET_VERSION='1.0.2'")
     );
     const script = String(writeRemoteFile.mock.calls[0]?.[2] ?? "");
-    expect(script).toContain("docker compose -f 'docker-compose.image.yml' pull app worker");
-    expect(script).toContain("docker compose -f 'docker-compose.image.yml' up -d app worker");
-    expect(String(runSshCommand.mock.calls[1]?.[1])).toContain("nohup '/srv/composebastion/.composebastion-self-update.sh'");
+    expect(script).toContain("prepare-compose-upgrade.mjs");
+    expect(script).toContain("--pull never --no-deps --force-recreate app worker");
+    expect(script).toContain("COMPOSEBASTION_DATABASE_CREDENTIAL_TRANSITION");
+    expect(script).toContain("COMPOSEBASTION_DATABASE_ENVIRONMENT_ACTION");
+    expect(script).toContain("COMPOSEBASTION_UPGRADE_SOURCE_DATABASE_URL: \\${DATABASE_URL-}");
+    expect(String(runSshCommand.mock.calls[1]?.[1])).toContain(".composebastion-self-update-test-job.sh");
   });
 
   it("requires SSH mode for the detached self-update handoff", async () => {
@@ -116,6 +123,64 @@ describe("self update service", () => {
     expect(compareVersions("1.0.4-beta.1", "1.0.4")).toBe(-1);
     expect(updateAvailable("1.0.2", "1.0.0")).toBe(false);
     expect(updateAvailable("1.0.2", "1.0.4")).toBe(true);
+  });
+
+  it("strictly parses authoritative bridge outcomes", async () => {
+    const { parseBridgeSelfUpdateOutcome } = await import("../src/services/selfUpdate.js");
+    const outcome = parseBridgeSelfUpdateOutcome([
+      "schema=1",
+      "job_id=test-job",
+      "status=failed",
+      "stage=verification",
+      "rollback=succeeded",
+      "target_version=1.2.0",
+      "exit_code=1",
+      ""
+    ].join("\n"), "test-job", "1.2.0");
+
+    expect(outcome).toMatchObject({ status: "failed", stage: "verification", rollback: "succeeded" });
+    expect(() => parseBridgeSelfUpdateOutcome("schema=1\n", "test-job", "1.2.0")).toThrow("unexpected schema");
+  });
+
+  it.each([
+    ["passed", "completed"],
+    ["failed", "failed"]
+  ] as const)("reconciles a %s updater outcome to a truthful API job", async (outcomeStatus, apiStatus) => {
+    const targetVersion = "1.2.0";
+    const outcome = [
+      "schema=1",
+      "job_id=test-job",
+      `status=${outcomeStatus}`,
+      `stage=${outcomeStatus === "passed" ? "complete" : "verification"}`,
+      `rollback=${outcomeStatus === "passed" ? "not_required" : "succeeded"}`,
+      `target_version=${targetVersion}`,
+      `exit_code=${outcomeStatus === "passed" ? "0" : "1"}`,
+      ""
+    ].join("\n");
+    query
+      .mockResolvedValueOnce({ rows: [{
+        id: "test-job",
+        type: "system.self_update",
+        host_id: hostId,
+        payload: {
+          workingDir: "/srv/composebastion",
+          composeFile: "docker-compose.image.yml",
+          versionMode: "pinned",
+          targetVersion
+        },
+        result: { handoffPending: true, handedOffAt: new Date().toISOString() },
+        created_at: new Date(),
+        updated_at: new Date()
+      }] })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: "test-job" }] });
+    runSshCommand.mockReset().mockResolvedValueOnce({ code: 0, stdout: outcome, stderr: "" });
+    const { reconcileBridgeSelfUpdateHandoffs } = await import("../src/services/selfUpdate.js");
+
+    const result = await reconcileBridgeSelfUpdateHandoffs();
+
+    expect(result).toEqual({ completed: apiStatus === "completed" ? 1 : 0, failed: apiStatus === "failed" ? 1 : 0, pending: 0 });
+    expect(String(query.mock.calls.at(-1)?.[0])).toContain("SET status = $2");
+    expect(query.mock.calls.at(-1)?.[1]?.[1]).toBe(apiStatus);
   });
 
   it("uses the newest semver tag when GitHub latest release is stale", async () => {

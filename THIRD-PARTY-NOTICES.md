@@ -3,7 +3,7 @@
 ComposeBastion may include or depend on third-party software components.
 Third-party components are governed by their own license terms and are not relicensed by LICENSE.md.
 
-This inventory was generated from package-lock.json for ComposeBastion 1.1.2. It is a best-effort dependency notice for the npm workspace.
+This inventory was generated from package-lock.json for ComposeBastion 1.1.3. It is a best-effort dependency notice for the npm workspace.
 
 ## Bundled Runtime Tools
 
@@ -31,7 +31,7 @@ inventories and any additional attribution obligations remains a release gate.
 
 | License | Package entries |
 |---------|-----------------|
-| MIT | 299 |
+| MIT | 300 |
 | Apache-2.0 | 33 |
 | ISC | 21 |
 | BSD-3-Clause | 10 |
@@ -151,7 +151,7 @@ No missing, GPL, AGPL, SSPL, UNKNOWN, or UNLICENSED package entries were found i
 | @fastify/proxy-addr | 5.1.0 | MIT | node_modules/@fastify/proxy-addr |
 | @fastify/rate-limit | 10.3.0 | MIT | node_modules/@fastify/rate-limit |
 | @fastify/send | 4.1.0 | MIT | node_modules/@fastify/send |
-| @fastify/static | 9.3.0 | MIT | node_modules/@fastify/static |
+| @fastify/static | 10.1.3 | MIT | node_modules/@fastify/static |
 | @fastify/websocket | 11.3.0 | MIT | node_modules/@fastify/websocket |
 | @ioredis/commands | 1.10.0 | MIT | node_modules/@ioredis/commands |
 | @jridgewell/gen-mapping | 0.3.13 | MIT | node_modules/@jridgewell/gen-mapping |
@@ -162,6 +162,7 @@ No missing, GPL, AGPL, SSPL, UNKNOWN, or UNLICENSED package entries were found i
 | @lukeed/ms | 2.0.2 | MIT | node_modules/@lukeed/ms |
 | @pinojs/redact | 0.4.0 | MIT | node_modules/@pinojs/redact |
 | @playwright/test | 1.61.1 | Apache-2.0 | node_modules/@playwright/test |
+| @remix-run/router | 1.23.3 | MIT | node_modules/@remix-run/router |
 | @rolldown/pluginutils | 1.0.0-beta.27 | MIT | node_modules/@rolldown/pluginutils |
 | @rollup/rollup-android-arm-eabi | 4.62.2 | MIT | node_modules/@rollup/rollup-android-arm-eabi |
 | @rollup/rollup-android-arm64 | 4.62.2 | MIT | node_modules/@rollup/rollup-android-arm64 |
@@ -237,7 +238,7 @@ No missing, GPL, AGPL, SSPL, UNKNOWN, or UNLICENSED package entries were found i
 | bcrypt-pbkdf | 1.0.2 | BSD-3-Clause | node_modules/bcrypt-pbkdf |
 | bcryptjs | 3.0.3 | BSD-3-Clause | node_modules/bcryptjs |
 | bowser | 2.14.1 | MIT | node_modules/bowser |
-| brace-expansion | 5.0.7 | MIT | node_modules/brace-expansion |
+| brace-expansion | 5.0.9 | MIT | node_modules/brace-expansion |
 | browserslist | 4.28.5 | MIT | node_modules/browserslist |
 | buildcheck | 0.0.7 | MIT | node_modules/buildcheck |
 | caniuse-lite | 1.0.30001803 | CC-BY-4.0 | node_modules/caniuse-lite |
@@ -245,8 +246,8 @@ No missing, GPL, AGPL, SSPL, UNKNOWN, or UNLICENSED package entries were found i
 | chalk | 5.6.2 | MIT | node_modules/chalk |
 | cliui | 9.0.1 | ISC | node_modules/cliui |
 | cluster-key-slot | 1.1.1 | Apache-2.0 | node_modules/cluster-key-slot |
-| concurrently | 10.0.3 | MIT | node_modules/concurrently |
-| content-disposition | 1.1.0 | MIT | node_modules/content-disposition |
+| concurrently | 10.0.4 | MIT | node_modules/concurrently |
+| content-disposition | 2.0.1 | MIT | node_modules/content-disposition |
 | convert-source-map | 2.0.0 | MIT | node_modules/convert-source-map |
 | cookie | 1.1.1 | MIT | node_modules/cookie |
 | cookie | 2.0.1 | MIT | node_modules/@fastify/cookie/node_modules/cookie |
@@ -271,15 +272,15 @@ No missing, GPL, AGPL, SSPL, UNKNOWN, or UNLICENSED package entries were found i
 | fast-deep-equal | 3.1.3 | MIT | node_modules/fast-deep-equal |
 | fast-json-stringify | 7.0.1 | MIT | node_modules/fast-json-stringify |
 | fast-querystring | 1.1.2 | MIT | node_modules/fast-querystring |
-| fast-uri | 3.1.3 | BSD-3-Clause | node_modules/fast-uri |
-| fast-uri | 4.1.0 | BSD-3-Clause | node_modules/fast-json-stringify/node_modules/fast-uri |
-| fastify | 5.10.0 | MIT | node_modules/fastify |
+| fast-uri | 3.1.5 | BSD-3-Clause | node_modules/fast-uri |
+| fast-uri | 4.1.2 | BSD-3-Clause | node_modules/fast-json-stringify/node_modules/fast-uri |
+| fastify | 5.11.2 | MIT | node_modules/fastify |
 | fastify-plugin | 5.1.0 | MIT | node_modules/@fastify/cors/node_modules/fastify-plugin |
 | fastify-plugin | 5.1.0 | MIT | node_modules/@fastify/rate-limit/node_modules/fastify-plugin |
 | fastify-plugin | 6.0.0 | MIT | node_modules/fastify-plugin |
 | fastq | 1.20.1 | ISC | node_modules/fastq |
 | fdir | 6.5.0 | MIT | node_modules/fdir |
-| find-my-way | 9.6.0 | MIT | node_modules/find-my-way |
+| find-my-way | 9.7.0 | MIT | node_modules/find-my-way |
 | fsevents | 2.3.2 | MIT | node_modules/fsevents |
 | fsevents | 2.3.3 | MIT | node_modules/tsx/node_modules/fsevents |
 | fsevents | 2.3.3 | MIT | node_modules/vite/node_modules/fsevents |
@@ -316,7 +317,7 @@ No missing, GPL, AGPL, SSPL, UNKNOWN, or UNLICENSED package entries were found i
 | mnemonist | 0.40.0 | MIT | node_modules/mnemonist |
 | ms | 2.1.3 | MIT | node_modules/ms |
 | nan | 2.28.0 | MIT | node_modules/nan |
-| nanoid | 3.3.15 | MIT | node_modules/nanoid |
+| nanoid | 3.3.17 | MIT | node_modules/nanoid |
 | node-releases | 2.0.51 | MIT | node_modules/node-releases |
 | nodemailer | 9.0.3 | MIT-0 | node_modules/nodemailer |
 | obliterator | 2.0.5 | MIT | node_modules/obliterator |
@@ -340,7 +341,7 @@ No missing, GPL, AGPL, SSPL, UNKNOWN, or UNLICENSED package entries were found i
 | pino-std-serializers | 7.1.0 | MIT | node_modules/pino-std-serializers |
 | playwright | 1.61.1 | Apache-2.0 | node_modules/playwright |
 | playwright-core | 1.61.1 | Apache-2.0 | node_modules/playwright-core |
-| postcss | 8.5.16 | MIT | node_modules/postcss |
+| postcss | 8.5.26 | MIT | node_modules/postcss |
 | postgres-array | 2.0.0 | MIT | node_modules/postgres-array |
 | postgres-bytea | 1.0.1 | MIT | node_modules/postgres-bytea |
 | postgres-date | 1.0.7 | MIT | node_modules/postgres-date |
@@ -351,8 +352,8 @@ No missing, GPL, AGPL, SSPL, UNKNOWN, or UNLICENSED package entries were found i
 | react | 19.2.7 | MIT | node_modules/react |
 | react-dom | 19.2.7 | MIT | node_modules/react-dom |
 | react-refresh | 0.17.0 | MIT | node_modules/react-refresh |
-| react-router | 7.18.1 | MIT | node_modules/react-router |
-| react-router-dom | 7.18.1 | MIT | node_modules/react-router-dom |
+| react-router | 6.30.4 | MIT | apps/web/node_modules/react-router |
+| react-router-dom | 6.30.4 | MIT | apps/web/node_modules/react-router-dom |
 | readable-stream | 3.6.2 | MIT | node_modules/readable-stream |
 | real-require | 0.2.0 | MIT | node_modules/real-require |
 | real-require | 1.0.0 | MIT | node_modules/thread-stream/node_modules/real-require |
@@ -375,7 +376,7 @@ No missing, GPL, AGPL, SSPL, UNKNOWN, or UNLICENSED package entries were found i
 | semver | 7.8.5 | ISC | node_modules/semver |
 | set-cookie-parser | 2.7.2 | MIT | node_modules/set-cookie-parser |
 | setprototypeof | 1.2.0 | ISC | node_modules/setprototypeof |
-| shell-quote | 1.8.4 | MIT | node_modules/shell-quote |
+| shell-quote | 1.9.0 | MIT | node_modules/shell-quote |
 | siginfo | 2.0.0 | ISC | node_modules/siginfo |
 | sonic-boom | 4.2.1 | MIT | node_modules/sonic-boom |
 | source-map-js | 1.2.1 | BSD-3-Clause | node_modules/source-map-js |
