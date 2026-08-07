@@ -31,7 +31,7 @@ This runbook is the minimum production checklist for a ComposeBastion deployment
   the manager host should be an SSH-mode host, the Compose directory should
   match the deployed stack, and the Compose file should be the image install
   file used by production.
-- For a 1.0.6, 1.1.2, 1.1.3, or 1.1.4 manager, schedule two distinct jobs: first target 1.1.5
+- For a 1.0.6, 1.1.2, 1.1.3, 1.1.4, or 1.1.5 manager, schedule two distinct jobs: first target 1.1.6
   and verify readiness, then target 1.2 from the bridge. Do not approve a direct
   pre-1.2-to-1.2 handoff.
 
@@ -135,5 +135,5 @@ claims for a release.
   but live logs and host `/proc` stats require the newer agent endpoints.
 - V1 expects app and agent images from the same release for live logs, queued
   Docker work, and host `/proc` stats.
-- The current compatibility app and agent tags are `1.1.5` and `v1.1.5`.
+- The current compatibility app and agent tags are `1.1.6` and `v1.1.6`.
   Verify that bridge before the 1.2 transition.

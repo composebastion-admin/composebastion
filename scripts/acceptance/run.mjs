@@ -15,6 +15,10 @@ import {
   ownedCandidateImageTags,
   requireImageComposeProject
 } from "./qualification-policy.mjs";
+import {
+  assertSelfUpdateOutcomeStatus,
+  parseSelfUpdateOutcome
+} from "./self-update-outcome.mjs";
 import { acceptanceScenarioManifest } from "./scenario-manifest.mjs";
 import { acceptanceUpgradeBaselines, acceptanceUpgradeBridge } from "./upgrade-baselines.mjs";
 import { assertSafeTestResultsPath, digestGitBuildContext, materializeGitBuildContext } from "../materialize-git-context.mjs";
@@ -2489,19 +2493,18 @@ function renderUpgradeEnvironment(values) {
   }).join("\n")}\n`;
 }
 
-async function waitForSelfUpdateOutcome(outcomePath, expectedStatus, readOutcome) {
+async function waitForSelfUpdateOutcome(
+  outcomePath,
+  { expectedStatus, expectedJobId, expectedTargetVersion },
+  readOutcome
+) {
   assert(typeof readOutcome === "function", "self-update outcome reader is required");
-  return retry(`self-update outcome ${path.basename(outcomePath)}`, async () => {
+  const outcome = await retry(`self-update outcome ${path.basename(outcomePath)}`, async () => {
     const contents = await readOutcome(outcomePath, "self-update outcome");
-    const outcome = Object.fromEntries(contents.trim().split(/\r?\n/).map((line) => {
-      const separator = line.indexOf("=");
-      assert(separator > 0, `invalid updater outcome line ${line}`);
-      return [line.slice(0, separator), line.slice(separator + 1)];
-    }));
-    assert(outcome.status === expectedStatus,
-      `updater outcome is ${outcome.status ?? "missing"}, expected ${expectedStatus}`);
-    return outcome;
+    return parseSelfUpdateOutcome(contents, { expectedJobId, expectedTargetVersion });
   }, { attempts: 240, delayMs: 1_000 });
+  assertSelfUpdateOutcomeStatus(outcome, expectedStatus);
+  return outcome;
 }
 
 async function upgradeScenario(baseline) {
@@ -2857,7 +2860,11 @@ async function upgradeScenario(baseline) {
     const failedLogPath = path.join(managerDir, `.composebastion-self-update-${failedJobId}.log`);
     const failedOutcome = await waitForSelfUpdateOutcome(
       failedOutcomePath,
-      "failed",
+      {
+        expectedStatus: "failed",
+        expectedJobId: failedJobId,
+        expectedTargetVersion: candidateVersion
+      },
       readProtectedManagerFile
     );
     assert(failedOutcome.stage === "verification" && failedOutcome.rollback === "succeeded",
@@ -2913,7 +2920,11 @@ async function upgradeScenario(baseline) {
     const successfulLogPath = path.join(managerDir, `.composebastion-self-update-${successfulJobId}.log`);
     const successfulOutcome = await waitForSelfUpdateOutcome(
       successfulOutcomePath,
-      "passed",
+      {
+        expectedStatus: "passed",
+        expectedJobId: successfulJobId,
+        expectedTargetVersion: candidateVersion
+      },
       readProtectedManagerFile
     );
     assert(successfulOutcome.stage === "complete" && successfulOutcome.rollback === "not_required",

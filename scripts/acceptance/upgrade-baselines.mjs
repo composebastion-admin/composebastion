@@ -1,15 +1,15 @@
 export const acceptanceUpgradeBridge = Object.freeze({
-  version: "1.1.5",
-  releaseTag: "ghcr.io/composebastion-admin/composebastion-app:1.1.5",
+  version: "1.1.6",
+  releaseTag: "ghcr.io/composebastion-admin/composebastion-app:1.1.6",
   pinnedImage:
-    "ghcr.io/composebastion-admin/composebastion-app@sha256:2d96b643976777b8609d57e5c163281d28707d64044124890ef33d0fbc4661bd"
+    "ghcr.io/composebastion-admin/composebastion-app@sha256:7132e9301647d2b2a38eb9c4e9f1c046af2a61ad662d75a8faa3b2d31fae2e76"
 });
 
 export const acceptanceUpgradeBaselines = Object.freeze([
   Object.freeze({
     key: "current-stable",
     scenarioId: "current-stable-upgrade",
-    name: "Public 1.1.2 through 1.1.5 bridge with rollback and state preservation",
+    name: "Public 1.1.2 through 1.1.6 bridge with rollback and state preservation",
     version: "1.1.2",
     releaseTag: "ghcr.io/composebastion-admin/composebastion-app:1.1.2",
     pinnedImage:
@@ -24,7 +24,7 @@ export const acceptanceUpgradeBaselines = Object.freeze([
   Object.freeze({
     key: "legacy",
     scenarioId: "legacy-upgrade",
-    name: "Public 1.0.6 through 1.1.5 bridge with stale-environment canonicalization and re-upgrade",
+    name: "Public 1.0.6 through 1.1.6 bridge with stale-environment canonicalization and re-upgrade",
     version: "1.0.6",
     releaseTag: "ghcr.io/composebastion-admin/composebastion-app:1.0.6",
     pinnedImage:

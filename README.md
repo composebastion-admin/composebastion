@@ -31,11 +31,11 @@ devices, Proxmox Docker VMs/LXCs, Portainer stacks, and any native Docker host o
 
 ## Published Release
 
-Latest published stable release: `v1.1.5`.
+Latest published stable release: `v1.1.6`.
 
 - Package and OpenAPI version: `1.2.0-beta.1`.
 - Current beta candidate: `v1.2.0-beta.1`.
-- GitHub stable release images: `1.1.5` and `v1.1.5`.
+- GitHub stable release images: `1.1.6` and `v1.1.6`.
 - GitHub beta images: `beta` for both app and agent.
 - Published platforms: `linux/amd64` and `linux/arm64` for both app and agent.
 - Release gates include CI/OpenAPI, per-workspace coverage, separate
@@ -160,8 +160,8 @@ the handoff. ComposeBastion writes a short host-side update script, pulls the
 selected app and worker images, restarts them, and shows the latest handoff job
 so you can confirm the update completed.
 
-The release-qualified in-app path is `1.0.6/1.1.2/1.1.3/1.1.4 -> 1.1.5 -> 1.2`. Update to
-the compatibility-only 1.1.5 bridge first; direct pre-1.2-to-1.2 updates are not
+The release-qualified in-app path is `1.0.6/1.1.2/1.1.3/1.1.4/1.1.5 -> 1.1.6 -> 1.2`. Update to
+the compatibility-only 1.1.6 bridge first; direct pre-1.2-to-1.2 updates are not
 qualified. The bridge can retain the pre-1.2 `docker-compose.image.yml`, pull
 and prepare the 1.2 candidate, and start only app/worker with dependency
 recreation disabled. Manual image updates must download the matching

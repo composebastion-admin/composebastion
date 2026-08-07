@@ -31,11 +31,11 @@ the base images all support the device.
 
 ## Current Published Release
 
-The most recent published stable release is `v1.1.5`.
+The most recent published stable release is `v1.1.6`.
 
 - App image: `ghcr.io/composebastion-admin/composebastion-app`
 - Agent image: `ghcr.io/composebastion-admin/composebastion-agent`
-- Exact release tags: `1.1.5` and `v1.1.5`
+- Exact release tags: `1.1.6` and `v1.1.6`
 - Beta test tag: `beta` for both app and agent; see
   [ComposeBastion Beta](beta-release.md).
 - Moving `main` alias, stable-only `latest`, and full-commit `sha-*` indexes
@@ -278,8 +278,8 @@ Compose directory, starts the script detached from the worker, pulls the app and
 worker images, and restarts those services. The browser may disconnect briefly
 while the new app container starts.
 
-The supported pre-1.2 route is `1.0.6/1.1.2/1.1.3/1.1.4 -> 1.1.5 -> 1.2`. Select the
-`1.1.5` bridge first and verify it is healthy; only then target 1.2. The bridge
+The supported pre-1.2 route is `1.0.6/1.1.2/1.1.3/1.1.4/1.1.5 -> 1.1.6 -> 1.2`. Select the
+`1.1.6` bridge first and verify it is healthy; only then target 1.2. The bridge
 keeps the existing Compose file, performs compatibility work through the pulled
 candidate, and starts app/worker with dependency recreation disabled. Direct
 pre-1.2-to-1.2 updates are not release-qualified. Manual updates require the
