@@ -88,9 +88,9 @@ if [ "$1" = inspect ]; then
       if [ "$phase" = new ] && [ "$MOCK_FAIL" = identity ]; then printf '%s\n' Lookalike; else printf '%s\n' ComposeBastion; fi ;;
     *"org.opencontainers.image.source"*) printf '%s\n' https://github.com/composebastion-admin/composebastion ;;
     *"org.opencontainers.image.version"*)
-      if [ "$phase" = old ]; then printf '%s\n' 1.1.4; else printf '%s\n' 1.2.0; fi ;;
+      if [ "$phase" = old ]; then printf '%s\n' 1.1.5; else printf '%s\n' 1.2.0; fi ;;
     *"{{.Config.Image}}"*)
-      if [ "$4" = app-container ]; then printf '%s\n' prior-app:1.1.4; else printf '%s\n' prior-worker:1.1.4; fi ;;
+      if [ "$4" = app-container ]; then printf '%s\n' prior-app:1.1.5; else printf '%s\n' prior-worker:1.1.5; fi ;;
     *"{{.Image}}"*)
       if [ "$phase" = old ]; then
         if [ "$4" = app-container ]; then printf '%s\n' sha256:aaaaaaaa; else printf '%s\n' sha256:bbbbbbbb; fi
@@ -125,7 +125,7 @@ async function runBridge(
   const rollbackComposePath = path.join(directory, ".composebastion-self-update-bridge-job.rollback.yml");
   const scriptPath = path.join(directory, "update.sh");
   const dockerPath = path.join(directory, "docker-mock");
-  const originalEnvironment = "COMPOSEBASTION_VERSION=1.1.4\nPOSTGRES_PASSWORD=managed\nDATABASE_URL=postgres://composebastion:composebastion@postgres:5432/composebastion\nAPP_SECRET=preserved\n";
+  const originalEnvironment = "COMPOSEBASTION_VERSION=1.1.5\nPOSTGRES_PASSWORD=managed\nDATABASE_URL=postgres://composebastion:composebastion@postgres:5432/composebastion\nAPP_SECRET=preserved\n";
   await mkdir(stateDirectory);
   await mkdir(lockPath);
   await writeFile(path.join(lockPath, "job"), "bridge-job\n");
@@ -192,7 +192,7 @@ async function runBridge(
   };
 }
 
-describe("1.1.4 bridge updater shell", () => {
+describe("1.1.5 bridge updater shell", () => {
   it("pins, prepares, verifies, and persists the canonical managed database selection", async () => {
     const result = await runBridge("");
     expect(result.exitCode).toBe(0);
@@ -277,7 +277,7 @@ describe("1.1.4 bridge updater shell", () => {
   });
 });
 
-describe("1.1.4 bridge manager-host lock", () => {
+describe("1.1.5 bridge manager-host lock", () => {
   it("refuses a recent incomplete lock and safely reclaims it after the recovery age", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "composebastion-bridge-lock-"));
     temporaryDirectories.push(directory);
@@ -300,7 +300,7 @@ describe("1.1.4 bridge manager-host lock", () => {
   });
 });
 
-describe("1.1.4 bridge recovery artifact exclusions", () => {
+describe("1.1.5 bridge recovery artifact exclusions", () => {
   it("excludes every upgrade recovery family from Git and Docker contexts", async () => {
     const exclusions = [
       [".composebastion-image-upgrade-*", ".composebastion-image-upgrade-job.recovery"],

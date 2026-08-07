@@ -1,3 +1,7 @@
+import { execFileSync } from "node:child_process";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const getHostForWorker = vi.fn();
@@ -51,6 +55,50 @@ describe("self update service", () => {
     writeRemoteFile.mockResolvedValue(undefined);
   });
 
+  it("creates the detached updater log privately and refuses an existing symlink", async () => {
+    const { buildBridgeSelfUpdateLaunchScript } = await import("../src/services/selfUpdate.js");
+    const directory = mkdtempSync(join(tmpdir(), "composebastion-bridge-launch-"));
+
+    try {
+      const scriptPath = join(directory, "update.sh");
+      const logPath = join(directory, "update.log");
+      const lockPath = join(directory, "update.lock");
+      writeFileSync(scriptPath, "#!/bin/sh\nprintf '%s\\n' secure-log\n", { mode: 0o700 });
+      chmodSync(scriptPath, 0o700);
+
+      const launch = buildBridgeSelfUpdateLaunchScript({
+        jobId: "secure-log",
+        scriptPath,
+        logPath,
+        lockPath
+      });
+      execFileSync("/bin/sh", ["-c", launch], { cwd: directory, stdio: "pipe" });
+
+      expect(statSync(logPath).mode & 0o777).toBe(0o600);
+      for (let attempt = 0; attempt < 200 && !readFileSync(logPath, "utf8").includes("secure-log"); attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(readFileSync(logPath, "utf8")).toContain("secure-log");
+
+      const symlinkLogPath = join(directory, "symlink.log");
+      const externalPath = join(directory, "external.txt");
+      const symlinkLockPath = join(directory, "symlink.lock");
+      writeFileSync(externalPath, "unchanged\n", { mode: 0o600 });
+      symlinkSync(externalPath, symlinkLogPath);
+      const symlinkLaunch = buildBridgeSelfUpdateLaunchScript({
+        jobId: "symlink-log",
+        scriptPath,
+        logPath: symlinkLogPath,
+        lockPath: symlinkLockPath
+      });
+
+      expect(() => execFileSync("/bin/sh", ["-c", symlinkLaunch], { cwd: directory, stdio: "pipe" })).toThrow();
+      expect(readFileSync(externalPath, "utf8")).toBe("unchanged\n");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("writes and starts a detached host-side self-update script", async () => {
     const { runSelfUpdate } = await import("../src/services/selfUpdate.js");
 
@@ -82,6 +130,9 @@ describe("self update service", () => {
     expect(script).toContain("COMPOSEBASTION_DATABASE_ENVIRONMENT_ACTION");
     expect(script).toContain("COMPOSEBASTION_UPGRADE_SOURCE_DATABASE_URL: \\${DATABASE_URL-}");
     expect(String(runSshCommand.mock.calls[1]?.[1])).toContain(".composebastion-self-update-test-job.sh");
+    expect(String(runSshCommand.mock.calls[1]?.[1])).toContain("umask 077");
+    expect(String(runSshCommand.mock.calls[1]?.[1])).toContain('exec 3> "$LOG_PATH"');
+    expect(String(runSshCommand.mock.calls[1]?.[1])).toContain('nohup "$SCRIPT_PATH" >&3 2>&1');
   });
 
   it("requires SSH mode for the detached self-update handoff", async () => {
