@@ -7,8 +7,8 @@ every production update.
 
 - `/api/v1` is the public compatibility boundary for V1.
 - Use additive API changes whenever possible.
-- Keep app and agent images on the same release when possible. The published
-  compatibility bridge for qualifying 1.2 is `v1.1.4`.
+- Keep app and agent images on the same release when possible. The latest
+  published release is `v1.1.4`. It is the compatibility bridge for qualifying 1.2.
 - New database migrations must use the next clean `NNN_snake_case.sql` filename.
   The existing duplicate `018_` migration prefix is a published legacy exception;
   do not create new duplicates.

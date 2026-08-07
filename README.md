@@ -31,11 +31,11 @@ devices, Proxmox Docker VMs/LXCs, Portainer stacks, and any native Docker host o
 
 ## Published Release
 
-Latest published stable release: `v1.1.2`.
+Latest published stable release: `v1.1.4`.
 
 - Package and OpenAPI version: `1.2.0-beta.1`.
 - Current beta candidate: `v1.2.0-beta.1`.
-- GitHub stable release images: `1.1.2` and `v1.1.2`.
+- GitHub stable release images: `1.1.4` and `v1.1.4`.
 - GitHub beta images: `beta` for both app and agent.
 - Published platforms: `linux/amd64` and `linux/arm64` for both app and agent.
 - Release gates include CI/OpenAPI, per-workspace coverage, separate

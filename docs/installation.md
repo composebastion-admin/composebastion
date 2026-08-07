@@ -31,11 +31,11 @@ the base images all support the device.
 
 ## Current Published Release
 
-The most recent published stable release is `v1.1.2`.
+The most recent published stable release is `v1.1.4`.
 
 - App image: `ghcr.io/composebastion-admin/composebastion-app`
 - Agent image: `ghcr.io/composebastion-admin/composebastion-agent`
-- Exact release tags: `1.1.2` and `v1.1.2`
+- Exact release tags: `1.1.4` and `v1.1.4`
 - Beta test tag: `beta` for both app and agent; see
   [ComposeBastion Beta](beta-release.md).
 - Moving `main` alias, stable-only `latest`, and full-commit `sha-*` indexes
