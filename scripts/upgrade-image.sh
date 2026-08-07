@@ -45,18 +45,26 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-[ -n "$TARGET_VERSION" ] && [ "$PAIR_COUNT" -ge 1 ] || usage
+if [ -z "$TARGET_VERSION" ] || [ "$PAIR_COUNT" -lt 1 ]; then usage; fi
 case "$TARGET_VERSION" in *[!A-Za-z0-9._-]*|'') printf '%s\n' 'Version contains unsupported characters.' >&2; exit 64 ;; esac
 WORKING_DIRECTORY="$(pwd -P)" || exit 1
 ENV_PARENT="$(cd "$(dirname "$ENV_FILE")" 2>/dev/null && pwd -P)" \
   || { printf 'Environment file parent is unavailable: %s\n' "$ENV_FILE" >&2; exit 64; }
 ENV_FILE="$ENV_PARENT/$(basename "$ENV_FILE")"
-[ -f "$ENV_FILE" ] && [ ! -L "$ENV_FILE" ] || { printf 'Environment file must be a regular, non-symlink file: %s\n' "$ENV_FILE" >&2; exit 64; }
+if [ ! -f "$ENV_FILE" ] || [ -L "$ENV_FILE" ]; then
+  printf 'Environment file must be a regular, non-symlink file: %s\n' "$ENV_FILE" >&2
+  exit 64
+fi
 
 CURRENT_COMPOSE_ARGS=
 TARGET_COMPOSE_ARGS=
 VALIDATED_PAIR_LIST=
 VALIDATED_FILES=
+VALIDATED_IDENTITIES=
+file_identity() {
+  if stat -Lc '%d:%i' -- "$1" 2>/dev/null; then return 0; fi
+  stat -f '%d:%i' "$1" 2>/dev/null
+}
 OLD_IFS=$IFS
 IFS='
 '
@@ -69,18 +77,30 @@ for pair in $PAIR_LIST; do
     case "$candidate_file" in -*) printf 'Compose file names must not begin with a dash: %s\n' "$candidate_file" >&2; exit 64 ;; esac
     candidate_argument_parent="$(dirname "$candidate_file")"
     case "$candidate_argument_parent" in .|"$WORKING_DIRECTORY") ;; *) printf 'Compose file must be a direct child of the working directory: %s\n' "$candidate_file" >&2; exit 64 ;; esac
-    [ -f "$candidate_file" ] && [ ! -L "$candidate_file" ] || { printf 'Compose file must be a regular, non-symlink file: %s\n' "$candidate_file" >&2; exit 64; }
+    if [ ! -f "$candidate_file" ] || [ -L "$candidate_file" ]; then
+      printf 'Compose file must be a regular, non-symlink file: %s\n' "$candidate_file" >&2
+      exit 64
+    fi
     candidate_parent="$(cd "$(dirname "$candidate_file")" && pwd -P)" || exit 64
     [ "$candidate_parent" = "$WORKING_DIRECTORY" ] || { printf 'Compose file must be a direct child of the working directory: %s\n' "$candidate_file" >&2; exit 64; }
     candidate_name=$(basename "$candidate_file")
     for existing_file in $VALIDATED_FILES; do
-      if [ "$candidate_name" = "$existing_file" ] || [ "$candidate_file" -ef "$existing_file" ]; then
+      if [ "$candidate_name" = "$existing_file" ]; then
+        printf 'Compose files must be unique and must not alias another current or target file: %s\n' "$candidate_file" >&2
+        exit 64
+      fi
+    done
+    candidate_identity="$(file_identity "$candidate_file")" || exit 64
+    for existing_identity in $VALIDATED_IDENTITIES; do
+      if [ "$candidate_identity" = "$existing_identity" ]; then
         printf 'Compose files must be unique and must not alias another current or target file: %s\n' "$candidate_file" >&2
         exit 64
       fi
     done
     VALIDATED_FILES="${VALIDATED_FILES}${VALIDATED_FILES:+
 }$candidate_name"
+    VALIDATED_IDENTITIES="${VALIDATED_IDENTITIES}${VALIDATED_IDENTITIES:+
+}$candidate_identity"
   done
   CURRENT_COMPOSE_ARGS="$CURRENT_COMPOSE_ARGS -f $current_name"
   TARGET_COMPOSE_ARGS="$TARGET_COMPOSE_ARGS -f $target_name"
@@ -305,13 +325,13 @@ IFS=$OLD_IFS
 
 current_app_id="$(container_id app)"
 current_worker_id="$(container_id worker)"
-[ -n "$current_app_id" ] && [ -n "$current_worker_id" ] || fail_update prior_image_identity 1
+if [ -z "$current_app_id" ] || [ -z "$current_worker_id" ]; then fail_update prior_image_identity 1; fi
 PREVIOUS_APP_IMAGE_ID="$(inspect_value "$current_app_id" '{{.Image}}')"
 PREVIOUS_WORKER_IMAGE_ID="$(inspect_value "$current_worker_id" '{{.Image}}')"
 PREVIOUS_APP_VERSION="$(inspect_value "$current_app_id" '{{ index .Config.Labels "org.opencontainers.image.version" }}')"
 PREVIOUS_WORKER_VERSION="$(inspect_value "$current_worker_id" '{{ index .Config.Labels "org.opencontainers.image.version" }}')"
 case "$PREVIOUS_APP_IMAGE_ID:$PREVIOUS_WORKER_IMAGE_ID" in sha256:*:sha256:*) ;; *) fail_update prior_image_identity 1 ;; esac
-[ -n "$PREVIOUS_APP_VERSION" ] && [ "$PREVIOUS_APP_VERSION" = "$PREVIOUS_WORKER_VERSION" ] || fail_update prior_image_identity 1
+if [ -z "$PREVIOUS_APP_VERSION" ] || [ "$PREVIOUS_APP_VERSION" != "$PREVIOUS_WORKER_VERSION" ]; then fail_update prior_image_identity 1; fi
 
 {
   printf 'services:\n'
@@ -344,7 +364,7 @@ service_image_from_config() {
 }
 candidate_app_ref="$(service_image_from_config app)"
 candidate_worker_ref="$(service_image_from_config worker)"
-[ -n "$candidate_app_ref" ] && [ -n "$candidate_worker_ref" ] || fail_update candidate_image_identity 1
+if [ -z "$candidate_app_ref" ] || [ -z "$candidate_worker_ref" ]; then fail_update candidate_image_identity 1; fi
 CANDIDATE_APP_IMAGE_ID="$("$DOCKER_BIN" image inspect --format '{{.Id}}' "$candidate_app_ref" 2>/dev/null || true)"
 CANDIDATE_WORKER_IMAGE_ID="$("$DOCKER_BIN" image inspect --format '{{.Id}}' "$candidate_worker_ref" 2>/dev/null || true)"
 case "$CANDIDATE_APP_IMAGE_ID:$CANDIDATE_WORKER_IMAGE_ID" in sha256:*:sha256:*) ;; *) fail_update candidate_image_identity 1 ;; esac

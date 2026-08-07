@@ -290,7 +290,6 @@ export async function reconcileManagedDatabase({
       receiptFilesystem
     );
     await legacyClient.query("COMMIT");
-    transactionStarted = false;
   } catch {
     if (transactionStarted) await legacyClient?.query("ROLLBACK").catch(() => undefined);
     throw new Error(

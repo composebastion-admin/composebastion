@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { access, chmod, lstat, mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import { access, lstat, mkdir, open, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -540,6 +541,21 @@ function validateScenarioManifest() {
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+async function readRegularFileNoFollow(filePath, { expectedMode, label = "acceptance file" } = {}) {
+  const handle = await open(filePath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  try {
+    const metadata = await handle.stat();
+    assert(metadata.isFile(), `${label} is not a regular file`);
+    if (expectedMode !== undefined) {
+      assert((metadata.mode & 0o777) === expectedMode,
+        `${label} mode is ${(metadata.mode & 0o777).toString(8)}, expected ${expectedMode.toString(8)}`);
+    }
+    return await handle.readFile("utf8");
+  } finally {
+    await handle.close();
+  }
 }
 
 function markNonqualifying(reason) {
@@ -2759,7 +2775,10 @@ async function upgradeScenario(baseline) {
         targetVersion: candidateVersion
       }
     });
-    const environmentBeforeFailure = await readFile(managerEnvPath, "utf8");
+    const environmentBeforeFailure = await readRegularFileNoFollow(managerEnvPath, {
+      expectedMode: 0o600,
+      label: "pre-upgrade manager environment"
+    });
     await writeFile(forcedFailureMarker, "candidate-only health failure\n", { mode: 0o600 });
     const failedStart = await api("/api/self-update/start", {
       method: "POST",
@@ -2783,10 +2802,11 @@ async function upgradeScenario(baseline) {
     assert(failedJob.data.job.result?.outcome?.status === "failed"
       && failedJob.data.job.result?.outcome?.stage === "verification",
     "bridge updater failure API job is missing its authoritative outcome");
-    assert(await readFile(managerEnvPath, "utf8") === environmentBeforeFailure,
+    assert(await readRegularFileNoFollow(managerEnvPath, {
+      expectedMode: 0o600,
+      label: "rolled-back manager environment"
+    }) === environmentBeforeFailure,
       "automatic rollback did not restore the exact pre-upgrade environment");
-    assert(((await lstat(managerEnvPath)).mode & 0o777) === 0o600,
-      "automatic rollback did not restore the exact mode-0600 environment protection");
     const expectedTransition = baseline.expectedCredentialTransition;
     const expectedEnvironmentAction = baseline.expectedEnvironmentAction;
     assert((await readFile(failedLogPath, "utf8")).includes(
@@ -2833,11 +2853,10 @@ async function upgradeScenario(baseline) {
     }, { attempts: 120, delayMs: 1_000 });
     assert(successfulJob.result?.outcome?.status === "passed",
       "successful updater API job is missing its authoritative outcome");
-    const canonicalEnvironment = await readFile(managerEnvPath, "utf8");
-    const finalManagerEnvironment = await lstat(managerEnvPath);
-    assert(finalManagerEnvironment.isFile() && !finalManagerEnvironment.isSymbolicLink()
-      && (finalManagerEnvironment.mode & 0o777) === 0o600,
-      "successful updater did not leave a protected mode-0600 environment file");
+    const canonicalEnvironment = await readRegularFileNoFollow(managerEnvPath, {
+      expectedMode: 0o600,
+      label: "successful manager environment"
+    });
     assert((await readFile(successfulLogPath, "utf8")).includes(
       `COMPOSEBASTION_DATABASE_CREDENTIAL_TRANSITION=${expectedTransition}`
     ), "successful updater log does not record the candidate preparation transition");
@@ -2886,7 +2905,10 @@ async function upgradeScenario(baseline) {
       "backup ownership preparation changed an external symlink target"
     );
     assert(
-      await readFile(externalOwnershipTarget, "utf8") === "external ownership must remain unchanged\n",
+      await readRegularFileNoFollow(externalOwnershipTarget, {
+        expectedMode: 0o600,
+        label: "external ownership target"
+      }) === "external ownership must remain unchanged\n",
       "backup ownership preparation overwrote an external symlink target"
     );
     sessionCookie = "";

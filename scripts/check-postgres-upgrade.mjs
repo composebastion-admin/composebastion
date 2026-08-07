@@ -21,7 +21,6 @@ const replacementPassword = "replacement-composebastion-password";
 const transitionDirectory = mkdtempSync(path.join(os.tmpdir(), "composebastion-postgres-transition-"));
 const composeConfigPath = path.join(transitionDirectory, "compose-config.json");
 const environmentProbePath = path.join(transitionDirectory, "source-env-probe.json");
-const transitionStatePath = path.join(transitionDirectory, "database-transition.json");
 const storageHelperDirectory = path.join(transitionDirectory, "storage-helper");
 const storageHelperPath = path.join(storageHelperDirectory, "composebastion-prepare-storage");
 
