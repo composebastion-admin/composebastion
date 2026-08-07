@@ -2478,9 +2478,10 @@ function renderUpgradeEnvironment(values) {
   }).join("\n")}\n`;
 }
 
-async function waitForSelfUpdateOutcome(outcomePath, expectedStatus) {
+async function waitForSelfUpdateOutcome(outcomePath, expectedStatus, readOutcome) {
+  assert(typeof readOutcome === "function", "self-update outcome reader is required");
   return retry(`self-update outcome ${path.basename(outcomePath)}`, async () => {
-    const contents = await readFile(outcomePath, "utf8");
+    const contents = await readOutcome(outcomePath, "self-update outcome");
     const outcome = Object.fromEntries(contents.trim().split(/\r?\n/).map((line) => {
       const separator = line.indexOf("=");
       assert(separator > 0, `invalid updater outcome line ${line}`);
@@ -2528,6 +2529,43 @@ async function upgradeScenario(baseline) {
   const scenarioCompose = (env, args, options = {}) => (
     upgradeCompose(project, env, publicComposeFile, args, options)
   );
+  const readProtectedManagerFile = async (filePath, label) => {
+    const resolvedManagerDir = path.resolve(managerDir);
+    const resolvedFilePath = path.resolve(filePath);
+    assert(
+      path.dirname(resolvedFilePath) === resolvedManagerDir,
+      `${label} is not a direct child of the manager directory`
+    );
+    const managerDirectory = await lstat(resolvedManagerDir);
+    assert(
+      managerDirectory.isDirectory() && !managerDirectory.isSymbolicLink(),
+      "upgrade manager directory is not a real directory"
+    );
+    const fileName = path.basename(resolvedFilePath);
+    const candidateAppId = report.candidateImages?.app?.id;
+    assert(candidateAppId, `${label} reader is missing the candidate app image`);
+    const readerProgram = [
+      "const fs=require('node:fs');",
+      "const name=process.argv[1];",
+      "if(!name||name==='.'||name==='..'||name.includes('/'))process.exit(2);",
+      "if(typeof fs.constants.O_NOFOLLOW!=='number')process.exit(3);",
+      "const fd=fs.openSync('/manager/'+name,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW);",
+      "try{",
+      "const s=fs.fstatSync(fd);",
+      "if(!s.isFile()||(s.mode&0o777)!==0o600)process.exit(4);",
+      "process.stdout.write(fs.readFileSync(fd,'utf8'));",
+      "}finally{fs.closeSync(fd);}"
+    ].join("");
+    const result = await run("docker", [
+      "run", "--rm", "--user", "0:0", "--network", "none", "--read-only",
+      "--cap-drop", "ALL", "--cap-add", "DAC_READ_SEARCH",
+      "--security-opt", "no-new-privileges=true",
+      "--volume", `${resolvedManagerDir}:/manager:ro`,
+      candidateAppId,
+      "node", "-e", readerProgram, fileName
+    ]);
+    return result.stdout;
+  };
   await mkdir(oldEnv.COMPOSEBASTION_BACKUP_DIR, { recursive: true });
   activeProject = project;
   activeEnv = oldEnv;
@@ -2775,10 +2813,10 @@ async function upgradeScenario(baseline) {
         targetVersion: candidateVersion
       }
     });
-    const environmentBeforeFailure = await readRegularFileNoFollow(managerEnvPath, {
-      expectedMode: 0o600,
-      label: "pre-upgrade manager environment"
-    });
+    const environmentBeforeFailure = await readProtectedManagerFile(
+      managerEnvPath,
+      "pre-upgrade manager environment"
+    );
     await writeFile(forcedFailureMarker, "candidate-only health failure\n", { mode: 0o600 });
     const failedStart = await api("/api/self-update/start", {
       method: "POST",
@@ -2787,7 +2825,11 @@ async function upgradeScenario(baseline) {
     const failedJobId = failedStart.data.job.id;
     const failedOutcomePath = path.join(managerDir, `.composebastion-self-update-${failedJobId}.outcome`);
     const failedLogPath = path.join(managerDir, `.composebastion-self-update-${failedJobId}.log`);
-    const failedOutcome = await waitForSelfUpdateOutcome(failedOutcomePath, "failed");
+    const failedOutcome = await waitForSelfUpdateOutcome(
+      failedOutcomePath,
+      "failed",
+      readProtectedManagerFile
+    );
     assert(failedOutcome.stage === "verification" && failedOutcome.rollback === "succeeded",
       `forced updater failure reported stage=${failedOutcome.stage} rollback=${failedOutcome.rollback}`);
     await waitForApiVersion(acceptanceUpgradeBridge.version);
@@ -2802,17 +2844,18 @@ async function upgradeScenario(baseline) {
     assert(failedJob.data.job.result?.outcome?.status === "failed"
       && failedJob.data.job.result?.outcome?.stage === "verification",
     "bridge updater failure API job is missing its authoritative outcome");
-    assert(await readRegularFileNoFollow(managerEnvPath, {
-      expectedMode: 0o600,
-      label: "rolled-back manager environment"
-    }) === environmentBeforeFailure,
+    assert(await readProtectedManagerFile(
+      managerEnvPath,
+      "rolled-back manager environment"
+    ) === environmentBeforeFailure,
       "automatic rollback did not restore the exact pre-upgrade environment");
     const expectedTransition = baseline.expectedCredentialTransition;
     const expectedEnvironmentAction = baseline.expectedEnvironmentAction;
-    assert((await readFile(failedLogPath, "utf8")).includes(
+    const failedLog = await readProtectedManagerFile(failedLogPath, "failed updater log");
+    assert(failedLog.includes(
       `COMPOSEBASTION_DATABASE_CREDENTIAL_TRANSITION=${expectedTransition}`
     ), "failed updater log does not record the candidate preparation transition");
-    assert((await readFile(failedLogPath, "utf8")).includes(
+    assert(failedLog.includes(
       `COMPOSEBASTION_DATABASE_ENVIRONMENT_ACTION=${expectedEnvironmentAction}`
     ), "failed updater log does not record the raw environment action");
     await assertManagedCredential(baseline.rollbackManagedCredential, `failed ${baseline.version} rollback`);
@@ -2838,7 +2881,11 @@ async function upgradeScenario(baseline) {
     const successfulJobId = successfulStart.data.job.id;
     const successfulOutcomePath = path.join(managerDir, `.composebastion-self-update-${successfulJobId}.outcome`);
     const successfulLogPath = path.join(managerDir, `.composebastion-self-update-${successfulJobId}.log`);
-    const successfulOutcome = await waitForSelfUpdateOutcome(successfulOutcomePath, "passed");
+    const successfulOutcome = await waitForSelfUpdateOutcome(
+      successfulOutcomePath,
+      "passed",
+      readProtectedManagerFile
+    );
     assert(successfulOutcome.stage === "complete" && successfulOutcome.rollback === "not_required",
       "successful bridge-to-candidate updater outcome is incomplete");
     activeEnv = newEnv;
@@ -2853,14 +2900,18 @@ async function upgradeScenario(baseline) {
     }, { attempts: 120, delayMs: 1_000 });
     assert(successfulJob.result?.outcome?.status === "passed",
       "successful updater API job is missing its authoritative outcome");
-    const canonicalEnvironment = await readRegularFileNoFollow(managerEnvPath, {
-      expectedMode: 0o600,
-      label: "successful manager environment"
-    });
-    assert((await readFile(successfulLogPath, "utf8")).includes(
+    const canonicalEnvironment = await readProtectedManagerFile(
+      managerEnvPath,
+      "successful manager environment"
+    );
+    const successfulLog = await readProtectedManagerFile(
+      successfulLogPath,
+      "successful updater log"
+    );
+    assert(successfulLog.includes(
       `COMPOSEBASTION_DATABASE_CREDENTIAL_TRANSITION=${expectedTransition}`
     ), "successful updater log does not record the candidate preparation transition");
-    assert((await readFile(successfulLogPath, "utf8")).includes(
+    assert(successfulLog.includes(
       `COMPOSEBASTION_DATABASE_ENVIRONMENT_ACTION=${expectedEnvironmentAction}`
     ), "successful updater log does not record the raw environment action");
     assert(canonicalEnvironment.includes(`COMPOSEBASTION_VERSION=${candidateVersion}\n`),
