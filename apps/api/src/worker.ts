@@ -21,11 +21,14 @@ import {
   JOB_LEASE_MAINTENANCE_INTERVAL_MS,
   JobLeaseLostError,
   markJobProgressStep,
+  markSelfUpdateHandoffPending,
   markWorkerDraining,
   markWorkerStopped,
   recoverExpiredJobs,
   registerWorkerInstance,
   renewJobLease,
+  shouldResumeWorkerClaimsAfterReconciliation,
+  shouldStopWorkerClaimsAfterHandoff,
   updateJobProgress,
   withActiveJobLeaseTransaction,
   WORKER_HEARTBEAT_INTERVAL_MS,
@@ -35,14 +38,18 @@ import {
 import { startRedisWakeupSubscription, type RedisWakeupSubscription } from "./services/redisWakeups.js";
 import { runDueBackupSchedules } from "./services/backupSchedules.js";
 import { markRecoveryDrillResult, runDueRecoverySchedules, runMigrationExecute, runRecoveryCreate, runRecoveryRestore, runRecoveryVerify } from "./services/recoveryCenter.js";
-import { runSelfUpdate } from "./services/selfUpdate.js";
+import {
+  confirmBridgeSelfUpdateHandoff,
+  reconcileBridgeSelfUpdateHandoffs,
+  runSelfUpdate,
+} from "./services/selfUpdate.js";
 import { runStackUpdatePolicies } from "./services/stackUpdatePolicies.js";
 import { safeErrorMessage, workerJobLogFields } from "./services/operationLogs.js";
 import { createNonOverlappingTask } from "./services/nonOverlappingTask.js";
 import { APP_VERSION } from "./services/version.js";
 
 let processing = false;
-let acceptingJobs = true;
+let acceptingJobs = false;
 let shuttingDown = false;
 let workerRegistered = false;
 const workerId = randomUUID();
@@ -96,6 +103,7 @@ async function processAvailableJobs() {
 
       let actionForFailure: { type: string; payload: Record<string, unknown> } | null = null;
       let activeStepForFailure: string | undefined;
+      let selfUpdateHandoffPending = false;
       const jobStartedAtMs = Date.now();
       try {
         console.info("worker.job", workerJobLogFields(job, "running", jobStartedAtMs));
@@ -163,24 +171,44 @@ async function processAvailableJobs() {
             }
           });
         } else if (action.type === "system.self_update") {
-          result = await runSelfUpdate(action.hostId, action.payload, {
+          const handoff = await runSelfUpdate(action.hostId, action.payload, {
+            jobId: job.id,
             onProgress: async (stepId, detail) => {
               await executionFence.assertActive();
               activeStepForFailure = stepId;
               await markJobProgressStep(job.id, action.type, stepId, detail, lease);
             }
           });
+          result = handoff;
+          const handoffPersisted = await markSelfUpdateHandoffPending(job.id, handoff, lease);
+          if (!handoffPersisted) throw new JobLeaseLostError(job.id);
+          selfUpdateHandoffPending = true;
+          if (shouldStopWorkerClaimsAfterHandoff(action.type, selfUpdateHandoffPending)) acceptingJobs = false;
+          leaseRenewal.stop();
+          clearInterval(leaseRenewalTimer);
+          await confirmBridgeSelfUpdateHandoff(action.hostId, handoff).catch((handoffError) => {
+            console.warn("worker.self_update.handoff_confirmation", {
+              jobId: job.id,
+              error: safeErrorMessage(handoffError),
+              gatePath: handoff.gatePath,
+              outcomePath: handoff.outcomePath
+            });
+          });
         } else {
           await executionFence.assertActive();
           result = await executeDockerAction(action, executionFence);
         }
-        await updateJobProgress(job.id, buildJobProgress(action.type, "completed"), lease);
-        const completed = await completeJob(job.id, result, lease);
-        if (completed) {
-          console.info("worker.job", workerJobLogFields(job, "completed", jobStartedAtMs));
+        if (selfUpdateHandoffPending) {
+          console.info("worker.job", workerJobLogFields(job, "running", jobStartedAtMs));
         } else {
-          leaseLost = true;
-          console.warn("worker.job.lease_lost", { jobId: job.id, attemptCount: job.attemptCount });
+          await updateJobProgress(job.id, buildJobProgress(action.type, "completed"), lease);
+          const completed = await completeJob(job.id, result, lease);
+          if (completed) {
+            console.info("worker.job", workerJobLogFields(job, "completed", jobStartedAtMs));
+          } else {
+            leaseLost = true;
+            console.warn("worker.job.lease_lost", { jobId: job.id, attemptCount: job.attemptCount });
+          }
         }
       } catch (error) {
         if (actionForFailure?.type === "recovery.restore" && actionForFailure.payload.drill === true && typeof actionForFailure.payload.recoveryPointId === "string") {
@@ -295,6 +323,8 @@ async function main() {
   await registerWorkerInstance({ id: workerId, version: APP_VERSION, hostname: hostname() });
   workerRegistered = true;
   await cleanupWorkerInstances();
+  const startupReconciliation = await reconcileBridgeSelfUpdateHandoffs();
+  if (!shuttingDown) acceptingJobs = startupReconciliation.pending === 0;
   await recoverExpiredJobs();
 
   redisWakeups = startRedisWakeupSubscription({
@@ -308,6 +338,15 @@ async function main() {
   schedule("lease-recovery", JOB_LEASE_MAINTENANCE_INTERVAL_MS, async () => {
     const recovered = await recoverExpiredJobs();
     if (recovered.requeued || recovered.failed) console.warn("worker.jobs.recovered", recovered);
+  });
+  schedule("self-update-reconciliation", JOB_LEASE_MAINTENANCE_INTERVAL_MS, async () => {
+    const reconciled = await reconcileBridgeSelfUpdateHandoffs();
+    if (reconciled.pending > 0) {
+      acceptingJobs = false;
+    } else if (!shuttingDown && !acceptingJobs && shouldResumeWorkerClaimsAfterReconciliation(reconciled)) {
+      acceptingJobs = true;
+    }
+    if (reconciled.completed || reconciled.failed) console.info("worker.self_update.reconciled", reconciled);
   });
   schedule("host-checks", env.HOST_CHECK_INTERVAL_MS, enqueueHostChecks);
   schedule("inventory-syncs", env.INVENTORY_SYNC_INTERVAL_MS, enqueueInventorySyncs);

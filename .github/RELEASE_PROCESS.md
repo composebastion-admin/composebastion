@@ -6,12 +6,20 @@ deployment, and runtime Docker images.
 
 ## Branches
 
-- `main` is the current stable/public branch and the branch targeted by push CI.
-- Short-lived feature or `codex/` branches should branch from `main`.
-- Use `dev` for active integration work only if the maintainer establishes that
-  branch for a release cycle.
-- Use `beta` for staging/beta test releases only if the maintainer establishes
-  that branch. Promote to `main` only after smoke testing passes.
+- `main`, `beta`, and `dev` are the only persistent branches.
+- Normal changes use a short-lived `codex/*` branch and a pull request into
+  `dev`. The branch must be deleted when the pull request is merged or closed.
+- Promote releases with direct `dev` to `beta` and `beta` to `main` pull
+  requests. Do not create a separate promotion branch.
+- A compatibility or security maintenance release for the current stable line
+  may use a short-lived pull request directly into `main`.
+- Never force-push or directly push changes to a persistent branch. Historical
+  version tags and GitHub releases are immutable artifacts, not branches, and
+  are never removed by branch cleanup.
+- Automated dependency pull requests are disabled to prevent persistent bot
+  branches. Keep vulnerability alerts, CodeQL, secret scanning, and
+  `npm audit --audit-level=high` enabled; review dependency alerts weekly and
+  batch approved updates through a short-lived `codex/*` pull request.
 
 ## Required Checks
 

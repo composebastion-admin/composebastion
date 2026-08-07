@@ -87,3 +87,6 @@ acceptance-runtime
 **/*.log
 npm-debug.log
 **/npm-debug.log
+.composebastion-image-upgrade-*
+.composebastion-source-upgrade-*
+.composebastion-self-update-*

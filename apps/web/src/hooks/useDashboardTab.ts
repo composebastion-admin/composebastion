@@ -1,5 +1,5 @@
 import { useCallback, useEffect } from "react";
-import { useNavigate, useParams } from "react-router";
+import { useNavigate, useParams } from "react-router-dom";
 import type { Tab } from "../lib/navigation.js";
 import { resolveAuthorizedTab } from "../lib/authorization.js";
 import { tabFromPath, tabPath, tabRequiresHost } from "../lib/tabRoute.js";

@@ -1,5 +1,29 @@
 # Changelog
 
+## [v1.1.3] - Unreleased
+
+### Fixed
+
+- Added a compatibility-only, rollback-safe self-update bridge for the supported
+  1.1.3 to 1.2 transition. Runtime identity, Compose services, database behavior,
+  migrations, and product behavior remain unchanged from v1.1.2. The bridge now
+  keeps the originating API job running until the detached updater's exact
+  outcome is reconciled after app/worker replacement.
+
+### Security
+
+- Refreshed only the dependency versions required for a clean high/critical
+  audit, including Fastify/static routing, concurrent development tooling,
+  PostCSS, URI/router transitives, and the compatible React Router 6 line. The
+  1.1.3 compatibility claim permits these security-only dependency changes; it
+  does not permit UID/GID, Compose, migration, database, or product changes.
+- The release gate is zero high or critical npm findings. Two moderate React
+  Router 6 advisories remain recorded: the bridge UI builds every `Link` and
+  `navigate` destination from enumerated internal dashboard tabs, limiting the
+  open-redirect path, and it is a client-only `BrowserRouter` application with
+  no server-side hydration path. The advisories remain visible in `npm audit`
+  and are deferred to the post-bridge React Router major upgrade.
+
 ## [v1.1.2] - 2026-07-18
 
 ### Added

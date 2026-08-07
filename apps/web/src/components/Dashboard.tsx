@@ -25,7 +25,7 @@ import { getScopedHostIds, jobLabel, roleLabel, sleep } from "../lib/hostScope.j
 import { hostlessTabs, type HostScope } from "../lib/navigation.js";
 import type { Theme } from "../lib/theme.js";
 import { tabPath } from "../lib/tabRoute.js";
-import { Link } from "react-router";
+import { Link } from "react-router-dom";
 import { useToast } from "./ToastProvider.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
 import { HostForm } from "./dashboard/HostForm.js";
