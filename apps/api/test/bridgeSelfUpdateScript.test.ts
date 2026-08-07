@@ -295,14 +295,13 @@ describe("1.1.3 bridge manager-host lock", () => {
 
 describe("1.1.3 bridge recovery artifact exclusions", () => {
   it("excludes every upgrade recovery family from Git and Docker contexts", async () => {
-    const patterns = [
-      ".composebastion-image-upgrade-*",
-      ".composebastion-source-upgrade-*",
-      ".composebastion-self-update-*"
+    const exclusions = [
+      [".composebastion-image-upgrade-*", ".composebastion-image-upgrade-job.recovery"],
+      [".composebastion-source-upgrade-*", ".composebastion-source-upgrade-job.recovery"],
+      [".composebastion-self-update-*", ".composebastion-self-update-job.recovery"]
     ];
     const dockerIgnore = await readFile(path.join(repositoryRoot, ".dockerignore"), "utf8");
-    for (const pattern of patterns) {
-      const representative = pattern.replace("*", "job.recovery");
+    for (const [pattern, representative] of exclusions) {
       await expect(execFileAsync("git", ["check-ignore", "--no-index", "--quiet", representative], {
         cwd: repositoryRoot
       })).resolves.toBeTruthy();

@@ -211,7 +211,9 @@ PREVIOUS_WORKER_IMAGE_ID="$("$DOCKER_BIN" inspect --format '{{.Image}}' "$curren
 PREVIOUS_APP_IMAGE_REF="$("$DOCKER_BIN" inspect --format '{{.Config.Image}}' "$current_app_id" 2>/dev/null || true)"
 PREVIOUS_WORKER_IMAGE_REF="$("$DOCKER_BIN" inspect --format '{{.Config.Image}}' "$current_worker_id" 2>/dev/null || true)"
 case "$PREVIOUS_APP_IMAGE_ID:$PREVIOUS_WORKER_IMAGE_ID" in sha256:*:sha256:*) ;; *) fail_update prior_image_identity 1 ;; esac
-[ -n "$PREVIOUS_APP_VERSION" ] && [ -n "$PREVIOUS_WORKER_VERSION" ] || fail_update prior_image_identity 1
+if [ -z "$PREVIOUS_APP_VERSION" ] || [ -z "$PREVIOUS_WORKER_VERSION" ]; then
+  fail_update prior_image_identity 1
+fi
 
 {
   printf 'services:\n'
@@ -245,7 +247,9 @@ config_yaml="${UPGRADE_STATE_DIR}/compose-config.yml"
 candidate_app_ref="$(awk '$0 == "  app:" { active=1; next } active && /^  [^ ]/ { exit } active && /^    image: / { sub(/^    image: /, ""); print; exit }' "$config_yaml")"
 candidate_worker_ref="$(awk '$0 == "  worker:" { active=1; next } active && /^  [^ ]/ { exit } active && /^    image: / { sub(/^    image: /, ""); print; exit }' "$config_yaml")"
 rm -f -- "$config_yaml"
-[ -n "$candidate_app_ref" ] && [ -n "$candidate_worker_ref" ] || fail_update candidate_image_identity 1
+if [ -z "$candidate_app_ref" ] || [ -z "$candidate_worker_ref" ]; then
+  fail_update candidate_image_identity 1
+fi
 CANDIDATE_APP_IMAGE_ID="$("$DOCKER_BIN" image inspect --format '{{.Id}}' "$candidate_app_ref" 2>/dev/null || true)"
 CANDIDATE_WORKER_IMAGE_ID="$("$DOCKER_BIN" image inspect --format '{{.Id}}' "$candidate_worker_ref" 2>/dev/null || true)"
 case "$CANDIDATE_APP_IMAGE_ID:$CANDIDATE_WORKER_IMAGE_ID" in sha256:*:sha256:*) ;; *) fail_update candidate_image_identity 1 ;; esac
