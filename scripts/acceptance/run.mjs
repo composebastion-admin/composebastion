@@ -429,6 +429,7 @@ function composeWithFiles(project, env, files, args, options = {}) {
 async function inspectComposeServiceImage(composeAction, service, {
   expectedId,
   expectedReference,
+  expectedReferences,
   expectedRevision,
   expectedCreated
 } = {}) {
@@ -440,8 +441,12 @@ async function inspectComposeServiceImage(composeAction, service, {
   const imageId = detail.Image;
   const configuredImage = detail.Config?.Image ?? null;
   if (expectedId) assert(imageId === expectedId, `${service} uses image ${imageId}, expected ${expectedId}`);
-  if (expectedReference) {
-    assert(configuredImage === expectedReference, `${service} is configured with ${configuredImage}, expected ${expectedReference}`);
+  const allowedReferences = expectedReferences ?? (expectedReference ? [expectedReference] : []);
+  if (allowedReferences.length > 0) {
+    assert(
+      allowedReferences.includes(configuredImage),
+      `${service} is configured with ${configuredImage}, expected one of ${allowedReferences.join(", ")}`
+    );
   }
   const image = JSON.parse((await run("docker", ["image", "inspect", imageId, "--format", "{{json .}}"])).stdout);
   const labels = image.Config?.Labels ?? {};
@@ -2809,12 +2814,18 @@ async function upgradeScenario(baseline) {
     imageBindings.bridgeApp = await inspectComposeServiceImage(
       (args, options) => scenarioCompose(bridgeEnv, args, options),
       "app",
-      { expectedId: bridgeImageEvidence.id, expectedReference: bridgeImageEvidence.id }
+      {
+        expectedId: bridgeImageEvidence.id,
+        expectedReferences: [bridgeRegistryReference, bridgeImageEvidence.id]
+      }
     );
     imageBindings.bridgeWorker = await inspectComposeServiceImage(
       (args, options) => scenarioCompose(bridgeEnv, args, options),
       "worker",
-      { expectedId: bridgeImageEvidence.id, expectedReference: bridgeImageEvidence.id }
+      {
+        expectedId: bridgeImageEvidence.id,
+        expectedReferences: [bridgeRegistryReference, bridgeImageEvidence.id]
+      }
     );
     const dependencyContainerIds = {
       postgres: (await scenarioCompose(bridgeEnv, ["ps", "-q", "postgres"])).stdout.trim(),
