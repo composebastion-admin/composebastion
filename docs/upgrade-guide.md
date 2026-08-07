@@ -8,7 +8,7 @@ every production update.
 - `/api/v1` is the public compatibility boundary for V1.
 - Use additive API changes whenever possible.
 - Keep app and agent images on the same release when possible. The latest
-  published release is `v1.1.4`. It is the compatibility bridge for qualifying 1.2.
+  published release is `v1.1.5`. It is the compatibility bridge for qualifying 1.2.
 - New database migrations must use the next clean `NNN_snake_case.sql` filename.
   The existing duplicate `018_` migration prefix is a published legacy exception;
   do not create new duplicates.
@@ -35,13 +35,13 @@ Admin -> Operations -> ComposeBastion self-update is available for disposable
 evaluation and homelab image installs managed over SSH. It currently accepts
 `latest` or a SemVer tag and does not consume a durable signed app/agent
 release-pair manifest, so it is not the production-qualified update path.
-The release-qualified in-app route is `1.0.6/1.1.2/1.1.3 -> 1.1.4 -> 1.2`.
-First update explicitly to `1.1.4`; do not target 1.2 directly from an older
+The release-qualified in-app route is `1.0.6/1.1.2/1.1.3/1.1.4 -> 1.1.5 -> 1.2`.
+First update explicitly to `1.1.5`; do not target 1.2 directly from an older
 release. The compatibility-only bridge keeps the existing pre-1.2 Compose file,
 then uses the pulled 1.2 image to prepare storage and the exact managed legacy
 credential before app and worker start. It records job-specific protected
-rollback state and recreates the immutable 1.1.4 app/worker images with
-`--no-deps` if startup or verification fails. Keep `latest` on 1.1.4 until the
+rollback state and recreates the immutable 1.1.5 app/worker images with
+`--no-deps` if startup or verification fails. Keep `latest` on 1.1.5 until the
 bridge rollout and both qualified hops are complete.
 Production, source-checkout, and agent-host updates use the manual pinned
 commands below.

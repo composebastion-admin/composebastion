@@ -24,7 +24,7 @@ We will review reports as soon as practical.
 ## Supported Versions
 
 Security fixes are expected to target the current `main` branch and the latest
-public release (`v1.1.4`) unless a separate written support agreement applies.
+public release (`v1.1.5`) unless a separate written support agreement applies.
 
 ## Deployment
 

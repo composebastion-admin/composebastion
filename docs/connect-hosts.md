@@ -35,7 +35,7 @@ Recommended SSH host settings:
 The ComposeBastion agent is a small Docker-only command proxy for hosts where you
 prefer not to give the manager direct SSH access. App and agent images are
 published together for each V1 release; keep them on the same release when
-possible. The current manager and agent release is `1.1.4`.
+possible. The current manager and agent release is `1.1.5`.
 
 Use the published image on the target Docker host:
 

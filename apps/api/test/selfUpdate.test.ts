@@ -1,3 +1,7 @@
+import { execFileSync } from "node:child_process";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const getHostForWorker = vi.fn();
@@ -69,6 +73,53 @@ describe("self update service", () => {
     notifyJobQueued.mockResolvedValue(undefined);
   });
 
+  it("creates the detached updater log privately and refuses an existing symlink", async () => {
+    const { buildSelfUpdateLockLaunchScript } = await import("../src/services/selfUpdate.js");
+    const directory = mkdtempSync(join(tmpdir(), "composebastion-update-launch-"));
+
+    try {
+      const scriptPath = join(directory, "update.sh");
+      const logPath = join(directory, "update.log");
+      const lockPath = join(directory, "update.lock");
+      writeFileSync(scriptPath, "#!/bin/sh\nprintf '%s\\n' secure-log\n", { mode: 0o700 });
+      chmodSync(scriptPath, 0o700);
+
+      const launch = buildSelfUpdateLockLaunchScript({
+        jobId: "secure-log",
+        scriptPath,
+        logPath,
+        lockPath
+      });
+      execFileSync("/bin/sh", ["-c", launch], { cwd: directory, stdio: "pipe" });
+
+      let logContents = "";
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        logContents = readFileSync(logPath, "utf8");
+        if (logContents.includes("secure-log")) break;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(logContents).toContain("secure-log");
+      expect(statSync(logPath).mode & 0o777).toBe(0o600);
+
+      const symlinkLogPath = join(directory, "symlink.log");
+      const externalPath = join(directory, "external.txt");
+      const symlinkLockPath = join(directory, "symlink.lock");
+      writeFileSync(externalPath, "unchanged\n", { mode: 0o600 });
+      symlinkSync(externalPath, symlinkLogPath);
+      const symlinkLaunch = buildSelfUpdateLockLaunchScript({
+        jobId: "symlink-log",
+        scriptPath,
+        logPath: symlinkLogPath,
+        lockPath: symlinkLockPath
+      });
+
+      expect(() => execFileSync("/bin/sh", ["-c", symlinkLaunch], { cwd: directory, stdio: "pipe" })).toThrow();
+      expect(readFileSync(externalPath, "utf8")).toBe("unchanged\n");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("writes and starts a detached host-side self-update script", async () => {
     const { runSelfUpdate } = await import("../src/services/selfUpdate.js");
 
@@ -118,7 +169,11 @@ describe("self update service", () => {
     expect(launch).toContain('LOCK_PATH=\'/tmp/composebastion-self-update.lock\'');
     expect(launch).toContain("kill -0");
     expect(launch).toContain("/proc/$existing_owner/cmdline");
+    expect(launch).toContain("umask 077");
+    expect(launch).toContain("set -C");
+    expect(launch).toContain(`exec 3> '/srv/composebastion/.composebastion-self-update-${jobId}.log'`);
     expect(launch).toContain(`nohup '/srv/composebastion/.composebastion-self-update-${jobId}.sh'`);
+    expect(launch).toContain(" >&3 2>&1 < /dev/null");
   });
 
   it("confirms a persisted handoff through its job-specific gate", async () => {

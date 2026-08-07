@@ -99,7 +99,7 @@ for (const baseline of acceptanceUpgradeBaselines) {
       || scenario?.detail?.bridge?.reference !== acceptanceUpgradeBridge.pinnedImage
       || scenario?.detail?.bridge?.repoDigest !== acceptanceUpgradeBridge.pinnedImage) {
     failures.push(
-      `${baseline.scenarioId} is not bound to exact public ${baseline.version} and 1.1.4 bridge image evidence`
+      `${baseline.scenarioId} is not bound to exact public ${baseline.version} and ${acceptanceUpgradeBridge.version} bridge image evidence`
     );
   }
   for (const outcome of ["failed", "successful"]) {

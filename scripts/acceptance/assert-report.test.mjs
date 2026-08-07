@@ -10,6 +10,8 @@ import { acceptanceScenarioManifest } from "./scenario-manifest.mjs";
 import { cleanupEmptyFields, cleanupTrueFields } from "./qualification-policy.mjs";
 import { acceptanceUpgradeBaselines, acceptanceUpgradeBridge } from "./upgrade-baselines.mjs";
 
+const escapedBridgeVersion = acceptanceUpgradeBridge.version.replaceAll(".", "\\.");
+
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const assertionScript = path.join(root, "scripts/acceptance/assert-report.mjs");
 const acceptanceResultsDir = path.join(root, "test-results", "acceptance");
@@ -261,7 +263,7 @@ test("release assertion rejects an upgrade scenario bound to the wrong public im
   scenario.detail.publicImage.repoDigest = acceptanceUpgradeBaselines[1].pinnedImage;
   const result = await assertReport(report);
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /not bound to exact public 1\.1\.2 and 1\.1\.4 bridge image evidence/);
+  assert.match(result.stderr, new RegExp(`not bound to exact public 1\\.1\\.2 and ${escapedBridgeVersion} bridge image evidence`));
 });
 
 test("release assertion rejects an upgrade scenario bound to the wrong bridge digest", async () => {
@@ -271,7 +273,7 @@ test("release assertion rejects an upgrade scenario bound to the wrong bridge di
   scenario.detail.bridge.repoDigest = scenario.detail.bridge.reference;
   const result = await assertReport(report);
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /not bound to exact public 1\.0\.6 and 1\.1\.4 bridge image evidence/);
+  assert.match(result.stderr, new RegExp(`not bound to exact public 1\\.0\\.6 and ${escapedBridgeVersion} bridge image evidence`));
 });
 
 test("release assertion rejects current-stable upgrade without retained-volume rollback proof", async () => {

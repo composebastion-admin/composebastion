@@ -57,7 +57,7 @@ role credential when required. Preserve `.env` and all volumes; neither
 compatibility repair requires a manual database or backup operation.
 
 For an existing 1.0.6 or 1.1.2 homelab image install, first use Admin ->
-Operations to update to the compatibility-only 1.1.4 bridge. From the running
+Operations to update to the compatibility-only 1.1.5 bridge. From the running
 bridge, target this beta. The bridge retains the pre-1.2 Compose file, runs the
 repairs from the pulled candidate image, and retains protected
 credential/image rollback state until verification succeeds. Direct
@@ -115,12 +115,12 @@ Do not include tokens, secrets, `.env` contents, or registry passwords.
 ## Roll back
 
 Export a ComposeBastion configuration backup before testing. To return to the
-compatibility bridge, set both manager and agent versions to `1.1.4`, pull,
+compatibility bridge, set both manager and agent versions to `1.1.5`, pull,
 and recreate the services:
 
 ```dotenv
-COMPOSEBASTION_VERSION=1.1.4
-COMPOSEBASTION_AGENT_VERSION=1.1.4
+COMPOSEBASTION_VERSION=1.1.5
+COMPOSEBASTION_AGENT_VERSION=1.1.5
 ```
 
 Do not run `docker compose down -v`; keep PostgreSQL, Redis, backups, and other
@@ -134,14 +134,14 @@ volumes. The tested rollback leaves migrations `031` through `038` applied:
 - `036`–`038` add analysis revision/digest bindings, encrypted stack
   environment bindings, and clone-deployment job records.
 
-The `1.1.4` app ignores the additive tables and columns while using the same
+The `1.1.5` app ignores the additive tables and columns while using the same
 PostgreSQL, Redis, configuration, backup, and application volumes. Qualification
 verifies readiness and preserved state on that rollback, then re-upgrades those
 same volumes to the candidate. The `032` data normalization is not reversed.
 Keep the pre-upgrade backup for restoring encrypted beta source configuration
 if you return to the beta later.
 
-Before recreating `1.1.4`, restore the saved pre-beta Compose file so Docker
+Before recreating `1.1.5`, restore the saved pre-beta Compose file so Docker
 does not ask the historical image to run beta initializer scripts:
 
 ```bash
