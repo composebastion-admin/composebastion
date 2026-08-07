@@ -8,7 +8,7 @@ every production update.
 - `/api/v1` is the public compatibility boundary for V1.
 - Use additive API changes whenever possible.
 - Keep app and agent images on the same release when possible. The most recent
-  published bridge release is `v1.1.4`.
+  published bridge release is `v1.1.5`.
 - New database migrations must use the next clean `NNN_snake_case.sql` filename.
   The existing duplicate `018_` migration prefix is a published legacy exception;
   do not create new duplicates.
@@ -35,11 +35,11 @@ file, and release mode, then start the update. V1 self-update supports image
 installs only; source checkouts and agent-only manager hosts use the manual
 commands below.
 
-The only qualified 1.2 route is `1.0.6/1.1.2/1.1.3 -> 1.1.4 -> 1.2`. Reach this
+The only qualified 1.2 route is `1.0.6/1.1.2/1.1.3/1.1.4 -> 1.1.5 -> 1.2`. Reach this
 bridge first and confirm app/worker readiness. The bridge then captures the
 immutable running image IDs, prepares the pulled 1.2 candidate through the
 existing Compose file, and automatically restores any changed legacy
-credential plus the exact 1.1.4 images with `--no-deps` if verification fails.
+credential plus the exact 1.1.5 images with `--no-deps` if verification fails.
 Keep every job-specific outcome and recovery artifact until the result is
 confirmed.
 
@@ -47,7 +47,7 @@ Manual image install:
 
 ```bash
 cd ~/composebastion
-export COMPOSEBASTION_VERSION=1.1.4
+export COMPOSEBASTION_VERSION=1.1.5
 docker compose -f docker-compose.image.yml pull
 docker compose -f docker-compose.image.yml up -d
 ```

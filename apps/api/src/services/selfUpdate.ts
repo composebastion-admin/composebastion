@@ -286,6 +286,7 @@ export function buildBridgeSelfUpdateLaunchScript(input: {
   return [
     "#!/bin/sh",
     "set -eu",
+    "umask 077",
     `LOCK_PATH=${shQuote(input.lockPath)}`,
     `JOB_ID=${shQuote(input.jobId)}`,
     `SCRIPT_PATH=${shQuote(input.scriptPath)}`,
@@ -325,7 +326,11 @@ export function buildBridgeSelfUpdateLaunchScript(input: {
     "printf '%s\\n' \"$JOB_ID\" > \"$LOCK_PATH/job\"",
     "printf '%s\\n' \"$SCRIPT_PATH\" > \"$LOCK_PATH/script\"",
     "chmod 700 \"$SCRIPT_PATH\" || { release_lock; exit 1; }",
-    "nohup \"$SCRIPT_PATH\" > \"$LOG_PATH\" 2>&1 < /dev/null & child_pid=$!",
+    "set -C",
+    "if ! exec 3> \"$LOG_PATH\"; then set +C; release_lock; exit 1; fi",
+    "set +C",
+    "nohup \"$SCRIPT_PATH\" >&3 2>&1 < /dev/null & child_pid=$!",
+    "exec 3>&-",
     "owner_tmp=\"$LOCK_PATH/owner.$$\"; printf '%s\\n' \"$child_pid\" > \"$owner_tmp\"; mv -- \"$owner_tmp\" \"$LOCK_PATH/owner\"",
     "printf '%s\\n' \"$child_pid\""
   ].join("\n");

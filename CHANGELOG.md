@@ -1,6 +1,17 @@
 # Changelog
 
-## [v1.1.4] - Unreleased
+## [v1.1.5] - 2026-08-07
+
+### Security
+
+- Create detached updater logs with a restrictive process umask and a
+  no-clobber file descriptor before starting the updater. Recovery can now read
+  the log under its strict mode-0600 contract, while existing files and
+  symlinks are rejected instead of followed or overwritten.
+- The immutable v1.1.4 artifacts remain published for historical recovery, but
+  v1.1.5 is the bridge qualified for the 1.2 transition.
+
+## [v1.1.4] - 2026-08-07
 
 ### Fixed
 
@@ -8,8 +19,7 @@
   restored bridge now proves the exact immutable app/worker images, live API,
   managed database, and connected draining worker before publishing the
   authoritative outcome; full worker readiness resumes after reconciliation.
-- The immutable v1.1.3 artifacts remain published for history, but v1.1.4 is
-  the bridge qualified for the 1.2 transition.
+- The immutable v1.1.3 artifacts remain published for history.
 
 ## [v1.1.3] - 2026-08-07
 
