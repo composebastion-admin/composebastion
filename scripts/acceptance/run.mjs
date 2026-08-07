@@ -1303,9 +1303,11 @@ async function createSshHost() {
     }
   });
   await waitForJob(response.data.job.id, { timeoutMs: 3 * 60_000 });
-  const current = await api(`/api/hosts/${response.data.host.id}`);
-  assert(current.data.host.lastStatus === "online", `SSH host is ${current.data.host.lastStatus}`);
-  return current.data.host;
+  return retry("SSH host online state", async () => {
+    const current = await api(`/api/hosts/${response.data.host.id}`);
+    assert(current.data.host.lastStatus === "online", `SSH host is ${current.data.host.lastStatus}`);
+    return current.data.host;
+  }, { attempts: 60, delayMs: 1_000 });
 }
 
 async function verifyAgentHost() {
@@ -1339,7 +1341,11 @@ async function verifyAgentHost() {
     }
   });
   await waitForJob(created.data.job.id, { timeoutMs: 3 * 60_000 });
-  const current = await api(`/api/hosts/${created.data.host.id}`);
+  const current = await retry("agent host online state", async () => {
+    const result = await api(`/api/hosts/${created.data.host.id}`);
+    assert(result.data.host.lastStatus === "online", `agent host is ${result.data.host.lastStatus}`);
+    return result;
+  }, { attempts: 60, delayMs: 1_000 });
   assert(current.data.host.lastStatus === "online", `agent host is ${current.data.host.lastStatus}`);
   assert(current.data.host.agentVersion === candidateVersion, `manager recorded agent ${current.data.host.agentVersion}`);
   const usage = await api(`/api/hosts/${created.data.host.id}/containers/usage`);
