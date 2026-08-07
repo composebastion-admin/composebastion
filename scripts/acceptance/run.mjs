@@ -2896,9 +2896,11 @@ async function upgradeScenario(baseline) {
       "exec", "-T", "app", "node", "-e",
       "const s=require('node:fs').lstatSync('/data/backups/recovery-points/.pre-1.2-owner');if(s.uid!==1000||s.gid!==1000)process.exit(1)"
     ]);
-    const ownershipLink = await lstat(backupSymlinkPath);
+    await scenarioCompose(newEnv, [
+      "exec", "-T", "app", "node", "-e",
+      "const s=require('node:fs').lstatSync('/data/backups/.composebastion-storage-owner');if(!s.isSymbolicLink())process.exit(1)"
+    ]);
     const externalOwnerAfter = await stat(externalOwnershipTarget);
-    assert(ownershipLink.isSymbolicLink(), "backup ownership preparation replaced a marker-name symlink");
     assert(
       externalOwnerAfter.uid === externalOwnerBefore.uid
         && externalOwnerAfter.gid === externalOwnerBefore.gid,
