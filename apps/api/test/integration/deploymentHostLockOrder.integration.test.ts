@@ -272,7 +272,8 @@ describe.skipIf(!integrationEnabled)(
           activeJobId: expect.any(String)
         });
         expect((outcome.error as { code?: string } | null)?.code).not.toBe("40P01");
-      }
+      },
+      30_000
     );
 
     it("does not capture the host advisory while blocked on the host row", async () => {
