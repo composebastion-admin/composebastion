@@ -1,0 +1,40 @@
+name: Branch Hygiene
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+
+jobs:
+  delete-closed-head:
+    name: Delete closed temporary PR branch
+    if: >-
+      ${{ github.event.pull_request.head.repo.full_name == github.repository
+          && github.event.pull_request.head.ref != 'main'
+          && github.event.pull_request.head.ref != 'beta'
+          && github.event.pull_request.head.ref != 'dev' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete same-repository head ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          case "${HEAD_REF}" in
+            main|beta|dev)
+              echo "Refusing to delete persistent branch ${HEAD_REF}."
+              exit 1
+              ;;
+          esac
+          endpoint="repos/${GITHUB_REPOSITORY}/git/refs/heads/${HEAD_REF}"
+          if gh api --silent --method DELETE "${endpoint}"; then
+            echo "Deleted closed PR branch ${HEAD_REF}."
+          elif gh api --silent "${endpoint}" >/dev/null 2>&1; then
+            echo "Branch ${HEAD_REF} still exists after deletion failed."
+            exit 1
+          else
+            echo "Branch ${HEAD_REF} was already absent."
+          fi

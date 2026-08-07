@@ -23,6 +23,8 @@ jobs:
           node-version: "24"
           cache: npm
       - run: npm ci
+      - name: Bridge updater shell safety
+        run: shellcheck scripts/bridge-self-update.sh
       - name: Typecheck
         run: npm run typecheck
       - name: Migration naming
