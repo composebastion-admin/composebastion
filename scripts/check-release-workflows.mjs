@@ -34,12 +34,17 @@ function requireBranches(file, eventName, expectedBranches) {
   }
 }
 
+requireBranches(
+  ".github/workflows/ci.yml",
+  "push",
+  ["main", "beta", "dev"]
+);
 for (const file of [
   ".github/workflows/codeql.yml",
   ".github/workflows/container-scan.yml",
   ".github/workflows/publish-images.yml"
 ]) {
-  requireBranches(file, "push", ["main", "beta"]);
+  requireBranches(file, "push", ["main", "beta", "dev"]);
   requireBranches(file, "pull_request", ["main", "beta", "dev"]);
 }
 requireBranches(
@@ -344,8 +349,8 @@ const publishFile = ".github/workflows/publish-images.yml";
 const publish = workflows[publishFile];
 const publishJobs = publish?.jobs ?? {};
 const publicationBranches = [...(publish?.on?.push?.branches ?? [])].sort();
-if (JSON.stringify(publicationBranches) !== JSON.stringify(["beta", "main"])) {
-  fail(`${publishFile}: push publication must be limited to the main and beta branches`);
+if (JSON.stringify(publicationBranches) !== JSON.stringify(["beta", "dev", "main"])) {
+  fail(`${publishFile}: release-image verification must run on main, beta, and dev`);
 }
 requireNode24Setup(publishFile, "metadata", publishJobs.metadata);
 requireContainerConfigStep(publishFile, "metadata", publishJobs.metadata);

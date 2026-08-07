@@ -2,7 +2,7 @@ name: Publish Images
 
 on:
   push:
-    branches: [main, beta]
+    branches: [main, beta, dev]
     tags:
       - "v*"
   pull_request:
