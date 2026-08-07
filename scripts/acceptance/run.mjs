@@ -2809,12 +2809,12 @@ async function upgradeScenario(baseline) {
     imageBindings.bridgeApp = await inspectComposeServiceImage(
       (args, options) => scenarioCompose(bridgeEnv, args, options),
       "app",
-      { expectedId: bridgeImageEvidence.id, expectedReference: bridgeRegistryReference }
+      { expectedId: bridgeImageEvidence.id, expectedReference: bridgeImageEvidence.id }
     );
     imageBindings.bridgeWorker = await inspectComposeServiceImage(
       (args, options) => scenarioCompose(bridgeEnv, args, options),
       "worker",
-      { expectedId: bridgeImageEvidence.id, expectedReference: bridgeRegistryReference }
+      { expectedId: bridgeImageEvidence.id, expectedReference: bridgeImageEvidence.id }
     );
     const dependencyContainerIds = {
       postgres: (await scenarioCompose(bridgeEnv, ["ps", "-q", "postgres"])).stdout.trim(),
@@ -2881,12 +2881,12 @@ async function upgradeScenario(baseline) {
     imageBindings.rollbackApp = await inspectComposeServiceImage(
       (args, options) => scenarioCompose(bridgeEnv, args, options),
       "app",
-      { expectedId: bridgeImageEvidence.id, expectedReference: bridgeRegistryReference }
+      { expectedId: bridgeImageEvidence.id, expectedReference: bridgeImageEvidence.id }
     );
     imageBindings.rollbackWorker = await inspectComposeServiceImage(
       (args, options) => scenarioCompose(bridgeEnv, args, options),
       "worker",
-      { expectedId: bridgeImageEvidence.id, expectedReference: bridgeRegistryReference }
+      { expectedId: bridgeImageEvidence.id, expectedReference: bridgeImageEvidence.id }
     );
     assert((await scenarioCompose(bridgeEnv, ["ps", "-q", "postgres"])).stdout.trim() === dependencyContainerIds.postgres,
       "automatic rollback recreated PostgreSQL");
@@ -2945,7 +2945,7 @@ async function upgradeScenario(baseline) {
       "app",
       {
         expectedId: report.candidateImages.app.id,
-        expectedReference: candidateRegistryReference,
+        expectedReference: report.candidateImages.app.id,
         expectedRevision: candidateRevision,
         expectedCreated: candidateBuildDate
       }
@@ -2955,7 +2955,7 @@ async function upgradeScenario(baseline) {
       "worker",
       {
         expectedId: report.candidateImages.app.id,
-        expectedReference: candidateRegistryReference,
+        expectedReference: report.candidateImages.app.id,
         expectedRevision: candidateRevision,
         expectedCreated: candidateBuildDate
       }
