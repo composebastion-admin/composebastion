@@ -2529,10 +2529,6 @@ async function upgradeScenario(baseline) {
     upgradeCompose(project, env, publicComposeFile, args, options)
   );
   await mkdir(oldEnv.COMPOSEBASTION_BACKUP_DIR, { recursive: true });
-  await setManagerBackupDirectoryOwnership(
-    oldEnv.COMPOSEBASTION_BACKUP_DIR,
-    "manager"
-  );
   activeProject = project;
   activeEnv = oldEnv;
   sessionCookie = "";
@@ -2588,6 +2584,10 @@ async function upgradeScenario(baseline) {
     const externalOwnerBefore = await stat(externalOwnershipTarget);
     await rm(backupSymlinkPath, { force: true });
     await symlink(`/acceptance-runtime/${path.basename(externalOwnershipTarget)}`, backupSymlinkPath);
+    await setManagerBackupDirectoryOwnership(
+      oldEnv.COMPOSEBASTION_BACKUP_DIR,
+      "manager"
+    );
     await run("docker", ["pull", baseline.pinnedImage], { inherit: true });
     const publicImageEvidence = await inspectPublicUpgradeImage(baseline);
     const bridgeImageEvidence = await inspectBridgeUpgradeImage();
