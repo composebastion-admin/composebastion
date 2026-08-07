@@ -3238,7 +3238,9 @@ async function upgradeScenario(baseline) {
   } finally {
     if (!keep) {
       try {
-        await scenarioCompose(newEnv, ["down", "--volumes", "--remove-orphans", "--rmi", "local"]);
+        if (await pathExists(publicComposeFile)) {
+          await scenarioCompose(newEnv, ["down", "--volumes", "--remove-orphans", "--rmi", "local"]);
+        }
       } finally {
         try {
           await setManagerBackupDirectoryOwnership(

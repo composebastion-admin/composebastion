@@ -292,6 +292,10 @@ if (readFileSync(".github/gitleaks.toml", "utf8") !== expectedGitleaksConfig) {
 requireNode24Setup(ciFile, "production-build", productionBuild);
 requireContainerConfigStep(ciFile, "production-build", productionBuild);
 requireNode24Setup(ciFile, "live-acceptance", liveAcceptance);
+const liveAcceptanceCheckout = actionStep(liveAcceptance, "actions/checkout");
+if (liveAcceptanceCheckout?.with?.["fetch-depth"] !== 0) {
+  fail(`${ciFile}:live-acceptance: historical public upgrade qualification requires complete Git history and tags`);
+}
 const installBrowser = (liveAcceptance?.steps ?? []).find((step) => String(step.run ?? "").includes("playwright install --with-deps chromium"));
 if (!installBrowser) fail(`${ciFile}:live-acceptance: live Playwright requires an explicit Chromium installation`);
 if (!(liveAcceptance?.steps ?? []).some((step) => String(step.run ?? "").trim() === "npm run acceptance:local")
