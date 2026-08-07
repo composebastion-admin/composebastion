@@ -165,6 +165,7 @@ jobs:
           cache: npm
       - name: Install integrity-pinned npm
         run: node scripts/bootstrap-npm.mjs
+      - run: npm ci --engine-strict --strict-allow-scripts --dangerously-allow-all-scripts=false --ignore-scripts=false
       - name: Materialize exact Git build context
         run: node scripts/materialize-git-context.mjs "${RUNNER_TEMP}/composebastion-git-context" "${GITHUB_SHA}"
       - name: Enforce container configuration policy
