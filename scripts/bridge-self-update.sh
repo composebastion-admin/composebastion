@@ -71,11 +71,14 @@ stack_is_ready() {
   expected_worker_version="$2"
   expected_app_image="$3"
   expected_worker_image="$4"
+  verification_mode="${5:-ready}"
   app_id="$(container_id app)"
   worker_id="$(container_id worker)"
   [ -n "$app_id" ] && [ -n "$worker_id" ] || return 1
   [ "$("$DOCKER_BIN" inspect --format '{{.State.Running}}' "$app_id" 2>/dev/null || true)" = true ] || return 1
-  [ "$("$DOCKER_BIN" inspect --format '{{.State.Health.Status}}' "$app_id" 2>/dev/null || true)" = healthy ] || return 1
+  if [ "$verification_mode" = ready ]; then
+    [ "$("$DOCKER_BIN" inspect --format '{{.State.Health.Status}}' "$app_id" 2>/dev/null || true)" = healthy ] || return 1
+  fi
   [ "$("$DOCKER_BIN" inspect --format '{{.State.Running}}' "$worker_id" 2>/dev/null || true)" = true ] || return 1
   container_is_composebastion "$app_id" || return 1
   container_is_composebastion "$worker_id" || return 1
@@ -91,9 +94,24 @@ stack_is_ready() {
   fi
   [ "$("$DOCKER_BIN" inspect --format '{{.Image}}' "$app_id" 2>/dev/null || true)" = "$expected_app_image" ] || return 1
   [ "$("$DOCKER_BIN" inspect --format '{{.Image}}' "$worker_id" 2>/dev/null || true)" = "$expected_worker_image" ] || return 1
-  "$DOCKER_BIN" compose -f "$COMPOSE_FILE" exec -T app node -e \
-    'Promise.all([fetch("http://127.0.0.1:8080/api/health").then(r=>r.ok?r.json():Promise.reject()),fetch("http://127.0.0.1:8080/api/health/ready").then(r=>r.ok?r.json():Promise.reject())]).then(([h,r])=>{if(!h.ok||!r.ok||!r.checks?.worker?.ok)process.exit(1)}).catch(()=>process.exit(1))' \
-    >/dev/null 2>&1
+  case "$verification_mode" in
+    ready)
+      "$DOCKER_BIN" compose -f "$COMPOSE_FILE" exec -T app node -e \
+        'Promise.all([fetch("http://127.0.0.1:8080/api/health").then(r=>r.ok?r.json():Promise.reject()),fetch("http://127.0.0.1:8080/api/health/ready").then(r=>r.ok?r.json():Promise.reject())]).then(([h,r])=>{if(!h.ok||!r.ok||!r.checks?.worker?.ok)process.exit(1)}).catch(()=>process.exit(1))' \
+        >/dev/null 2>&1
+      ;;
+    handoff)
+      # The restored bridge deliberately reports its worker as draining while
+      # this handoff is pending. Requiring full readiness here would deadlock:
+      # the worker can become available only after this updater publishes the
+      # authoritative outcome. Verify the live API, managed database, exact
+      # immutable images, and a connected draining worker before publication.
+      "$DOCKER_BIN" compose -f "$COMPOSE_FILE" exec -T app node -e \
+        'Promise.all([fetch("http://127.0.0.1:8080/api/health").then(r=>r.ok?r.json():Promise.reject()),fetch("http://127.0.0.1:8080/api/health/ready").then(r=>r.json())]).then(([h,r])=>{const w=r.checks?.worker;if(!h.ok||!r.checks?.database?.ok||w?.ok||w?.state!=="draining"||!(w?.activeWorkers>0)||!w?.lastHeartbeatAt)process.exit(1)}).catch(()=>process.exit(1))' \
+        >/dev/null 2>&1
+      ;;
+    *) return 1 ;;
+  esac
 }
 
 wait_for_stack() {
@@ -101,7 +119,7 @@ wait_for_stack() {
   case "$attempts" in ''|*[!0-9]*) attempts=60 ;; esac
   index=0
   while [ "$index" -lt "$attempts" ]; do
-    if stack_is_ready "$1" "$2" "$3" "$4"; then return 0; fi
+    if stack_is_ready "$1" "$2" "$3" "$4" "${5:-ready}"; then return 0; fi
     index=$((index + 1))
     [ "$index" -ge "$attempts" ] || sleep "${COMPOSEBASTION_SELF_UPDATE_VERIFY_INTERVAL_SECONDS:-2}"
   done
@@ -169,7 +187,7 @@ fail_update() {
     rollback_status=succeeded
   elif [ "$rollback_ready" -eq 1 ] \
       && "$DOCKER_BIN" compose -f "$COMPOSE_FILE" -f "$ROLLBACK_COMPOSE_PATH" up -d --pull never --no-deps --force-recreate app worker >/dev/null 2>&1 \
-      && wait_for_stack "$PREVIOUS_APP_VERSION" "$PREVIOUS_WORKER_VERSION" "$PREVIOUS_APP_IMAGE_ID" "$PREVIOUS_WORKER_IMAGE_ID" \
+      && wait_for_stack "$PREVIOUS_APP_VERSION" "$PREVIOUS_WORKER_VERSION" "$PREVIOUS_APP_IMAGE_ID" "$PREVIOUS_WORKER_IMAGE_ID" handoff \
       && [ "$environment_restored" -eq 1 ] && [ "$credential_restored" -eq 1 ]; then
     rollback_status=succeeded
   fi
