@@ -75,10 +75,13 @@ describe("self update service", () => {
       execFileSync("/bin/sh", ["-c", launch], { cwd: directory, stdio: "pipe" });
 
       expect(statSync(logPath).mode & 0o777).toBe(0o600);
-      for (let attempt = 0; attempt < 200 && !readFileSync(logPath, "utf8").includes("secure-log"); attempt += 1) {
+      let logContents = "";
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        logContents = readFileSync(logPath, "utf8");
+        if (logContents.includes("secure-log")) break;
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
-      expect(readFileSync(logPath, "utf8")).toContain("secure-log");
+      expect(logContents).toContain("secure-log");
 
       const symlinkLogPath = join(directory, "symlink.log");
       const externalPath = join(directory, "external.txt");
