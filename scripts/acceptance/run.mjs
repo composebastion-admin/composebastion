@@ -2541,30 +2541,43 @@ async function upgradeScenario(baseline) {
       managerDirectory.isDirectory() && !managerDirectory.isSymbolicLink(),
       "upgrade manager directory is not a real directory"
     );
-    const fileName = path.basename(resolvedFilePath);
-    const candidateAppId = report.candidateImages?.app?.id;
-    assert(candidateAppId, `${label} reader is missing the candidate app image`);
-    const readerProgram = [
-      "const fs=require('node:fs');",
-      "const name=process.argv[1];",
-      "if(!name||name==='.'||name==='..'||name.includes('/'))process.exit(2);",
-      "if(typeof fs.constants.O_NOFOLLOW!=='number')process.exit(3);",
-      "const fd=fs.openSync('/manager/'+name,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW);",
-      "try{",
-      "const s=fs.fstatSync(fd);",
-      "if(!s.isFile()||(s.mode&0o777)!==0o600)process.exit(4);",
-      "process.stdout.write(fs.readFileSync(fd,'utf8'));",
-      "}finally{fs.closeSync(fd);}"
-    ].join("");
-    const result = await run("docker", [
-      "run", "--rm", "--user", "0:0", "--network", "none", "--read-only",
-      "--cap-drop", "ALL", "--cap-add", "DAC_READ_SEARCH",
-      "--security-opt", "no-new-privileges=true",
-      "--volume", `${resolvedManagerDir}:/manager:ro`,
-      candidateAppId,
-      "node", "-e", readerProgram, fileName
+    const result = await scenarioCompose(activeEnv, [
+      "exec", "-T", "sshhost", "sh", "-ceu",
+      "file=$1; [ -f \"$file\" ]; [ ! -L \"$file\" ]; [ \"$(stat -c %a -- \"$file\")\" = 600 ]; exec cat -- \"$file\"",
+      "read-protected-manager-file", resolvedFilePath
     ]);
     return result.stdout;
+  };
+  const clearProtectedManagerDirectory = async () => {
+    const resolvedManagerDir = path.resolve(managerDir);
+    const resolvedRuntimeDir = path.resolve(runtimeDir);
+    assert(
+      path.dirname(resolvedManagerDir) === resolvedRuntimeDir,
+      "upgrade manager directory is not a direct child of the acceptance runtime"
+    );
+    const managerDirectory = await lstat(resolvedManagerDir);
+    assert(
+      managerDirectory.isDirectory() && !managerDirectory.isSymbolicLink(),
+      "upgrade manager cleanup target is not a real directory"
+    );
+    const candidateAppId = report.candidateImages?.app?.id;
+    assert(candidateAppId, "upgrade manager cleanup is missing the candidate app image");
+    const cleanerProgram = [
+      "const fs=require('node:fs');",
+      "const path=require('node:path');",
+      "for(const name of fs.readdirSync('/manager')){",
+      "if(name==='.'||name==='..'||name.includes('/'))process.exit(2);",
+      "fs.rmSync(path.join('/manager',name),{recursive:true,force:true,maxRetries:3});",
+      "}"
+    ].join("");
+    await run("docker", [
+      "run", "--rm", "--user", "0:0", "--network", "none", "--read-only",
+      "--cap-drop", "ALL", "--cap-add", "DAC_OVERRIDE", "--cap-add", "DAC_READ_SEARCH",
+      "--security-opt", "no-new-privileges=true",
+      "--volume", `${resolvedManagerDir}:/manager`,
+      candidateAppId,
+      "node", "-e", cleanerProgram
+    ]);
   };
   await mkdir(oldEnv.COMPOSEBASTION_BACKUP_DIR, { recursive: true });
   activeProject = project;
@@ -3301,6 +3314,7 @@ async function upgradeScenario(baseline) {
             "cleanup"
           );
         } finally {
+          if (await pathExists(managerDir)) await clearProtectedManagerDirectory();
           for (const reference of [publicRegistryReference, bridgeRegistryReference, candidateRegistryReference]) {
             await run("docker", ["image", "rm", reference]).catch(() => undefined);
           }
