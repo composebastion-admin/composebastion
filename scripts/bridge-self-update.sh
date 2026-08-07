@@ -76,7 +76,7 @@ stack_is_ready() {
   worker_id="$(container_id worker)"
   [ -n "$app_id" ] && [ -n "$worker_id" ] || return 1
   [ "$("$DOCKER_BIN" inspect --format '{{.State.Running}}' "$app_id" 2>/dev/null || true)" = true ] || return 1
-  if [ "$verification_mode" = ready ]; then
+  if [ "$verification_mode" = ready ] || [ "$verification_mode" = candidate_handoff ]; then
     [ "$("$DOCKER_BIN" inspect --format '{{.State.Health.Status}}' "$app_id" 2>/dev/null || true)" = healthy ] || return 1
   fi
   [ "$("$DOCKER_BIN" inspect --format '{{.State.Running}}' "$worker_id" 2>/dev/null || true)" = true ] || return 1
@@ -100,11 +100,13 @@ stack_is_ready() {
         'Promise.all([fetch("http://127.0.0.1:8080/api/health").then(r=>r.ok?r.json():Promise.reject()),fetch("http://127.0.0.1:8080/api/health/ready").then(r=>r.ok?r.json():Promise.reject())]).then(([h,r])=>{if(!h.ok||!r.ok||!r.checks?.worker?.ok)process.exit(1)}).catch(()=>process.exit(1))' \
         >/dev/null 2>&1
       ;;
-    handoff)
-      # The restored bridge deliberately reports its worker as draining while
-      # this handoff is pending. Requiring full readiness here would deadlock:
-      # the worker can become available only after this updater publishes the
-      # authoritative outcome. Verify the live API, managed database, exact
+    candidate_handoff|handoff)
+      # Both the new candidate and a restored bridge deliberately report their
+      # workers as draining while this handoff is pending. Requiring full
+      # readiness here would deadlock: the worker can become available only
+      # after this updater publishes the authoritative outcome. Candidate mode
+      # still requires the Docker healthcheck above so a candidate-only health
+      # failure cannot be hidden. Verify the live API, managed database, exact
       # immutable images, and a connected draining worker before publication.
       "$DOCKER_BIN" compose -f "$COMPOSE_FILE" exec -T app node -e \
         'Promise.all([fetch("http://127.0.0.1:8080/api/health").then(r=>r.ok?r.json():Promise.reject()),fetch("http://127.0.0.1:8080/api/health/ready").then(r=>r.json())]).then(([h,r])=>{const w=r.checks?.worker;if(!h.ok||!r.checks?.database?.ok||w?.ok||w?.state!=="draining"||!(w?.activeWorkers>0)||!w?.lastHeartbeatAt)process.exit(1)}).catch(()=>process.exit(1))' \
@@ -290,7 +292,7 @@ case "$environment_action" in
   *) fail_update prepare_result 1 ;;
 esac
 "$DOCKER_BIN" compose -f "$COMPOSE_FILE" -f "$CANDIDATE_COMPOSE_PATH" up -d --pull never --no-deps --force-recreate app worker || fail_update up 1
-wait_for_stack "$TARGET_VERSION" "$TARGET_VERSION" "$CANDIDATE_APP_IMAGE_ID" "$CANDIDATE_WORKER_IMAGE_ID" || fail_update verification 1
+wait_for_stack "$TARGET_VERSION" "$TARGET_VERSION" "$CANDIDATE_APP_IMAGE_ID" "$CANDIDATE_WORKER_IMAGE_ID" candidate_handoff || fail_update verification 1
 
 write_outcome passed complete not_required 0 || fail_update outcome_publication 1
 trap - HUP INT TERM
