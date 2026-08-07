@@ -74,7 +74,6 @@ describe("self update service", () => {
       });
       execFileSync("/bin/sh", ["-c", launch], { cwd: directory, stdio: "pipe" });
 
-      expect(statSync(logPath).mode & 0o777).toBe(0o600);
       let logContents = "";
       for (let attempt = 0; attempt < 200; attempt += 1) {
         logContents = readFileSync(logPath, "utf8");
@@ -82,6 +81,7 @@ describe("self update service", () => {
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
       expect(logContents).toContain("secure-log");
+      expect(statSync(logPath).mode & 0o777).toBe(0o600);
 
       const symlinkLogPath = join(directory, "symlink.log");
       const externalPath = join(directory, "external.txt");
