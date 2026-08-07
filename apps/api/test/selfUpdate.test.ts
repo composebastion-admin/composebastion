@@ -98,6 +98,8 @@ describe("self update service", () => {
     const script = String(writeRemoteFile.mock.calls[0]?.[2] ?? "");
     expect(script).toContain('"$DOCKER_BIN" compose -f "$COMPOSE_FILE" pull app worker');
     expect(script).toContain("prepare-compose-upgrade.mjs \"$preparation_mode\"");
+    expect(script).toContain("COMPOSEBASTION_UPGRADE_SOURCE_DATABASE_URL: ${DATABASE_URL-}");
+    expect(script).toContain("COMPOSEBASTION_DATABASE_ENVIRONMENT_ACTION");
     expect(script).toContain('"$DOCKER_BIN" compose -f "$COMPOSE_FILE" stop app worker');
     expect(script).toContain('up -d --pull never --no-deps --force-recreate app worker');
     expect(script).toContain('wait_for_stack "$TARGET_VERSION" "$TARGET_VERSION" "$CANDIDATE_APP_IMAGE_ID" "$CANDIDATE_WORKER_IMAGE_ID"');

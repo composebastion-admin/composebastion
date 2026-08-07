@@ -26,7 +26,7 @@ services:
       - ALL
     cap_add:
       - CHOWN
-      - DAC_OVERRIDE
+      - DAC_READ_SEARCH
     security_opt:
       - no-new-privileges:true
     restart: "no"
@@ -35,13 +35,15 @@ services:
     image: ${COMPOSEBASTION_IMAGE:-ghcr.io/composebastion-admin/composebastion-app}:${COMPOSEBASTION_VERSION:-latest}
     pull_policy: always
     user: "1000:1000"
-    command: ["node", "/app/scripts/prepare-database-upgrade.mjs", "reconcile"]
+    command: ["node", "/app/scripts/prepare-database-upgrade.mjs", "reconcile", "--state-file", "/var/lib/composebastion/upgrade-state/database-transition.json"]
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
       DATABASE_URL: ${DATABASE_URL:-postgres://composebastion:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/composebastion}
     depends_on:
       postgres:
         condition: service_healthy
+    volumes:
+      - upgrade-state:/var/lib/composebastion/upgrade-state
     read_only: true
     cap_drop:
       - ALL
@@ -172,5 +174,6 @@ services:
     restart: unless-stopped
 
 volumes:
+  upgrade-state:
   postgres-data:
   redis-data:

@@ -8,7 +8,8 @@ every production update.
 - `/api/v1` is the public compatibility boundary for V1.
 - Use additive API changes whenever possible.
 - Keep app and agent images on the same release when possible. The most recent
-  published release is `v1.1.2`.
+  published release is `v1.1.2`. Publish the compatibility-only `v1.1.3`
+  bridge before qualifying or publishing 1.2.
 - New database migrations must use the next clean `NNN_snake_case.sql` filename.
   The existing duplicate `018_` migration prefix is a published legacy exception;
   do not create new duplicates.
@@ -21,10 +22,9 @@ every production update.
    regenerate either value during a routine update. The exact fixed placeholder
    shipped by the v1.1.0 template is detected and repaired automatically.
 4. Confirm recent backups and at least one recent successful drill for critical data.
-5. For production image installs, resolve one reviewed release revision and
-   manually pin both app and agent images to its immutable
-   `sha-<40-character-sha>` tags. Do not use in-app self-update for the
-   production handoff yet.
+5. For production image installs, resolve one reviewed release revision, obtain
+   the target release's Compose files and `scripts/upgrade-image.sh`, and pin
+   both app and agent images to its immutable `sha-<40-character-sha>` tags.
 6. For source installs, pull the source update and use the source-upgrade
    wrapper below.
 7. Validate the Compose configuration when updating manually.
@@ -36,25 +36,45 @@ Admin -> Operations -> ComposeBastion self-update is available for disposable
 evaluation and homelab image installs managed over SSH. It currently accepts
 `latest` or a SemVer tag and does not consume a durable signed app/agent
 release-pair manifest, so it is not the production-qualified update path.
-The updater can cross from a pre-1.2 Compose file without replacing that file:
-the candidate image prepares storage and the exact managed legacy credential
-before app and worker start. It records protected rollback state and recreates
-the immutable prior app/worker images with `--no-deps` if startup or
-verification fails.
+The release-qualified in-app route is `1.0.6/1.1.2 -> 1.1.3 -> 1.2`.
+First update explicitly to `1.1.3`; do not target 1.2 directly from an older
+release. The compatibility-only bridge keeps the existing pre-1.2 Compose file,
+then uses the pulled 1.2 image to prepare storage and the exact managed legacy
+credential before app and worker start. It records job-specific protected
+rollback state and recreates the immutable 1.1.3 app/worker images with
+`--no-deps` if startup or verification fails. Keep `latest` on 1.1.3 until the
+bridge rollout and both qualified hops are complete.
 Production, source-checkout, and agent-host updates use the manual pinned
 commands below.
 
-Manual image install:
+Manual image upgrade:
 
 ```bash
 cd ~/composebastion
-cp -p docker-compose.image.yml docker-compose.image.yml.pre-upgrade
-# Download docker-compose.image.yml from the same release channel/tag first.
 export REVIEWED_REVISION="REPLACE_WITH_REVIEWED_40_CHARACTER_COMMIT"
-export COMPOSEBASTION_VERSION="sha-${REVIEWED_REVISION}"
-docker compose -f docker-compose.image.yml pull
-docker compose -f docker-compose.image.yml up -d
+# Save the reviewed target release files under distinct names. Do not replace
+# the active Compose file before verification.
+chmod 755 upgrade-image.target.sh
+./upgrade-image.target.sh \
+  --version "sha-${REVIEWED_REVISION}" \
+  --env-file .env \
+  --compose docker-compose.image.yml docker-compose.image.target.yml
 ```
+
+Repeat `--compose CURRENT_FILE TARGET_FILE` for every hardening or site overlay.
+The wrapper backs up `.env` and all current definitions, pins the pulled
+candidate image IDs, runs `storage-init` and `database-init`, verifies labels,
+health, readiness, worker connectivity, and version, and only then promotes the
+target files. A failure restores the recorded credential before `.env` and the
+Compose files, then recreates the prior immutable app/worker images with
+`--no-deps`. Its sanitized outcome is
+`.composebastion-image-upgrade-JOB_ID.outcome`; protected recovery state is
+retained if rollback cannot finish. It never removes named volumes.
+
+Raw `docker compose pull` followed by `docker compose up -d` is supported for a
+fresh install, or an upgrade that has been positively verified not to cross a
+legacy credential/storage transition. It is not the supported pre-1.2 manual
+upgrade path.
 
 Pin every separately deployed ComposeBastion agent to the same reviewed
 revision before calling the production update complete.
@@ -89,7 +109,9 @@ not always use it. Version 1.2 recognizes that repository-owned value. Its
 `database-init` preflight first tries the preserved `POSTGRES_PASSWORD`; when a
 long-hop source install still uses the legacy role credential, it rotates that
 managed role and verifies the new connection before startup. No `.env` edit or
-manual database-role rotation is required for that specific upgrade case.
+manual database-role rotation is required for that specific upgrade case. Its
+non-secret receipt remains in the `upgrade-state` volume so a later manual
+rollback can prove whether this exact transition changed the credential.
 
 ## Backup Storage Ownership Compatibility
 
@@ -97,31 +119,22 @@ Version 1.2 runs the app and worker as UID/GID `1000:1000`. The shipped Compose
 files include a root `storage-init` one-shot that prepares only
 `/data/backups`, then exits before the long-running services start. It repairs
 root-owned files created by older releases while preserving the contents and
-all database, Redis, and backup volumes. The pass recursively checks the whole
-same-filesystem tree and skips every symlink, including legacy marker names.
+all database, Redis, and backup volumes. A repository-owned native helper walks
+the same-filesystem tree through held directory descriptors, skips every
+symlink, and rejects nested filesystems and special files. The initializer runs
+with only `CHOWN` and `DAC_READ_SEARCH` capabilities.
 Manual image updates must refresh the Compose file from the target release;
 the in-app updater performs the same preparation from the candidate image even
 when the operator's Compose file predates the initializer services. Never use
 `docker compose down -v` as an ownership repair.
 
-For an existing installation, keep `.env` unchanged during the upgrade. To
-move from a legacy `DATABASE_URL` to the canonical `POSTGRES_PASSWORD`, first
-stop the database clients, rotate the actual role password through PostgreSQL's
-local socket, then clear the override. The password must be URL-safe, as
-generated by `openssl rand -hex 32`:
-
-```bash
-docker compose stop app worker
-DB_PASSWORD="$(sed -n 's/^POSTGRES_PASSWORD=//p' .env)"
-test -n "$DB_PASSWORD"
-docker compose exec -T -u postgres postgres \
-  psql -U composebastion -d postgres \
-  -c "ALTER ROLE composebastion PASSWORD '$DB_PASSWORD'"
-unset DB_PASSWORD
-# Set DATABASE_URL= (or remove the assignment) only after ALTER ROLE succeeds.
-docker compose up -d app worker
-docker compose ps
-```
+For an existing installation, let `upgrade-image.sh` manage `.env`. The
+target-release `database-init` service performs and verifies the sole supported
+managed rotation and records its non-secret result in the `upgrade-state`
+volume. The wrapper atomically appends the canonical managed selection only
+when the helper requests it. Never clear the legacy override before that
+service has succeeded. `POSTGRES_PASSWORD` must remain URL-safe, as generated
+by `openssl rand -hex 32`.
 
 The Compose-managed database has a `composebastion` administrative role; it
 does not create a separate `postgres` role. Never run `docker compose down -v`
@@ -146,10 +159,28 @@ security guidance.
 - Do not manually delete rows from `schema_migrations`; fix forward unless a full
   database restore is part of the rollback.
 
-Historical app images do not contain the 1.2 initializer scripts. Every manual
-rollback or recovery start must therefore bypass candidate dependencies:
+For wrapper-driven updates, inspect the job-specific outcome first. A complete
+automatic rollback requires no further command. If it reports
+`rollback=failed`, retain the named recovery directory and use its candidate,
+receipt, environment, Compose backups, and immutable rollback overlay to finish
+the same credential-first ordering before restarting historical images.
+
+Historical app images do not contain the 1.2 initializer scripts. For a legacy
+raw manual start outside the wrapper, restore a changed credential while the
+target-release Compose file and durable receipt volume are still present:
 
 ```bash
+docker compose -f docker-compose.image.yml stop app worker
+docker compose -f docker-compose.image.yml run --rm --no-deps database-init \
+  node /app/scripts/prepare-database-upgrade.mjs restore-legacy \
+  --state-file /var/lib/composebastion/upgrade-state/database-transition.json
+```
+
+Then restore the saved pre-upgrade Compose file. Every historical-image start
+must bypass candidate dependencies:
+
+```bash
+cp -p docker-compose.image.yml.pre-upgrade docker-compose.image.yml
 docker compose \
   -f docker-compose.image.yml \
   -f .composebastion-self-update-JOB_ID.rollback.yml \
@@ -173,6 +204,7 @@ docker compose -f docker-compose.image.yml -f "$STATE_DIR/candidate.yml" \
   --volume "$STATE_DIR:/run/composebastion-upgrade" \
   app node /app/scripts/prepare-compose-upgrade.mjs restore-legacy \
   --compose-config /run/composebastion-upgrade/compose-config.json \
+  --environment-probe /run/composebastion-upgrade/source-env-probe.json \
   --state-file /run/composebastion-upgrade/database-transition.json
 ```
 

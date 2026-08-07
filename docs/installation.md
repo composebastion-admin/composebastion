@@ -278,11 +278,12 @@ Compose directory, starts the script detached from the worker, pulls the app and
 worker images, and restarts those services. The browser may disconnect briefly
 while the new app container starts.
 
-Crossing from a pre-1.2 image install does not require replacing its Compose
-file first when using the in-app updater. The pulled candidate image performs
-the storage and managed-database compatibility work through `compose run`, then
-starts app and worker with dependency recreation disabled. Manual updates still
-require `docker-compose.image.yml` from the same target release.
+The supported pre-1.2 route is `1.0.6/1.1.2 -> 1.1.3 -> 1.2`. Select the
+`1.1.3` bridge first and verify it is healthy; only then target 1.2. The bridge
+keeps the existing Compose file, performs compatibility work through the pulled
+candidate, and starts app/worker with dependency recreation disabled. Direct
+pre-1.2-to-1.2 updates are not release-qualified. Manual updates require the
+matching target-release Compose file and `scripts/upgrade-image.sh`.
 
 Following `latest` is a homelab convenience, not the production-qualified
 paired update path. Until self-update consumes a durable signed app/agent
@@ -293,16 +294,23 @@ index before pulling.
 Use the manual commands below when the manager host is not managed over SSH,
 when running a source checkout, or when you want to inspect each step yourself.
 
-For homelab/NAS installs following `latest`:
+For an existing image install, save the reviewed target files under distinct
+names and run the target release's wrapper:
 
 ```bash
 cd ~/composebastion
-docker compose -f docker-compose.image.yml pull
-docker compose -f docker-compose.image.yml up -d
+chmod 755 upgrade-image.target.sh
+./upgrade-image.target.sh --version 1.2.0 \
+  --compose docker-compose.image.yml docker-compose.image.target.yml
 ```
 
-For pinned production installs, edit `COMPOSEBASTION_VERSION` in `.env`, then
-run:
+Repeat `--compose CURRENT TARGET` for each overlay. The wrapper promotes the
+target definitions only after candidate verification and performs
+credential-first immutable rollback on failure. Keep its recovery directory if
+the outcome says rollback is incomplete.
+
+For a fresh install, or an update known not to involve a legacy transition, the
+ordinary Compose startup remains:
 
 ```bash
 cd ~/composebastion

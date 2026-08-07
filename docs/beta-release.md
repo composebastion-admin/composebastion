@@ -7,8 +7,11 @@ The app and agent images are available for `linux/amd64` and `linux/arm64`:
 
 - `ghcr.io/composebastion-admin/composebastion-app:beta`
 - `ghcr.io/composebastion-admin/composebastion-agent:beta`
+- `ghcr.io/composebastion-admin/composebastion-app:1.2.0-beta.1`
+- `ghcr.io/composebastion-admin/composebastion-agent:1.2.0-beta.1`
 
-The beta channel never moves `latest`, `main`, or stable version tags.
+The `beta` channel is moving. Each exact prerelease version is immutable and
+never moves `latest`, `main`, or stable/minor version tags.
 
 The agent image retains Docker Compose v5.3.1 compatibility while rebuilding
 its bundled CLI with gRPC-Go 1.82.1. The manager image also rebuilds its pinned
@@ -22,8 +25,10 @@ Use the Compose files from the same beta branch:
 
 ```bash
 [ ! -f docker-compose.image.yml ] || \
-  cp -p docker-compose.image.yml docker-compose.image.yml.pre-beta
-curl -fsSLO https://raw.githubusercontent.com/composebastion-admin/composebastion/beta/docker-compose.image.yml
+curl -fsSL https://raw.githubusercontent.com/composebastion-admin/composebastion/beta/docker-compose.image.yml \
+  -o docker-compose.image.target.yml
+curl -fsSL https://raw.githubusercontent.com/composebastion-admin/composebastion/beta/scripts/upgrade-image.sh \
+  -o upgrade-image.target.sh
 curl -fsSLO https://raw.githubusercontent.com/composebastion-admin/composebastion/beta/.env.example
 ```
 
@@ -31,15 +36,17 @@ Preserve an existing `.env`. For a new install, copy `.env.example` to `.env`,
 generate unique `APP_SECRET` and `POSTGRES_PASSWORD` values, then set:
 
 ```dotenv
-COMPOSEBASTION_VERSION=beta
-COMPOSEBASTION_AGENT_VERSION=beta
+COMPOSEBASTION_VERSION=1.2.0-beta.1
+COMPOSEBASTION_AGENT_VERSION=1.2.0-beta.1
 ```
 
-Update the manager:
+For an existing manager, keep the downloaded target definition distinct and
+use the beta wrapper:
 
 ```bash
-docker compose -f docker-compose.image.yml pull
-docker compose -f docker-compose.image.yml up -d
+chmod 755 upgrade-image.target.sh
+./upgrade-image.target.sh --version 1.2.0-beta.1 \
+  --compose docker-compose.image.yml docker-compose.image.target.yml
 ```
 
 The refreshed Compose file runs `storage-init` automatically before the beta
@@ -49,19 +56,21 @@ password and, only for the exact repository legacy URL, rotates the managed
 role credential when required. Preserve `.env` and all volumes; neither
 compatibility repair requires a manual database or backup operation.
 
-For an existing homelab image install, the Admin -> Operations in-app updater
-can cross into 1.2 without replacing a pre-1.2 Compose file. It runs the same
-repairs from the pulled candidate image and retains protected credential/image
-rollback state until verification succeeds. The matching beta Compose file is
-still required for the manual `pull`/`up` procedure above.
+For an existing 1.0.6 or 1.1.2 homelab image install, first use Admin ->
+Operations to update to the compatibility-only 1.1.3 bridge. From the running
+bridge, target this beta. The bridge retains the pre-1.2 Compose file, runs the
+repairs from the pulled candidate image, and retains protected
+credential/image rollback state until verification succeeds. Direct
+pre-1.2-to-beta updates are not qualified. The matching beta Compose file and
+wrapper are required for the manual procedure above.
 
 For each image-installed agent, use `agent-compose.image.example.yml`, set
-`COMPOSEBASTION_AGENT_VERSION=beta`, then pull and recreate that agent.
+`COMPOSEBASTION_AGENT_VERSION=1.2.0-beta.1`, then pull and recreate that agent.
 Because app and agent aliases are stored in separate GHCR repositories, they
 have a brief non-atomic update window. For paired testing, resolve the beta
-release revision from the recorded publication evidence and set both image
-versions to the same immutable `sha-<40-character-sha>` index instead of
-independently following `beta`.
+release revision from the recorded publication evidence and use either the
+same exact prerelease version or the same immutable `sha-<40-character-sha>`
+index instead of independently following the moving `beta` alias.
 
 ## What to verify
 
@@ -106,12 +115,12 @@ Do not include tokens, secrets, `.env` contents, or registry passwords.
 ## Roll back
 
 Export a ComposeBastion configuration backup before testing. To return to the
-current stable release, set both manager and agent versions to `1.1.2`, pull,
+compatibility bridge, set both manager and agent versions to `1.1.3`, pull,
 and recreate the services:
 
 ```dotenv
-COMPOSEBASTION_VERSION=1.1.2
-COMPOSEBASTION_AGENT_VERSION=1.1.2
+COMPOSEBASTION_VERSION=1.1.3
+COMPOSEBASTION_AGENT_VERSION=1.1.3
 ```
 
 Do not run `docker compose down -v`; keep PostgreSQL, Redis, backups, and other
@@ -125,14 +134,14 @@ volumes. The tested rollback leaves migrations `031` through `038` applied:
 - `036`–`038` add analysis revision/digest bindings, encrypted stack
   environment bindings, and clone-deployment job records.
 
-The `1.1.2` app ignores the additive tables and columns while using the same
+The `1.1.3` app ignores the additive tables and columns while using the same
 PostgreSQL, Redis, configuration, backup, and application volumes. Qualification
 verifies readiness and preserved state on that rollback, then re-upgrades those
 same volumes to the candidate. The `032` data normalization is not reversed.
 Keep the pre-upgrade backup for restoring encrypted beta source configuration
 if you return to the beta later.
 
-Before recreating `1.1.2`, restore the saved pre-beta Compose file so Docker
+Before recreating `1.1.3`, restore the saved pre-beta Compose file so Docker
 does not ask the historical image to run beta initializer scripts:
 
 ```bash

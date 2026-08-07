@@ -160,12 +160,14 @@ the handoff. ComposeBastion writes a short host-side update script, pulls the
 selected app and worker images, restarts them, and shows the latest handoff job
 so you can confirm the update completed.
 
-The in-app updater can cross into 1.2 while the host still has a pre-1.2
-`docker-compose.image.yml`. It pulls the candidate first, stops app and worker,
-runs the candidate compatibility entrypoint, and starts only those two services
-with dependency recreation disabled. Manual image updates must instead download
-the matching target-release Compose file so its `storage-init` and
-`database-init` services are available.
+The release-qualified in-app path is `1.0.6/1.1.2 -> 1.1.3 -> 1.2`. Update to
+the compatibility-only 1.1.3 bridge first; direct pre-1.2-to-1.2 updates are not
+qualified. The bridge can retain the pre-1.2 `docker-compose.image.yml`, pull
+and prepare the 1.2 candidate, and start only app/worker with dependency
+recreation disabled. Manual image updates must download the matching
+target-release Compose file so its initializer services and durable transition
+receipt volume are available, and must use the target release's
+`scripts/upgrade-image.sh` so those files are promoted only after verification.
 
 In-app self-update currently accepts `latest` or a SemVer tag; it does not
 consume a durable signed app/agent release-pair manifest. Production updates
@@ -178,9 +180,10 @@ Manual image update fallback:
 ```bash
 cd ~/composebastion
 export REVIEWED_REVISION="REPLACE_WITH_REVIEWED_40_CHARACTER_COMMIT"
-export COMPOSEBASTION_VERSION="sha-${REVIEWED_REVISION}"
-docker compose -f docker-compose.image.yml pull
-docker compose -f docker-compose.image.yml up -d
+chmod 755 upgrade-image.target.sh
+./upgrade-image.target.sh \
+  --version "sha-${REVIEWED_REVISION}" \
+  --compose docker-compose.image.yml docker-compose.image.target.yml
 ```
 
 Source install:

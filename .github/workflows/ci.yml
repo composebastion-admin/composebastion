@@ -66,6 +66,12 @@ jobs:
         run: npm run test:upgrade-preparation
       - name: Source upgrade rollback tests
         run: npm run test:source-upgrade
+      - name: Manual image upgrade rollback tests
+        env:
+          COMPOSEBASTION_REQUIRE_CROSS_FILESYSTEM_TEST: "1"
+        run: npm run test:image-upgrade
+      - name: Upgrade wrapper shell safety
+        run: shellcheck scripts/upgrade-image.sh
       - name: Third-party notices
         run: npm run notices:check
       - name: Immutable workflow actions

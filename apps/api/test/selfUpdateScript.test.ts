@@ -48,9 +48,12 @@ if [ "$1" = "compose" ]; then
           if [ "$MOCK_FAIL" = "prepare" ]; then exit 1; fi
           if [ "$MOCK_CREDENTIAL_CHANGED" = "true" ]; then
             printf '%s\n' '{"schema":1,"transition":"legacy-managed-database-credential","status":"reconciled","changed":true}' > "$state_mount/database-transition.json"
+            printf '%s\n' 'COMPOSEBASTION_DATABASE_CREDENTIAL_TRANSITION=changed'
           else
             printf '%s\n' '{"schema":1,"transition":"legacy-managed-database-credential","status":"unchanged","changed":false}' > "$state_mount/database-transition.json"
+            printf '%s\n' 'COMPOSEBASTION_DATABASE_CREDENTIAL_TRANSITION=unchanged'
           fi
+          printf '%s\n' "COMPOSEBASTION_DATABASE_ENVIRONMENT_ACTION=$MOCK_ENVIRONMENT_ACTION"
           exit 0
           ;;
         *"prepare-compose-upgrade.mjs"*"restore-legacy"*)
@@ -78,7 +81,13 @@ if [ "$1" = "compose" ]; then
       printf '%s\\n' new > "$MOCK_STATE_DIR/phase"
       exit 0
       ;;
-    *" exec -T app node "*) exit 0 ;;
+    *" exec -T app node "*)
+      if [ "$phase" = "new" ] && [ "$MOCK_FAIL" = "finalization_interrupt" ]; then
+        kill -TERM "$PPID"
+        sleep 1
+        exit 1
+      fi
+      exit 0 ;;
   esac
 fi
 if [ "$1" = "inspect" ]; then
@@ -114,10 +123,12 @@ exit 1
 `;
 
 async function runGeneratedUpdate(
-  failure: "" | "pull" | "prepare" | "up" | "verification",
+  failure: "" | "pull" | "prepare" | "up" | "verification" | "finalization_interrupt",
   targetVersion = "1.0.2",
   credentialChanged = false,
-  restoreFails = false
+  restoreFails = false,
+  environmentAction: "canonicalize" | "preserve" = credentialChanged ? "canonicalize" : "preserve",
+  blockOutcomePublication = false
 ) {
   const directory = await temporaryDirectory();
   const stateDirectory = path.join(directory, "state");
@@ -155,8 +166,10 @@ async function runGeneratedUpdate(
     rollbackComposePath
   })}\n`);
   await chmod(scriptPath, 0o700);
+  if (blockOutcomePublication) await mkdir(outcomePath);
 
   let exitCode = 0;
+  let stderr = "";
   try {
     await execFileAsync("/bin/sh", [
       "-c",
@@ -174,18 +187,21 @@ async function runGeneratedUpdate(
         MOCK_STATE_DIR: stateDirectory,
         MOCK_FAIL: failure,
         MOCK_CREDENTIAL_CHANGED: String(credentialChanged),
+        MOCK_ENVIRONMENT_ACTION: environmentAction,
         MOCK_RESTORE_FAIL: String(restoreFails)
       }
     });
   } catch (error) {
-    exitCode = Number((error as { code?: number }).code ?? 1);
+    const failure = error as { code?: number; stderr?: string };
+    exitCode = Number(failure.code ?? 1);
+    stderr = failure.stderr ?? "";
   }
 
   return {
     directory,
     stateDirectory,
     lockPath,
-    outcome: await readFile(outcomePath, "utf8"),
+    outcome: await readFile(outcomePath, "utf8").catch(() => ""),
     environment: await readFile(path.join(directory, ".env"), "utf8"),
     originalEnvironment,
     commands: await readFile(path.join(stateDirectory, "commands.log"), "utf8"),
@@ -194,6 +210,8 @@ async function runGeneratedUpdate(
     rollbackComposePath,
     envBackupPath,
     upgradeStateDirectory: path.join(directory, ".composebastion-self-update-shell-job.upgrade"),
+    script: await readFile(scriptPath, "utf8"),
+    stderr,
     exitCode
   };
 }
@@ -210,6 +228,12 @@ describe("generated self-update shell program", () => {
     expect(result.commands).toContain("candidate.yml run --rm --no-deps --user 0:0");
     expect(result.commands).toContain("up -d --pull never --no-deps --force-recreate app worker");
     expect(result.candidate).toContain("POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}");
+    expect(result.script.lastIndexOf("if ! write_outcome passed complete not_required 0")).toBeLessThan(
+      result.script.lastIndexOf("trap - HUP INT TERM")
+    );
+    expect(result.script.lastIndexOf("trap - HUP INT TERM")).toBeLessThan(
+      result.script.lastIndexOf("success_cleanup_failed=0")
+    );
     await expect(stat(result.lockPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
@@ -237,6 +261,21 @@ describe("generated self-update shell program", () => {
     await expect(stat(path.join(result.stateDirectory, "credential-restored"))).resolves.toBeTruthy();
   });
 
+  it("persists the canonical DATABASE_URL selection after a managed credential transition", async () => {
+    const result = await runGeneratedUpdate("", "1.0.2", true);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.environment).toContain("# ComposeBastion managed legacy database transition\nDATABASE_URL=\n");
+    expect(result.environment).toContain("APP_SECRET=do-not-log-or-lose");
+  });
+
+  it("canonicalizes a stale environment even when the credential was already current", async () => {
+    const result = await runGeneratedUpdate("", "1.0.2", false, false, "canonicalize");
+
+    expect(result.exitCode).toBe(0);
+    expect(result.environment).toContain("# ComposeBastion managed legacy database transition\nDATABASE_URL=\n");
+  });
+
   it("retains protected recovery artifacts when credential rollback cannot finish", async () => {
     const result = await runGeneratedUpdate("up", "latest", true, true);
 
@@ -256,6 +295,28 @@ describe("generated self-update shell program", () => {
     expect(result.outcome).toContain("stage=pull\nrollback=succeeded");
     expect(result.environment).toBe(result.originalEnvironment);
     expect(result.commands).not.toContain(".rollback.yml up -d");
+  });
+
+  it("rolls back and retains recovery inputs when the success outcome cannot be published", async () => {
+    const result = await runGeneratedUpdate("", "1.0.2", true, false, "canonicalize", true);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.outcome).toBe("");
+    expect(result.environment).toBe(result.originalEnvironment);
+    expect(await readFile(path.join(result.stateDirectory, "phase"), "utf8")).toBe("old\n");
+    await expect(stat(result.rollbackComposePath)).resolves.toBeTruthy();
+    await expect(stat(result.envBackupPath)).resolves.toBeTruthy();
+    await expect(stat(path.join(result.upgradeStateDirectory, "database-transition.json"))).resolves.toBeTruthy();
+    expect(result.stderr).toContain("authoritative failure outcome");
+  });
+
+  it("uses the armed interruption trap to roll back during final verification", async () => {
+    const result = await runGeneratedUpdate("finalization_interrupt", "1.0.2", true);
+
+    expect(result.exitCode).toBe(130);
+    expect(result.outcome).toContain("status=failed\nstage=interrupted\nrollback=succeeded");
+    expect(result.environment).toBe(result.originalEnvironment);
+    expect(await readFile(path.join(result.stateDirectory, "phase"), "utf8")).toBe("old\n");
   });
 });
 

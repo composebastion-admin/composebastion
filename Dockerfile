@@ -28,6 +28,16 @@ COPY . .
 RUN npm run build
 RUN npm prune --omit=dev
 
+FROM node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a AS storage-helper-builder
+WORKDIR /src
+RUN apk add --no-cache build-base
+COPY scripts/prepare-backup-storage.c ./prepare-backup-storage.c
+RUN cc -std=c17 -O2 -Wall -Wextra -Werror prepare-backup-storage.c -o /tmp/composebastion-prepare-storage && \
+    strip /tmp/composebastion-prepare-storage
+
+FROM scratch AS storage-helper-artifacts
+COPY --from=storage-helper-builder /tmp/composebastion-prepare-storage /composebastion-prepare-storage
+
 FROM --platform=$BUILDPLATFORM golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS trivy-builder
 ENV GOTOOLCHAIN=local
 ARG TARGETOS
@@ -141,6 +151,7 @@ RUN set -eux; \
 
 COPY --from=trivy-builder /out/trivy /usr/local/bin/trivy
 COPY --from=rclone-builder /out/rclone /usr/local/bin/rclone
+COPY --from=storage-helper-builder /tmp/composebastion-prepare-storage /usr/local/bin/composebastion-prepare-storage
 COPY --from=trivy-builder /out/licenses/ /licenses/third-party/
 COPY --from=rclone-builder /out/licenses/ /licenses/third-party/
 COPY LICENSES/go-modules/ /licenses/third-party/go-modules/
@@ -159,8 +170,9 @@ COPY --from=build /app/scripts/prepare-database-upgrade.mjs ./scripts/prepare-da
 COPY --from=build /app/infra ./infra
 COPY LICENSE.md LICENSING_SUMMARY.md COMMERCIAL-LICENSE.md NOTICE.md THIRD-PARTY-NOTICES.md TRADEMARKS.md /licenses/
 COPY LICENSES /licenses/LICENSES
-RUN mkdir -p /data/backups /var/cache/composebastion/trivy && \
-    chown -R 1000:1000 /data/backups /var/cache/composebastion
+RUN mkdir -p /data/backups /var/cache/composebastion/trivy /var/lib/composebastion/upgrade-state && \
+    chmod 0700 /var/lib/composebastion/upgrade-state && \
+    chown -R 1000:1000 /data/backups /var/cache/composebastion /var/lib/composebastion
 RUN set -eux; \
     node -e "Promise.all([import('@composebastion/shared'), import('semver')])"; \
     trivy --version | grep -F "Version: ${TRIVY_VERSION}"; \

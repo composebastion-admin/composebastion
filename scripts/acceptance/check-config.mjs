@@ -6,6 +6,7 @@ import {
   isDockerBindPathStrictlyBeneath
 } from "./bind-paths.mjs";
 import { acceptanceScenarioManifest } from "./scenario-manifest.mjs";
+import { acceptanceUpgradeBridge } from "./upgrade-baselines.mjs";
 
 const candidateVersion = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")).version;
 const root = new URL("../..", import.meta.url);
@@ -52,6 +53,15 @@ function curatedHostEnvironment(source) {
 
 const hostEnvironment = curatedHostEnvironment(process.env);
 
+if (acceptanceUpgradeBridge.releaseTag !== "ghcr.io/composebastion-admin/composebastion-app:1.1.3") {
+  throw new Error("Acceptance bridge release tag must identify the published 1.1.3 app image");
+}
+if (!/^ghcr\.io\/composebastion-admin\/composebastion-app@sha256:[a-f0-9]{64}$/.test(
+  acceptanceUpgradeBridge.pinnedImage
+)) {
+  throw new Error("Acceptance bridge qualification image must be an immutable GHCR app digest");
+}
+
 function assertPinnedImages(file, { allowInterpolated = false } = {}) {
   const contents = readFileSync(new URL(`../../${file}`, import.meta.url), "utf8");
   const failures = [];
@@ -68,6 +78,17 @@ assertPinnedImages("docker-compose.acceptance.upgrade.yml", { allowInterpolated:
 assertPinnedImages("docker-compose.acceptance.source.yml");
 assertPinnedImages("infra/dev/sshhost.Dockerfile");
 assertPinnedImages("scripts/acceptance/run.mjs");
+
+const upgradeFixtureSource = readFileSync(new URL("../../docker-compose.acceptance.upgrade.yml", import.meta.url), "utf8");
+for (const fragment of [
+  "sshhost:",
+  "/var/run/docker.sock:/var/run/docker.sock",
+  "\${ACCEPTANCE_RUNTIME_DIR:?Set ACCEPTANCE_RUNTIME_DIR}:\${ACCEPTANCE_RUNTIME_DIR:?Set ACCEPTANCE_RUNTIME_DIR}"
+]) {
+  if (!upgradeFixtureSource.includes(fragment)) {
+    throw new Error(`Upgrade acceptance SSH fixture is missing ${fragment}`);
+  }
+}
 
 const runnerSource = readFileSync(new URL("./run.mjs", import.meta.url), "utf8");
 const qualificationPolicySource = readFileSync(new URL("./qualification-policy.mjs", import.meta.url), "utf8");
@@ -128,9 +149,13 @@ for (const fragment of [
   'host.tags.includes("demo")',
   'restoredDataVerified: true',
   'preservedQueuedJob: true',
-  'gitCapture(["show", "v1.1.2:docker-compose.image.yml"])',
-  'runCompatibilityPreparation("reconcile")',
-  'runCompatibilityPreparation("restore-legacy")',
+  'gitCapture(["show", `v${baseline.version}:docker-compose.image.yml`])',
+  'inspectBridgeUpgradeImage()',
+  'api("/api/self-update/start"',
+  'waitForSelfUpdateOutcome',
+  'forcedFailureMarker',
+  'immutableBridgeRollback: true',
+  'dependencyContainerIdsPreserved: true',
   'pre12ComposeInitializerServicesAbsent: true',
   'credentialRollbackVerified:',
   'rollbackDependenciesBypassed: true',

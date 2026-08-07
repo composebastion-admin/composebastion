@@ -3,8 +3,10 @@ import { execFileSync } from "node:child_process";
 import {
   access,
   chmod,
+  copyFile,
   mkdir,
   readFile,
+  rename,
   rm,
   writeFile
 } from "node:fs/promises";
@@ -14,6 +16,9 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const candidateVersion = JSON.parse(await readFile(path.join(root, "package.json"), "utf8")).version;
 const dockerBin = process.env.COMPOSEBASTION_SOURCE_UPGRADE_DOCKER_BIN || "docker";
+const environmentPath = process.env.COMPOSEBASTION_SOURCE_UPGRADE_ENV_FILE
+  ? path.resolve(process.env.COMPOSEBASTION_SOURCE_UPGRADE_ENV_FILE)
+  : path.join(root, ".env");
 if (dockerBin !== "docker" && !path.isAbsolute(dockerBin)) {
   throw new Error("COMPOSEBASTION_SOURCE_UPGRADE_DOCKER_BIN must be docker or an absolute path");
 }
@@ -35,15 +40,22 @@ function parseFiles(argv) {
 }
 
 const composeFiles = parseFiles(process.argv.slice(2));
-const composePrefix = composeFiles.flatMap((file) => ["-f", file]);
 
-function docker(args, { capture = false, composeOverride = null } = {}) {
+function docker(args, {
+  capture = false,
+  composeOverride = null,
+  composeFilesOverride = null,
+  unsetDatabaseUrl = false
+} = {}) {
+  const selectedComposePrefix = (composeFilesOverride ?? composeFiles).flatMap((file) => ["-f", file]);
   const command = args[0] === "compose"
-    ? ["compose", ...composePrefix, ...(composeOverride ? ["-f", composeOverride] : []), ...args.slice(1)]
+    ? ["compose", "--env-file", environmentPath, ...selectedComposePrefix, ...(composeOverride ? ["-f", composeOverride] : []), ...args.slice(1)]
     : args;
+  const commandEnvironment = { ...process.env };
+  if (unsetDatabaseUrl) delete commandEnvironment.DATABASE_URL;
   const output = execFileSync(dockerBin, command, {
     cwd: root,
-    env: process.env,
+    env: commandEnvironment,
     encoding: "utf8",
     stdio: capture ? ["ignore", "pipe", "pipe"] : "inherit"
   });
@@ -113,6 +125,7 @@ function preparationArgs(stateDirectory, mode) {
     "--volume", `${stateDirectory}:/run/composebastion-upgrade`,
     "app", "node", "/app/scripts/prepare-compose-upgrade.mjs", mode,
     "--compose-config", "/run/composebastion-upgrade/compose-config.json",
+    "--environment-probe", "/run/composebastion-upgrade/source-env-probe.json",
     "--state-file", "/run/composebastion-upgrade/database-transition.json"
   ];
 }
@@ -121,14 +134,50 @@ const previousApp = runningIdentity("app");
 const previousWorker = runningIdentity("worker");
 const stateDirectory = path.join(root, `.composebastion-source-upgrade-${randomUUID()}`);
 const configPath = path.join(stateDirectory, "compose-config.json");
+const sourceEnvironmentProbeTemplatePath = path.join(stateDirectory, "source-env-probe.yml");
+const sourceEnvironmentProbePath = path.join(stateDirectory, "source-env-probe.json");
 const rollbackPath = path.join(stateDirectory, "rollback.yml");
+const environmentBackupPath = path.join(stateDirectory, "env.backup");
 let servicesTouched = false;
 let rollbackSucceeded = false;
+let environmentChanged = false;
+
+async function canonicalizeManagedDatabaseEnvironment() {
+  const contents = await readFile(environmentPath, "utf8").catch(() => {
+    throw new Error("A changed managed database credential requires a persistent .env file");
+  });
+  const temporary = path.join(
+    path.dirname(environmentPath),
+    `.env.composebastion-database.${process.pid}.${randomUUID()}.tmp`
+  );
+  try {
+    await writeFile(temporary, `${contents}\n# ComposeBastion managed legacy database transition\nDATABASE_URL=\n`, { mode: 0o600 });
+    await chmod(temporary, 0o600);
+    await rename(temporary, environmentPath);
+    environmentChanged = true;
+  } finally {
+    await rm(temporary, { force: true });
+  }
+}
 
 try {
   await mkdir(stateDirectory, { mode: 0o700 });
+  await writeFile(sourceEnvironmentProbeTemplatePath, [
+    "services:",
+    "  composebastion-upgrade-probe:",
+    "    image: scratch",
+    "    environment:",
+    "      COMPOSEBASTION_UPGRADE_SOURCE_DATABASE_URL: ${DATABASE_URL-}",
+    ""
+  ].join("\n"), { mode: 0o600 });
   console.info(`Building ComposeBastion ${candidateVersion} from the current source checkout.`);
   docker(["compose", "build", "app", "worker"]);
+  const renderedProbe = docker(["compose", "config", "--format", "json"], {
+    capture: true,
+    composeFilesOverride: [sourceEnvironmentProbeTemplatePath],
+    unsetDatabaseUrl: true
+  });
+  await writeFile(sourceEnvironmentProbePath, `${renderedProbe}\n`, { mode: 0o600 });
   const renderedConfig = docker(["compose", "config", "--format", "json"], { capture: true });
   const candidateServices = JSON.parse(renderedConfig).services;
   const candidateAppReference = candidateServices?.app?.image;
@@ -144,10 +193,23 @@ try {
   }
   await writeFile(configPath, `${renderedConfig}\n`, { mode: 0o600 });
   await chmod(configPath, 0o600);
+  if (await access(environmentPath).then(() => true).catch(() => false)) {
+    await copyFile(environmentPath, environmentBackupPath);
+    await chmod(environmentBackupPath, 0o600);
+  }
 
   servicesTouched = true;
   docker(["compose", "stop", "app", "worker"]);
-  docker(preparationArgs(stateDirectory, "reconcile"));
+  const preparationOutput = docker(preparationArgs(stateDirectory, "reconcile"), { capture: true });
+  console.info(preparationOutput);
+  const credentialTransition = preparationOutput.match(/^COMPOSEBASTION_DATABASE_CREDENTIAL_TRANSITION=(changed|unchanged)$/m)?.[1];
+  const environmentAction = preparationOutput.match(/^COMPOSEBASTION_DATABASE_ENVIRONMENT_ACTION=(canonicalize|preserve)$/m)?.[1];
+  if (!credentialTransition || !environmentAction) {
+    throw new Error("Candidate preparation did not return valid database preparation results");
+  }
+  if (environmentAction === "canonicalize") {
+    await canonicalizeManagedDatabaseEnvironment();
+  }
   docker(["compose", "up", "-d", "--no-deps", "--force-recreate", "app", "worker"]);
   await waitForStack(candidateVersion, candidateAppImage, candidateWorkerImage);
   await rm(stateDirectory, { recursive: true, force: true });
@@ -165,6 +227,10 @@ try {
         docker(preparationArgs(stateDirectory, "restore-legacy"));
       } catch (stateError) {
         if (!(stateError instanceof Error && "code" in stateError && stateError.code === "ENOENT")) throw stateError;
+      }
+      if (environmentChanged) {
+        await copyFile(environmentBackupPath, environmentPath);
+        await chmod(environmentPath, 0o600);
       }
       await writeFile(rollbackPath, [
         "services:",

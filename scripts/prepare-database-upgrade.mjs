@@ -26,6 +26,13 @@ function managedUrl(postgresPassword) {
   return `postgres://composebastion:${postgresPassword}@postgres:5432/composebastion`;
 }
 
+function isRepositoryManagedUrl(value) {
+  return value === LEGACY_MANAGED_DATABASE_URL
+    || (typeof value === "string"
+      && value.startsWith("postgres://composebastion:")
+      && value.endsWith("@postgres:5432/composebastion"));
+}
+
 async function connect(connectionString) {
   const client = new Client({ connectionString, connectionTimeoutMillis: 5_000 });
   await client.connect();
@@ -55,13 +62,21 @@ async function ensureStateParent(stateFile) {
   return parent;
 }
 
-async function writeReceipt(stateFile, receipt) {
+const defaultReceiptFilesystem = {
+  chmod,
+  open,
+  rename,
+  rm
+};
+
+async function writeReceipt(stateFile, receipt, filesystem = defaultReceiptFilesystem) {
   if (!stateFile) return;
   const parent = await ensureStateParent(stateFile);
   const temporary = path.join(parent, `.${path.basename(stateFile)}.${process.pid}.${randomUUID()}.tmp`);
   let handle;
+  let parentHandle;
   try {
-    handle = await open(
+    handle = await filesystem.open(
       temporary,
       fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY | fsConstants.O_NOFOLLOW,
       0o600
@@ -70,11 +85,19 @@ async function writeReceipt(stateFile, receipt) {
     await handle.sync();
     await handle.close();
     handle = null;
-    await rename(temporary, stateFile);
-    await chmod(stateFile, 0o600);
+    await filesystem.rename(temporary, stateFile);
+    await filesystem.chmod(stateFile, 0o600);
+    parentHandle = await filesystem.open(
+      parent,
+      fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW
+    );
+    await parentHandle.sync();
+    await parentHandle.close();
+    parentHandle = null;
   } finally {
     await handle?.close().catch(() => undefined);
-    await rm(temporary, { force: true }).catch(() => undefined);
+    await parentHandle?.close().catch(() => undefined);
+    await filesystem.rm(temporary, { force: true }).catch(() => undefined);
   }
 }
 
@@ -106,6 +129,31 @@ async function readReceiptIfPresent(stateFile) {
   }
 }
 
+export async function readRawEnvironmentProbe(probeFile) {
+  if (!probeFile) return null;
+  let handle;
+  try {
+    handle = await open(probeFile, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    const stats = await handle.stat();
+    if (!stats.isFile() || (stats.mode & 0o777) !== 0o600) {
+      throw new Error("Raw environment probe must be a mode-0600 regular file");
+    }
+    const config = JSON.parse(await handle.readFile("utf8"));
+    const environment = config?.services?.["composebastion-upgrade-probe"]?.environment;
+    if (!environment || typeof environment !== "object" || Array.isArray(environment)) {
+      throw new Error("Raw environment probe is missing its protected service environment");
+    }
+    return environment.COMPOSEBASTION_UPGRADE_SOURCE_DATABASE_URL === undefined
+      ? null
+      : String(environment.COMPOSEBASTION_UPGRADE_SOURCE_DATABASE_URL);
+  } catch (error) {
+    if (error instanceof SyntaxError) throw new Error("Raw environment probe is invalid JSON");
+    throw error;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
 function isChangedTransitionReceipt(value) {
   return value?.schema === 1
     && value?.transition === DATABASE_TRANSITION
@@ -132,37 +180,98 @@ function receipt(status, changed, reason) {
   };
 }
 
+function reconciliationResult(transitionReceipt, environmentAction) {
+  return {
+    credentialTransition: transitionReceipt.changed ? "changed" : "unchanged",
+    environmentAction,
+    receipt: transitionReceipt
+  };
+}
+
+function environmentActionFor({ configuredUrl, rawEnvironmentUrl }) {
+  if (rawEnvironmentUrl === LEGACY_MANAGED_DATABASE_URL) return "canonicalize";
+  if (rawEnvironmentUrl && rawEnvironmentUrl !== LEGACY_MANAGED_DATABASE_URL) return "preserve";
+  return configuredUrl === LEGACY_MANAGED_DATABASE_URL ? "canonicalize" : "preserve";
+}
+
 export async function reconcileManagedDatabase({
   configuredUrl = process.env.DATABASE_URL,
+  rawEnvironmentUrl = Object.hasOwn(process.env, "COMPOSEBASTION_UPGRADE_SOURCE_DATABASE_URL")
+    ? process.env.COMPOSEBASTION_UPGRADE_SOURCE_DATABASE_URL
+    : null,
   postgresPassword = process.env.POSTGRES_PASSWORD || "",
   stateFile = null,
   acceptsConnection = accepts,
-  connectClient = connect
+  connectClient = connect,
+  receiptFilesystem = defaultReceiptFilesystem
 } = {}) {
-  if (configuredUrl !== LEGACY_MANAGED_DATABASE_URL) {
-    const result = receipt("unchanged", false, "explicit-or-derived-database-url");
-    await writeReceipt(stateFile, result);
+  const environmentAction = environmentActionFor({ configuredUrl, rawEnvironmentUrl });
+  const rawUrlIsExplicitCustom = Boolean(rawEnvironmentUrl && !isRepositoryManagedUrl(rawEnvironmentUrl));
+  const effectiveUrlLooksManaged = isRepositoryManagedUrl(configuredUrl);
+
+  // The raw operator assignment is authoritative. Classify custom/external
+  // deployments before validating a password that those deployments do not use.
+  if (rawUrlIsExplicitCustom || (!effectiveUrlLooksManaged && rawEnvironmentUrl !== LEGACY_MANAGED_DATABASE_URL)) {
+    const transitionReceipt = receipt("unchanged", false, "explicit-or-derived-database-url");
+    await writeReceipt(stateFile, transitionReceipt, receiptFilesystem);
     console.info("Managed database credentials do not require legacy reconciliation.");
-    return result;
+    return reconciliationResult(transitionReceipt, "preserve");
   }
 
-  const password = validateManagedPassword(postgresPassword);
+  let password;
+  try {
+    password = validateManagedPassword(postgresPassword);
+  } catch (error) {
+    // A stale raw legacy assignment can be ignored by an external effective URL.
+    // Without a valid managed password, it cannot be verified and canonicalized,
+    // but it must not make the external deployment fail.
+    if (!effectiveUrlLooksManaged && rawEnvironmentUrl === LEGACY_MANAGED_DATABASE_URL) {
+      const transitionReceipt = receipt("unchanged", false, "external-url-with-unverifiable-stale-legacy-assignment");
+      await writeReceipt(stateFile, transitionReceipt, receiptFilesystem);
+      console.info("Preserved an unverifiable stale legacy assignment for an external database deployment.");
+      return reconciliationResult(transitionReceipt, "preserve");
+    }
+    throw error;
+  }
+
   const canonicalUrl = managedUrl(password);
-  if (await acceptsConnection(canonicalUrl)) {
+  const rawUrlIsCustom = Boolean(
+    rawEnvironmentUrl
+    && rawEnvironmentUrl !== LEGACY_MANAGED_DATABASE_URL
+    && rawEnvironmentUrl !== canonicalUrl
+  );
+  const isManagedEffectiveUrl = configuredUrl === LEGACY_MANAGED_DATABASE_URL
+    || configuredUrl === canonicalUrl;
+  const mayUseManagedCredential = isManagedEffectiveUrl && !rawUrlIsCustom;
+  const canonicalAccepted = mayUseManagedCredential || environmentAction === "canonicalize"
+    ? await acceptsConnection(canonicalUrl)
+    : false;
+
+  if (!mayUseManagedCredential) {
+    const transitionReceipt = receipt("unchanged", false, "explicit-or-derived-database-url");
+    await writeReceipt(stateFile, transitionReceipt, receiptFilesystem);
+    console.info("Managed database credentials do not require legacy reconciliation.");
+    return reconciliationResult(
+      transitionReceipt,
+      environmentAction === "canonicalize" && canonicalAccepted ? "canonicalize" : "preserve"
+    );
+  }
+
+  if (canonicalAccepted) {
     const previousReceipt = await readReceiptIfPresent(stateFile);
     if (previousReceipt && !isRecognizedTransitionReceipt(previousReceipt)) {
       throw new Error("Managed database transition state is invalid");
     }
-    const result = isChangedTransitionReceipt(previousReceipt)
+    const transitionReceipt = isChangedTransitionReceipt(previousReceipt)
       ? receipt("reconciled", true, "managed-password-accepted-after-recorded-transition")
       : receipt("unchanged", false, "managed-password-already-accepted");
-    await writeReceipt(stateFile, result);
+    await writeReceipt(stateFile, transitionReceipt, receiptFilesystem);
     console.info(
-      result.changed
+      transitionReceipt.changed
         ? "Managed database still accepts POSTGRES_PASSWORD; preserved the recorded credential transition."
         : "Managed database already accepts POSTGRES_PASSWORD."
     );
-    return result;
+    return reconciliationResult(transitionReceipt, environmentAction);
   }
 
   let legacyClient;
@@ -175,7 +284,11 @@ export async function reconcileManagedDatabase({
     // Record the intended changed state before committing. PostgreSQL rolls the
     // ALTER back if this process exits before COMMIT; if COMMIT completes, the
     // receipt is already durable enough for interruption recovery.
-    await writeReceipt(stateFile, receipt("pending", true, "legacy-password-rotation-pending-verification"));
+    await writeReceipt(
+      stateFile,
+      receipt("pending", true, "legacy-password-rotation-pending-verification"),
+      receiptFilesystem
+    );
     await legacyClient.query("COMMIT");
     transactionStarted = false;
   } catch {
@@ -190,10 +303,10 @@ export async function reconcileManagedDatabase({
   if (!(await acceptsConnection(canonicalUrl))) {
     throw new Error("Managed database credential rotation did not pass verification");
   }
-  const result = receipt("reconciled", true, "legacy-password-rotated");
-  await writeReceipt(stateFile, result);
+  const transitionReceipt = receipt("reconciled", true, "legacy-password-rotated");
+  await writeReceipt(stateFile, transitionReceipt, receiptFilesystem);
   console.info("Reconciled the repository legacy database credential with POSTGRES_PASSWORD.");
-  return result;
+  return reconciliationResult(transitionReceipt, environmentAction);
 }
 
 export async function restoreLegacyManagedDatabase({
@@ -257,10 +370,15 @@ function parseCli(argv) {
   const args = [...argv];
   const mode = args[0] && !args[0].startsWith("--") ? args.shift() : "reconcile";
   let stateFile = null;
+  let environmentProbe = null;
   while (args.length > 0) {
     const argument = args.shift();
     if (argument === "--state-file") {
       stateFile = args.shift() || null;
+      continue;
+    }
+    if (argument === "--environment-probe") {
+      environmentProbe = args.shift() || null;
       continue;
     }
     throw new Error(`Unknown database upgrade argument: ${argument}`);
@@ -268,15 +386,20 @@ function parseCli(argv) {
   if (!["reconcile", "restore-legacy"].includes(mode)) {
     throw new Error(`Unknown database upgrade mode: ${mode}`);
   }
-  return { mode, stateFile };
+  return { mode, stateFile, environmentProbe };
 }
 
 async function main() {
-  const { mode, stateFile } = parseCli(process.argv.slice(2));
+  const { mode, stateFile, environmentProbe } = parseCli(process.argv.slice(2));
   if (mode === "restore-legacy") {
     await restoreLegacyManagedDatabase({ stateFile });
   } else {
-    await reconcileManagedDatabase({ stateFile });
+    const rawEnvironmentUrl = environmentProbe
+      ? await readRawEnvironmentProbe(environmentProbe)
+      : undefined;
+    const result = await reconcileManagedDatabase({ stateFile, rawEnvironmentUrl });
+    console.info(`COMPOSEBASTION_DATABASE_CREDENTIAL_TRANSITION=${result.credentialTransition}`);
+    console.info(`COMPOSEBASTION_DATABASE_ENVIRONMENT_ACTION=${result.environmentAction}`);
   }
 }
 

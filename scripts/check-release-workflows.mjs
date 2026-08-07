@@ -358,6 +358,10 @@ if (!String(releaseMetadataStep?.run ?? "").includes("refs/heads/main")
     || !String(releaseMetadataStep?.run ?? "").includes("cannot publish prerelease version")) {
   fail(`${publishFile}:metadata: the main image alias must reject prerelease package versions`);
 }
+if (!String(releaseMetadataStep?.run ?? "").includes("refs/heads/beta")
+    || !String(releaseMetadataStep?.run ?? "").includes("requires an explicit prerelease version")) {
+  fail(`${publishFile}:metadata: the beta image alias must require a prerelease package version`);
+}
 const publicationRun = String(publicationStep?.run ?? "");
 for (const invariant of [
   "refs/tags/*",
@@ -722,12 +726,16 @@ const branchAliasRun = branchAliasStep?.run ?? "";
 if (branchAliasRun.includes(":latest")) fail(`${publishFile}:publish-branch: an untagged branch commit must not move latest`);
 if (!branchAliasRun.includes("scripts/reconcile-image-alias-pair.sh")
     || !branchAliasRun.includes("/tmp/branch-alias-reconciliation.json")
-    || !branchAliasRun.includes("branch")
-    || !branchAliasRun.includes('"${GITHUB_REF_NAME}"')
+    || !branchAliasRun.includes('mode="branch"')
+    || !branchAliasRun.includes('mode="beta"')
+    || !branchAliasRun.includes('aliases=("${GITHUB_REF_NAME}")')
+    || !branchAliasRun.includes('aliases+=("${VERSION}")')
+    || !branchAliasRun.includes('"${aliases[@]}"')
     || branchAliasStep?.env?.LEGACY_ALIAS_BOOTSTRAP_POLICY !== ".github/legacy-alias-bootstrap.json"
     || branchAliasStep?.env?.APP_INDEX_DIGEST !== "${{ steps.indexes.outputs.app_digest }}"
-    || branchAliasStep?.env?.AGENT_INDEX_DIGEST !== "${{ steps.indexes.outputs.agent_digest }}") {
-  fail(`${publishFile}:publish-branch: main/beta must use the paired attestation/rollback reconciler`);
+    || branchAliasStep?.env?.AGENT_INDEX_DIGEST !== "${{ steps.indexes.outputs.agent_digest }}"
+    || branchAliasStep?.env?.VERSION !== "${{ needs.metadata.outputs.version }}") {
+  fail(`${publishFile}:publish-branch: main/beta must use paired branch/prerelease attestation reconciliation`);
 }
 const branchReconciliationUpload = publishBranchSteps.find(
   (step) => step.name === "Upload paired branch-alias reconciliation evidence"
@@ -995,6 +1003,8 @@ for (const invariant of [
   "finalInspectionComplete",
   "finalTargetPairVerified",
   'kind="new-moving"',
+  "branch|beta|stable",
+  "reconcile_range 1 1",
   "allow_legacy_pair",
   "LEGACY_ALIAS_BOOTSTRAP_POLICY",
   "reconcile_range 0 1",

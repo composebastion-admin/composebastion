@@ -19,9 +19,9 @@ shift 6
 aliases=("$@")
 
 case "${mode}" in
-  branch|stable) ;;
+  branch|beta|stable) ;;
   *)
-    printf 'Mode must be branch or stable, got %s.\n' "${mode}" >&2
+    printf 'Mode must be branch, beta, or stable, got %s.\n' "${mode}" >&2
     exit 64
     ;;
 esac
@@ -39,6 +39,10 @@ for alias in "${aliases[@]}"; do
 done
 if [[ "${mode}" = branch && "${#aliases[@]}" -ne 1 ]]; then
   printf 'Branch reconciliation requires exactly one moving alias.\n' >&2
+  exit 64
+fi
+if [[ "${mode}" = beta && "${#aliases[@]}" -ne 2 ]]; then
+  printf 'Beta reconciliation requires the moving beta alias and one immutable prerelease alias.\n' >&2
   exit 64
 fi
 if [[ "${mode}" = stable && "${#aliases[@]}" -ne 4 ]]; then
@@ -312,8 +316,14 @@ for index in "${!aliases[@]}"; do
   fi
   kind="existing"
 
+  immutable_alias=false
+  if [[ ( "${mode}" = stable && "${index}" -lt 2 ) \
+        || ( "${mode}" = beta && "${index}" -eq 1 ) ]]; then
+    immutable_alias=true
+  fi
+
   if [[ -z "${app_before}" && -z "${agent_before}" ]]; then
-    if [[ "${mode}" = stable && "${index}" -lt 2 ]]; then kind="new-immutable"; else kind="new-moving"; fi
+    if [[ "${immutable_alias}" = true ]]; then kind="new-immutable"; else kind="new-moving"; fi
   elif [[ -z "${app_before}" || -z "${agent_before}" ]]; then
     if [[ ( -n "${app_before}" && "${app_before}" != "${app_target}" ) \
           || ( -n "${agent_before}" && "${agent_before}" != "${agent_target}" ) ]]; then
@@ -335,9 +345,9 @@ for index in "${!aliases[@]}"; do
         exit 1
       fi
     fi
-    if [[ "${mode}" = stable && "${index}" -lt 2 \
+    if [[ "${immutable_alias}" = true \
           && ( "${app_before}" != "${app_target}" || "${agent_before}" != "${agent_target}" ) ]]; then
-      failure_message="Immutable release alias ${alias} already exists at a different attested pair."
+      failure_message="Immutable version alias ${alias} already exists at a different attested pair."
       printf '%s\n' "${failure_message}" >&2
       exit 1
     fi
@@ -527,6 +537,14 @@ if [[ "${mode}" = stable ]]; then
   elif ! reconcile_range 2 2; then
     mutation_failed=true
   elif ! reconcile_range 3 3; then
+    mutation_failed=true
+  fi
+elif [[ "${mode}" = beta ]]; then
+  # Publish the immutable prerelease version first. A partial or conflicting
+  # version pair blocks the moving beta alias from changing.
+  if ! reconcile_range 1 1; then
+    mutation_failed=true
+  elif ! reconcile_range 0 0; then
     mutation_failed=true
   fi
 elif ! reconcile_range 0 0; then

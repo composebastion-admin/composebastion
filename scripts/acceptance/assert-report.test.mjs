@@ -8,7 +8,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { acceptanceScenarioManifest } from "./scenario-manifest.mjs";
 import { cleanupEmptyFields, cleanupTrueFields } from "./qualification-policy.mjs";
-import { acceptanceUpgradeBaselines } from "./upgrade-baselines.mjs";
+import { acceptanceUpgradeBaselines, acceptanceUpgradeBridge } from "./upgrade-baselines.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const assertionScript = path.join(root, "scripts/acceptance/assert-report.mjs");
@@ -72,9 +72,33 @@ function passingReport() {
     upgrade.detail.publicImage.version = baseline.version;
     upgrade.detail.publicImage.releaseTag = baseline.releaseTag;
     upgrade.detail.publicImage.repoDigest = baseline.pinnedImage;
-    upgrade.detail.legacyManagedCredentialReconciled = baseline.key === "legacy";
+    upgrade.detail.bridge = {
+      version: acceptanceUpgradeBridge.version,
+      releaseTag: acceptanceUpgradeBridge.releaseTag,
+      reference: acceptanceUpgradeBridge.pinnedImage,
+      repoDigest: acceptanceUpgradeBridge.pinnedImage
+    };
+    upgrade.detail.bridgeVersion = acceptanceUpgradeBridge.version;
+    upgrade.detail.hardenedUpdaterJobs = {
+      failed: {
+        jobId: "11111111-1111-4111-8111-111111111111",
+        outcomeFile: ".composebastion-self-update-11111111-1111-4111-8111-111111111111.outcome"
+      },
+      successful: {
+        jobId: "22222222-2222-4222-8222-222222222222",
+        outcomeFile: ".composebastion-self-update-22222222-2222-4222-8222-222222222222.outcome"
+      }
+    };
+    upgrade.detail.credentialPreparation = {
+      credentialTransition: baseline.expectedCredentialTransition,
+      environmentAction: baseline.expectedEnvironmentAction,
+      rawEnvironmentCanonicalized: true,
+      actualRotationVerified: baseline.expectedCredentialTransition === "changed",
+      restorationVerified: baseline.expectedCredentialTransition === "changed",
+      unchangedCredentialVerified: baseline.expectedCredentialTransition === "unchanged"
+    };
     if (baseline.rollbackRehearsal) {
-      upgrade.detail.rollbackVersion = baseline.version;
+      upgrade.detail.rollbackVersion = acceptanceUpgradeBridge.version;
       upgrade.detail.reupgradeVersion = "1.2.0-beta.1";
       upgrade.detail.volumesRetained = true;
       upgrade.detail.rollbackReupgradeHealthy = true;
@@ -237,7 +261,17 @@ test("release assertion rejects an upgrade scenario bound to the wrong public im
   scenario.detail.publicImage.repoDigest = acceptanceUpgradeBaselines[1].pinnedImage;
   const result = await assertReport(report);
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /not bound to exact public 1\.1\.2 image evidence/);
+  assert.match(result.stderr, /not bound to exact public 1\.1\.2 and 1\.1\.3 bridge image evidence/);
+});
+
+test("release assertion rejects an upgrade scenario bound to the wrong bridge digest", async () => {
+  const report = passingReport();
+  const scenario = report.scenarios.find((item) => item.id === "legacy-upgrade");
+  scenario.detail.bridge.reference = `ghcr.io/composebastion-admin/composebastion-app@sha256:${"cd".repeat(32)}`;
+  scenario.detail.bridge.repoDigest = scenario.detail.bridge.reference;
+  const result = await assertReport(report);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /not bound to exact public 1\.0\.6 and 1\.1\.3 bridge image evidence/);
 });
 
 test("release assertion rejects current-stable upgrade without retained-volume rollback proof", async () => {
@@ -247,6 +281,15 @@ test("release assertion rejects current-stable upgrade without retained-volume r
   const result = await assertReport(report);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /does not prove rollback and re-upgrade on retained volumes/);
+});
+
+test("release assertion rejects updater outcomes not bound to their job IDs", async () => {
+  const report = passingReport();
+  const scenario = report.scenarios.find((item) => item.id === "legacy-upgrade");
+  scenario.detail.hardenedUpdaterJobs.failed.outcomeFile = ".composebastion-self-update-wrong.outcome";
+  const result = await assertReport(report);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /failed updater outcome is not bound to its durable job ID/);
 });
 
 test("release assertion rejects an upgrade without legacy environment compatibility proof", async () => {
@@ -267,11 +310,20 @@ test("release assertion rejects an upgrade without backup ownership migration pr
   assert.match(result.stderr, /is missing legacyBackupOwnershipMigrated/);
 });
 
-test("release assertion rejects a long-hop upgrade without managed credential reconciliation", async () => {
+test("release assertion rejects an upgrade without separate credential rotation evidence", async () => {
   const report = passingReport();
-  const scenario = report.scenarios.find((item) => item.id === "legacy-upgrade");
-  scenario.detail.legacyManagedCredentialReconciled = false;
+  const scenario = report.scenarios.find((item) => item.id === "current-stable-upgrade");
+  scenario.detail.credentialPreparation.actualRotationVerified = false;
   const result = await assertReport(report);
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /does not prove legacy managed database credential reconciliation/);
+  assert.match(result.stderr, /does not prove actual managed credential rotation and restoration/);
+});
+
+test("release assertion rejects stale-environment canonicalization inferred from the baseline name", async () => {
+  const report = passingReport();
+  const scenario = report.scenarios.find((item) => item.id === "legacy-upgrade");
+  scenario.detail.credentialPreparation.rawEnvironmentCanonicalized = false;
+  const result = await assertReport(report);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /does not prove its raw-environment and credential preparation results separately/);
 });

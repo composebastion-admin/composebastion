@@ -1,28 +1,8 @@
-# Upgrade-only overrides layered over the exact public v1.1.2 image Compose
-# definition materialized by scripts/acceptance/run.mjs. Deliberately do not
-# add the 1.2 storage-init or database-init services: the candidate image must
-# bootstrap compatibility through `docker compose run --no-deps app`.
+# Upgrade-only dependencies layered over the pre-1.2 Compose definition
+# materialized by scripts/acceptance/run.mjs. Deliberately do not add the 1.2
+# initializer services or override app/worker: both updater hops must keep using
+# the operator's original single Compose file.
 services:
-  app:
-    image: ${COMPOSEBASTION_ACCEPTANCE_IMAGE:?Set COMPOSEBASTION_ACCEPTANCE_IMAGE}
-    pull_policy: never
-    environment:
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
-    volumes:
-      - ${ACCEPTANCE_RUNTIME_DIR:?Set ACCEPTANCE_RUNTIME_DIR}:/acceptance-runtime
-    healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/api/health/ready').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
-      interval: 5s
-      timeout: 5s
-      retries: 24
-      start_period: 15s
-
-  worker:
-    image: ${COMPOSEBASTION_ACCEPTANCE_IMAGE:?Set COMPOSEBASTION_ACCEPTANCE_IMAGE}
-    pull_policy: never
-    environment:
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
-
   postgres:
     image: postgres:16.6-alpine3.20@sha256:1e59919c179e296eaf3cc701f4d50bab5c393d7ed9746c188c9d519489c998dc
     healthcheck:
@@ -41,11 +21,15 @@ services:
 
   registry:
     image: registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
-    environment:
-      REGISTRY_AUTH: htpasswd
-      REGISTRY_AUTH_HTPASSWD_REALM: ComposeBastion Acceptance Registry
-      REGISTRY_AUTH_HTPASSWD_PATH: /auth/htpasswd
     ports:
       - "127.0.0.1:${ACCEPTANCE_REGISTRY_PORT:-18050}:5000"
+
+  sshhost:
+    build:
+      context: ${ACCEPTANCE_RUNTIME_DIR:?Set ACCEPTANCE_RUNTIME_DIR}/git-build-context
+      dockerfile: infra/dev/sshhost.Dockerfile
+    environment:
+      COMPOSEBASTION_SSH_AUTHORIZED_KEYS: ${COMPOSEBASTION_SSH_AUTHORIZED_KEYS:?Set COMPOSEBASTION_SSH_AUTHORIZED_KEYS}
     volumes:
-      - ${ACCEPTANCE_REGISTRY_AUTH_FILE:?Set ACCEPTANCE_REGISTRY_AUTH_FILE}:/auth/htpasswd:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${ACCEPTANCE_RUNTIME_DIR:?Set ACCEPTANCE_RUNTIME_DIR}:${ACCEPTANCE_RUNTIME_DIR:?Set ACCEPTANCE_RUNTIME_DIR}

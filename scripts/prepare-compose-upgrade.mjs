@@ -4,6 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { prepareBackupStorage, numericIdentity } from "./prepare-backup-storage.mjs";
 import {
+  readRawEnvironmentProbe,
   reconcileManagedDatabase,
   restoreLegacyManagedDatabase
 } from "./prepare-database-upgrade.mjs";
@@ -48,7 +49,7 @@ function runtimeIdentity(config) {
   };
 }
 
-function managedDatabaseConfiguration(config) {
+function managedDatabaseConfiguration(config, rawEnvironmentUrl) {
   const appEnvironment = serviceEnvironment(config, "app");
   const workerEnvironment = serviceEnvironment(config, "worker");
   const postgresEnvironment = serviceEnvironment(config, "postgres");
@@ -58,7 +59,7 @@ function managedDatabaseConfiguration(config) {
   }
   const postgresPassword = String(postgresEnvironment.POSTGRES_PASSWORD ?? "");
   if (!postgresPassword) throw new Error("Rendered PostgreSQL service is missing POSTGRES_PASSWORD");
-  return { configuredUrl, postgresPassword };
+  return { configuredUrl, rawEnvironmentUrl, postgresPassword };
 }
 
 function parseCli(argv) {
@@ -66,27 +67,30 @@ function parseCli(argv) {
   const mode = args.shift();
   let composeConfig = null;
   let stateFile = null;
+  let environmentProbe = null;
   while (args.length > 0) {
     const argument = args.shift();
     if (argument === "--compose-config") composeConfig = args.shift() || null;
     else if (argument === "--state-file") stateFile = args.shift() || null;
+    else if (argument === "--environment-probe") environmentProbe = args.shift() || null;
     else throw new Error(`Unknown Compose upgrade argument: ${argument}`);
   }
   if (!["reconcile", "restore-legacy"].includes(mode)) {
     throw new Error("Compose upgrade mode must be reconcile or restore-legacy");
   }
-  if (!composeConfig || !stateFile) {
-    throw new Error("Compose upgrade requires --compose-config and --state-file");
+  if (!composeConfig || !stateFile || !environmentProbe) {
+    throw new Error("Compose upgrade requires --compose-config, --environment-probe, and --state-file");
   }
-  return { mode, composeConfig, stateFile };
+  return { mode, composeConfig, stateFile, environmentProbe };
 }
 
-export async function runComposeUpgrade({ mode, composeConfig, stateFile }) {
+export async function runComposeUpgrade({ mode, composeConfig, stateFile, environmentProbe }) {
   if (typeof process.getuid !== "function" || process.getuid() !== 0) {
     throw new Error("Compose upgrade preparation must run as container root");
   }
   const config = await readProtectedComposeConfig(composeConfig);
-  const database = managedDatabaseConfiguration(config);
+  const rawEnvironmentUrl = await readRawEnvironmentProbe(environmentProbe);
+  const database = managedDatabaseConfiguration(config, rawEnvironmentUrl);
 
   if (mode === "restore-legacy") {
     return restoreLegacyManagedDatabase({ ...database, stateFile });
@@ -100,13 +104,18 @@ export async function runComposeUpgrade({ mode, composeConfig, stateFile }) {
   const credential = await reconcileManagedDatabase({ ...database, stateFile });
   console.info(
     `Compose upgrade preparation completed for ${identity.uid}:${identity.gid}; `
-    + `storage changes ${storage.changed}, credential state ${credential.status}.`
+    + `storage changes ${storage.changed}, credential state ${credential.receipt.status}.`
   );
   return { storage, credential };
 }
 
 async function main() {
-  await runComposeUpgrade(parseCli(process.argv.slice(2)));
+  const result = await runComposeUpgrade(parseCli(process.argv.slice(2)));
+  const credential = result?.credential ?? result;
+  if (credential?.credentialTransition) {
+    console.info(`COMPOSEBASTION_DATABASE_CREDENTIAL_TRANSITION=${credential.credentialTransition}`);
+    console.info(`COMPOSEBASTION_DATABASE_ENVIRONMENT_ACTION=${credential.environmentAction}`);
+  }
 }
 
 const invokedPath = process.argv[1] ? pathToFileURL(path.resolve(process.argv[1])).href : null;

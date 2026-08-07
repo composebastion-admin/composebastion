@@ -207,6 +207,7 @@ run_reconciler() {
 all_attested="[\"${app_target}\",\"${agent_target}\",\"${app_prior}\",\"${agent_prior}\"]"
 target_attested="[\"${app_target}\",\"${agent_target}\"]"
 branch_aliases="{\"${app_image}:beta\":\"${app_prior}\",\"${agent_image}:beta\":\"${agent_prior}\"}"
+beta_version="1.2.0-beta.1"
 
 # The shared inspector must distinguish a confirmed missing reference from a
 # transient registry failure, including in the skopeo publication path.
@@ -246,6 +247,70 @@ assert_jq "${case_root}/state.json" \
   ".aliases[\"${app_image}:beta\"] == \"${app_target}\" and .aliases[\"${agent_image}:beta\"] == \"${agent_target}\""
 assert_jq "${case_root}/evidence.json" \
   ".status == \"succeeded\" and .finalInspectionComplete == true and .finalTargetPairVerified == true and .targetPair.revision == \"${target_revision}\" and .aliases[0].final.appDigest == \"${app_target}\" and .aliases[0].final.agentDigest == \"${agent_target}\""
+
+# A beta publication creates the exact prerelease alias first, then advances
+# the moving beta alias to the same attested app/agent pair.
+case_root="${fixture_root}/beta-success"
+mkdir -p "${case_root}"
+write_state "${case_root}/state.json" "${branch_aliases}" "${all_attested}"
+: > "${case_root}/mutations.log"
+TEST_GITHUB_REF="refs/heads/beta"
+TEST_BOOTSTRAP_POLICY=""
+TEST_FAIL_MATCH=""
+TEST_INSPECT_ERROR_REFERENCE=""
+TEST_INSPECT_ERROR_AFTER_CALL=""
+run_reconciler "${case_root}/state.json" "${case_root}/mutations.log" \
+  "${case_root}/evidence.json" beta "${app_image}" "${agent_image}" \
+  "${app_target}" "${agent_target}" beta "${beta_version}"
+assert_jq "${case_root}/state.json" \
+  ". as \$state | [\"beta\",\"${beta_version}\"] | all(.[]; . as \$alias | (\$state.aliases[\"${app_image}:\" + \$alias] == \"${app_target}\") and (\$state.aliases[\"${agent_image}:\" + \$alias] == \"${agent_target}\"))"
+assert_jq "${case_root}/evidence.json" \
+  ".status == \"succeeded\" and .mode == \"beta\" and (.aliases | length) == 2 and (.aliases[] | select(.alias == \"${beta_version}\") | .prior.kind) == \"new-immutable\""
+[[ "$(wc -l < "${case_root}/mutations.log" | tr -d ' ')" -eq 4 ]] \
+  || fail "beta success did not reconcile exactly four component aliases"
+
+# An existing prerelease alias is immutable and blocks beta before mutation if
+# it points at any other valid attested pair.
+case_root="${fixture_root}/beta-immutable-collision"
+mkdir -p "${case_root}"
+beta_collision_aliases="{
+  \"${app_image}:beta\":\"${app_prior}\",
+  \"${agent_image}:beta\":\"${agent_prior}\",
+  \"${app_image}:${beta_version}\":\"${app_prior}\",
+  \"${agent_image}:${beta_version}\":\"${agent_prior}\"
+}"
+write_state "${case_root}/state.json" "${beta_collision_aliases}" "${all_attested}"
+: > "${case_root}/mutations.log"
+if run_reconciler "${case_root}/state.json" "${case_root}/mutations.log" \
+  "${case_root}/evidence.json" beta "${app_image}" "${agent_image}" \
+  "${app_target}" "${agent_target}" beta "${beta_version}"; then
+  fail "immutable beta version collision unexpectedly succeeded"
+fi
+[[ ! -s "${case_root}/mutations.log" ]] \
+  || fail "immutable beta version collision mutated an alias"
+assert_jq "${case_root}/evidence.json" \
+  '.status == "preflight-failed" and (.failure | contains("Immutable version alias"))'
+
+# A partial new prerelease pair is retained for safe retry and must never move
+# the beta alias to a candidate whose exact version pair is incomplete.
+case_root="${fixture_root}/beta-partial-version"
+mkdir -p "${case_root}"
+write_state "${case_root}/state.json" "${branch_aliases}" "${all_attested}"
+: > "${case_root}/mutations.log"
+TEST_FAIL_MATCH="${agent_image}:${beta_version}|${agent_image}@${agent_target}"
+if run_reconciler "${case_root}/state.json" "${case_root}/mutations.log" \
+  "${case_root}/evidence.json" beta "${app_image}" "${agent_image}" \
+  "${app_target}" "${agent_target}" beta "${beta_version}"; then
+  fail "partial beta version unexpectedly succeeded"
+fi
+assert_jq "${case_root}/state.json" \
+  ".aliases[\"${app_image}:${beta_version}\"] == \"${app_target}\" and (.aliases[\"${agent_image}:${beta_version}\"] // null) == null and .aliases[\"${app_image}:beta\"] == \"${app_prior}\" and .aliases[\"${agent_image}:beta\"] == \"${agent_prior}\""
+assert_jq "${case_root}/evidence.json" \
+  '.status == "partial-blocked" and .rollbackStatus == "partial-blocked"'
+if grep -Eq ':beta\|' "${case_root}/mutations.log"; then
+  fail "partial beta version attempted to move the beta alias"
+fi
+TEST_FAIL_MATCH=""
 
 # Clean stable release success creates both immutable aliases, creates the
 # minor alias, advances latest, and verifies all four final pairs.
@@ -293,7 +358,7 @@ fi
 assert_jq "${case_root}/state.json" \
   ".aliases[\"${app_image}:1.2.0\"] == \"${app_prior}\" and .aliases[\"${agent_image}:1.2.0\"] == \"${agent_prior}\" and (.aliases[\"${app_image}:v1.2.0\"] // null) == null and (.aliases[\"${agent_image}:v1.2.0\"] // null) == null and (.aliases[\"${app_image}:1.2\"] // null) == null and (.aliases[\"${agent_image}:1.2\"] // null) == null and (.aliases[\"${app_image}:latest\"] // null) == null and (.aliases[\"${agent_image}:latest\"] // null) == null"
 assert_jq "${case_root}/evidence.json" \
-  '.status == "preflight-failed" and .finalInspectionComplete == false and .finalTargetPairVerified == false and (.failure | contains("Immutable release alias"))'
+  '.status == "preflight-failed" and .finalInspectionComplete == false and .finalTargetPairVerified == false and (.failure | contains("Immutable version alias"))'
 
 # A transient failure that begins only during final evidence inspection must
 # never leave a green status after the pair appeared to settle.

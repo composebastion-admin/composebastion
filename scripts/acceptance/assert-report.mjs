@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { cleanupEvidenceFailures } from "./qualification-policy.mjs";
 import { acceptanceScenarioManifest } from "./scenario-manifest.mjs";
-import { acceptanceUpgradeBaselines } from "./upgrade-baselines.mjs";
+import { acceptanceUpgradeBaselines, acceptanceUpgradeBridge } from "./upgrade-baselines.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const acceptanceResultsDir = path.join(root, "test-results", "acceptance");
@@ -93,13 +93,26 @@ for (const baseline of acceptanceUpgradeBaselines) {
       || scenario?.detail?.to !== report.candidateVersion
       || scenario?.detail?.publicImage?.version !== baseline.version
       || scenario?.detail?.publicImage?.releaseTag !== baseline.releaseTag
-      || scenario?.detail?.publicImage?.repoDigest !== baseline.pinnedImage) {
+      || scenario?.detail?.publicImage?.repoDigest !== baseline.pinnedImage
+      || scenario?.detail?.bridge?.version !== acceptanceUpgradeBridge.version
+      || scenario?.detail?.bridge?.releaseTag !== acceptanceUpgradeBridge.releaseTag
+      || scenario?.detail?.bridge?.reference !== acceptanceUpgradeBridge.pinnedImage
+      || scenario?.detail?.bridge?.repoDigest !== acceptanceUpgradeBridge.pinnedImage) {
     failures.push(
-      `${baseline.scenarioId} is not bound to exact public ${baseline.version} image evidence`
+      `${baseline.scenarioId} is not bound to exact public ${baseline.version} and 1.1.3 bridge image evidence`
     );
   }
+  for (const outcome of ["failed", "successful"]) {
+    const jobId = scenario?.detail?.hardenedUpdaterJobs?.[outcome]?.jobId;
+    const outcomeFile = scenario?.detail?.hardenedUpdaterJobs?.[outcome]?.outcomeFile;
+    if (typeof jobId !== "string"
+        || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(jobId)
+        || outcomeFile !== `.composebastion-self-update-${jobId}.outcome`) {
+      failures.push(`${baseline.scenarioId} ${outcome} updater outcome is not bound to its durable job ID`);
+    }
+  }
   if (baseline.rollbackRehearsal
-      && (scenario?.detail?.rollbackVersion !== baseline.version
+      && (scenario?.detail?.rollbackVersion !== acceptanceUpgradeBridge.version
         || scenario?.detail?.reupgradeVersion !== report.candidateVersion
         || scenario?.detail?.volumesRetained !== true
         || scenario?.detail?.rollbackReupgradeHealthy !== true)) {
@@ -107,11 +120,21 @@ for (const baseline of acceptanceUpgradeBaselines) {
       `${baseline.scenarioId} does not prove rollback and re-upgrade on retained volumes`
     );
   }
-  if (baseline.key === "legacy"
-      && scenario?.detail?.legacyManagedCredentialReconciled !== true) {
+  if (scenario?.detail?.credentialPreparation?.credentialTransition !== baseline.expectedCredentialTransition
+      || scenario?.detail?.credentialPreparation?.environmentAction !== baseline.expectedEnvironmentAction
+      || scenario?.detail?.credentialPreparation?.rawEnvironmentCanonicalized !== true) {
     failures.push(
-      `${baseline.scenarioId} does not prove legacy managed database credential reconciliation`
+      `${baseline.scenarioId} does not prove its raw-environment and credential preparation results separately`
     );
+  }
+  if (baseline.expectedCredentialTransition === "changed"
+      && (scenario?.detail?.credentialPreparation?.actualRotationVerified !== true
+        || scenario?.detail?.credentialPreparation?.restorationVerified !== true)) {
+    failures.push(`${baseline.scenarioId} does not prove actual managed credential rotation and restoration`);
+  }
+  if (baseline.expectedCredentialTransition === "unchanged"
+      && scenario?.detail?.credentialPreparation?.unchangedCredentialVerified !== true) {
+    failures.push(`${baseline.scenarioId} does not prove that the managed credential remained unchanged`);
   }
 }
 const candidateScenario = (report.scenarios ?? []).find((item) => item.id === "candidate-images");

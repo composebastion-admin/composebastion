@@ -4,6 +4,7 @@ import { access, chmod, lstat, mkdir, readFile, rm, stat, symlink, writeFile } f
 import { createServer } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parse, stringify } from "yaml";
 import { dockerBindPathRelativeChild } from "./bind-paths.mjs";
 import {
   acceptanceNonqualifyingReasons,
@@ -14,7 +15,7 @@ import {
   requireImageComposeProject
 } from "./qualification-policy.mjs";
 import { acceptanceScenarioManifest } from "./scenario-manifest.mjs";
-import { acceptanceUpgradeBaselines } from "./upgrade-baselines.mjs";
+import { acceptanceUpgradeBaselines, acceptanceUpgradeBridge } from "./upgrade-baselines.mjs";
 import { assertSafeTestResultsPath, digestGitBuildContext, materializeGitBuildContext } from "../materialize-git-context.mjs";
 import { validateGoAttributionReview } from "../go-attribution-review.mjs";
 
@@ -70,6 +71,7 @@ function goModuleLegalReviewGate(review) {
 const goLegalReviewGate = goModuleLegalReviewGate(goAttributionManifest.review);
 const externalImageReferences = Object.freeze([
   ...acceptanceUpgradeBaselines.map((baseline) => baseline.pinnedImage),
+  process.env.COMPOSEBASTION_ACCEPTANCE_BRIDGE_IMAGE || acceptanceUpgradeBridge.pinnedImage,
   "node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a",
   "golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2",
   "alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b",
@@ -98,6 +100,7 @@ const inheritedEnvironmentKeys = Object.freeze([
   "DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG", "DOCKER_CERT_PATH",
   "DOCKER_TLS_VERIFY", "DOCKER_API_VERSION",
   "SSH_AUTH_SOCK",
+  "COMPOSEBASTION_ACCEPTANCE_BRIDGE_IMAGE",
   "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS",
   "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
   "http_proxy", "https_proxy", "all_proxy", "no_proxy"
@@ -1040,6 +1043,49 @@ async function inspectPublicUpgradeImage(baseline) {
     repoDigest,
     architecture: details.Architecture,
     version
+  };
+}
+
+async function inspectBridgeUpgradeImage() {
+  const override = hostEnvironment.COMPOSEBASTION_ACCEPTANCE_BRIDGE_IMAGE;
+  if (override) {
+    const reason = "COMPOSEBASTION_ACCEPTANCE_BRIDGE_IMAGE is restricted to explicit --allow-nonqualifying developer runs";
+    if (!allowNonqualifying) throw new Error(reason);
+    markNonqualifying(reason);
+  }
+  const requested = override || acceptanceUpgradeBridge.pinnedImage;
+  const immutable = /^ghcr\.io\/composebastion-admin\/composebastion-app@sha256:[a-f0-9]{64}$/i.test(requested);
+  if (!immutable) {
+    const reason = "COMPOSEBASTION_ACCEPTANCE_BRIDGE_IMAGE must name the published 1.1.3 image by immutable GHCR digest";
+    if (!allowNonqualifying) throw new Error(reason);
+    markNonqualifying(reason);
+  }
+  if (requested !== acceptanceUpgradeBridge.pinnedImage) {
+    const reason = `1.1.3 bridge override ${requested} does not match the qualification digest ${acceptanceUpgradeBridge.pinnedImage}`;
+    if (!allowNonqualifying) throw new Error(reason);
+    markNonqualifying(reason);
+  }
+  await run("docker", ["pull", requested], { inherit: true });
+  const details = JSON.parse((await run(
+    "docker",
+    ["image", "inspect", requested, "--format", "{{json .}}"]
+  )).stdout);
+  const repoDigest = (details.RepoDigests ?? []).find((value) =>
+    /^ghcr\.io\/composebastion-admin\/composebastion-app@sha256:[a-f0-9]{64}$/i.test(value)
+  );
+  assert(repoDigest, "published 1.1.3 bridge image did not expose an immutable GHCR digest");
+  if (immutable) assert(repoDigest === requested, `1.1.3 bridge digest is ${repoDigest}, expected ${requested}`);
+  const labels = details.Config?.Labels ?? {};
+  assert(labels["org.opencontainers.image.version"] === acceptanceUpgradeBridge.version,
+    `bridge image label is ${labels["org.opencontainers.image.version"] ?? "missing"}, expected ${acceptanceUpgradeBridge.version}`);
+  assert(labels["org.opencontainers.image.title"] === "ComposeBastion", "bridge image title label is invalid");
+  return {
+    reference: requested,
+    releaseTag: acceptanceUpgradeBridge.releaseTag,
+    repoDigest,
+    id: details.Id,
+    architecture: details.Architecture,
+    version: labels["org.opencontainers.image.version"]
   };
 }
 
@@ -2386,44 +2432,86 @@ async function hardenedContainersScenario() {
   }
 }
 
+function materializePre12UpgradeCompose(contents, acceptanceRuntimeDir) {
+  const definition = parse(contents);
+  const app = definition?.services?.app;
+  assert(app && definition.services?.worker, "public pre-1.2 Compose is missing app or worker");
+  app.volumes = [...(app.volumes ?? []), `${acceptanceRuntimeDir}:/acceptance-runtime`];
+  const forcedFailureProgram = [
+    "const fs=require('node:fs');",
+    "const version=require('/app/package.json').version;",
+    `if(version===${JSON.stringify(candidateVersion)}&&fs.existsSync('/acceptance-runtime/force-candidate-unhealthy'))process.exit(1);`,
+    "fetch('http://127.0.0.1:8080/api/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1));"
+  ].join("");
+  app.healthcheck = {
+    test: ["CMD", "node", "-e", forcedFailureProgram],
+    interval: "2s",
+    timeout: "3s",
+    retries: 3,
+    start_period: "5s"
+  };
+  return stringify(definition);
+}
+
+function renderUpgradeEnvironment(values) {
+  return `${Object.entries(values).map(([name, raw]) => {
+    const value = String(raw ?? "");
+    assert(/^[A-Z][A-Z0-9_]*$/.test(name), `invalid upgrade environment name ${name}`);
+    assert(!/[\r\n]/.test(value), `upgrade environment ${name} contains a newline`);
+    return `${name}=${value}`;
+  }).join("\n")}\n`;
+}
+
+async function waitForSelfUpdateOutcome(outcomePath, expectedStatus) {
+  return retry(`self-update outcome ${path.basename(outcomePath)}`, async () => {
+    const contents = await readFile(outcomePath, "utf8");
+    const outcome = Object.fromEntries(contents.trim().split(/\r?\n/).map((line) => {
+      const separator = line.indexOf("=");
+      assert(separator > 0, `invalid updater outcome line ${line}`);
+      return [line.slice(0, separator), line.slice(separator + 1)];
+    }));
+    assert(outcome.status === expectedStatus,
+      `updater outcome is ${outcome.status ?? "missing"}, expected ${expectedStatus}`);
+    return outcome;
+  }, { attempts: 240, delayMs: 1_000 });
+}
+
 async function upgradeScenario(baseline) {
   const scenarioName = `upgrade-${baseline.key}`;
   const project = projectName(scenarioName);
-  const publicComposeFile = path.join(runtimeDir, `${scenarioName}-docker-compose.image.yml`);
-  const upgradeStateDir = path.join(runtimeDir, `${scenarioName}-transition`);
-  const composeConfigPath = path.join(upgradeStateDir, "compose-config.json");
-  const databaseStatePath = path.join(upgradeStateDir, "database-transition.json");
+  const managerDir = path.join(runtimeDir, scenarioName);
+  const publicComposeFile = path.join(managerDir, "docker-compose.image.yml");
+  const managerEnvPath = path.join(managerDir, ".env");
+  const forcedFailureMarker = path.join(runtimeDir, "force-candidate-unhealthy");
   const externalOwnershipTarget = path.join(runtimeDir, `${scenarioName}-external-owner`);
   const backupSymlinkPath = path.join(scenarioBackupDir(scenarioName), ".composebastion-storage-owner");
   const legacyDatabasePlaceholder = "postgres://composebastion:composebastion@postgres:5432/composebastion";
+  const registryOrigin = `127.0.0.1:${portBase + 50}`;
+  const registryImage = `${registryOrigin}/composebastion-app`;
+  const publicRegistryReference = `${registryImage}:${baseline.version}`;
+  const bridgeRegistryReference = `${registryImage}:${acceptanceUpgradeBridge.version}`;
+  const candidateRegistryReference = `${registryImage}:${candidateVersion}`;
   const upgradeOverrides = {
     ACCEPTANCE_SCENARIO: scenarioName,
     ACCEPTANCE_HTTP_PORT: String(portBase + baseline.portOffset),
-    ACCEPTANCE_RUNTIME_DIR: runtimeDir
+    ACCEPTANCE_RUNTIME_DIR: runtimeDir,
+    COMPOSEBASTION_IMAGE: registryImage
   };
-  const oldOverrides = { ...upgradeOverrides, DATABASE_URL: "" };
-  const newOverrides = { ...upgradeOverrides, DATABASE_URL: legacyDatabasePlaceholder };
+  const oldOverrides = {
+    ...upgradeOverrides,
+    COMPOSEBASTION_VERSION: baseline.version,
+    DATABASE_URL: legacyDatabasePlaceholder
+  };
+  const newOverrides = {
+    ...upgradeOverrides,
+    COMPOSEBASTION_VERSION: candidateVersion,
+    DATABASE_URL: ""
+  };
   let oldEnv = acceptanceEnv(baseline.pinnedImage, oldOverrides);
   const newEnv = acceptanceEnv(candidateImage, newOverrides);
-  let rollbackEnv = oldEnv;
   const scenarioCompose = (env, args, options = {}) => (
     upgradeCompose(project, env, publicComposeFile, args, options)
   );
-  const runCompatibilityPreparation = async (mode) => scenarioCompose(newEnv, [
-    "run", "--rm", "--no-deps", "--user", "0:0",
-    "--volume", `${upgradeStateDir}:/run/composebastion-upgrade`,
-    "app", "node", "/app/scripts/prepare-compose-upgrade.mjs", mode,
-    "--compose-config", "/run/composebastion-upgrade/compose-config.json",
-    "--state-file", "/run/composebastion-upgrade/database-transition.json"
-  ], { inherit: true });
-  const renderCandidateConfiguration = async () => {
-    const rendered = await scenarioCompose(newEnv, ["config", "--format", "json"]);
-    const configuration = JSON.parse(rendered.stdout);
-    assert(!configuration.services?.["storage-init"] && !configuration.services?.["database-init"],
-      "pre-1.2 acceptance Compose unexpectedly contains initializer services");
-    await writeFile(composeConfigPath, `${rendered.stdout}\n`, { mode: 0o600 });
-    await chmod(composeConfigPath, 0o600);
-  };
   await mkdir(oldEnv.COMPOSEBASTION_BACKUP_DIR, { recursive: true });
   await setManagerBackupDirectoryOwnership(
     oldEnv.COMPOSEBASTION_BACKUP_DIR,
@@ -2445,43 +2533,89 @@ async function upgradeScenario(baseline) {
     ]);
     return result.stdout.split(/\r?\n/).map((value) => value.trim()).filter(Boolean).sort();
   };
+  const assertManagedCredential = async (credential, label) => {
+    const credentialCommand = credential === "legacy"
+      ? "PGPASSWORD=composebastion psql -h 127.0.0.1 -U composebastion -d composebastion -Atc 'SELECT 1'"
+      : "PGPASSWORD=\"$POSTGRES_PASSWORD\" psql -h 127.0.0.1 -U composebastion -d composebastion -Atc 'SELECT 1'";
+    const result = await scenarioCompose(activeEnv, [
+      "exec", "-T", "postgres", "sh", "-ceu",
+      credentialCommand
+    ]);
+    assert(result.stdout.trim() === "1", `${label} did not accept the expected ${credential} managed credential`);
+  };
   try {
-    const exactPublicCompose = gitCapture(["show", "v1.1.2:docker-compose.image.yml"]);
-    await writeFile(publicComposeFile, `${exactPublicCompose}\n`, { mode: 0o600 });
+    await mkdir(managerDir, { recursive: true, mode: 0o700 });
+    const exactPublicCompose = gitCapture(["show", `v${baseline.version}:docker-compose.image.yml`]);
+    await writeFile(
+      publicComposeFile,
+      materializePre12UpgradeCompose(exactPublicCompose, runtimeDir),
+      { mode: 0o600 }
+    );
+    const publicControls = [...exactPublicCompose.matchAll(/\$\{([A-Z0-9_]+)/g)]
+      .map((match) => match[1]);
+    const managerEnvironment = Object.fromEntries(
+      [...new Set(publicControls)].map((name) => [name, oldEnv[name] ?? ""])
+    );
+    Object.assign(managerEnvironment, {
+      COMPOSE_PROJECT_NAME: project,
+      COMPOSEBASTION_IMAGE: registryImage,
+      COMPOSEBASTION_VERSION: baseline.version,
+      DATABASE_URL: oldOverrides.DATABASE_URL
+    });
+    await writeFile(managerEnvPath, renderUpgradeEnvironment(managerEnvironment), { mode: 0o600 });
+    const initialManagerEnvironment = await lstat(managerEnvPath);
+    assert(initialManagerEnvironment.isFile() && !initialManagerEnvironment.isSymbolicLink(),
+      "upgrade manager environment is not a regular file");
+    assert((initialManagerEnvironment.mode & 0o777) === 0o600,
+      "upgrade manager environment is not protected with mode 0600");
     await writeFile(externalOwnershipTarget, "external ownership must remain unchanged\n", { mode: 0o600 });
     const externalOwnerBefore = await stat(externalOwnershipTarget);
     await rm(backupSymlinkPath, { force: true });
     await symlink(`/acceptance-runtime/${path.basename(externalOwnershipTarget)}`, backupSymlinkPath);
     await run("docker", ["pull", baseline.pinnedImage], { inherit: true });
     const publicImageEvidence = await inspectPublicUpgradeImage(baseline);
+    const bridgeImageEvidence = await inspectBridgeUpgradeImage();
     oldEnv = acceptanceEnv(publicImageEvidence.repoDigest, oldOverrides);
-    rollbackEnv = baseline.key === "legacy"
-      ? acceptanceEnv(publicImageEvidence.repoDigest, {
-        ...upgradeOverrides,
-        DATABASE_URL: legacyDatabasePlaceholder
-      })
-      : oldEnv;
     activeEnv = oldEnv;
-    // Start the public image without the candidate-only initializers so
-    // it can create the same root-owned recovery directory found on real
-    // pre-1.2 installations. The candidate phase must repair it automatically.
-    await scenarioCompose(oldEnv, ["up", "--detach", "postgres", "redis", "registry"], { inherit: true });
+    await scenarioCompose(oldEnv, ["up", "--detach", "--build", "postgres", "redis", "registry", "sshhost"], { inherit: true });
+    await retry("upgrade registry", async () => {
+      const response = await fetch(`http://${registryOrigin}/v2/`);
+      assert(response.ok, `upgrade registry returned ${response.status}`);
+    });
+    for (const [imageId, reference] of [
+      [publicImageEvidence.id, publicRegistryReference],
+      [bridgeImageEvidence.id, bridgeRegistryReference],
+      [report.candidateImages.app.id, candidateRegistryReference]
+    ]) {
+      await run("docker", ["image", "tag", imageId, reference]);
+      await run("docker", ["push", reference], { inherit: true });
+    }
+    if (baseline.initialManagedCredential === "legacy") {
+      await scenarioCompose(oldEnv, [
+        "exec", "-T", "postgres",
+        "psql", "-v", "ON_ERROR_STOP=1", "-U", "composebastion", "-d", "composebastion", "-c",
+        "ALTER ROLE composebastion PASSWORD 'composebastion'"
+      ]);
+    }
+    // Start the exact public image without candidate-only initializers. The
+    // candidate preparation must repair this nested root-owned path later.
     await scenarioCompose(oldEnv, ["up", "--detach", "--no-deps", "app", "worker"], { inherit: true });
     const imageBindings = {
       publicApp: await inspectComposeServiceImage(
         (args, options) => scenarioCompose(oldEnv, args, options),
         "app",
-        { expectedId: publicImageEvidence.id, expectedReference: publicImageEvidence.repoDigest }
+        { expectedId: publicImageEvidence.id, expectedReference: publicRegistryReference }
       ),
       publicWorker: await inspectComposeServiceImage(
         (args, options) => scenarioCompose(oldEnv, args, options),
         "worker",
-        { expectedId: publicImageEvidence.id, expectedReference: publicImageEvidence.repoDigest }
+        { expectedId: publicImageEvidence.id, expectedReference: publicRegistryReference }
       )
     };
     const initialVolumeNames = await projectVolumeNames();
     assert(initialVolumeNames.length > 0, "upgrade fixture did not create persistent Compose volumes");
     await waitForApiVersion(baseline.version);
+    await assertManagedCredential(baseline.initialManagedCredential, `public ${baseline.version}`);
     await scenarioCompose(oldEnv, [
       "exec", "-T", "app", "sh", "-ceu",
       "mkdir -p /data/backups/recovery-points; touch /data/backups/recovery-points/.pre-1.2-owner"
@@ -2519,6 +2653,32 @@ async function upgradeScenario(baseline) {
     });
     const demoHost = demoHostResponse.data.host;
     await waitForJob(demoHostResponse.data.job.id, { timeoutMs: 2 * 60_000 });
+    const managerHostResponse = await api("/api/hosts", {
+      method: "POST",
+      body: {
+        name: `Upgrade manager ${baseline.version}`,
+        hostname: "sshhost",
+        port: 22,
+        username: "root",
+        connectionMode: "ssh",
+        sshAuthType: "key",
+        sshPrivateKey,
+        dockerSocketPath: "/var/run/docker.sock",
+        tags: ["acceptance", "manager", scenarioName]
+      }
+    });
+    const managerHost = managerHostResponse.data.host;
+    await waitForJob(managerHostResponse.data.job.id, { timeoutMs: 3 * 60_000 });
+    await api("/api/self-update/config", {
+      method: "PUT",
+      body: {
+        hostId: managerHost.id,
+        workingDir: managerDir,
+        composeFile: path.basename(publicComposeFile),
+        versionMode: "pinned",
+        targetVersion: acceptanceUpgradeBridge.version
+      }
+    });
     await scenarioCompose(oldEnv, ["stop", "worker"]);
     const queued = await api(`/api/hosts/${demoHost.id}/actions`, {
       method: "POST",
@@ -2556,61 +2716,163 @@ async function upgradeScenario(baseline) {
          '/tmp/${upgradeMarker}-repository', now(), now()
        )`
     ]);
-    await scenarioCompose(oldEnv, ["stop", "app"]);
-    if (baseline.key === "legacy") {
-      // The 1.0.6 source stack used the repository legacy password for both
-      // clients and PostgreSQL. Force that retained-volume state so the
-      // candidate database initializer must reconcile it to POSTGRES_PASSWORD.
-      await scenarioCompose(oldEnv, [
-        "exec", "-T", "postgres",
-        "psql", "-v", "ON_ERROR_STOP=1", "-U", "composebastion", "-d", "composebastion", "-c",
-        "ALTER ROLE composebastion PASSWORD 'composebastion'"
-      ]);
-    }
-    await mkdir(upgradeStateDir, { recursive: true, mode: 0o700 });
-    await chmod(upgradeStateDir, 0o700);
-    await renderCandidateConfiguration();
-    await scenarioCompose(oldEnv, ["stop", "app", "worker"]);
-    activeEnv = newEnv;
-    await runCompatibilityPreparation("reconcile");
-    const transitionState = await scenarioCompose(newEnv, [
-      "run", "--rm", "--no-deps", "--user", "0:0",
-      "--volume", `${upgradeStateDir}:/run/composebastion-upgrade:ro`,
-      "app", "node", "-e",
-      "const r=JSON.parse(require('node:fs').readFileSync('/run/composebastion-upgrade/database-transition.json','utf8'));process.stdout.write(JSON.stringify({changed:r.changed,status:r.status}))"
-    ]);
-    const transitionReceipt = JSON.parse(transitionState.stdout);
-    assert(
-      transitionReceipt.changed === (baseline.key === "legacy"),
-      `unexpected database transition state for ${baseline.key}`
+    const oldHopStart = await api("/api/self-update/start", {
+      method: "POST",
+      body: { targetVersion: acceptanceUpgradeBridge.version }
+    });
+    const oldHopJobId = oldHopStart.data.job.id;
+    await scenarioCompose(oldEnv, ["up", "--detach", "--no-deps", "worker"], { inherit: true });
+    await waitForApiVersion(acceptanceUpgradeBridge.version);
+    const bridgeEnv = acceptanceEnv(bridgeImageEvidence.repoDigest, {
+      ...upgradeOverrides,
+      COMPOSEBASTION_VERSION: acceptanceUpgradeBridge.version,
+      DATABASE_URL: oldOverrides.DATABASE_URL
+    });
+    activeEnv = bridgeEnv;
+    sessionCookie = "";
+    await loginOwner();
+    const oldHopJob = await api(`/api/jobs/${oldHopJobId}`);
+    assert(oldHopJob.data.job.status === "completed", "public updater did not complete the old-to-bridge handoff job");
+    imageBindings.bridgeApp = await inspectComposeServiceImage(
+      (args, options) => scenarioCompose(bridgeEnv, args, options),
+      "app",
+      { expectedId: bridgeImageEvidence.id, expectedReference: bridgeRegistryReference }
     );
-    await scenarioCompose(newEnv, ["up", "--detach", "--no-deps", "--force-recreate", "app"], { inherit: true });
+    imageBindings.bridgeWorker = await inspectComposeServiceImage(
+      (args, options) => scenarioCompose(bridgeEnv, args, options),
+      "worker",
+      { expectedId: bridgeImageEvidence.id, expectedReference: bridgeRegistryReference }
+    );
+    const dependencyContainerIds = {
+      postgres: (await scenarioCompose(bridgeEnv, ["ps", "-q", "postgres"])).stdout.trim(),
+      redis: (await scenarioCompose(bridgeEnv, ["ps", "-q", "redis"])).stdout.trim()
+    };
+    assert(dependencyContainerIds.postgres && dependencyContainerIds.redis,
+      "bridge fixture dependency container identities are missing");
+    await api("/api/self-update/config", {
+      method: "PUT",
+      body: {
+        hostId: managerHost.id,
+        workingDir: managerDir,
+        composeFile: path.basename(publicComposeFile),
+        versionMode: "pinned",
+        targetVersion: candidateVersion
+      }
+    });
+    const environmentBeforeFailure = await readFile(managerEnvPath, "utf8");
+    await writeFile(forcedFailureMarker, "candidate-only health failure\n", { mode: 0o600 });
+    const failedStart = await api("/api/self-update/start", {
+      method: "POST",
+      body: { targetVersion: candidateVersion }
+    });
+    const failedJobId = failedStart.data.job.id;
+    const failedOutcomePath = path.join(managerDir, `.composebastion-self-update-${failedJobId}.outcome`);
+    const failedLogPath = path.join(managerDir, `.composebastion-self-update-${failedJobId}.log`);
+    const failedOutcome = await waitForSelfUpdateOutcome(failedOutcomePath, "failed");
+    assert(failedOutcome.stage === "verification" && failedOutcome.rollback === "succeeded",
+      `forced updater failure reported stage=${failedOutcome.stage} rollback=${failedOutcome.rollback}`);
+    await waitForApiVersion(acceptanceUpgradeBridge.version);
+    await waitForReadiness("automatic bridge rollback readiness");
+    sessionCookie = "";
+    await loginOwner();
+    const failedJob = await retry("failed updater API reconciliation", async () => {
+      const current = await api(`/api/jobs/${failedJobId}`);
+      assert(current.data.job.status === "failed", `bridge updater API job is ${current.data.job.status}`);
+      return current;
+    }, { attempts: 120, delayMs: 1_000 });
+    assert(failedJob.data.job.result?.outcome?.status === "failed"
+      && failedJob.data.job.result?.outcome?.stage === "verification",
+    "bridge updater failure API job is missing its authoritative outcome");
+    assert(await readFile(managerEnvPath, "utf8") === environmentBeforeFailure,
+      "automatic rollback did not restore the exact pre-upgrade environment");
+    assert(((await lstat(managerEnvPath)).mode & 0o777) === 0o600,
+      "automatic rollback did not restore the exact mode-0600 environment protection");
+    const expectedTransition = baseline.expectedCredentialTransition;
+    const expectedEnvironmentAction = baseline.expectedEnvironmentAction;
+    assert((await readFile(failedLogPath, "utf8")).includes(
+      `COMPOSEBASTION_DATABASE_CREDENTIAL_TRANSITION=${expectedTransition}`
+    ), "failed updater log does not record the candidate preparation transition");
+    assert((await readFile(failedLogPath, "utf8")).includes(
+      `COMPOSEBASTION_DATABASE_ENVIRONMENT_ACTION=${expectedEnvironmentAction}`
+    ), "failed updater log does not record the raw environment action");
+    await assertManagedCredential(baseline.rollbackManagedCredential, `failed ${baseline.version} rollback`);
+    imageBindings.rollbackApp = await inspectComposeServiceImage(
+      (args, options) => scenarioCompose(bridgeEnv, args, options),
+      "app",
+      { expectedId: bridgeImageEvidence.id, expectedReference: bridgeRegistryReference }
+    );
+    imageBindings.rollbackWorker = await inspectComposeServiceImage(
+      (args, options) => scenarioCompose(bridgeEnv, args, options),
+      "worker",
+      { expectedId: bridgeImageEvidence.id, expectedReference: bridgeRegistryReference }
+    );
+    assert((await scenarioCompose(bridgeEnv, ["ps", "-q", "postgres"])).stdout.trim() === dependencyContainerIds.postgres,
+      "automatic rollback recreated PostgreSQL");
+    assert((await scenarioCompose(bridgeEnv, ["ps", "-q", "redis"])).stdout.trim() === dependencyContainerIds.redis,
+      "automatic rollback recreated Redis");
+    await rm(forcedFailureMarker, { force: true });
+    const successfulStart = await api("/api/self-update/start", {
+      method: "POST",
+      body: { targetVersion: candidateVersion }
+    });
+    const successfulJobId = successfulStart.data.job.id;
+    const successfulOutcomePath = path.join(managerDir, `.composebastion-self-update-${successfulJobId}.outcome`);
+    const successfulLogPath = path.join(managerDir, `.composebastion-self-update-${successfulJobId}.log`);
+    const successfulOutcome = await waitForSelfUpdateOutcome(successfulOutcomePath, "passed");
+    assert(successfulOutcome.stage === "complete" && successfulOutcome.rollback === "not_required",
+      "successful bridge-to-candidate updater outcome is incomplete");
+    activeEnv = newEnv;
+    await waitForApiVersion(candidateVersion);
+    await waitForReadiness("successful bridge-to-candidate readiness");
+    sessionCookie = "";
+    await loginOwner();
+    const successfulJob = await retry("successful updater API reconciliation", async () => {
+      const current = await api(`/api/jobs/${successfulJobId}`);
+      assert(current.data.job.status === "completed", `successful updater API job is ${current.data.job.status}`);
+      return current.data.job;
+    }, { attempts: 120, delayMs: 1_000 });
+    assert(successfulJob.result?.outcome?.status === "passed",
+      "successful updater API job is missing its authoritative outcome");
+    const canonicalEnvironment = await readFile(managerEnvPath, "utf8");
+    const finalManagerEnvironment = await lstat(managerEnvPath);
+    assert(finalManagerEnvironment.isFile() && !finalManagerEnvironment.isSymbolicLink()
+      && (finalManagerEnvironment.mode & 0o777) === 0o600,
+      "successful updater did not leave a protected mode-0600 environment file");
+    assert((await readFile(successfulLogPath, "utf8")).includes(
+      `COMPOSEBASTION_DATABASE_CREDENTIAL_TRANSITION=${expectedTransition}`
+    ), "successful updater log does not record the candidate preparation transition");
+    assert((await readFile(successfulLogPath, "utf8")).includes(
+      `COMPOSEBASTION_DATABASE_ENVIRONMENT_ACTION=${expectedEnvironmentAction}`
+    ), "successful updater log does not record the raw environment action");
+    assert(canonicalEnvironment.includes(`COMPOSEBASTION_VERSION=${candidateVersion}\n`),
+      "successful updater did not persist the candidate version");
+    assert(canonicalEnvironment.includes("DATABASE_URL=\n"),
+      "successful updater did not persist the canonical managed database selection");
+    assert(canonicalEnvironment.includes("# ComposeBastion managed legacy database transition\nDATABASE_URL=\n"),
+      "raw legacy environment assignment was not replaced with its managed canonical override");
+    await assertManagedCredential("canonical", `successful ${baseline.version} upgrade`);
     imageBindings.candidateApp = await inspectComposeServiceImage(
       (args, options) => scenarioCompose(newEnv, args, options),
       "app",
       {
         expectedId: report.candidateImages.app.id,
-        expectedReference: candidateImage,
+        expectedReference: candidateRegistryReference,
         expectedRevision: candidateRevision,
         expectedCreated: candidateBuildDate
       }
     );
-    await waitForApiVersion(candidateVersion);
-    const queuedAfterMigration = await api(`/api/jobs/${queuedJobId}`);
-    assert(queuedAfterMigration.data.job.status === "queued", "queued API job did not survive candidate migrations");
-    assert(await jobAttemptCount(queuedJobId) === 0, "queued API job gained an attempt before the candidate worker started");
-    await scenarioCompose(newEnv, ["up", "--detach", "--no-deps", "--force-recreate", "worker"], { inherit: true });
     imageBindings.candidateWorker = await inspectComposeServiceImage(
       (args, options) => scenarioCompose(newEnv, args, options),
       "worker",
       {
         expectedId: report.candidateImages.app.id,
-        expectedReference: candidateImage,
+        expectedReference: candidateRegistryReference,
         expectedRevision: candidateRevision,
         expectedCreated: candidateBuildDate
       }
     );
-    await waitForReadiness("upgraded candidate readiness");
+    imageBindings.reupgradeApp = imageBindings.candidateApp;
+    imageBindings.reupgradeWorker = imageBindings.candidateWorker;
     await scenarioCompose(newEnv, [
       "exec", "-T", "app", "node", "-e",
       "const s=require('node:fs').lstatSync('/data/backups/recovery-points/.pre-1.2-owner');if(s.uid!==1000||s.gid!==1000)process.exit(1)"
@@ -2861,103 +3123,58 @@ async function upgradeScenario(baseline) {
         && migrated.legacyLocalTarget?.healthError === null,
       "legacy local backup target was not canonicalized without losing the row"
     );
-    let rollbackEvidence = {};
-    if (baseline.rollbackRehearsal) {
-      await scenarioCompose(newEnv, ["stop", "worker", "app"]);
-      await runCompatibilityPreparation("restore-legacy");
-      activeEnv = rollbackEnv;
-      sessionCookie = "";
-      // The historical image predates candidate initializer scripts. Rollback
-      // reuses the already-reconciled volumes and intentionally bypasses those
-      // candidate-only dependencies.
-      await scenarioCompose(rollbackEnv, ["up", "--detach", "--no-deps", "--force-recreate", "app", "worker"], { inherit: true });
-      imageBindings.rollbackApp = await inspectComposeServiceImage(
-        (args, options) => scenarioCompose(rollbackEnv, args, options),
-        "app",
-        { expectedId: publicImageEvidence.id, expectedReference: publicImageEvidence.repoDigest }
-      );
-      imageBindings.rollbackWorker = await inspectComposeServiceImage(
-        (args, options) => scenarioCompose(rollbackEnv, args, options),
-        "worker",
-        { expectedId: publicImageEvidence.id, expectedReference: publicImageEvidence.repoDigest }
-      );
-      await waitForApiVersion(baseline.version);
-      await waitForReadiness("rolled-back stable readiness");
-      await loginOwner();
-      const rollbackChannels = await api("/api/alerts/channels");
-      assert(
-        rollbackChannels.data.channels.some((channel) => channel.name === upgradeMarker),
-        "configuration did not survive rollback to current stable"
-      );
-      const rollbackState = await api("/api/auth/setup-state");
-      assert(rollbackState.data.needsSetup === false, "database state did not survive rollback");
-      const rollbackVolumes = await projectVolumeNames();
-      assert(
-        JSON.stringify(rollbackVolumes) === JSON.stringify(initialVolumeNames),
-        "rollback replaced or removed persistent Compose volumes"
-      );
-
-      await scenarioCompose(rollbackEnv, ["stop", "worker", "app"]);
-      activeEnv = newEnv;
-      sessionCookie = "";
-      await renderCandidateConfiguration();
-      await runCompatibilityPreparation("reconcile");
-      await scenarioCompose(newEnv, ["up", "--detach", "--no-deps", "--force-recreate", "app", "worker"], { inherit: true });
-      imageBindings.reupgradeApp = await inspectComposeServiceImage(
-        (args, options) => scenarioCompose(newEnv, args, options),
-        "app",
-        {
-          expectedId: report.candidateImages.app.id,
-          expectedReference: candidateImage,
-          expectedRevision: candidateRevision,
-          expectedCreated: candidateBuildDate
-        }
-      );
-      imageBindings.reupgradeWorker = await inspectComposeServiceImage(
-        (args, options) => scenarioCompose(newEnv, args, options),
-        "worker",
-        {
-          expectedId: report.candidateImages.app.id,
-          expectedReference: candidateImage,
-          expectedRevision: candidateRevision,
-          expectedCreated: candidateBuildDate
-        }
-      );
-      await waitForApiVersion(candidateVersion);
-      await waitForReadiness("re-upgraded candidate readiness");
-      await loginOwner();
-      const reupgradeChannels = await api("/api/alerts/channels");
-      assert(
-        reupgradeChannels.data.channels.some((channel) => channel.name === upgradeMarker),
-        "configuration did not survive candidate re-upgrade"
-      );
-      const reupgradeSource = await api(`/api/deployment-sources/${upgradeRepositoryId}`);
-      assert(
-        reupgradeSource.data.source.safeEnvironment?.PUBLIC_SETTING === "upgrade-preserved",
-        "deployment source did not survive rollback and re-upgrade"
-      );
-      const reupgradeVolumes = await projectVolumeNames();
-      assert(
-        JSON.stringify(reupgradeVolumes) === JSON.stringify(initialVolumeNames),
-        "re-upgrade replaced or removed persistent Compose volumes"
-      );
-      rollbackEvidence = {
-        rollbackVersion: baseline.version,
-        rollbackPreservedConfiguration: true,
-        rollbackPreservedDatabase: true,
-        reupgradeVersion: candidateVersion,
-        reupgradePreservedConfiguration: true,
-        reupgradePreservedDatabase: true,
-        volumesRetained: true,
-        rollbackReupgradeHealthy: true,
-        credentialRollbackVerified: baseline.key === "legacy" || transitionReceipt.changed === false,
-        rollbackDependenciesBypassed: true
-      };
-    }
+    const finalVolumes = await projectVolumeNames();
+    assert(JSON.stringify(finalVolumes) === JSON.stringify(initialVolumeNames),
+      "real updater rollback/re-upgrade replaced or removed persistent Compose volumes");
+    const rollbackEvidence = {
+      rollbackVersion: acceptanceUpgradeBridge.version,
+      rollbackPreservedConfiguration: true,
+      rollbackPreservedDatabase: true,
+      reupgradeVersion: candidateVersion,
+      reupgradePreservedConfiguration: true,
+      reupgradePreservedDatabase: true,
+      volumesRetained: true,
+      rollbackReupgradeHealthy: true,
+      credentialRollbackVerified: true,
+      credentialRestoration: true,
+      rollbackDependenciesBypassed: true,
+      immutableBridgeRollback: true,
+      dependencyContainerIdsPreserved: true,
+      forcedFailureStage: failedOutcome.stage,
+      updaterOutcome: failedOutcome.status,
+      successfulReupgrade: successfulOutcome.status === "passed",
+      canonicalEnvironmentPersisted: true
+    };
     return {
       from: baseline.version,
       to: candidateVersion,
       publicImage: publicImageEvidence,
+      bridge: bridgeImageEvidence,
+      bridgeVersion: acceptanceUpgradeBridge.version,
+      oldUpdaterApiHop: true,
+      oldUpdaterJobId,
+      realApiHandoff: true,
+      protectedEnvironmentFile: true,
+      candidatePreparationTransitionRecorded: true,
+      credentialPreparation: {
+        credentialTransition: baseline.expectedCredentialTransition,
+        environmentAction: baseline.expectedEnvironmentAction,
+        rawEnvironmentCanonicalized: true,
+        actualRotationVerified: baseline.expectedCredentialTransition === "changed",
+        restorationVerified: baseline.expectedCredentialTransition === "changed",
+        unchangedCredentialVerified: baseline.expectedCredentialTransition === "unchanged"
+      },
+      hardenedUpdaterJobs: {
+        failed: {
+          jobId: failedJobId,
+          outcomeFile: path.basename(failedOutcomePath)
+        },
+        successful: {
+          jobId: successfulJobId,
+          outcomeFile: path.basename(successfulOutcomePath)
+        }
+      },
+      bridgeComposeDefinitionRetained: true,
       imageBindings,
       preservedConfiguration: true,
       preservedEncryptedConfiguration: true,
@@ -2965,7 +3182,6 @@ async function upgradeScenario(baseline) {
       preservedCompletedJob: true,
       preservedQueuedJob: true,
       legacyEnvironmentPlaceholderHandled: true,
-      legacyManagedCredentialReconciled: baseline.key === "legacy",
       legacyBackupOwnershipMigrated: true,
       pre12ComposeInitializerServicesAbsent: true,
       candidateCompatibilityEntrypointUsed: true,
@@ -3008,8 +3224,11 @@ async function upgradeScenario(baseline) {
             "cleanup"
           );
         } finally {
-          await rm(upgradeStateDir, { recursive: true, force: true });
-          await rm(publicComposeFile, { force: true });
+          for (const reference of [publicRegistryReference, bridgeRegistryReference, candidateRegistryReference]) {
+            await run("docker", ["image", "rm", reference]).catch(() => undefined);
+          }
+          await rm(forcedFailureMarker, { force: true });
+          await rm(managerDir, { recursive: true, force: true });
           await rm(externalOwnershipTarget, { force: true });
           activeProject = null;
           activeEnv = null;

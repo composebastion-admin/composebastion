@@ -1,13 +1,12 @@
-import {
-  chown,
-  lstat,
-  mkdir,
-  opendir
-} from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { lstat, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 
 export const DEFAULT_BACKUP_ROOT = "/data/backups";
+export const STORAGE_HELPER_PATH = "/usr/local/bin/composebastion-prepare-storage";
+const execFileAsync = promisify(execFile);
 
 export function numericIdentity(name, raw, fallback = "1000") {
   const valueText = raw || fallback;
@@ -23,7 +22,8 @@ export async function prepareBackupStorage({
   backupRoot = DEFAULT_BACKUP_ROOT,
   targetUid = numericIdentity("COMPOSEBASTION_UID", process.env.COMPOSEBASTION_UID),
   targetGid = numericIdentity("COMPOSEBASTION_GID", process.env.COMPOSEBASTION_GID),
-  requireContainerRoot = true
+  requireContainerRoot = true,
+  helperPath = process.env.COMPOSEBASTION_STORAGE_HELPER_PATH || STORAGE_HELPER_PATH
 } = {}) {
   if (requireContainerRoot && (typeof process.getuid !== "function" || process.getuid() !== 0)) {
     throw new Error("Backup storage preparation must run as container root");
@@ -38,38 +38,21 @@ export async function prepareBackupStorage({
     throw new Error("Backup storage root must be a real directory");
   }
 
-  let changed = 0;
-  let symlinksSkipped = 0;
-
-  async function prepare(candidate, stats = null) {
-    const current = stats ?? await lstat(candidate);
-    if (current.dev !== rootStats.dev) {
-      throw new Error(`Backup storage contains a nested filesystem at ${candidate}`);
-    }
-
-    // Ownership of a symlink is irrelevant to access through it. Never chown a
-    // path after observing it as a symlink: skipping it also prevents a
-    // user-controlled link from redirecting this root one-shot outside the
-    // managed tree.
-    if (current.isSymbolicLink()) {
-      symlinksSkipped += 1;
-      return;
-    }
-
-    if (current.isDirectory()) {
-      const directory = await opendir(candidate);
-      for await (const entry of directory) {
-        await prepare(path.join(candidate, entry.name));
-      }
-    }
-
-    if (current.uid === targetUid && current.gid === targetGid) return;
-    await chown(candidate, targetUid, targetGid);
-    changed += 1;
+  const { stdout } = await execFileAsync(helperPath, [backupRoot, String(targetUid), String(targetGid)], {
+    encoding: "utf8",
+    maxBuffer: 1024 * 1024
+  });
+  let result;
+  try {
+    result = JSON.parse(stdout);
+  } catch {
+    throw new Error("Backup storage helper returned an invalid result");
   }
-
-  await prepare(backupRoot, rootStats);
-  return { backupRoot, targetUid, targetGid, changed, symlinksSkipped };
+  if (!Number.isSafeInteger(result?.changed) || result.changed < 0
+      || !Number.isSafeInteger(result?.symlinksSkipped) || result.symlinksSkipped < 0) {
+    throw new Error("Backup storage helper returned an invalid result");
+  }
+  return { backupRoot, targetUid, targetGid, ...result };
 }
 
 async function main() {

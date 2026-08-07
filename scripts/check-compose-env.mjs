@@ -160,8 +160,9 @@ function verifyManager(label, config, expectPublishedPort, expectedImage = null)
     }
     if (storageInit.read_only !== true) failures.push("storage-init.read_only: expected true");
     if (!(storageInit.cap_drop ?? []).includes("ALL")) failures.push("storage-init.cap_drop: expected ALL");
-    for (const capability of ["CHOWN", "DAC_OVERRIDE"]) {
-      if (!(storageInit.cap_add ?? []).includes(capability)) failures.push(`storage-init.cap_add: missing ${capability}`);
+    const capabilities = [...(storageInit.cap_add ?? [])].sort();
+    if (JSON.stringify(capabilities) !== JSON.stringify(["CHOWN", "DAC_READ_SEARCH"])) {
+      failures.push(`storage-init.cap_add: expected only CHOWN,DAC_READ_SEARCH; got ${capabilities.join(",") || "none"}`);
     }
     if (!(storageInit.security_opt ?? []).includes("no-new-privileges:true")) {
       failures.push("storage-init.security_opt: missing no-new-privileges");
@@ -192,6 +193,13 @@ function verifyManager(label, config, expectPublishedPort, expectedImage = null)
     }
     if (databaseInit.depends_on?.postgres?.condition !== "service_healthy") {
       failures.push("database-init.depends_on.postgres: expected service_healthy");
+    }
+    const transitionMount = (databaseInit.volumes ?? []).find((volume) => volume.target === "/var/lib/composebastion/upgrade-state");
+    if (transitionMount?.type !== "volume") failures.push("database-init: durable upgrade-state volume is missing");
+    const command = (databaseInit.command ?? []).map(String);
+    if (!command.includes("--state-file")
+        || !command.includes("/var/lib/composebastion/upgrade-state/database-transition.json")) {
+      failures.push("database-init: durable transition receipt path is missing");
     }
     if (expectedImage) {
       if (databaseInit.image !== expectedImage) failures.push(`database-init.image: expected ${expectedImage}, got ${databaseInit.image ?? "missing"}`);

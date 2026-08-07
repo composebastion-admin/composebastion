@@ -6,16 +6,25 @@ deployment, and runtime Docker images.
 
 ## Branches
 
-- `main` is the current stable/public branch.
-- Short-lived feature or `codex/` branches should branch from `main`.
-- Use `dev` for active integration work only if the maintainer establishes that
-  branch for a release cycle.
-- `beta` is the established staging/test branch. It receives push CI, CodeQL,
-  container scans, and isolated app/agent image publication. Promote to `main`
-  only after beta verification passes.
+- `main`, `beta`, and `dev` are the only persistent branches.
+- Normal changes use a short-lived `codex/*` branch and a pull request into
+  `dev`. The branch must be deleted when the pull request is merged or closed.
+- Promote releases with direct `dev` to `beta` and `beta` to `main` pull
+  requests. Do not create a separate promotion branch.
+- A compatibility or security maintenance release for the current stable line
+  may use a short-lived pull request directly into `main`.
+- Never force-push or directly push changes to a persistent branch. Historical
+  version tags and GitHub releases are immutable artifacts, not branches, and
+  are never removed by branch cleanup.
+- `beta` receives push CI, CodeQL, container scans, and isolated app/agent image
+  publication. Promote to `main` only after beta verification passes.
 - Pull requests targeting `dev` receive CodeQL, dependency review, container
   scanning, and non-publishing image-build checks. Push publication remains
   restricted to `main` and `beta`; a `dev` push must never publish images.
+- Automated dependency pull requests are disabled to prevent persistent bot
+  branches. Keep vulnerability alerts, CodeQL, secret scanning, and
+  `npm audit --audit-level=high` enabled; review dependency alerts weekly and
+  batch approved updates through a short-lived `codex/*` pull request.
 
 ## Required Checks
 
@@ -38,6 +47,8 @@ Run the same gates CI expects before release:
 - `npm run test:acceptance-policy`
 - `npm run test:upgrade-preparation`
 - `npm run test:source-upgrade`
+- `npm run test:image-upgrade`
+- `shellcheck scripts/upgrade-image.sh`
 - `npm run notices:check`
 - `npm run check:actions-pinned`
 - `npm run check:release-workflows`
@@ -61,10 +72,11 @@ Run the same gates CI expects before release:
 - CodeQL, dependency review, container/image scanning, secret scanning, and
   image publishing checks when configured
 
-Go-module legal approval and evidence from real NAS/cloud infrastructure remain
-mandatory before beta, main, or public image publication. They are explicitly
-deferred for a non-publishing `dev` qualification and do not make that evidence
-valid for a public release.
+Go-module legal approval remains mandatory before beta, main, or public image
+publication. Real NAS/cloud evidence is collected against the published beta
+and is mandatory before promotion to `main` or a stable tag. Both are deferred
+for a non-publishing `dev` qualification and dev evidence alone is not valid
+for a public stable release.
 
 ## Version Bumps
 
@@ -96,14 +108,17 @@ valid for a public release.
 - Publish container images for every public release and every merge to `main`
   through `.github/workflows/publish-images.yml`.
 - Every push to `beta` publishes both scanned multi-architecture images to the
-  moving `beta` alias and immutable full-commit tags. Beta publication must
-  never move `main`, `latest`, or stable version aliases.
+  moving `beta` alias, the exact prerelease version alias such as
+  `1.2.0-beta.1`, and immutable full-commit tags. The prerelease alias is
+  immutable: publishing a different digest requires a new prerelease version.
+  Beta publication must never move `main`, `latest`, or stable/minor aliases.
 - Main image publishes must include `main`, deterministic per-platform
   `sha-<40-character-sha>-amd64` and `sha-<40-character-sha>-arm64` tags, and a
   multi-platform `sha-<40-character-sha>` index. Only a verified stable tag may
   move `latest`.
-  Immutable version tags such as `${VERSION}` and `v${VERSION}` must only be published
-  from `v*` git tags.
+  Stable immutable aliases such as `${VERSION}` and `v${VERSION}` must only be
+  published from `v*` git tags; exact prerelease aliases are published from
+  `beta` and may never be moved.
 - The workflow builds each app/agent architecture once as an OCI archive,
   scans that exact archive, and requires all four scans before copying any
   archive to GHCR. It generates an SPDX JSON SBOM from each exact passing OCI
@@ -318,9 +333,10 @@ docker pull "ghcr.io/composebastion-admin/composebastion-app:v${VERSION}"
 docker pull "ghcr.io/composebastion-admin/composebastion-agent:v${VERSION}"
 ```
 
-For a beta branch publication, version aliases are intentionally absent.
-Verify `:beta`, the immutable `sha-${REVISION}` indexes, and both
-`sha-${REVISION}-{amd64,arm64}` platform tags instead.
+For a beta branch publication, verify `:beta`, the exact prerelease
+`:${VERSION}` alias, the immutable `sha-${REVISION}` indexes, and both
+`sha-${REVISION}-{amd64,arm64}` platform tags. Do not expect `v${VERSION}`,
+minor, `main`, or `latest` to move.
 
 ## Post-Push Verification
 

@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,13 +13,17 @@ const network = `${container}-network`;
 const volume = `${container}-data`;
 const backupVolume = `${container}-backups`;
 const externalVolume = `${container}-external`;
+const nestedVolume = `${container}-nested`;
 const database = "composebastion";
 const user = "composebastion";
 const legacyPassword = "composebastion";
 const replacementPassword = "replacement-composebastion-password";
 const transitionDirectory = mkdtempSync(path.join(os.tmpdir(), "composebastion-postgres-transition-"));
 const composeConfigPath = path.join(transitionDirectory, "compose-config.json");
+const environmentProbePath = path.join(transitionDirectory, "source-env-probe.json");
 const transitionStatePath = path.join(transitionDirectory, "database-transition.json");
+const storageHelperDirectory = path.join(transitionDirectory, "storage-helper");
+const storageHelperPath = path.join(storageHelperDirectory, "composebastion-prepare-storage");
 
 function docker(args, options = {}) {
   return execFileSync("docker", args, {
@@ -115,19 +119,61 @@ function runCompatibilityPreparation(mode) {
     "--volume", `${transitionDirectory}:/transition`,
     "--volume", `${backupVolume}:/data/backups`,
     "--volume", `${externalVolume}:/outside`,
+    "--volume", `${storageHelperPath}:/usr/local/bin/composebastion-prepare-storage:ro`,
+    "--env", "COMPOSEBASTION_STORAGE_HELPER_PATH=/usr/local/bin/composebastion-prepare-storage",
     "--workdir", "/workspace",
     nodeImage,
     "node", "scripts/prepare-compose-upgrade.mjs", mode,
     "--compose-config", "/transition/compose-config.json",
+    "--environment-probe", "/transition/source-env-probe.json",
     "--state-file", "/transition/database-transition.json"
   ]);
 }
 
+function runStoragePreparation(extraVolumes = []) {
+  return spawnSync("docker", [
+    "run", "--rm", "--user", "0:0",
+    "--read-only",
+    "--cap-drop", "ALL",
+    "--cap-add", "CHOWN",
+    "--cap-add", "DAC_READ_SEARCH",
+    "--security-opt", "no-new-privileges",
+    "--volume", `${root}:/workspace:ro`,
+    "--volume", `${backupVolume}:/data/backups`,
+    "--volume", `${externalVolume}:/outside`,
+    "--volume", `${storageHelperPath}:/usr/local/bin/composebastion-prepare-storage:ro`,
+    ...extraVolumes.flatMap((volumeMount) => ["--volume", volumeMount]),
+    "--env", "COMPOSEBASTION_STORAGE_HELPER_PATH=/usr/local/bin/composebastion-prepare-storage",
+    "--workdir", "/workspace",
+    nodeImage,
+    "node", "scripts/prepare-backup-storage.mjs"
+  ], { encoding: "utf8" });
+}
+
 try {
+  chmodSync(transitionDirectory, 0o700);
+  const protectedProbeOwner = statSync(transitionDirectory);
+  if ((protectedProbeOwner.mode & 0o777) !== 0o700) {
+    throw new Error("Database upgrade probe fixture must remain mode 0700");
+  }
+  if (typeof process.getuid !== "function" || process.getuid() === 1000) {
+    throw new Error("Database upgrade qualification requires a host UID other than the image runtime UID 1000");
+  }
+  if (protectedProbeOwner.uid !== process.getuid()) {
+    throw new Error("Database upgrade probe fixture is not owned by the invoking non-1000 host UID");
+  }
+  mkdirSync(storageHelperDirectory, { recursive: true });
+  docker([
+    "build", "--target", "storage-helper-artifacts",
+    "--output", `type=local,dest=${storageHelperDirectory}`,
+    root
+  ], { capture: false });
+  chmodSync(storageHelperPath, 0o755);
   docker(["network", "create", network]);
   docker(["volume", "create", volume]);
   docker(["volume", "create", backupVolume]);
   docker(["volume", "create", externalVolume]);
+  docker(["volume", "create", nestedVolume]);
   startPostgres(legacyPassword);
   await waitForPostgres();
 
@@ -176,14 +222,38 @@ try {
     }
   })}\n`, { mode: 0o600 });
   chmodSync(composeConfigPath, 0o600);
+  writeFileSync(environmentProbePath, `${JSON.stringify({
+    services: {
+      "composebastion-upgrade-probe": {
+        environment: { COMPOSEBASTION_UPGRADE_SOURCE_DATABASE_URL: internalLegacyUrl }
+      }
+    }
+  })}\n`, { mode: 0o600 });
+  chmodSync(environmentProbePath, 0o600);
   docker([
     "run", "--rm",
     "--volume", `${backupVolume}:/data/backups`,
     "--volume", `${externalVolume}:/outside`,
     alpineImage,
     "sh", "-ceu",
-    "mkdir -p /data/backups/recovery/nested; echo retained >/data/backups/recovery/nested/root-owned; chown -R 0:0 /data/backups; echo external >/outside/target; chown 123:456 /outside/target; ln -s /outside/target /data/backups/.composebastion-storage-owner"
+    "mkdir -p /data/backups/recovery/nested /data/backups/nested-mount; echo retained >/data/backups/recovery/nested/root-owned; chown -R 0:0 /data/backups; echo external >/outside/target; chown 123:456 /outside/target; ln -s /outside/target /data/backups/.composebastion-storage-owner; find /data/backups -type f -exec chmod 000 {} +; find /data/backups -type d -exec chmod 000 {} +"
   ]);
+
+  const nestedFilesystem = runStoragePreparation([
+    `${nestedVolume}:/data/backups/nested-mount`
+  ]);
+  if (nestedFilesystem.status === 0
+      || !`${nestedFilesystem.stdout}\n${nestedFilesystem.stderr}`.includes("nested filesystem")) {
+    throw new Error(
+      `Storage helper did not reject a nested same-host filesystem:\n${nestedFilesystem.stdout}${nestedFilesystem.stderr}`
+    );
+  }
+  const minimumCapabilities = runStoragePreparation();
+  if (minimumCapabilities.status !== 0) {
+    throw new Error(
+      `Storage helper failed with only CHOWN and DAC_READ_SEARCH:\n${minimumCapabilities.stdout}${minimumCapabilities.stderr}`
+    );
+  }
 
   runCompatibilityPreparation("reconcile");
   if (query(replacementPassword).status !== 0 || query(legacyPassword).status === 0) {
@@ -215,6 +285,7 @@ try {
   spawnSync("docker", ["volume", "rm", "-f", volume], { stdio: "ignore" });
   spawnSync("docker", ["volume", "rm", "-f", backupVolume], { stdio: "ignore" });
   spawnSync("docker", ["volume", "rm", "-f", externalVolume], { stdio: "ignore" });
+  spawnSync("docker", ["volume", "rm", "-f", nestedVolume], { stdio: "ignore" });
   spawnSync("docker", ["network", "rm", network], { stdio: "ignore" });
   rmSync(transitionDirectory, { recursive: true, force: true });
 }
