@@ -1072,12 +1072,12 @@ async function inspectBridgeUpgradeImage() {
   const requested = override || acceptanceUpgradeBridge.pinnedImage;
   const immutable = /^ghcr\.io\/composebastion-admin\/composebastion-app@sha256:[a-f0-9]{64}$/i.test(requested);
   if (!immutable) {
-    const reason = "COMPOSEBASTION_ACCEPTANCE_BRIDGE_IMAGE must name the published 1.1.3 image by immutable GHCR digest";
+    const reason = "COMPOSEBASTION_ACCEPTANCE_BRIDGE_IMAGE must name the published 1.1.4 image by immutable GHCR digest";
     if (!allowNonqualifying) throw new Error(reason);
     markNonqualifying(reason);
   }
   if (requested !== acceptanceUpgradeBridge.pinnedImage) {
-    const reason = `1.1.3 bridge override ${requested} does not match the qualification digest ${acceptanceUpgradeBridge.pinnedImage}`;
+    const reason = `1.1.4 bridge override ${requested} does not match the qualification digest ${acceptanceUpgradeBridge.pinnedImage}`;
     if (!allowNonqualifying) throw new Error(reason);
     markNonqualifying(reason);
   }
@@ -1089,8 +1089,8 @@ async function inspectBridgeUpgradeImage() {
   const repoDigest = (details.RepoDigests ?? []).find((value) =>
     /^ghcr\.io\/composebastion-admin\/composebastion-app@sha256:[a-f0-9]{64}$/i.test(value)
   );
-  assert(repoDigest, "published 1.1.3 bridge image did not expose an immutable GHCR digest");
-  if (immutable) assert(repoDigest === requested, `1.1.3 bridge digest is ${repoDigest}, expected ${requested}`);
+  assert(repoDigest, "published 1.1.4 bridge image did not expose an immutable GHCR digest");
+  if (immutable) assert(repoDigest === requested, `1.1.4 bridge digest is ${repoDigest}, expected ${requested}`);
   const labels = details.Config?.Labels ?? {};
   assert(labels["org.opencontainers.image.version"] === acceptanceUpgradeBridge.version,
     `bridge image label is ${labels["org.opencontainers.image.version"] ?? "missing"}, expected ${acceptanceUpgradeBridge.version}`);

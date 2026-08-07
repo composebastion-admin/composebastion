@@ -5,7 +5,7 @@ Samba, registry, agent, and SSH Docker-host fixtures over the shipped
 `docker-compose.image.yml`, so the fresh-image and public-upgrade scenarios use
 the real production image Compose wiring. Upgrade qualification has two
 required baselines: public `1.1.2` and legacy public `1.0.6`. Each uses its
-real API updater to reach the published 1.1.3 bridge, then uses the bridge's
+real API updater to reach the published 1.1.4 bridge, then uses the bridge's
 API/SSH updater for a forced 1.2 rollback and successful retry on retained
 volumes. Qualifying runs always use the published immutable bridge digest
 committed in `scripts/acceptance/upgrade-baselines.mjs`. The
@@ -113,7 +113,7 @@ subscription recovery, safe-job lease recovery after a killed worker, a disposab
 Compose workload, S3 and SMB target checks, remote-only capture metadata and
 local-cache eviction, clone restore with volume/bind/database/network behavior
 verification and cleanup, public `1.1.2` and legacy `1.0.6` old-updater hops
-to 1.1.3, forced bridge-to-1.2 credential-first rollback, and successful
+to 1.1.4, forced bridge-to-1.2 credential-first rollback, and successful
 API/SSH re-upgrade on retained volumes. It proves unchanged PostgreSQL/Redis
 identities, immutable bridge image restoration, and long-hop state preservation
 (including a queued API job, encrypted registry credentials, and

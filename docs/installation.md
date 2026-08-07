@@ -278,8 +278,8 @@ Compose directory, starts the script detached from the worker, pulls the app and
 worker images, and restarts those services. The browser may disconnect briefly
 while the new app container starts.
 
-The supported pre-1.2 route is `1.0.6/1.1.2 -> 1.1.3 -> 1.2`. Select the
-`1.1.3` bridge first and verify it is healthy; only then target 1.2. The bridge
+The supported pre-1.2 route is `1.0.6/1.1.2/1.1.3 -> 1.1.4 -> 1.2`. Select the
+`1.1.4` bridge first and verify it is healthy; only then target 1.2. The bridge
 keeps the existing Compose file, performs compatibility work through the pulled
 candidate, and starts app/worker with dependency recreation disabled. Direct
 pre-1.2-to-1.2 updates are not release-qualified. Manual updates require the

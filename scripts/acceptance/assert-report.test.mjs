@@ -261,7 +261,7 @@ test("release assertion rejects an upgrade scenario bound to the wrong public im
   scenario.detail.publicImage.repoDigest = acceptanceUpgradeBaselines[1].pinnedImage;
   const result = await assertReport(report);
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /not bound to exact public 1\.1\.2 and 1\.1\.3 bridge image evidence/);
+  assert.match(result.stderr, /not bound to exact public 1\.1\.2 and 1\.1\.4 bridge image evidence/);
 });
 
 test("release assertion rejects an upgrade scenario bound to the wrong bridge digest", async () => {
@@ -271,7 +271,7 @@ test("release assertion rejects an upgrade scenario bound to the wrong bridge di
   scenario.detail.bridge.repoDigest = scenario.detail.bridge.reference;
   const result = await assertReport(report);
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /not bound to exact public 1\.0\.6 and 1\.1\.3 bridge image evidence/);
+  assert.match(result.stderr, /not bound to exact public 1\.0\.6 and 1\.1\.4 bridge image evidence/);
 });
 
 test("release assertion rejects current-stable upgrade without retained-volume rollback proof", async () => {

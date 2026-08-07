@@ -160,8 +160,8 @@ the handoff. ComposeBastion writes a short host-side update script, pulls the
 selected app and worker images, restarts them, and shows the latest handoff job
 so you can confirm the update completed.
 
-The release-qualified in-app path is `1.0.6/1.1.2 -> 1.1.3 -> 1.2`. Update to
-the compatibility-only 1.1.3 bridge first; direct pre-1.2-to-1.2 updates are not
+The release-qualified in-app path is `1.0.6/1.1.2/1.1.3 -> 1.1.4 -> 1.2`. Update to
+the compatibility-only 1.1.4 bridge first; direct pre-1.2-to-1.2 updates are not
 qualified. The bridge can retain the pre-1.2 `docker-compose.image.yml`, pull
 and prepare the 1.2 candidate, and start only app/worker with dependency
 recreation disabled. Manual image updates must download the matching

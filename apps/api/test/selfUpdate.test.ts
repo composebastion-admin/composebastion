@@ -103,6 +103,8 @@ describe("self update service", () => {
     expect(script).toContain('"$DOCKER_BIN" compose -f "$COMPOSE_FILE" stop app worker');
     expect(script).toContain('up -d --pull never --no-deps --force-recreate app worker');
     expect(script).toContain('wait_for_stack "$TARGET_VERSION" "$TARGET_VERSION" "$CANDIDATE_APP_IMAGE_ID" "$CANDIDATE_WORKER_IMAGE_ID"');
+    expect(script).toContain('wait_for_stack "$PREVIOUS_APP_VERSION" "$PREVIOUS_WORKER_VERSION" "$PREVIOUS_APP_IMAGE_ID" "$PREVIOUS_WORKER_IMAGE_ID" handoff');
+    expect(script).toContain('worker?.state!=="draining"');
     expect(script).toContain("restore-legacy");
     expect(script).toContain("PREVIOUS_APP_IMAGE_ID");
     expect(script).toContain("pull_policy: never");

@@ -53,8 +53,8 @@ function curatedHostEnvironment(source) {
 
 const hostEnvironment = curatedHostEnvironment(process.env);
 
-if (acceptanceUpgradeBridge.releaseTag !== "ghcr.io/composebastion-admin/composebastion-app:1.1.3") {
-  throw new Error("Acceptance bridge release tag must identify the published 1.1.3 app image");
+if (acceptanceUpgradeBridge.releaseTag !== "ghcr.io/composebastion-admin/composebastion-app:1.1.4") {
+  throw new Error("Acceptance bridge release tag must identify the published 1.1.4 app image");
 }
 if (!/^ghcr\.io\/composebastion-admin\/composebastion-app@sha256:[a-f0-9]{64}$/.test(
   acceptanceUpgradeBridge.pinnedImage
