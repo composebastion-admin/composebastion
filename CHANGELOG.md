@@ -1,5 +1,16 @@
 # Changelog
 
+## [v1.1.6] - 2026-08-07
+
+### Fixed
+
+- Removed the successful-upgrade handoff deadlock between the compatibility
+  bridge and the hardened 1.2 worker. Candidate verification now still requires
+  the candidate-only Docker healthcheck while accepting the connected worker's
+  intentional draining state until the authoritative outcome is published.
+- The immutable v1.1.5 artifacts remain published for historical recovery, but
+  v1.1.6 is the bridge qualified for the 1.2 transition.
+
 ## [v1.1.5] - 2026-08-07
 
 ### Security
@@ -8,8 +19,7 @@
   no-clobber file descriptor before starting the updater. Recovery can now read
   the log under its strict mode-0600 contract, while existing files and
   symlinks are rejected instead of followed or overwritten.
-- The immutable v1.1.4 artifacts remain published for historical recovery, but
-  v1.1.5 is the bridge qualified for the 1.2 transition.
+- The immutable v1.1.4 artifacts remain published for historical recovery.
 
 ## [v1.1.4] - 2026-08-07
 
