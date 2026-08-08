@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse, stringify } from "yaml";
 import { dockerBindPathRelativeChild } from "./bind-paths.mjs";
+import { renderCandidateHealthcheckProgram } from "./candidate-healthcheck.mjs";
 import {
   acceptanceNonqualifyingReasons,
   acceptanceOwnsDockerResource,
@@ -2468,12 +2469,7 @@ function materializePre12UpgradeCompose(contents, acceptanceRuntimeDir) {
   const app = definition?.services?.app;
   assert(app && definition.services?.worker, "public pre-1.2 Compose is missing app or worker");
   app.volumes = [...(app.volumes ?? []), `${acceptanceRuntimeDir}:/acceptance-runtime`];
-  const forcedFailureProgram = [
-    "const fs=require('node:fs');",
-    "const version=require('/app/package.json').version;",
-    `if(version===${JSON.stringify(candidateVersion)}&&fs.existsSync('/acceptance-runtime/force-candidate-unhealthy'))process.exit(1);`,
-    "fetch('http://127.0.0.1:8080/api/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1));"
-  ].join("");
+  const forcedFailureProgram = renderCandidateHealthcheckProgram(candidateVersion);
   app.healthcheck = {
     test: ["CMD", "node", "-e", forcedFailureProgram],
     interval: "2s",
