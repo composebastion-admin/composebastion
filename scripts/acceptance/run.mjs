@@ -3263,7 +3263,7 @@ async function upgradeScenario(baseline) {
       bridge: bridgeImageEvidence,
       bridgeVersion: acceptanceUpgradeBridge.version,
       oldUpdaterApiHop: true,
-      oldUpdaterJobId,
+      oldUpdaterJobId: oldHopJobId,
       realApiHandoff: true,
       protectedEnvironmentFile: true,
       candidatePreparationTransitionRecorded: true,

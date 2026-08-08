@@ -323,7 +323,7 @@ No missing, GPL, AGPL, SSPL, UNKNOWN, or UNLICENSED package entries were found i
 | mnemonist | 0.40.0 | MIT | node_modules/mnemonist |
 | ms | 2.1.3 | MIT | node_modules/ms |
 | nan | 2.28.0 | MIT | node_modules/nan |
-| nanoid | 3.3.16 | MIT | node_modules/nanoid |
+| nanoid | 3.3.18 | MIT | node_modules/nanoid |
 | node-releases | 2.0.51 | MIT | node_modules/node-releases |
 | nodemailer | 9.0.3 | MIT-0 | node_modules/nodemailer |
 | obliterator | 2.0.5 | MIT | node_modules/obliterator |
