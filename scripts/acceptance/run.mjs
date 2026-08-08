@@ -3022,7 +3022,11 @@ async function upgradeScenario(baseline) {
     );
     const completedQueuedJob = await waitForJob(queuedJobId, { timeoutMs: 3 * 60_000 });
     assert(completedQueuedJob.status === "completed", "queued pre-upgrade API job did not complete after upgrade");
-    assert(await jobAttemptCount(queuedJobId) === 1, "queued pre-upgrade API job did not complete exactly once");
+    const queuedJobAttemptCount = await jobAttemptCount(queuedJobId);
+    assert(
+      queuedJobAttemptCount === baseline.expectedQueuedJobAttemptCount,
+      `queued pre-upgrade API job attempt accounting is ${queuedJobAttemptCount}, expected ${baseline.expectedQueuedJobAttemptCount} for ${baseline.version}`
+    );
     await retry("upgraded worker idle queue", async () => {
       const worker = await api("/api/jobs/status");
       assert(worker.data.worker.available === true, "upgraded worker heartbeat was not available");

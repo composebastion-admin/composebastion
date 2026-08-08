@@ -16,6 +16,7 @@ export const acceptanceUpgradeBaselines = Object.freeze([
       "ghcr.io/composebastion-admin/composebastion-app@sha256:53cceea331c04260ef30aba495ef912dc923e3636f0b5b70e66bfad02f284674",
     portOffset: 380,
     rollbackRehearsal: true,
+    expectedQueuedJobAttemptCount: 1,
     expectedCredentialTransition: "changed",
     expectedEnvironmentAction: "canonicalize",
     initialManagedCredential: "legacy",
@@ -31,6 +32,10 @@ export const acceptanceUpgradeBaselines = Object.freeze([
       "ghcr.io/composebastion-admin/composebastion-app@sha256:8bbff7cac90e0e6ec77b872f112dd52185c9033e5124e42c3e63a74f9ec42770",
     portOffset: 680,
     rollbackRehearsal: true,
+    // 1.0.6 predates migration 029 and therefore completes the queued job
+    // before attempt_count exists. Migration 029 backfills that terminal row
+    // with the non-retry default of zero.
+    expectedQueuedJobAttemptCount: 0,
     expectedCredentialTransition: "unchanged",
     expectedEnvironmentAction: "canonicalize",
     initialManagedCredential: "canonical",
