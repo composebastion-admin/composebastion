@@ -40,7 +40,7 @@
     "test:container-config-policy": "node --test scripts/container-config-policy.test.mjs",
     "test:release-image-policy": "node --test scripts/oci-rootfs.test.mjs",
     "test:release-alias-policy": "bash scripts/reconcile-image-alias-pair.test.sh",
-    "test:acceptance-policy": "node --test scripts/acceptance/qualification-policy.test.mjs scripts/acceptance/assert-report.test.mjs scripts/acceptance/candidate-healthcheck.test.mjs scripts/acceptance/self-update-outcome.test.mjs",
+    "test:acceptance-policy": "node --test scripts/acceptance/qualification-policy.test.mjs scripts/acceptance/assert-report.test.mjs scripts/acceptance/candidate-healthcheck.test.mjs scripts/acceptance/manager-environment.test.mjs scripts/acceptance/self-update-outcome.test.mjs",
     "test:upgrade-preparation": "node --test scripts/upgrade-preparation.test.mjs",
     "test:source-upgrade": "node --test scripts/upgrade-source.test.mjs",
     "test:image-upgrade": "node --test scripts/upgrade-image.test.mjs",

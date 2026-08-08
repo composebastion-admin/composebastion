@@ -20,6 +20,7 @@ import {
   assertSelfUpdateOutcomeStatus,
   parseSelfUpdateOutcome
 } from "./self-update-outcome.mjs";
+import { hasManagedCanonicalDatabaseOverride } from "./manager-environment.mjs";
 import { acceptanceScenarioManifest } from "./scenario-manifest.mjs";
 import { acceptanceUpgradeBaselines, acceptanceUpgradeBridge } from "./upgrade-baselines.mjs";
 import { assertSafeTestResultsPath, digestGitBuildContext, materializeGitBuildContext } from "../materialize-git-context.mjs";
@@ -2953,9 +2954,7 @@ async function upgradeScenario(baseline) {
     ), "successful updater log does not record the raw environment action");
     assert(canonicalEnvironment.includes(`COMPOSEBASTION_VERSION=${candidateVersion}\n`),
       "successful updater did not persist the candidate version");
-    assert(canonicalEnvironment.includes("DATABASE_URL=\n"),
-      "successful updater did not persist the canonical managed database selection");
-    assert(canonicalEnvironment.includes("# ComposeBastion managed legacy database transition\nDATABASE_URL=\n"),
+    assert(hasManagedCanonicalDatabaseOverride(canonicalEnvironment),
       "raw legacy environment assignment was not replaced with its managed canonical override");
     await assertManagedCredential("canonical", `successful ${baseline.version} upgrade`);
     imageBindings.candidateApp = await inspectComposeServiceImage(
