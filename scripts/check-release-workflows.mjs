@@ -34,12 +34,17 @@ function requireBranches(file, eventName, expectedBranches) {
   }
 }
 
+requireBranches(
+  ".github/workflows/ci.yml",
+  "push",
+  ["main", "beta", "dev"]
+);
 for (const file of [
   ".github/workflows/codeql.yml",
   ".github/workflows/container-scan.yml",
   ".github/workflows/publish-images.yml"
 ]) {
-  requireBranches(file, "push", ["main", "beta"]);
+  requireBranches(file, "push", ["main", "beta", "dev"]);
   requireBranches(file, "pull_request", ["main", "beta", "dev"]);
 }
 requireBranches(
@@ -292,6 +297,10 @@ if (readFileSync(".github/gitleaks.toml", "utf8") !== expectedGitleaksConfig) {
 requireNode24Setup(ciFile, "production-build", productionBuild);
 requireContainerConfigStep(ciFile, "production-build", productionBuild);
 requireNode24Setup(ciFile, "live-acceptance", liveAcceptance);
+const liveAcceptanceCheckout = actionStep(liveAcceptance, "actions/checkout");
+if (liveAcceptanceCheckout?.with?.["fetch-depth"] !== 0) {
+  fail(`${ciFile}:live-acceptance: historical public upgrade qualification requires complete Git history and tags`);
+}
 const installBrowser = (liveAcceptance?.steps ?? []).find((step) => String(step.run ?? "").includes("playwright install --with-deps chromium"));
 if (!installBrowser) fail(`${ciFile}:live-acceptance: live Playwright requires an explicit Chromium installation`);
 if (!(liveAcceptance?.steps ?? []).some((step) => String(step.run ?? "").trim() === "npm run acceptance:local")
@@ -340,8 +349,8 @@ const publishFile = ".github/workflows/publish-images.yml";
 const publish = workflows[publishFile];
 const publishJobs = publish?.jobs ?? {};
 const publicationBranches = [...(publish?.on?.push?.branches ?? [])].sort();
-if (JSON.stringify(publicationBranches) !== JSON.stringify(["beta", "main"])) {
-  fail(`${publishFile}: push publication must be limited to the main and beta branches`);
+if (JSON.stringify(publicationBranches) !== JSON.stringify(["beta", "dev", "main"])) {
+  fail(`${publishFile}: release-image verification must run on main, beta, and dev`);
 }
 requireNode24Setup(publishFile, "metadata", publishJobs.metadata);
 requireContainerConfigStep(publishFile, "metadata", publishJobs.metadata);
@@ -357,6 +366,10 @@ if (!String(stableTagStep?.run ?? "").includes('echo "stable=true" >> "${GITHUB_
 if (!String(releaseMetadataStep?.run ?? "").includes("refs/heads/main")
     || !String(releaseMetadataStep?.run ?? "").includes("cannot publish prerelease version")) {
   fail(`${publishFile}:metadata: the main image alias must reject prerelease package versions`);
+}
+if (!String(releaseMetadataStep?.run ?? "").includes("refs/heads/beta")
+    || !String(releaseMetadataStep?.run ?? "").includes("requires an explicit prerelease version")) {
+  fail(`${publishFile}:metadata: the beta image alias must require a prerelease package version`);
 }
 const publicationRun = String(publicationStep?.run ?? "");
 for (const invariant of [
@@ -722,12 +735,16 @@ const branchAliasRun = branchAliasStep?.run ?? "";
 if (branchAliasRun.includes(":latest")) fail(`${publishFile}:publish-branch: an untagged branch commit must not move latest`);
 if (!branchAliasRun.includes("scripts/reconcile-image-alias-pair.sh")
     || !branchAliasRun.includes("/tmp/branch-alias-reconciliation.json")
-    || !branchAliasRun.includes("branch")
-    || !branchAliasRun.includes('"${GITHUB_REF_NAME}"')
+    || !branchAliasRun.includes('mode="branch"')
+    || !branchAliasRun.includes('mode="beta"')
+    || !branchAliasRun.includes('aliases=("${GITHUB_REF_NAME}")')
+    || !branchAliasRun.includes('aliases+=("${VERSION}")')
+    || !branchAliasRun.includes('"${aliases[@]}"')
     || branchAliasStep?.env?.LEGACY_ALIAS_BOOTSTRAP_POLICY !== ".github/legacy-alias-bootstrap.json"
     || branchAliasStep?.env?.APP_INDEX_DIGEST !== "${{ steps.indexes.outputs.app_digest }}"
-    || branchAliasStep?.env?.AGENT_INDEX_DIGEST !== "${{ steps.indexes.outputs.agent_digest }}") {
-  fail(`${publishFile}:publish-branch: main/beta must use the paired attestation/rollback reconciler`);
+    || branchAliasStep?.env?.AGENT_INDEX_DIGEST !== "${{ steps.indexes.outputs.agent_digest }}"
+    || branchAliasStep?.env?.VERSION !== "${{ needs.metadata.outputs.version }}") {
+  fail(`${publishFile}:publish-branch: main/beta must use paired branch/prerelease attestation reconciliation`);
 }
 const branchReconciliationUpload = publishBranchSteps.find(
   (step) => step.name === "Upload paired branch-alias reconciliation evidence"
@@ -995,6 +1012,8 @@ for (const invariant of [
   "finalInspectionComplete",
   "finalTargetPairVerified",
   'kind="new-moving"',
+  "branch|beta|stable",
+  "reconcile_range 1 1",
   "allow_legacy_pair",
   "LEGACY_ALIAS_BOOTSTRAP_POLICY",
   "reconcile_range 0 1",
@@ -1050,10 +1069,12 @@ if (!/^ARG TRIVY_SOURCE_COMMIT=8a32853686209a428179bb3a1688802b25691564$/m.test(
   fail("Dockerfile: embedded Trivy source must be pinned to the reviewed v0.72.0 commit and archive checksum");
 }
 if (!/^ARG TRIVY_ORAS_VERSION=v2\.6\.2$/m.test(appDockerfile)
+    || !/^ARG TRIVY_GO_GIT_VERSION=v5\.19\.2$/m.test(appDockerfile)
     || !appDockerfile.includes('go get "oras.land/oras-go/v2@${TRIVY_ORAS_VERSION}"')
+    || !appDockerfile.includes('go get "github.com/go-git/go-git/v5@${TRIVY_GO_GIT_VERSION}"')
     || !appDockerfile.includes("go test oras.land/oras-go/v2/content/file -run '^Test_extractTarDirectory_HardLink$'")
     || !appDockerfile.includes(goBuilder)) {
-  fail("Dockerfile: embedded Trivy must retain the reviewed ORAS and patched Go toolchain rebuild");
+  fail("Dockerfile: embedded Trivy must retain the reviewed ORAS, go-git, and patched Go toolchain rebuild");
 }
 for (const [invariant, message] of [
   [nodeBase, "pinned multi-architecture Node base"],
@@ -1062,6 +1083,7 @@ for (const [invariant, message] of [
   ['echo "${TRIVY_SOURCE_SHA256}  /tmp/trivy-source.tar.gz" | sha256sum -c -', "Trivy source checksum verification"],
   ["go build -mod=readonly -buildvcs=false -trimpath", "read-only deterministic Trivy module build"],
   ['go version -m /out/trivy | grep -F "oras.land/oras-go/v2"', "embedded ORAS version verification"],
+  ['go version -m /out/trivy | grep -F "github.com/go-git/go-git/v5"', "embedded go-git version verification"],
   ["ARG RCLONE_VERSION=1.74.4", "reviewed rclone version"],
   ["ARG RCLONE_SOURCE_COMMIT=5bc93a2a7ab0ebd0a11352bc4968eabeffb18027", "reviewed rclone source commit"],
   ["ARG RCLONE_SOURCE_SHA256=1d604c49673ddbb8829563c6768d3d69cd0a8ddc4a0beec3b42a9dae3ea34a63", "rclone source checksum"],

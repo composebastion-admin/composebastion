@@ -6,10 +6,28 @@ const upgradeRequiredEvidence = Object.freeze([
   "publicImage.id",
   "publicImage.repoDigest",
   "publicImage.version",
+  "bridge.repoDigest",
+  "bridge.version",
+  "bridgeVersion",
   "imageBindings.publicApp.id",
   "imageBindings.publicWorker.id",
+  "imageBindings.bridgeApp.id",
+  "imageBindings.bridgeWorker.id",
   "imageBindings.candidateApp.id",
   "imageBindings.candidateWorker.id",
+  "oldUpdaterApiHop",
+  "oldUpdaterJobId",
+  "realApiHandoff",
+  "protectedEnvironmentFile",
+  "candidatePreparationTransitionRecorded",
+  "credentialPreparation.credentialTransition",
+  "credentialPreparation.environmentAction",
+  "credentialPreparation.rawEnvironmentCanonicalized",
+  "hardenedUpdaterJobs.failed.jobId",
+  "hardenedUpdaterJobs.failed.outcomeFile",
+  "hardenedUpdaterJobs.successful.jobId",
+  "hardenedUpdaterJobs.successful.outcomeFile",
+  "bridgeComposeDefinitionRetained",
   "preservedConfiguration",
   "preservedEncryptedConfiguration",
   "preservedDatabase",
@@ -19,7 +37,12 @@ const upgradeRequiredEvidence = Object.freeze([
   "recoveryRestoreAttemptMigrationHealthy",
   "deploymentAnalysisBindingMigrationHealthy",
   "stackSourceEnvironmentBindingMigrationHealthy",
-  "githubCloneDeploymentBindingMigrationHealthy"
+  "githubCloneDeploymentBindingMigrationHealthy",
+  "legacyEnvironmentPlaceholderHandled",
+  "legacyBackupOwnershipMigrated",
+  "pre12ComposeInitializerServicesAbsent",
+  "candidateCompatibilityEntrypointUsed",
+  "recursiveOwnershipSymlinkSafe"
 ]);
 
 const rollbackRequiredEvidence = Object.freeze([
@@ -34,7 +57,16 @@ const rollbackRequiredEvidence = Object.freeze([
   "reupgradePreservedConfiguration",
   "reupgradePreservedDatabase",
   "volumesRetained",
-  "rollbackReupgradeHealthy"
+  "rollbackReupgradeHealthy",
+  "credentialRollbackVerified",
+  "credentialRestoration",
+  "rollbackDependenciesBypassed",
+  "immutableBridgeRollback",
+  "dependencyContainerIdsPreserved",
+  "forcedFailureStage",
+  "updaterOutcome",
+  "successfulReupgrade",
+  "canonicalEnvironmentPersisted"
 ]);
 
 export const acceptanceScenarioManifest = Object.freeze([

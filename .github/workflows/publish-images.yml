@@ -2,7 +2,7 @@ name: Publish Images
 
 on:
   push:
-    branches: [main, beta]
+    branches: [main, beta, dev]
     tags:
       - "v*"
   pull_request:
@@ -60,6 +60,10 @@ jobs:
           created="$(git show -s --format=%cI "${GITHUB_SHA}")"
           if [[ "${GITHUB_REF}" = refs/heads/main && "${version}" == *-* ]]; then
             echo "::error::The main image alias cannot publish prerelease version ${version}."
+            exit 1
+          fi
+          if [[ "${GITHUB_REF}" = refs/heads/beta && "${version}" != *-* ]]; then
+            echo "::error::The beta image alias requires an explicit prerelease version, got ${version}."
             exit 1
           fi
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
@@ -554,15 +558,27 @@ jobs:
           LEGACY_ALIAS_BOOTSTRAP_POLICY: .github/legacy-alias-bootstrap.json
           APP_INDEX_DIGEST: ${{ steps.indexes.outputs.app_digest }}
           AGENT_INDEX_DIGEST: ${{ steps.indexes.outputs.agent_digest }}
+          VERSION: ${{ needs.metadata.outputs.version }}
         run: |
+          set -euo pipefail
+          mode="branch"
+          aliases=("${GITHUB_REF_NAME}")
+          if [[ "${GITHUB_REF}" = refs/heads/beta ]]; then
+            if [[ "${VERSION}" != *-* ]]; then
+              echo "::error::The beta branch must publish an explicit SemVer prerelease version."
+              exit 1
+            fi
+            mode="beta"
+            aliases+=("${VERSION}")
+          fi
           bash scripts/reconcile-image-alias-pair.sh \
             /tmp/branch-alias-reconciliation.json \
-            branch \
+            "${mode}" \
             "${APP_IMAGE}" \
             "${AGENT_IMAGE}" \
             "${APP_INDEX_DIGEST}" \
             "${AGENT_INDEX_DIGEST}" \
-            "${GITHUB_REF_NAME}"
+            "${aliases[@]}"
 
       - name: Upload paired branch-alias reconciliation evidence
         if: always()

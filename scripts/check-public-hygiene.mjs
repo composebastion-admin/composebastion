@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 const tracked = spawnSync("git", ["ls-files", "-z"], {
   encoding: "buffer",
@@ -50,8 +50,7 @@ const labelContract = new Map([
   [".github/ISSUE_TEMPLATE/bug_report.yml", ['labels: ["type: bug", "status: needs info"]']],
   [".github/ISSUE_TEMPLATE/feature_request.yml", ['labels: ["type: feature", "status: needs info"]']],
   [".github/ISSUE_TEMPLATE/deployment_help.yml", ['labels: ["type: support", "area: docker", "status: needs info"]']],
-  [".github/ISSUE_TEMPLATE/security_report.yml", ['labels: ["type: security", "area: security", "status: needs info"]']],
-  [".github/dependabot.yml", ['"type: dependencies"', '"area: security"', '"area: ci"', '"area: docker"']]
+  [".github/ISSUE_TEMPLATE/security_report.yml", ['labels: ["type: security", "area: security", "status: needs info"]']]
 ]);
 const documentedLabels = readFileSync(".github/labels.md", "utf8");
 for (const [file, expectedLabels] of labelContract) {
@@ -61,6 +60,20 @@ for (const [file, expectedLabels] of labelContract) {
     for (const label of expected.matchAll(/"([^"]+)"/g)) {
       if (!documentedLabels.includes(`\`${label[1]}\``)) failures.push(`.github/labels.md: missing referenced label ${label[1]}`);
     }
+  }
+}
+
+if (existsSync(".github/dependabot.yml")) {
+  failures.push(".github/dependabot.yml: automated dependency PR creation must remain disabled");
+}
+const releaseProcess = readFileSync(".github/RELEASE_PROCESS.md", "utf8");
+for (const required of [
+  "Automated dependency pull requests are disabled",
+  "Keep vulnerability alerts, CodeQL, secret scanning",
+  "batch approved updates through a short-lived `codex/*` pull request"
+]) {
+  if (!releaseProcess.includes(required)) {
+    failures.push(`.github/RELEASE_PROCESS.md: missing dependency governance contract ${required}`);
   }
 }
 

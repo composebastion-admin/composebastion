@@ -10,6 +10,7 @@ import {
   ownedCandidateImageTags,
   requireImageComposeProject
 } from "./qualification-policy.mjs";
+import { acceptanceUpgradeBaselines } from "./upgrade-baselines.mjs";
 
 function passingCleanup() {
   return {
@@ -42,6 +43,19 @@ test("skipping upgrades names both required public baselines", () => {
   assert.deepEqual(reasons, [
     "The required public 1.1.2 current-stable and 1.0.6 legacy upgrade scenarios were explicitly skipped"
   ]);
+});
+
+test("public upgrade fixtures retain their historical attempt-accounting contracts", () => {
+  assert.deepEqual(
+    acceptanceUpgradeBaselines.map(({ version, expectedQueuedJobAttemptCount }) => ({
+      version,
+      expectedQueuedJobAttemptCount
+    })),
+    [
+      { version: "1.1.2", expectedQueuedJobAttemptCount: 1 },
+      { version: "1.0.6", expectedQueuedJobAttemptCount: 0 }
+    ]
+  );
 });
 
 test("cleanup evidence fails closed for residual state and omitted checks", () => {

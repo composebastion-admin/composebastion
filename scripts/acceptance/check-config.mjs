@@ -6,6 +6,7 @@ import {
   isDockerBindPathStrictlyBeneath
 } from "./bind-paths.mjs";
 import { acceptanceScenarioManifest } from "./scenario-manifest.mjs";
+import { acceptanceUpgradeBridge } from "./upgrade-baselines.mjs";
 
 const candidateVersion = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")).version;
 const root = new URL("../..", import.meta.url);
@@ -52,6 +53,15 @@ function curatedHostEnvironment(source) {
 
 const hostEnvironment = curatedHostEnvironment(process.env);
 
+if (acceptanceUpgradeBridge.releaseTag !== `ghcr.io/composebastion-admin/composebastion-app:${acceptanceUpgradeBridge.version}`) {
+  throw new Error(`Acceptance bridge release tag must identify the published ${acceptanceUpgradeBridge.version} app image`);
+}
+if (!/^ghcr\.io\/composebastion-admin\/composebastion-app@sha256:[a-f0-9]{64}$/.test(
+  acceptanceUpgradeBridge.pinnedImage
+)) {
+  throw new Error("Acceptance bridge qualification image must be an immutable GHCR app digest");
+}
+
 function assertPinnedImages(file, { allowInterpolated = false } = {}) {
   const contents = readFileSync(new URL(`../../${file}`, import.meta.url), "utf8");
   const failures = [];
@@ -64,9 +74,21 @@ function assertPinnedImages(file, { allowInterpolated = false } = {}) {
 }
 
 assertPinnedImages("docker-compose.acceptance.yml", { allowInterpolated: true });
+assertPinnedImages("docker-compose.acceptance.upgrade.yml", { allowInterpolated: true });
 assertPinnedImages("docker-compose.acceptance.source.yml");
 assertPinnedImages("infra/dev/sshhost.Dockerfile");
 assertPinnedImages("scripts/acceptance/run.mjs");
+
+const upgradeFixtureSource = readFileSync(new URL("../../docker-compose.acceptance.upgrade.yml", import.meta.url), "utf8");
+for (const fragment of [
+  "sshhost:",
+  "/var/run/docker.sock:/var/run/docker.sock",
+  "\${ACCEPTANCE_RUNTIME_DIR:?Set ACCEPTANCE_RUNTIME_DIR}:\${ACCEPTANCE_RUNTIME_DIR:?Set ACCEPTANCE_RUNTIME_DIR}"
+]) {
+  if (!upgradeFixtureSource.includes(fragment)) {
+    throw new Error(`Upgrade acceptance SSH fixture is missing ${fragment}`);
+  }
+}
 
 const runnerSource = readFileSync(new URL("./run.mjs", import.meta.url), "utf8");
 const qualificationPolicySource = readFileSync(new URL("./qualification-policy.mjs", import.meta.url), "utf8");
@@ -127,6 +149,16 @@ for (const fragment of [
   'host.tags.includes("demo")',
   'restoredDataVerified: true',
   'preservedQueuedJob: true',
+  'gitCapture(["show", `v${baseline.version}:docker-compose.image.yml`])',
+  'inspectBridgeUpgradeImage()',
+  'api("/api/self-update/start"',
+  'waitForSelfUpdateOutcome',
+  'forcedFailureMarker',
+  'immutableBridgeRollback: true',
+  'dependencyContainerIdsPreserved: true',
+  'pre12ComposeInitializerServicesAbsent: true',
+  'credentialRollbackVerified:',
+  'rollbackDependenciesBypassed: true',
   'repoDigest',
   'real-nas',
   'real-cloud',
@@ -283,6 +315,7 @@ const env = {
   REGISTRY_PASSWORD: secret(),
   ACCEPTANCE_REGISTRY_AUTH_FILE: "/tmp/composebastion-acceptance-registry.htpasswd",
   ACCEPTANCE_BIND_DIR: "/tmp/composebastion-acceptance-config-bind",
+  ACCEPTANCE_RUNTIME_DIR: "/tmp/composebastion-acceptance-runtime",
   ACCEPTANCE_MAILPIT_PORT: "18025",
   ACCEPTANCE_MINIO_PORT: "19000",
   ACCEPTANCE_REGISTRY_PORT: "18050",
@@ -401,6 +434,11 @@ function assertManagerHardening(label, rendered) {
     if (!backup) throw new Error(`${label} ${serviceName} lost writable backup storage`);
     if (cache?.type !== "volume") throw new Error(`${label} ${serviceName} Trivy cache is not a volume`);
   }
+  const storageInit = rendered.services?.["storage-init"];
+  if (String(storageInit?.environment?.COMPOSEBASTION_UID ?? "") !== env.COMPOSEBASTION_UID
+      || String(storageInit?.environment?.COMPOSEBASTION_GID ?? "") !== env.COMPOSEBASTION_GID) {
+    throw new Error(`${label} storage-init identity does not match app and worker`);
+  }
 }
 
 function assertAgentHardening(label, rendered) {
@@ -446,6 +484,31 @@ for (const serviceName of ["app", "worker"]) {
   if (service?.depends_on?.redis?.condition !== "service_started" || service?.depends_on?.redis?.required !== false) {
     throw new Error(`${serviceName} does not retain optional production Redis startup semantics`);
   }
+  if (service?.depends_on?.["storage-init"]?.condition !== "service_completed_successfully") {
+    throw new Error(`${serviceName} does not wait for backup ownership migration`);
+  }
+  if (service?.depends_on?.["database-init"]?.condition !== "service_completed_successfully") {
+    throw new Error(`${serviceName} does not wait for legacy database reconciliation`);
+  }
+}
+const storageInit = acceptance.services?.["storage-init"];
+const storageInitMount = (storageInit?.volumes ?? []).find((volume) => volume.target === "/data/backups");
+if (storageInit?.user !== "0:0"
+    || storageInitMount?.source !== env.COMPOSEBASTION_BACKUP_DIR
+    || String(storageInit?.environment?.COMPOSEBASTION_UID ?? "") !== "1000"
+    || String(storageInit?.environment?.COMPOSEBASTION_GID ?? "") !== "1000"
+    || storageInit?.read_only !== true
+    || !(storageInit?.cap_drop ?? []).includes("ALL")
+    || !(storageInit?.security_opt ?? []).includes("no-new-privileges:true")) {
+  throw new Error("storage-init does not safely prepare the production backup bind mount");
+}
+const databaseInit = acceptance.services?.["database-init"];
+if (databaseInit?.user !== "1000:1000"
+    || databaseInit?.depends_on?.postgres?.condition !== "service_healthy"
+    || databaseInit?.read_only !== true
+    || !(databaseInit?.cap_drop ?? []).includes("ALL")
+    || !(databaseInit?.security_opt ?? []).includes("no-new-privileges:true")) {
+  throw new Error("database-init does not safely reconcile managed legacy credentials");
 }
 const sshBind = (acceptance.services?.sshhost?.volumes ?? []).find((volume) => volume.target === env.ACCEPTANCE_BIND_DIR);
 if (sshBind?.source !== env.ACCEPTANCE_BIND_DIR) throw new Error("Acceptance bind fixture was not mounted at its isolated path");
@@ -455,7 +518,7 @@ const source = validateRenderedCompose("Source-production acceptance", [
   "docker-compose.acceptance.source.yml"
 ]);
 assertLoopbackPort(source, "app", 18180);
-for (const serviceName of ["app", "worker"]) {
+for (const serviceName of ["storage-init", "database-init", "app", "worker"]) {
   if (source.services?.[serviceName]?.build?.context !== env.ACCEPTANCE_SOURCE_CONTEXT) {
     throw new Error(`${serviceName} source build does not use the exact Git context override`);
   }

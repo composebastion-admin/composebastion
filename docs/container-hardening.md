@@ -14,7 +14,8 @@ and adds a read-only root filesystem, all Linux capabilities dropped,
 Trivy cache volume remain writable.
 
 The default UID/GID is `1000:1000`. Before any image install that uses a host
-bind mount, make the backup directory writable by the selected identity:
+bind mount, it is still useful to create the backup directory with the selected
+identity:
 
 ```bash
 export COMPOSEBASTION_UID=1000
@@ -23,6 +24,15 @@ sudo install -d -m 0750 \
   -o "${COMPOSEBASTION_UID}" -g "${COMPOSEBASTION_GID}" \
   /srv/composebastion/backups
 ```
+
+The default Compose files also run a narrowly scoped root `storage-init`
+one-shot before the app and worker. It changes ownership only below
+`/data/backups`, recursively stays on the same filesystem, skips every symlink,
+and exits before either long-running non-root process starts. It does not trust
+or write an ownership marker. The base Compose contract always prepares for
+the image's fixed `1000:1000` runtime; custom `COMPOSEBASTION_UID/GID` values
+are hardening-overlay-only and the overlay applies them consistently to
+`storage-init`, app, and worker.
 
 Then validate and start the image installation with the overlay last:
 

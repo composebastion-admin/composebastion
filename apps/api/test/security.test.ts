@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { DOCUMENTED_APP_SECRET_PLACEHOLDER, REPOSITORY_APP_SECRET_PLACEHOLDERS, parseEnv } from "../src/config/env.js";
+import {
+  DOCUMENTED_APP_SECRET_PLACEHOLDER,
+  LEGACY_COMPOSE_DATABASE_URL,
+  REPOSITORY_APP_SECRET_PLACEHOLDERS,
+  parseEnv
+} from "../src/config/env.js";
 import { isAllowedCorsOrigin, isLocalDevelopmentOrigin, isSameHostOrigin, isTrustedUnsafeRequestOrigin, isUnsafeHttpMethod } from "../src/services/httpSecurity.js";
 import { isPrivateIp } from "../src/services/ssrf.js";
 
@@ -24,6 +29,28 @@ describe("HTTP security configuration", () => {
     const documented = /^APP_SECRET=(.+)$/m.exec(example)?.[1];
     expect(documented).toBe(DOCUMENTED_APP_SECRET_PLACEHOLDER);
     expect(() => parseEnv({ NODE_ENV: "production", APP_SECRET: documented })).toThrow("APP_SECRET");
+  });
+
+  it("repairs only the repository-owned legacy database placeholder", () => {
+    const postgresPassword = "upgrade-safe-postgres-password";
+    expect(parseEnv({
+      APP_SECRET: uniqueAppSecret,
+      DATABASE_URL: LEGACY_COMPOSE_DATABASE_URL,
+      POSTGRES_PASSWORD: postgresPassword
+    }).DATABASE_URL).toBe(
+      `postgres://composebastion:${postgresPassword}@postgres:5432/composebastion`
+    );
+
+    const externalDatabaseUrl = "postgres://legacy-user:legacy-password@database.internal:5432/composebastion";
+    expect(parseEnv({
+      APP_SECRET: uniqueAppSecret,
+      DATABASE_URL: externalDatabaseUrl,
+      POSTGRES_PASSWORD: postgresPassword
+    }).DATABASE_URL).toBe(externalDatabaseUrl);
+    expect(parseEnv({
+      APP_SECRET: uniqueAppSecret,
+      DATABASE_URL: LEGACY_COMPOSE_DATABASE_URL
+    }).DATABASE_URL).toBe(LEGACY_COMPOSE_DATABASE_URL);
   });
 
   it("parses comma separated CORS origins", () => {

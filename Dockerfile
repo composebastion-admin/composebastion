@@ -2,6 +2,7 @@ ARG TRIVY_VERSION=0.72.0
 ARG TRIVY_SOURCE_COMMIT=8a32853686209a428179bb3a1688802b25691564
 ARG TRIVY_SOURCE_SHA256=5a922c388846d11345ce8283e4373be312458f002abc667c3cd1f77c43163725
 ARG TRIVY_ORAS_VERSION=v2.6.2
+ARG TRIVY_GO_GIT_VERSION=v5.19.2
 ARG RCLONE_VERSION=1.74.4
 ARG RCLONE_SOURCE_COMMIT=5bc93a2a7ab0ebd0a11352bc4968eabeffb18027
 ARG RCLONE_SOURCE_SHA256=1d604c49673ddbb8829563c6768d3d69cd0a8ddc4a0beec3b42a9dae3ea34a63
@@ -28,6 +29,16 @@ COPY . .
 RUN npm run build
 RUN npm prune --omit=dev
 
+FROM node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a AS storage-helper-builder
+WORKDIR /src
+RUN apk add --no-cache build-base
+COPY scripts/prepare-backup-storage.c ./prepare-backup-storage.c
+RUN cc -std=c17 -O2 -Wall -Wextra -Werror prepare-backup-storage.c -o /tmp/composebastion-prepare-storage && \
+    strip /tmp/composebastion-prepare-storage
+
+FROM scratch AS storage-helper-artifacts
+COPY --from=storage-helper-builder /tmp/composebastion-prepare-storage /composebastion-prepare-storage
+
 FROM --platform=$BUILDPLATFORM golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS trivy-builder
 ENV GOTOOLCHAIN=local
 ARG TARGETOS
@@ -36,6 +47,7 @@ ARG TRIVY_VERSION
 ARG TRIVY_SOURCE_COMMIT
 ARG TRIVY_SOURCE_SHA256
 ARG TRIVY_ORAS_VERSION
+ARG TRIVY_GO_GIT_VERSION
 ARG GO_GRPC_VERSION
 ARG GO_TEXT_VERSION
 RUN set -eux; \
@@ -46,9 +58,11 @@ RUN set -eux; \
     tar -xzf /tmp/trivy-source.tar.gz -C /src --strip-components=1; \
     cd /src; \
     go get "oras.land/oras-go/v2@${TRIVY_ORAS_VERSION}"; \
+    go get "github.com/go-git/go-git/v5@${TRIVY_GO_GIT_VERSION}"; \
     go get "google.golang.org/grpc@v${GO_GRPC_VERSION}"; \
     go get "golang.org/x/text@v${GO_TEXT_VERSION}"; \
     test "$(go list -m -f '{{.Version}}' oras.land/oras-go/v2)" = "${TRIVY_ORAS_VERSION}"; \
+    test "$(go list -m -f '{{.Version}}' github.com/go-git/go-git/v5)" = "${TRIVY_GO_GIT_VERSION}"; \
     test "$(go list -m -f '{{.Version}}' google.golang.org/grpc)" = "v${GO_GRPC_VERSION}"; \
     test "$(go list -m -f '{{.Version}}' golang.org/x/text)" = "v${GO_TEXT_VERSION}"; \
     go test oras.land/oras-go/v2/content/file -run '^Test_extractTarDirectory_HardLink$'; \
@@ -57,6 +71,7 @@ RUN set -eux; \
         -ldflags="-s -w -extldflags '-static' -X github.com/aquasecurity/trivy/pkg/version/app.ver=${TRIVY_VERSION}" \
         -o /out/trivy ./cmd/trivy; \
     go version -m /out/trivy | grep -F "oras.land/oras-go/v2" | grep -F "${TRIVY_ORAS_VERSION}"; \
+    go version -m /out/trivy | grep -F "github.com/go-git/go-git/v5" | grep -F "${TRIVY_GO_GIT_VERSION}"; \
     install -m 0644 /src/LICENSE /out/licenses/trivy-LICENSE.txt; \
     install -m 0644 /src/NOTICE /out/licenses/trivy-NOTICE.txt; \
     install -m 0644 "$(go env GOPATH)/pkg/mod/oras.land/oras-go/v2@${TRIVY_ORAS_VERSION}/LICENSE" /out/licenses/oras-go-LICENSE.txt; \
@@ -141,6 +156,7 @@ RUN set -eux; \
 
 COPY --from=trivy-builder /out/trivy /usr/local/bin/trivy
 COPY --from=rclone-builder /out/rclone /usr/local/bin/rclone
+COPY --from=storage-helper-builder /tmp/composebastion-prepare-storage /usr/local/bin/composebastion-prepare-storage
 COPY --from=trivy-builder /out/licenses/ /licenses/third-party/
 COPY --from=rclone-builder /out/licenses/ /licenses/third-party/
 COPY LICENSES/go-modules/ /licenses/third-party/go-modules/
@@ -153,11 +169,15 @@ COPY --from=build /app/apps/api/dist ./apps/api/dist
 COPY --from=build /app/apps/web/dist ./apps/web/dist
 COPY --from=build /app/packages/shared/package.json ./packages/shared/package.json
 COPY --from=build /app/packages/shared/dist ./packages/shared/dist
+COPY --from=build /app/scripts/prepare-backup-storage.mjs ./scripts/prepare-backup-storage.mjs
+COPY --from=build /app/scripts/prepare-compose-upgrade.mjs ./scripts/prepare-compose-upgrade.mjs
+COPY --from=build /app/scripts/prepare-database-upgrade.mjs ./scripts/prepare-database-upgrade.mjs
 COPY --from=build /app/infra ./infra
 COPY LICENSE.md LICENSING_SUMMARY.md COMMERCIAL-LICENSE.md NOTICE.md THIRD-PARTY-NOTICES.md TRADEMARKS.md /licenses/
 COPY LICENSES /licenses/LICENSES
-RUN mkdir -p /data/backups /var/cache/composebastion/trivy && \
-    chown -R 1000:1000 /data/backups /var/cache/composebastion
+RUN mkdir -p /data/backups /var/cache/composebastion/trivy /var/lib/composebastion/upgrade-state && \
+    chmod 0700 /var/lib/composebastion/upgrade-state && \
+    chown -R 1000:1000 /data/backups /var/cache/composebastion /var/lib/composebastion
 RUN set -eux; \
     node -e "Promise.all([import('@composebastion/shared'), import('semver')])"; \
     trivy --version | grep -F "Version: ${TRIVY_VERSION}"; \

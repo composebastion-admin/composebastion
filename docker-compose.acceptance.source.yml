@@ -2,6 +2,22 @@
 # It restores a loopback-only browser/API port after the production example
 # removes public ports and pins every third-party runtime fixture by digest.
 services:
+  storage-init:
+    build:
+      context: ${ACCEPTANCE_SOURCE_CONTEXT:?Set ACCEPTANCE_SOURCE_CONTEXT to the exact Git build context}
+      args:
+        APP_VERSION: ${ACCEPTANCE_CANDIDATE_VERSION:?Set ACCEPTANCE_CANDIDATE_VERSION}
+        VCS_REF: ${ACCEPTANCE_CANDIDATE_REVISION:?Set ACCEPTANCE_CANDIDATE_REVISION}
+        BUILD_DATE: ${ACCEPTANCE_CANDIDATE_BUILD_DATE:?Set ACCEPTANCE_CANDIDATE_BUILD_DATE}
+
+  database-init:
+    build:
+      context: ${ACCEPTANCE_SOURCE_CONTEXT:?Set ACCEPTANCE_SOURCE_CONTEXT to the exact Git build context}
+      args:
+        APP_VERSION: ${ACCEPTANCE_CANDIDATE_VERSION:?Set ACCEPTANCE_CANDIDATE_VERSION}
+        VCS_REF: ${ACCEPTANCE_CANDIDATE_REVISION:?Set ACCEPTANCE_CANDIDATE_REVISION}
+        BUILD_DATE: ${ACCEPTANCE_CANDIDATE_BUILD_DATE:?Set ACCEPTANCE_CANDIDATE_BUILD_DATE}
+
   app:
     build:
       context: ${ACCEPTANCE_SOURCE_CONTEXT:?Set ACCEPTANCE_SOURCE_CONTEXT to the exact Git build context}

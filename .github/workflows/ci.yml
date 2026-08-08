@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, beta]
+    branches: [main, beta, dev]
   pull_request:
 
 permissions:
@@ -62,6 +62,16 @@ jobs:
         run: npm run test:release-alias-policy
       - name: Acceptance qualification policy tests
         run: npm run test:acceptance-policy
+      - name: Upgrade preparation safety tests
+        run: npm run test:upgrade-preparation
+      - name: Source upgrade rollback tests
+        run: npm run test:source-upgrade
+      - name: Manual image upgrade rollback tests
+        env:
+          COMPOSEBASTION_REQUIRE_CROSS_FILESYSTEM_TEST: "1"
+        run: npm run test:image-upgrade
+      - name: Upgrade wrapper shell safety
+        run: shellcheck scripts/upgrade-image.sh
       - name: Third-party notices
         run: npm run notices:check
       - name: Immutable workflow actions
@@ -155,6 +165,7 @@ jobs:
           cache: npm
       - name: Install integrity-pinned npm
         run: node scripts/bootstrap-npm.mjs
+      - run: npm ci --engine-strict --strict-allow-scripts --dangerously-allow-all-scripts=false --ignore-scripts=false
       - name: Materialize exact Git build context
         run: node scripts/materialize-git-context.mjs "${RUNNER_TEMP}/composebastion-git-context" "${GITHUB_SHA}"
       - name: Enforce container configuration policy
@@ -274,6 +285,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "24"

@@ -243,7 +243,7 @@ No missing, GPL, AGPL, SSPL, UNKNOWN, or UNLICENSED package entries were found i
 | bcrypt-pbkdf | 1.0.2 | BSD-3-Clause | node_modules/bcrypt-pbkdf |
 | bcryptjs | 3.0.3 | BSD-3-Clause | node_modules/bcryptjs |
 | bowser | 2.14.1 | MIT | node_modules/bowser |
-| brace-expansion | 5.0.8 | MIT | node_modules/brace-expansion |
+| brace-expansion | 5.0.9 | MIT | node_modules/brace-expansion |
 | browserslist | 4.28.5 | MIT | node_modules/browserslist |
 | buildcheck | 0.0.7 | MIT | node_modules/buildcheck |
 | caniuse-lite | 1.0.30001803 | CC-BY-4.0 | node_modules/caniuse-lite |
@@ -278,8 +278,8 @@ No missing, GPL, AGPL, SSPL, UNKNOWN, or UNLICENSED package entries were found i
 | fast-deep-equal | 3.1.3 | MIT | node_modules/fast-deep-equal |
 | fast-json-stringify | 7.0.1 | MIT | node_modules/fast-json-stringify |
 | fast-querystring | 1.1.2 | MIT | node_modules/fast-querystring |
-| fast-uri | 3.1.4 | BSD-3-Clause | node_modules/fast-uri |
-| fast-uri | 4.1.1 | BSD-3-Clause | node_modules/fast-json-stringify/node_modules/fast-uri |
+| fast-uri | 3.1.5 | BSD-3-Clause | node_modules/fast-uri |
+| fast-uri | 4.1.2 | BSD-3-Clause | node_modules/fast-json-stringify/node_modules/fast-uri |
 | fastify | 5.10.0 | MIT | node_modules/fastify |
 | fastify-plugin | 5.1.0 | MIT | node_modules/@fastify/cors/node_modules/fastify-plugin |
 | fastify-plugin | 5.1.0 | MIT | node_modules/@fastify/rate-limit/node_modules/fastify-plugin |
@@ -323,7 +323,7 @@ No missing, GPL, AGPL, SSPL, UNKNOWN, or UNLICENSED package entries were found i
 | mnemonist | 0.40.0 | MIT | node_modules/mnemonist |
 | ms | 2.1.3 | MIT | node_modules/ms |
 | nan | 2.28.0 | MIT | node_modules/nan |
-| nanoid | 3.3.16 | MIT | node_modules/nanoid |
+| nanoid | 3.3.18 | MIT | node_modules/nanoid |
 | node-releases | 2.0.51 | MIT | node_modules/node-releases |
 | nodemailer | 9.0.3 | MIT-0 | node_modules/nodemailer |
 | obliterator | 2.0.5 | MIT | node_modules/obliterator |

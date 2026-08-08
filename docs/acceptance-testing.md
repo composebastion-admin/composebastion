@@ -4,9 +4,15 @@ The local acceptance harness layers pinned Postgres, Redis, Mailpit, MinIO,
 Samba, registry, agent, and SSH Docker-host fixtures over the shipped
 `docker-compose.image.yml`, so the fresh-image and public-upgrade scenarios use
 the real production image Compose wiring. Upgrade qualification has two
-required baselines: current stable `1.1.2`, including rollback and re-upgrade
-on retained volumes, and legacy `1.0.6` for the long-hop compatibility
-guarantee. It creates runtime-only credentials,
+required baselines: public `1.1.2` and legacy public `1.0.6`. Each uses its
+real API updater to reach the published 1.1.6 bridge, then uses the bridge's
+API/SSH updater for a forced 1.2 rollback and successful retry on retained
+volumes. Qualifying runs always use the published immutable bridge digest
+committed in `scripts/acceptance/upgrade-baselines.mjs`. The
+`COMPOSEBASTION_ACCEPTANCE_BRIDGE_IMAGE` override is accepted only together with
+`--allow-nonqualifying` for an explicitly diagnostic developer run; a tag or an
+alternate digest can never produce a qualifying report. The harness creates
+runtime-only credentials,
 builds the candidate from the current checkout, and
 writes redacted JSON and Markdown results under the ignored
 `test-results/acceptance/` directory. Every report records the full HEAD SHA,
@@ -106,9 +112,11 @@ durable enqueue while readiness remains healthy, Redis diagnostics and worker
 subscription recovery, safe-job lease recovery after a killed worker, a disposable
 Compose workload, S3 and SMB target checks, remote-only capture metadata and
 local-cache eviction, clone restore with volume/bind/database/network behavior
-verification and cleanup, current-stable `1.1.2` upgrade, rollback, and
-re-upgrade on retained volumes, legacy `1.0.6` long-hop upgrade state
-preservation (including a queued API job, encrypted registry credentials, and
+verification and cleanup, public `1.1.2` and legacy `1.0.6` old-updater hops
+to 1.1.6, forced bridge-to-1.2 credential-first rollback, and successful
+API/SSH re-upgrade on retained volumes. It proves unchanged PostgreSQL/Redis
+identities, immutable bridge image restoration, and long-hop state preservation
+(including a queued API job, encrypted registry credentials, and
 the exact resolved public image digests), all ten release-candidate migrations
 `029` through `038` (including
 the GitHub API and clone-deployment revision/environment bindings), and a fresh

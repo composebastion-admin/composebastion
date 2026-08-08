@@ -1607,6 +1607,7 @@ test("admin about shows V1 licensing details", async ({ page }) => {
 test("configuration export and import remain encrypted, validated, and confirmed", { tag: ["@critical", "@admin"] }, async ({ page }) => {
   const mock = await mockApi(page);
   await gotoApp(page, "/settings");
+  await expect(page.getByRole("heading", { name: "Host Settings" })).toBeVisible();
   const passphrase = "qualification-passphrase";
   await page.getByLabel("Backup passphrase").fill(passphrase);
 
