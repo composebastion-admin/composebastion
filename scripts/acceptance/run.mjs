@@ -1073,6 +1073,19 @@ async function inspectPublicUpgradeImage(baseline) {
   };
 }
 
+// Local registries may rewrite a multi-platform GHCR index digest to the single
+// platform that is present on the host. Re-pull after push so compose bindings
+// assert against the runtime image id Docker actually starts.
+async function resolvePushedRegistryImageId(reference) {
+  await run("docker", ["pull", reference], { inherit: true });
+  const details = JSON.parse((await run(
+    "docker",
+    ["image", "inspect", reference, "--format", "{{json .}}"]
+  )).stdout);
+  assert(details?.Id, `pushed registry image ${reference} did not resolve to a local image id`);
+  return details.Id;
+}
+
 async function inspectBridgeUpgradeImage() {
   const override = hostEnvironment.COMPOSEBASTION_ACCEPTANCE_BRIDGE_IMAGE;
   if (override) {
@@ -2672,6 +2685,9 @@ async function upgradeScenario(baseline) {
       await run("docker", ["image", "tag", imageId, reference]);
       await run("docker", ["push", reference], { inherit: true });
     }
+    publicImageEvidence.id = await resolvePushedRegistryImageId(publicRegistryReference);
+    bridgeImageEvidence.id = await resolvePushedRegistryImageId(bridgeRegistryReference);
+    const candidateRuntimeImageId = await resolvePushedRegistryImageId(candidateRegistryReference);
     if (baseline.initialManagedCredential === "legacy") {
       await scenarioCompose(oldEnv, [
         "exec", "-T", "postgres",
@@ -2965,8 +2981,8 @@ async function upgradeScenario(baseline) {
       (args, options) => scenarioCompose(newEnv, args, options),
       "app",
       {
-        expectedId: report.candidateImages.app.id,
-        expectedReference: report.candidateImages.app.id,
+        expectedId: candidateRuntimeImageId,
+        expectedReference: candidateRuntimeImageId,
         expectedRevision: candidateRevision,
         expectedCreated: candidateBuildDate
       }
@@ -2975,8 +2991,8 @@ async function upgradeScenario(baseline) {
       (args, options) => scenarioCompose(newEnv, args, options),
       "worker",
       {
-        expectedId: report.candidateImages.app.id,
-        expectedReference: report.candidateImages.app.id,
+        expectedId: candidateRuntimeImageId,
+        expectedReference: candidateRuntimeImageId,
         expectedRevision: candidateRevision,
         expectedCreated: candidateBuildDate
       }
