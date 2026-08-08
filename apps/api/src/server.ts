@@ -169,7 +169,24 @@ export async function buildServer() {
     }
 
     const ok = Object.values(checks).filter((check) => check.required).every((check) => check.ok);
-    if (!ok) reply.code(503);
+    const workerCheck = checks.worker as {
+      ok: boolean;
+      required: boolean;
+      state?: string;
+      activeWorkers?: number;
+    };
+    // Historical Compose healthchecks probe /api/health/ready and only inspect
+    // HTTP success. While a self-update handoff is pending the worker is
+    // intentionally draining, so keep body.ok false but return HTTP 200 when
+    // the database is healthy and at least one worker heartbeat is still live.
+    const pendingHandoffDrain = Boolean(
+      checks.database?.ok
+      && workerCheck
+      && !workerCheck.ok
+      && workerCheck.state === "draining"
+      && Number(workerCheck.activeWorkers) > 0
+    );
+    if (!ok && !pendingHandoffDrain) reply.code(503);
     return { ok, checks };
   });
   app.get("/api/health/redis", { config: { rateLimit: healthCheckRateLimit } }, async (_request, reply) => {

@@ -87,6 +87,16 @@ if [ "$1" = "compose" ]; then
         sleep 1
         exit 1
       fi
+      case " $* " in
+        *'worker?.state!=="draining"'*)
+          # Handoff / candidate_handoff probes accept a draining worker.
+          exit 0
+          ;;
+        *'ready.checks?.worker?.ok'*)
+          # Full readiness requires worker.ok, which cannot pass before outcome publication.
+          exit 1
+          ;;
+      esac
       exit 0 ;;
   esac
 fi
@@ -222,6 +232,7 @@ describe("generated self-update shell program", () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.outcome).toContain("status=passed\nstage=complete\nrollback=not_required");
+    expect(result.script).toContain("candidate_handoff");
     expect(result.environment).toContain("COMPOSEBASTION_VERSION=1.0.2");
     expect(result.environment).toContain("APP_SECRET=do-not-log-or-lose");
     expect(result.commands).toContain("prepare-compose-upgrade.mjs reconcile");

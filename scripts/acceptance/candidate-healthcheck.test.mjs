@@ -12,7 +12,7 @@ function runHealthcheck(program) {
   return spawnSync(process.execPath, ["-e", program], { encoding: "utf8" });
 }
 
-test("candidate healthcheck uses liveness while the handoff keeps readiness draining", async () => {
+test("candidate healthcheck retains the historical readiness probe with a forced-failure marker", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "composebastion-candidate-health-"));
   try {
     const packagePath = path.join(directory, "package.json");
@@ -27,7 +27,7 @@ test("candidate healthcheck uses liveness while the handoff keeps readiness drai
     assert.equal(runHealthcheck(program).status, 0);
     await writeFile(markerPath, "forced candidate failure\n", { mode: 0o600 });
     assert.equal(runHealthcheck(program).status, 1);
-    assert(!renderCandidateHealthcheckProgram("1.2.0-beta.1").includes("/api/health/ready"));
+    assert.match(renderCandidateHealthcheckProgram("1.2.0-beta.1"), /\/api\/health\/ready/);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -52,7 +52,7 @@ test("health marker affects only the candidate version", async () => {
   }
 });
 
-test("candidate healthcheck fails when liveness is not healthy", async () => {
+test("candidate healthcheck fails when readiness HTTP is not successful", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "composebastion-candidate-health-"));
   try {
     const packagePath = path.join(directory, "package.json");
@@ -60,7 +60,7 @@ test("candidate healthcheck fails when liveness is not healthy", async () => {
     const program = renderCandidateHealthcheckProgram("1.2.0-beta.1", {
       packagePath,
       markerPath: path.join(directory, "missing-marker"),
-      healthUrl: "data:application/json,%7B%22ok%22%3Afalse%7D"
+      healthUrl: "http://127.0.0.1:1/"
     });
     assert.equal(runHealthcheck(program).status, 1);
   } finally {

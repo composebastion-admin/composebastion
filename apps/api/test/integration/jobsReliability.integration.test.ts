@@ -500,7 +500,7 @@ describe.skipIf(!integrationEnabled)("worker reliability integration", () => {
     expect(active.json().checks.worker).toMatchObject({ ok: true, available: true, state: "active" });
   });
 
-  it("makes readiness fail closed for every fresh worker while a self-update handoff blocks claims", async () => {
+  it("keeps readiness HTTP successful for Docker while a self-update handoff drains workers", async () => {
     const hostId = await insertHost();
     const handoffJobId = await insertJob("system.self_update", {
       status: "running",
@@ -531,12 +531,18 @@ describe.skipIf(!integrationEnabled)("worker reliability integration", () => {
     });
 
     const blocked = await app.inject({ method: "GET", url: "/api/health/ready" });
-    expect(blocked.statusCode).toBe(503);
-    expect(blocked.json().checks.worker).toMatchObject({
+    expect(blocked.statusCode).toBe(200);
+    expect(blocked.json()).toMatchObject({
       ok: false,
-      available: false,
-      activeWorkers: 2,
-      state: "draining"
+      checks: {
+        database: { ok: true, required: true },
+        worker: {
+          ok: false,
+          available: false,
+          activeWorkers: 2,
+          state: "draining"
+        }
+      }
     });
 
     await pool.query(
@@ -554,6 +560,40 @@ describe.skipIf(!integrationEnabled)("worker reliability integration", () => {
       available: true,
       activeWorkers: 2,
       state: "active"
+    });
+  });
+
+  it("still fails readiness HTTP when workers are absent during a self-update handoff", async () => {
+    const hostId = await insertHost();
+    const handoffJobId = await insertJob("system.self_update", {
+      status: "running",
+      attemptCount: 1,
+      hostId,
+      payload: {
+        workingDir: "/srv/composebastion",
+        composeFile: "docker-compose.image.yml",
+        versionMode: "latest",
+        targetVersion: "latest"
+      }
+    });
+    await pool.query(
+      `UPDATE operation_jobs
+       SET result = $2::jsonb
+       WHERE id = $1`,
+      [handoffJobId, JSON.stringify({ handoffPending: true, handedOffAt: new Date().toISOString() })]
+    );
+
+    const blocked = await app.inject({ method: "GET", url: "/api/health/ready" });
+    expect(blocked.statusCode).toBe(503);
+    expect(blocked.json()).toMatchObject({
+      ok: false,
+      checks: {
+        worker: {
+          ok: false,
+          available: false,
+          activeWorkers: 0
+        }
+      }
     });
   });
 

@@ -2471,6 +2471,10 @@ function materializePre12UpgradeCompose(contents, acceptanceRuntimeDir) {
   assert(app && definition.services?.worker, "public pre-1.2 Compose is missing app or worker");
   app.volumes = [...(app.volumes ?? []), `${acceptanceRuntimeDir}:/acceptance-runtime`];
   const forcedFailureProgram = renderCandidateHealthcheckProgram(candidateVersion);
+  assert(
+    forcedFailureProgram.includes("/api/health/ready"),
+    "pre-1.2 upgrade healthcheck must retain the historical readiness probe"
+  );
   app.healthcheck = {
     test: ["CMD", "node", "-e", forcedFailureProgram],
     interval: "2s",
