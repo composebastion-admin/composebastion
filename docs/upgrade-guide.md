@@ -221,3 +221,33 @@ docker compose -f docker-compose.image.yml ps
 Delete the job-specific state only after the prior app and worker are healthy.
 If no database transition receipt exists, skip only the credential-restoration
 command; do not invent or edit a receipt.
+
+### Post-upgrade symptom recovery
+
+Use this when an older install is already broken after a partial or unsupported
+hop into 1.2. Prefer repair over recreating Postgres or Redis volumes.
+
+1. Confirm the running app label version and whether Compose is still the
+   pre-1.2 file (no `storage-init` / `database-init` services).
+2. Check for a stuck `system.self_update` job with `handoffPending: true` and
+   any `.composebastion-self-update-*.outcome`. Host checks, backups, and
+   deploys queue forever while that handoff blocks worker claims. Finish or
+   reconcile the outcome, or use the interrupted-update recovery above.
+3. Verify the backup directory is writable by the runtime UID (1.2 defaults to
+   `1000:1000`). Root-owned trees from a raw `compose pull && up` across the
+   root→UID1000 boundary cause `EACCES` on backup create/hydrate/cleanup.
+   Repair with the candidate prepare helper / `storage-init` path rather than
+   `chown` ad hoc unless you know the hardened UID.
+4. Verify the database accepts the password implied by the effective
+   `DATABASE_URL` / `POSTGRES_PASSWORD`. A retained legacy URL without
+   `POSTGRES_PASSWORD` in the app process skips the managed rewrite and fails
+   auth after role rotation.
+5. Prefer candidate prepare reconcile
+   (`prepare-compose-upgrade.mjs`) for credential and storage repair. After a
+   successful bridge→1.2 hop, promote to the 1.2 Compose definition (or re-run
+   storage/database prepare) before calling the upgrade done; retained pre-1.2
+   Compose will not re-run init one-shots on later restarts.
+
+Supported path only: `1.0.6/1.1.2 → 1.1.6 → 1.2` via in-app self-update or the
+image-upgrade wrapper. Raw image pin bumps that skip prepare are unsupported
+across the 1.2 runtime-user boundary.
