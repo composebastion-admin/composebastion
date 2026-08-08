@@ -1069,10 +1069,12 @@ if (!/^ARG TRIVY_SOURCE_COMMIT=8a32853686209a428179bb3a1688802b25691564$/m.test(
   fail("Dockerfile: embedded Trivy source must be pinned to the reviewed v0.72.0 commit and archive checksum");
 }
 if (!/^ARG TRIVY_ORAS_VERSION=v2\.6\.2$/m.test(appDockerfile)
+    || !/^ARG TRIVY_GO_GIT_VERSION=v5\.19\.2$/m.test(appDockerfile)
     || !appDockerfile.includes('go get "oras.land/oras-go/v2@${TRIVY_ORAS_VERSION}"')
+    || !appDockerfile.includes('go get "github.com/go-git/go-git/v5@${TRIVY_GO_GIT_VERSION}"')
     || !appDockerfile.includes("go test oras.land/oras-go/v2/content/file -run '^Test_extractTarDirectory_HardLink$'")
     || !appDockerfile.includes(goBuilder)) {
-  fail("Dockerfile: embedded Trivy must retain the reviewed ORAS and patched Go toolchain rebuild");
+  fail("Dockerfile: embedded Trivy must retain the reviewed ORAS, go-git, and patched Go toolchain rebuild");
 }
 for (const [invariant, message] of [
   [nodeBase, "pinned multi-architecture Node base"],
@@ -1081,6 +1083,7 @@ for (const [invariant, message] of [
   ['echo "${TRIVY_SOURCE_SHA256}  /tmp/trivy-source.tar.gz" | sha256sum -c -', "Trivy source checksum verification"],
   ["go build -mod=readonly -buildvcs=false -trimpath", "read-only deterministic Trivy module build"],
   ['go version -m /out/trivy | grep -F "oras.land/oras-go/v2"', "embedded ORAS version verification"],
+  ['go version -m /out/trivy | grep -F "github.com/go-git/go-git/v5"', "embedded go-git version verification"],
   ["ARG RCLONE_VERSION=1.74.4", "reviewed rclone version"],
   ["ARG RCLONE_SOURCE_COMMIT=5bc93a2a7ab0ebd0a11352bc4968eabeffb18027", "reviewed rclone source commit"],
   ["ARG RCLONE_SOURCE_SHA256=1d604c49673ddbb8829563c6768d3d69cd0a8ddc4a0beec3b42a9dae3ea34a63", "rclone source checksum"],

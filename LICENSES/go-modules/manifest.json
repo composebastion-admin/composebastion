@@ -21,7 +21,7 @@
     },
     {
       "binary": "trivy",
-      "sha256": "8b2961b0164133d2cc24329a375647e940561bf82491c0493ddc77fc164891e2"
+      "sha256": "9ace6a5dc49b25be4feb132bdb0bd0b46b62dbd437047a378dc0a218259c4055"
     }
   ],
   "modules": [
@@ -3724,17 +3724,17 @@
     },
     {
       "module": "github.com/go-git/go-git/v5",
-      "version": "v5.19.1",
+      "version": "v5.19.2",
       "replacement": null,
       "consumingBinaries": [
         "trivy"
       ],
-      "sourceUrl": "https://pkg.go.dev/github.com/go-git/go-git/v5@v5.19.1",
+      "sourceUrl": "https://pkg.go.dev/github.com/go-git/go-git/v5@v5.19.2",
       "spdxExpression": "Apache-2.0",
-      "goChecksum": "h1:nX27AnaU43/K5bKktKwgBmR9lawoYVe1Ckg0rgzzN00=",
+      "goChecksum": "h1:wkfn7vOlUBu8ivAWKBWisTiwJK4jYHzTF8Ndv1LyGqY=",
       "requiredFiles": [
         {
-          "path": "texts/019609cde097eef24fef58e9/LICENSE",
+          "path": "texts/5a7263d3a4e8a404b9e46fed/LICENSE",
           "sha256": "fecc274e9b67f7e128c7d2ba1ad68fcf23b18fe0448d3c3671e943763502d504"
         }
       ]
