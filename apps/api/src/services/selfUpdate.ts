@@ -30,7 +30,6 @@ const GITHUB_API_REPO = "https://api.github.com/repos/composebastion-admin/compo
 const GITHUB_REPO_URL = "https://github.com/composebastion-admin/composebastion";
 const DOCKER_SSH_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin";
 export const SELF_UPDATE_LOCK_PATH = "/tmp/composebastion-self-update.lock";
-const SELF_UPDATE_MISSING_OUTCOME_GRACE_MS = 2 * 60_000;
 const SELF_UPDATE_HANDOFF_TIMEOUT_MS = 30 * 60_000;
 const COMPOSEBASTION_IMAGE_SOURCE = "https://github.com/composebastion-admin/composebastion";
 
@@ -997,8 +996,7 @@ function expectedHandoffArtifacts(row: any) {
   const executionId = String(row.id).replace(/[^a-zA-Z0-9_-]/g, "");
   return {
     action,
-    outcomePath: selfUpdateArtifactPath(action.payload.workingDir, executionId, "outcome"),
-    scriptPath: selfUpdateArtifactPath(action.payload.workingDir, executionId, "sh")
+    outcomePath: selfUpdateArtifactPath(action.payload.workingDir, executionId, "outcome")
   };
 }
 
@@ -1019,7 +1017,7 @@ export async function reconcileSelfUpdateHandoffs() {
   for (const row of pending.rows) {
     const ageMs = pendingHandoffAgeMs(row);
     try {
-      const { action, outcomePath, scriptPath } = expectedHandoffArtifacts(row);
+      const { action, outcomePath } = expectedHandoffArtifacts(row);
       const host = await getHostForWorker(action.hostId);
       if (host.connectionMode !== "ssh") {
         if (await failUnreconciledSelfUpdate(row.id, "Self-update outcome could not be reconciled because the manager host is no longer configured for SSH.")) failed += 1;
@@ -1045,34 +1043,18 @@ export async function reconcileSelfUpdateHandoffs() {
         continue;
       }
 
-      const lockResult = await runSshCommand(
-        host.ssh,
-        [
-          `owner="$(sed -n '1p' ${shQuote(`${SELF_UPDATE_LOCK_PATH}/owner`)} 2>/dev/null || true)"`,
-          `owner_job="$(sed -n '1p' ${shQuote(`${SELF_UPDATE_LOCK_PATH}/job`)} 2>/dev/null || true)"`,
-          `owner_script="$(sed -n '1p' ${shQuote(`${SELF_UPDATE_LOCK_PATH}/script`)} 2>/dev/null || true)"`,
-          `if [ "$owner_job" = ${shQuote(row.id)} ] && [ "$owner_script" = ${shQuote(scriptPath)} ] && case "$owner" in ''|*[!0-9]*) false ;; *) kill -0 "$owner" 2>/dev/null ;; esac; then`,
-          "  process_args=\"$(tr '\\000' ' ' < \"/proc/$owner/cmdline\" 2>/dev/null || true)\"",
-          "  process_cwd=\"$(readlink -f -- \"/proc/$owner/cwd\" 2>/dev/null || true)\"",
-          `  expected_cwd="$(readlink -f -- ${shQuote(action.payload.workingDir)} 2>/dev/null || true)"`,
-          `  case "$process_args" in *${shQuote(scriptPath)}*) [ "$process_cwd" = "$expected_cwd" ] && exit 0 ;; esac`,
-          "fi",
-          "exit 1"
-        ].join("\n"),
-        { timeoutMs: 30_000 }
-      );
-      if (lockResult.code === 0 && ageMs < SELF_UPDATE_HANDOFF_TIMEOUT_MS) {
+      // Verification and rollback can legitimately outlive the old two-minute
+      // missing-outcome grace period. The lock is also briefly unavailable
+      // while Compose replaces the worker. Only a strict outcome or the full
+      // handoff timeout may terminalize the authoritative job.
+      if (ageMs < SELF_UPDATE_HANDOFF_TIMEOUT_MS) {
         pendingCount += 1;
         continue;
       }
-      if (ageMs < SELF_UPDATE_MISSING_OUTCOME_GRACE_MS) {
-        pendingCount += 1;
-        continue;
-      }
-      const message = ageMs >= SELF_UPDATE_HANDOFF_TIMEOUT_MS
-        ? "Self-update handoff timed out before an authoritative outcome was written."
-        : "Self-update process exited without writing an authoritative outcome.";
-      if (await failUnreconciledSelfUpdate(row.id, message)) failed += 1;
+      if (await failUnreconciledSelfUpdate(
+        row.id,
+        "Self-update handoff timed out before an authoritative outcome was written."
+      )) failed += 1;
     } catch {
       if (ageMs >= SELF_UPDATE_HANDOFF_TIMEOUT_MS) {
         if (await failUnreconciledSelfUpdate(row.id, "Self-update outcome could not be reconciled before the handoff timeout.")) failed += 1;

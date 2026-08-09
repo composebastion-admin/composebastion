@@ -401,16 +401,44 @@ describe("self update service", () => {
     expect(query.mock.calls[1]?.[0]).toContain("result ->> 'handoffPending' = 'true'");
   });
 
-  it("keeps an active detached updater nonterminal", async () => {
+  it("keeps a missing outcome nonterminal before the full handoff timeout", async () => {
     query.mockResolvedValueOnce({ rows: [pendingRow()] });
-    runSshCommand.mockReset()
-      .mockResolvedValueOnce({ code: 44, stdout: "", stderr: "" })
-      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+    runSshCommand.mockReset().mockResolvedValueOnce({ code: 44, stdout: "", stderr: "" });
     const { reconcileSelfUpdateHandoffs } = await import("../src/services/selfUpdate.js");
 
     await expect(reconcileSelfUpdateHandoffs()).resolves.toEqual({ completed: 0, failed: 0, pending: 1 });
     expect(query).toHaveBeenCalledTimes(1);
-    expect(runSshCommand.mock.calls[1]?.[1]).toContain("/proc/$owner/cmdline");
+    expect(runSshCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let a missing lock terminalize a handoff after the old two-minute grace period", async () => {
+    query.mockResolvedValueOnce({
+      rows: [pendingRow({
+        result: {
+          handoffPending: true,
+          handedOffAt: new Date(Date.now() - 3 * 60_000).toISOString()
+        }
+      })]
+    });
+    runSshCommand.mockReset().mockResolvedValueOnce({ code: 44, stdout: "", stderr: "" });
+    const { reconcileSelfUpdateHandoffs } = await import("../src/services/selfUpdate.js");
+
+    await expect(reconcileSelfUpdateHandoffs()).resolves.toEqual({ completed: 0, failed: 0, pending: 1 });
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(runSshCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails a missing outcome at the full handoff timeout", async () => {
+    query
+      .mockResolvedValueOnce({
+        rows: [pendingRow({ result: { handoffPending: true, handedOffAt: "2026-01-01T00:00:00.000Z" } })]
+      })
+      .mockResolvedValueOnce({ rows: [{ id: jobId }], rowCount: 1 });
+    runSshCommand.mockReset().mockResolvedValueOnce({ code: 44, stdout: "", stderr: "" });
+    const { reconcileSelfUpdateHandoffs } = await import("../src/services/selfUpdate.js");
+
+    await expect(reconcileSelfUpdateHandoffs()).resolves.toEqual({ completed: 0, failed: 1, pending: 0 });
+    expect(query.mock.calls[1]?.[1]?.[2]).toBe("Self-update handoff timed out before an authoritative outcome was written.");
   });
 
   it("fails a malformed outcome immediately with a sanitized error", async () => {
