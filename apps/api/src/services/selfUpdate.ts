@@ -22,6 +22,7 @@ import {
 import { mapJob } from "./mappers.js";
 import { runSshCommand, writeRemoteFile } from "./ssh.js";
 import { runtimeVersionMetadata } from "./version.js";
+import { WORKER_READINESS_MARKER_PATH } from "./workerReadiness.js";
 
 const SELF_UPDATE_CONFIG_KEY = "self_update.config";
 const SELF_UPDATE_LATEST_KEY = "self_update.latest";
@@ -457,6 +458,7 @@ export function buildSelfUpdateScript(
     "  [ \"$ready_app_version\" = \"$ready_worker_version\" ] || return 1",
     "  if [ -n \"$expected_app_image_id\" ]; then [ \"$ready_app_image_id\" = \"$expected_app_image_id\" ] || return 1; fi",
     "  if [ -n \"$expected_worker_image_id\" ]; then [ \"$ready_worker_image_id\" = \"$expected_worker_image_id\" ] || return 1; fi",
+    `  "$DOCKER_BIN" compose -f "$COMPOSE_FILE" exec -T worker node -e 'const fs=require("node:fs");const expected=process.argv[1].replace(/^v/, "");const label=process.argv[2].replace(/^v/, "");try{const marker=JSON.parse(fs.readFileSync(process.argv[3], "utf8"));const actual=String(marker.version||"").replace(/^v/, "");if(marker.schema!==1||typeof marker.workerId!=="string"||!marker.workerId||typeof marker.registeredAt!=="string"||!Number.isFinite(Date.parse(marker.registeredAt))||!actual||actual==="unknown"||actual!==label||(expected!=="latest"&&actual!==expected))process.exit(1)}catch{process.exit(1)}' "$expected_worker_version" "$ready_worker_version" ${shQuote(WORKER_READINESS_MARKER_PATH)} >/dev/null 2>&1 || return 1`,
     "  case \"$verification_mode\" in",
     "    ready)",
     "      \"$DOCKER_BIN\" compose -f \"$COMPOSE_FILE\" exec -T app node -e 'const expected=process.argv[1].replace(/^v/, \"\"); const label=process.argv[2].replace(/^v/, \"\"); Promise.all([fetch(\"http://127.0.0.1:8080/api/health\").then(r=>r.ok?r.json():Promise.reject(new Error(\"health\"))),fetch(\"http://127.0.0.1:8080/api/health/ready\").then(r=>r.ok?r.json():Promise.reject(new Error(\"ready\")))]).then(([health,ready])=>{const actual=String(health.version||\"\").replace(/^v/, \"\"); if(!health.ok||!ready.ok||!ready.checks?.worker?.ok||!actual||actual===\"unknown\"||actual!==label||(expected!==\"latest\"&&actual!==expected))process.exit(1)}).catch(()=>process.exit(1))' \"$expected_app_version\" \"$ready_app_version\" >/dev/null 2>&1",

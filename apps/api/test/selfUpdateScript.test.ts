@@ -98,6 +98,9 @@ if [ "$1" = "compose" ]; then
           ;;
       esac
       exit 0 ;;
+    *" exec -T worker node "*)
+      if [ "$phase" = "new" ] && [ "$MOCK_FAIL" = "worker_marker" ]; then exit 1; fi
+      exit 0 ;;
   esac
 fi
 if [ "$1" = "inspect" ]; then
@@ -133,7 +136,7 @@ exit 1
 `;
 
 async function runGeneratedUpdate(
-  failure: "" | "pull" | "prepare" | "up" | "verification" | "finalization_interrupt",
+  failure: "" | "pull" | "prepare" | "up" | "verification" | "worker_marker" | "finalization_interrupt",
   targetVersion = "1.0.2",
   credentialChanged = false,
   restoreFails = false,
@@ -260,6 +263,16 @@ describe("generated self-update shell program", () => {
     expect(result.commands).toContain("image tag sha256:aaaaaaaa ghcr.io/composebastion-admin/composebastion-app:latest");
     expect(result.commands).toContain("-f");
     expect(result.commands).toContain(".rollback.yml up -d --pull never --no-deps --force-recreate app worker");
+    expect(await readFile(path.join(result.stateDirectory, "phase"), "utf8")).toBe("old\n");
+  });
+
+  it("rejects a candidate whose worker never publishes container-local readiness", async () => {
+    const result = await runGeneratedUpdate("worker_marker");
+
+    expect(result.exitCode).toBe(1);
+    expect(result.outcome).toContain("status=failed\nstage=verification\nrollback=succeeded");
+    expect(result.commands).toContain("exec -T worker node -e");
+    expect(result.commands).toContain("/tmp/composebastion-worker-ready.json");
     expect(await readFile(path.join(result.stateDirectory, "phase"), "utf8")).toBe("old\n");
   });
 

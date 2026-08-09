@@ -15,6 +15,9 @@ const workerMocks = vi.hoisted(() => ({
   reconcileRecoveryRestoreAttempts: vi.fn(),
   reconcileRecoverySourceRestartObligations: vi.fn(),
   reconcileSelfUpdateHandoffs: vi.fn(),
+  clearWorkerReadinessMarker: vi.fn(),
+  publishWorkerReadinessMarker: vi.fn(),
+  registerWorkerInstance: vi.fn(),
   redisClose: vi.fn(),
   startRedisWakeupSubscription: vi.fn()
 }));
@@ -72,7 +75,7 @@ vi.mock("../src/services/jobs.js", () => {
     markWorkerDraining: asyncNoop(),
     markWorkerStopped: asyncNoop(),
     recoverExpiredJobs: vi.fn().mockResolvedValue({ requeued: 0, failed: 0 }),
-    registerWorkerInstance: asyncNoop(),
+    registerWorkerInstance: workerMocks.registerWorkerInstance,
     renewJobLease: vi.fn().mockResolvedValue(true),
     shouldResumeWorkerClaimsAfterReconciliation: (result: { completed: number; failed: number; pending: number }) =>
       result.pending === 0,
@@ -141,7 +144,11 @@ vi.mock("../src/services/nonOverlappingTask.js", () => ({
     stop: vi.fn()
   })
 }));
-vi.mock("../src/services/version.js", () => ({ APP_VERSION: "1.2.0-beta.1" }));
+vi.mock("../src/services/version.js", () => ({ APP_VERSION: "1.2.0-beta.2" }));
+vi.mock("../src/services/workerReadiness.js", () => ({
+  clearWorkerReadinessMarker: workerMocks.clearWorkerReadinessMarker,
+  publishWorkerReadinessMarker: workerMocks.publishWorkerReadinessMarker
+}));
 
 describe("worker self-update startup handoff", () => {
   it("does not claim jobs while a handoff is pending and resumes only after terminal reconciliation", async () => {
@@ -158,6 +165,9 @@ describe("worker self-update startup handoff", () => {
     vi.spyOn(console, "error").mockImplementation(() => undefined);
 
     workerMocks.claimNextJob.mockResolvedValue(null);
+    workerMocks.clearWorkerReadinessMarker.mockResolvedValue(undefined);
+    workerMocks.publishWorkerReadinessMarker.mockResolvedValue(undefined);
+    workerMocks.registerWorkerInstance.mockResolvedValue(undefined);
     workerMocks.cleanupStaleDeploymentGitCredentialFiles.mockResolvedValue({
       checked: 1,
       cleaned: 1,
@@ -232,6 +242,11 @@ describe("worker self-update startup handoff", () => {
     });
 
     expect(workerMocks.startRedisWakeupSubscription).toHaveBeenCalledTimes(1);
+    expect(workerMocks.clearWorkerReadinessMarker).toHaveBeenCalledTimes(1);
+    expect(workerMocks.publishWorkerReadinessMarker).toHaveBeenCalledWith({
+      workerId: expect.any(String),
+      version: "1.2.0-beta.2"
+    });
     expect(workerMocks.cleanupStaleDeploymentGitCredentialFiles).toHaveBeenCalledTimes(1);
     expect(workerMocks.cleanupStaleRcloneConfigDirectories).toHaveBeenCalledTimes(1);
     expect(workerMocks.cleanupStaleBackupTemporaryDirectories).toHaveBeenCalledTimes(1);
@@ -255,6 +270,12 @@ describe("worker self-update startup handoff", () => {
     expect(workerMocks.reconcileRemoteArtifactOrphans.mock.invocationCallOrder[0])
       .toBeLessThan(workerMocks.cleanupTerminalRemoteOperationProofs.mock.invocationCallOrder[0]!);
     expect(workerMocks.cleanupTerminalRemoteOperationProofs.mock.invocationCallOrder[0])
+      .toBeLessThan(workerMocks.startRedisWakeupSubscription.mock.invocationCallOrder[0]!);
+    expect(workerMocks.clearWorkerReadinessMarker.mock.invocationCallOrder[0])
+      .toBeLessThan(workerMocks.registerWorkerInstance.mock.invocationCallOrder[0]!);
+    expect(workerMocks.reconcileSelfUpdateHandoffs.mock.invocationCallOrder[0])
+      .toBeLessThan(workerMocks.publishWorkerReadinessMarker.mock.invocationCallOrder[0]!);
+    expect(workerMocks.publishWorkerReadinessMarker.mock.invocationCallOrder[0])
       .toBeLessThan(workerMocks.startRedisWakeupSubscription.mock.invocationCallOrder[0]!);
     expect(workerMocks.claimNextJob).not.toHaveBeenCalled();
     expect(intervals.slice(0, 4).map(({ timeout }) => timeout)).toEqual([2_500, 5_000, 10_000, 10_000]);
