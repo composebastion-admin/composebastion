@@ -1,14 +1,14 @@
 # ComposeBastion Beta
 
-Beta version: `v1.2.0-beta.1`.
+Beta version: `v1.2.0-beta.2`.
 
 This candidate is published from the normal GitHub repository's `beta` branch.
 The app and agent images are available for `linux/amd64` and `linux/arm64`:
 
 - `ghcr.io/composebastion-admin/composebastion-app:beta`
 - `ghcr.io/composebastion-admin/composebastion-agent:beta`
-- `ghcr.io/composebastion-admin/composebastion-app:1.2.0-beta.1`
-- `ghcr.io/composebastion-admin/composebastion-agent:1.2.0-beta.1`
+- `ghcr.io/composebastion-admin/composebastion-app:1.2.0-beta.2`
+- `ghcr.io/composebastion-admin/composebastion-agent:1.2.0-beta.2`
 
 The `beta` channel is moving. Each exact prerelease version is immutable and
 never moves `latest`, `main`, or stable/minor version tags.
@@ -36,8 +36,8 @@ Preserve an existing `.env`. For a new install, copy `.env.example` to `.env`,
 generate unique `APP_SECRET` and `POSTGRES_PASSWORD` values, then set:
 
 ```dotenv
-COMPOSEBASTION_VERSION=1.2.0-beta.1
-COMPOSEBASTION_AGENT_VERSION=1.2.0-beta.1
+COMPOSEBASTION_VERSION=1.2.0-beta.2
+COMPOSEBASTION_AGENT_VERSION=1.2.0-beta.2
 ```
 
 For an existing manager, keep the downloaded target definition distinct and
@@ -45,7 +45,7 @@ use the beta wrapper:
 
 ```bash
 chmod 755 upgrade-image.target.sh
-./upgrade-image.target.sh --version 1.2.0-beta.1 \
+./upgrade-image.target.sh --version 1.2.0-beta.2 \
   --compose docker-compose.image.yml docker-compose.image.target.yml
 ```
 
@@ -65,7 +65,7 @@ pre-1.2-to-beta updates are not qualified. The matching beta Compose file and
 wrapper are required for the manual procedure above.
 
 For each image-installed agent, use `agent-compose.image.example.yml`, set
-`COMPOSEBASTION_AGENT_VERSION=1.2.0-beta.1`, then pull and recreate that agent.
+`COMPOSEBASTION_AGENT_VERSION=1.2.0-beta.2`, then pull and recreate that agent.
 Because app and agent aliases are stored in separate GHCR repositories, they
 have a brief non-atomic update window. For paired testing, resolve the beta
 release revision from the recorded publication evidence and use either the
@@ -109,7 +109,7 @@ Do not include tokens, secrets, `.env` contents, or registry passwords.
   Compose and image inputs and return a Git capability blocker.
 - Registry trust automation requires an owner/admin, a supported Linux/systemd
   Docker host, and passwordless sudo. Other hosts receive exact manual steps.
-- This is the `1.2.0-beta.1` test channel. It is
+- This is the `1.2.0-beta.2` test channel. It is
   not the supported stable release and is not covered by the `latest` tag.
 
 ## Roll back

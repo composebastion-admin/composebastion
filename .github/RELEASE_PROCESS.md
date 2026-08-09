@@ -109,7 +109,7 @@ for a public stable release.
   through `.github/workflows/publish-images.yml`.
 - Every push to `beta` publishes both scanned multi-architecture images to the
   moving `beta` alias, the exact prerelease version alias such as
-  `1.2.0-beta.1`, and immutable full-commit tags. The prerelease alias is
+  `1.2.0-beta.2`, and immutable full-commit tags. The prerelease alias is
   immutable: publishing a different digest requires a new prerelease version.
   Beta publication must never move `main`, `latest`, or stable/minor aliases.
 - Main image publishes must include `main`, deterministic per-platform
