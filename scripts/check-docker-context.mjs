@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { assertSafeTestResultsPath, digestGitBuildContext, materializeGitBuildContext } from "./materialize-git-context.mjs";
+import { assertSafeTestResultsPath, digestGitBuildContext, materializeGitBuildContext, readStableRegularFile } from "./materialize-git-context.mjs";
 
 const root = mkdtempSync(path.join(os.tmpdir(), "composebastion-context-"));
 const context = path.join(root, "context");
@@ -142,6 +142,41 @@ try {
   if (readlinkSync(path.join(attributeContext, "linked.txt")) !== "omitted.txt") {
     failures.push("exact Git context did not preserve a tracked symlink");
   }
+
+  const sameNameReplacement = path.join(root, "same-name-package-replacement.json");
+  writeFileSync(sameNameReplacement, "{\"replaced\":true}\n");
+  let sameNameReplacementRejected = false;
+  try {
+    materializeGitBuildContext({
+      repositoryRoot: attributeRepository,
+      revision: "HEAD",
+      destination: path.join(root, "same-name-replacement-context"),
+      testHooks: {
+        beforeStagedDigest: ({ stagingDestination }) => {
+          const parentStat = statSync(stagingDestination);
+          renameSync(
+            sameNameReplacement,
+            path.join(stagingDestination, "package.json")
+          );
+          utimesSync(
+            stagingDestination,
+            parentStat.atime,
+            parentStat.mtime
+          );
+        }
+      }
+    });
+  } catch (error) {
+    sameNameReplacementRejected = String(error).includes(
+      "does not exactly match the commit tree"
+    );
+  }
+  if (!sameNameReplacementRejected) {
+    failures.push(
+      "a same-name inode/content replacement bypassed exact Git provenance"
+    );
+  }
+
   writeFileSync(path.join(attributeRepository, "omitted.txt"), "replacement content\n");
   execFileSync("git", ["-C", attributeRepository, "add", "omitted.txt"], { stdio: "pipe" });
   execFileSync("git", [
@@ -210,6 +245,260 @@ try {
     failures.push("a symlinked test-results directory redirected destructive context cleanup outside the repository");
   }
 
+  const stableReadDirectory = path.join(root, "stable-read");
+  mkdirSync(stableReadDirectory);
+  const stableReadPath = path.join(stableReadDirectory, "payload.txt");
+  writeFileSync(stableReadPath, "original\n");
+  const stableReadReplacement = path.join(stableReadDirectory, "replacement.txt");
+  writeFileSync(stableReadReplacement, "replacement\n");
+  let changedInodeRejected = false;
+  try {
+    readStableRegularFile(stableReadPath, {
+      afterOpen: () => renameSync(stableReadReplacement, stableReadPath)
+    });
+  } catch {
+    changedInodeRejected = true;
+  }
+  if (!changedInodeRejected) failures.push("a file inode replacement was accepted as a stable context read");
+
+  const linkTarget = path.join(stableReadDirectory, "target.txt");
+  writeFileSync(linkTarget, "target\n");
+  const fileToLinkPath = path.join(stableReadDirectory, "file-to-link.txt");
+  writeFileSync(fileToLinkPath, "original\n");
+  let fileToLinkRejected = false;
+  try {
+    readStableRegularFile(fileToLinkPath, {
+      afterOpen: () => {
+        rmSync(fileToLinkPath);
+        symlinkSync("target.txt", fileToLinkPath);
+      }
+    });
+  } catch {
+    fileToLinkRejected = true;
+  }
+  if (!fileToLinkRejected) failures.push("a file-to-symlink replacement was accepted as a stable context read");
+
+  const inPlaceMutationPath = path.join(stableReadDirectory, "in-place-mutation.txt");
+  writeFileSync(inPlaceMutationPath, "before\n");
+  let inPlaceMutationRejected = false;
+  try {
+    readStableRegularFile(inPlaceMutationPath, {
+      afterRead: () => writeFileSync(inPlaceMutationPath, "after!\n")
+    });
+  } catch {
+    inPlaceMutationRejected = true;
+  }
+  if (!inPlaceMutationRejected) failures.push("an in-place content mutation was accepted as a stable context read");
+
+  const fileMetadataMutationPath = path.join(stableReadDirectory, "file-metadata-mutation.txt");
+  writeFileSync(fileMetadataMutationPath, "stable contents\n");
+  let fileMetadataMutationRejected = false;
+  let fileMetadataCtimeAdvanced = false;
+  try {
+    readStableRegularFile(fileMetadataMutationPath, {
+      afterRead: () => {
+        const before = statSync(fileMetadataMutationPath);
+        const originalMode = before.mode & 0o777;
+        chmodSync(fileMetadataMutationPath, originalMode);
+        let after = statSync(fileMetadataMutationPath);
+        if (after.ctimeMs === before.ctimeMs) {
+          chmodSync(fileMetadataMutationPath, originalMode ^ 0o100);
+          chmodSync(fileMetadataMutationPath, originalMode);
+          after = statSync(fileMetadataMutationPath);
+        }
+        fileMetadataCtimeAdvanced = after.ctimeMs !== before.ctimeMs;
+      }
+    });
+  } catch {
+    fileMetadataMutationRejected = true;
+  }
+  if (!fileMetadataCtimeAdvanced || !fileMetadataMutationRejected) {
+    failures.push("a file ctime-only metadata mutation was accepted as a stable file read");
+  }
+
+  const directoryMetadataContext = path.join(root, "directory-metadata-context");
+  mkdirSync(directoryMetadataContext);
+  const directoryMetadataPayload = path.join(directoryMetadataContext, "payload.txt");
+  writeFileSync(directoryMetadataPayload, "stable contents\n");
+  const directoryMetadataBaseline = digestGitBuildContext(directoryMetadataContext);
+  let directoryMetadataChurnApplied = false;
+  let directoryMetadataCtimeAdvanced = false;
+  let directoryMetadataSemanticsStable = false;
+  let leafMetadataCtimeAdvanced = false;
+  let leafMetadataSemanticsStable = false;
+  let directoryMetadataRetryObserved = false;
+  const directoryMetadataAfterChurn = digestGitBuildContext(
+    directoryMetadataContext,
+    {
+      afterDirectorySnapshot: ({ current }) => {
+        if (current !== directoryMetadataContext || directoryMetadataChurnApplied) return;
+        const before = statSync(current);
+        const originalMode = before.mode & 0o777;
+        chmodSync(current, originalMode);
+        let after = statSync(current);
+        if (after.ctimeMs === before.ctimeMs) {
+          chmodSync(current, originalMode ^ 0o100);
+          chmodSync(current, originalMode);
+          after = statSync(current);
+        }
+        directoryMetadataCtimeAdvanced = after.ctimeMs !== before.ctimeMs;
+        directoryMetadataSemanticsStable = after.dev === before.dev
+          && after.ino === before.ino
+          && after.mode === before.mode
+          && after.size === before.size
+          && after.mtimeMs === before.mtimeMs;
+        directoryMetadataChurnApplied = true;
+      },
+      beforeDirectoryMetadataRetry: () => {
+        directoryMetadataRetryObserved = true;
+        const before = statSync(directoryMetadataPayload);
+        const originalMode = before.mode & 0o777;
+        chmodSync(directoryMetadataPayload, originalMode);
+        let after = statSync(directoryMetadataPayload);
+        if (after.ctimeMs === before.ctimeMs) {
+          chmodSync(directoryMetadataPayload, originalMode ^ 0o100);
+          chmodSync(directoryMetadataPayload, originalMode);
+          after = statSync(directoryMetadataPayload);
+        }
+        leafMetadataCtimeAdvanced = after.ctimeMs !== before.ctimeMs;
+        leafMetadataSemanticsStable = after.dev === before.dev
+          && after.ino === before.ino
+          && after.mode === before.mode
+          && after.size === before.size
+          && after.mtimeMs === before.mtimeMs;
+      }
+    }
+  );
+  if (!directoryMetadataChurnApplied
+      || !directoryMetadataCtimeAdvanced
+      || !directoryMetadataSemanticsStable
+      || !leafMetadataCtimeAdvanced
+      || !leafMetadataSemanticsStable
+      || !directoryMetadataRetryObserved
+      || directoryMetadataAfterChurn.digest !== directoryMetadataBaseline.digest
+      || directoryMetadataAfterChurn.fileCount !== directoryMetadataBaseline.fileCount) {
+    failures.push("directory ctime-only metadata churn changed or blocked the exact Git context digest");
+  }
+
+  const retryReplacementContext = path.join(root, "retry-replacement-context");
+  mkdirSync(retryReplacementContext);
+  const retryReplacementPayload = path.join(retryReplacementContext, "payload.txt");
+  const retryReplacementSource = path.join(root, "retry-replacement-source.txt");
+  writeFileSync(retryReplacementPayload, "identical contents\n");
+  writeFileSync(retryReplacementSource, "identical contents\n");
+  const retryReplacementTimestampSeconds = 1_700_000_000;
+  for (const target of [
+    retryReplacementContext,
+    retryReplacementPayload,
+    retryReplacementSource
+  ]) {
+    utimesSync(
+      target,
+      retryReplacementTimestampSeconds,
+      retryReplacementTimestampSeconds
+    );
+  }
+  const retryReplacementOriginal = statSync(
+    retryReplacementPayload,
+    { bigint: true }
+  );
+  chmodSync(
+    retryReplacementSource,
+    Number(retryReplacementOriginal.mode & 0o777n)
+  );
+  utimesSync(
+    retryReplacementSource,
+    retryReplacementTimestampSeconds,
+    retryReplacementTimestampSeconds
+  );
+  let retryReplacementChurnApplied = false;
+  let retryReplacementIdentityChangedOnly = false;
+  let retryReplacementParentMtimeRestored = false;
+  let retryReplacementRejected = false;
+  try {
+    digestGitBuildContext(retryReplacementContext, {
+      afterDirectorySnapshot: ({ current }) => {
+        if (current !== retryReplacementContext || retryReplacementChurnApplied) return;
+        const before = statSync(current);
+        const originalMode = before.mode & 0o777;
+        chmodSync(current, originalMode);
+        if (statSync(current).ctimeMs === before.ctimeMs) {
+          chmodSync(current, originalMode ^ 0o100);
+          chmodSync(current, originalMode);
+        }
+        retryReplacementChurnApplied = true;
+      },
+      beforeDirectoryMetadataRetry: () => {
+        const parentStat = statSync(
+          retryReplacementContext,
+          { bigint: true }
+        );
+        renameSync(retryReplacementSource, retryReplacementPayload);
+        utimesSync(
+          retryReplacementContext,
+          retryReplacementTimestampSeconds,
+          retryReplacementTimestampSeconds
+        );
+        const replacementStat = statSync(
+          retryReplacementPayload,
+          { bigint: true }
+        );
+        const restoredParentStat = statSync(
+          retryReplacementContext,
+          { bigint: true }
+        );
+        retryReplacementIdentityChangedOnly =
+          replacementStat.dev === retryReplacementOriginal.dev
+          && replacementStat.ino !== retryReplacementOriginal.ino
+          && replacementStat.mode === retryReplacementOriginal.mode
+          && replacementStat.size === retryReplacementOriginal.size
+          && replacementStat.mtimeNs === retryReplacementOriginal.mtimeNs;
+        retryReplacementParentMtimeRestored =
+          restoredParentStat.mtimeNs === parentStat.mtimeNs;
+      }
+    });
+  } catch (error) {
+    retryReplacementRejected = String(error).includes(
+      "entries changed across a directory metadata retry"
+    );
+  }
+  const retryReplacementChecks = {
+    churnApplied: retryReplacementChurnApplied,
+    identityChangedOnly: retryReplacementIdentityChangedOnly,
+    parentMtimeRestored: retryReplacementParentMtimeRestored,
+    replacementRejected: retryReplacementRejected
+  };
+  const failedRetryReplacementChecks = Object.entries(retryReplacementChecks)
+    .filter(([, passed]) => !passed)
+    .map(([name]) => name);
+  if (failedRetryReplacementChecks.length > 0) {
+    failures.push(
+      "identical same-name inode replacement check failed: "
+      + failedRetryReplacementChecks.join(", ")
+    );
+  }
+
+  const directoryEntryMutationContext = path.join(root, "directory-entry-mutation-context");
+  mkdirSync(directoryEntryMutationContext);
+  writeFileSync(path.join(directoryEntryMutationContext, "payload.txt"), "stable contents\n");
+  let directoryEntryMutationRejected = false;
+  try {
+    digestGitBuildContext(directoryEntryMutationContext, {
+      afterDirectorySnapshot: ({ current }) => {
+        if (current === directoryEntryMutationContext) {
+          writeFileSync(path.join(current, "injected.txt"), "mutation\n");
+        }
+      }
+    });
+  } catch (error) {
+    directoryEntryMutationRejected = String(error).includes(
+      "directory entries changed during traversal"
+    );
+  }
+  if (!directoryEntryMutationRejected) {
+    failures.push("a directory entry mutation was accepted during exact Git context traversal");
+  }
+
   rmSync(path.join(attributeRepository, "Dockerfile.agent"));
   execFileSync("git", ["-C", attributeRepository, "add", "Dockerfile.agent"], { stdio: "pipe" });
   execFileSync("git", [
@@ -219,6 +508,9 @@ try {
     "commit", "--quiet", "-m", "missing required file fixture"
   ], { stdio: "pipe" });
   const incompleteContext = path.join(root, "incomplete-context");
+  mkdirSync(incompleteContext);
+  const existingContextSentinel = path.join(incompleteContext, "preserved.txt");
+  writeFileSync(existingContextSentinel, "preserve existing context\n");
   let missingRequiredRejected = false;
   try {
     materializeGitBuildContext({
@@ -229,8 +521,67 @@ try {
   } catch (error) {
     missingRequiredRejected = String(error).includes("missing tracked file Dockerfile.agent");
   }
-  if (!missingRequiredRejected || existsSync(incompleteContext)) {
-    failures.push("a failed required-file check left a partial exact Git context behind");
+  if (!missingRequiredRejected || readFileSync(existingContextSentinel, "utf8") !== "preserve existing context\n") {
+    failures.push("a failed required-file check replaced or damaged the previous exact Git context");
+  }
+
+  execFileSync("git", [
+    "-C", attributeRepository,
+    "-c", "user.name=ComposeBastion Context Test",
+    "-c", "user.email=context-test@composebastion.invalid",
+    "revert", "--no-edit", "HEAD"
+  ], { stdio: "pipe" });
+  const rollbackContext = path.join(root, "rollback-context");
+  mkdirSync(rollbackContext);
+  const rollbackSentinel = path.join(rollbackContext, "preserved.txt");
+  writeFileSync(rollbackSentinel, "preserve verified destination\n");
+  let promotedMutationRejected = false;
+  try {
+    materializeGitBuildContext({
+      repositoryRoot: attributeRepository,
+      revision: "HEAD",
+      destination: rollbackContext,
+      testHooks: {
+        beforePromotedDigest: ({ resolvedDestination }) => {
+          writeFileSync(path.join(resolvedDestination, "package.json"), "mutated after promotion\n");
+        }
+      }
+    });
+  } catch (error) {
+    promotedMutationRejected = String(error).includes("does not match its verified staging context");
+  }
+  if (!promotedMutationRejected
+      || !existsSync(rollbackSentinel)
+      || readFileSync(rollbackSentinel, "utf8") !== "preserve verified destination\n") {
+    failures.push("a post-promotion verification failure did not restore the previous exact Git context");
+  }
+
+  const parentRaceContainer = path.join(root, "parent-race");
+  const parentRaceOriginal = path.join(parentRaceContainer, "original-parent");
+  const parentRaceMoved = path.join(parentRaceContainer, "moved-parent");
+  mkdirSync(parentRaceOriginal, { recursive: true });
+  const parentRaceDestination = path.join(parentRaceOriginal, "context");
+  const redirectedParentSentinel = path.join(parentRaceContainer, "redirected-parent-sentinel.txt");
+  writeFileSync(redirectedParentSentinel, "preserve redirected parent\n");
+  let parentRaceRejected = false;
+  try {
+    materializeGitBuildContext({
+      repositoryRoot: attributeRepository,
+      revision: "HEAD",
+      destination: parentRaceDestination,
+      testHooks: {
+        afterStagingVerified: () => {
+          renameSync(parentRaceOriginal, parentRaceMoved);
+          mkdirSync(parentRaceOriginal);
+          symlinkSync(redirectedParentSentinel, path.join(parentRaceOriginal, "must-not-follow"));
+        }
+      }
+    });
+  } catch (error) {
+    parentRaceRejected = String(error).includes("changed or was redirected");
+  }
+  if (!parentRaceRejected || readFileSync(redirectedParentSentinel, "utf8") !== "preserve redirected parent\n") {
+    failures.push("a destination-parent replacement was not rejected without following redirected cleanup paths");
   }
 
   const collisionContextA = path.join(root, "digest-collision-a");
