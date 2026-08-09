@@ -2,6 +2,7 @@ ARG TRIVY_VERSION=0.72.0
 ARG TRIVY_SOURCE_COMMIT=8a32853686209a428179bb3a1688802b25691564
 ARG TRIVY_SOURCE_SHA256=5a922c388846d11345ce8283e4373be312458f002abc667c3cd1f77c43163725
 ARG TRIVY_ORAS_VERSION=v2.6.2
+ARG TRIVY_GO_GIT_VERSION=v5.19.2
 ARG RCLONE_VERSION=1.74.4
 ARG RCLONE_SOURCE_COMMIT=5bc93a2a7ab0ebd0a11352bc4968eabeffb18027
 ARG RCLONE_SOURCE_SHA256=1d604c49673ddbb8829563c6768d3d69cd0a8ddc4a0beec3b42a9dae3ea34a63
@@ -34,6 +35,7 @@ ARG TRIVY_VERSION
 ARG TRIVY_SOURCE_COMMIT
 ARG TRIVY_SOURCE_SHA256
 ARG TRIVY_ORAS_VERSION
+ARG TRIVY_GO_GIT_VERSION
 ARG GO_GRPC_VERSION
 ARG GO_TEXT_VERSION
 RUN set -eux; \
@@ -44,9 +46,11 @@ RUN set -eux; \
     tar -xzf /tmp/trivy-source.tar.gz -C /src --strip-components=1; \
     cd /src; \
     go get "oras.land/oras-go/v2@${TRIVY_ORAS_VERSION}"; \
+    go get "github.com/go-git/go-git/v5@${TRIVY_GO_GIT_VERSION}"; \
     go get "google.golang.org/grpc@v${GO_GRPC_VERSION}"; \
     go get "golang.org/x/text@v${GO_TEXT_VERSION}"; \
     test "$(go list -m -f '{{.Version}}' oras.land/oras-go/v2)" = "${TRIVY_ORAS_VERSION}"; \
+    test "$(go list -m -f '{{.Version}}' github.com/go-git/go-git/v5)" = "${TRIVY_GO_GIT_VERSION}"; \
     test "$(go list -m -f '{{.Version}}' google.golang.org/grpc)" = "v${GO_GRPC_VERSION}"; \
     test "$(go list -m -f '{{.Version}}' golang.org/x/text)" = "v${GO_TEXT_VERSION}"; \
     go test oras.land/oras-go/v2/content/file -run '^Test_extractTarDirectory_HardLink$'; \
@@ -55,6 +59,7 @@ RUN set -eux; \
         -ldflags="-s -w -extldflags '-static' -X github.com/aquasecurity/trivy/pkg/version/app.ver=${TRIVY_VERSION}" \
         -o /out/trivy ./cmd/trivy; \
     go version -m /out/trivy | grep -F "oras.land/oras-go/v2" | grep -F "${TRIVY_ORAS_VERSION}"; \
+    go version -m /out/trivy | grep -F "github.com/go-git/go-git/v5" | grep -F "${TRIVY_GO_GIT_VERSION}"; \
     install -m 0644 /src/LICENSE /out/licenses/trivy-LICENSE.txt; \
     install -m 0644 /src/NOTICE /out/licenses/trivy-NOTICE.txt; \
     install -m 0644 "$(go env GOPATH)/pkg/mod/oras.land/oras-go/v2@${TRIVY_ORAS_VERSION}/LICENSE" /out/licenses/oras-go-LICENSE.txt; \
