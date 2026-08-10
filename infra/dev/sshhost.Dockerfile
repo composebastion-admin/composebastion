@@ -24,5 +24,9 @@ RUN apk add --no-cache openssh-server docker-cli docker-cli-compose git bash cur
 
 ENV COMPOSEBASTION_SSH_AUTHORIZED_KEYS=""
 
+# Development fixture only: sshd must read root-owned host keys, bind port 22,
+# provision /root/.ssh, and expose the same root Docker identity used by the
+# ephemeral SSH acceptance tests.
+USER root
 EXPOSE 22
 CMD ["/bin/sh", "-c", "if [ -n \"$COMPOSEBASTION_SSH_AUTHORIZED_KEYS\" ]; then mkdir -p /root/.ssh && printf '%s\n' \"$COMPOSEBASTION_SSH_AUTHORIZED_KEYS\" > /root/.ssh/authorized_keys && chmod 700 /root/.ssh && chmod 600 /root/.ssh/authorized_keys; fi; printf 'root:%s\n' \"$(dd if=/dev/urandom bs=32 count=1 2>/dev/null | base64)\" | chpasswd; exec /usr/sbin/sshd -D -e"]

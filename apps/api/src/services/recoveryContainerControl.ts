@@ -14,6 +14,10 @@ type ContainerStopError = Error & {
   restartFailedIds?: string[];
 };
 
+type ContainerRestartError = Error & {
+  restartFailedIds: string[];
+};
+
 async function runHostDockerCommand(hostId: string, command: string, timeoutMs = 5 * 60_000): Promise<SshCommandResult> {
   const host = await getHostForWorker(hostId);
   if (isDemoHost(host.public)) {
@@ -27,10 +31,24 @@ async function runHostDockerCommand(hostId: string, command: string, timeoutMs =
 export async function stopContainersOneByOne(hostId: string, containerIds: string[]) {
   const stoppedIds: string[] = [];
   for (const containerId of containerIds) {
-    const result = await runHostDockerCommand(hostId, `docker stop ${shQuote(containerId)}`);
+    let result: SshCommandResult;
+    try {
+      result = await runHostDockerCommand(hostId, `docker stop ${shQuote(containerId)}`);
+    } catch (cause) {
+      const error = new Error(
+        cause instanceof Error ? cause.message : String(cause),
+        { cause }
+      ) as ContainerStopError;
+      // A transport failure makes the current command outcome ambiguous.
+      // Restarting an already-running container is idempotent, so include it.
+      error.stoppedIds = [...stoppedIds, containerId];
+      throw error;
+    }
     if (result.code !== 0) {
-      const error = new Error(result.stderr || result.stdout || `Failed to stop container ${containerId}`);
-      (error as Error & { stoppedIds?: string[] }).stoppedIds = [...stoppedIds];
+      const error = new Error(
+        result.stderr || result.stdout || `Failed to stop container ${containerId}`
+      ) as ContainerStopError;
+      error.stoppedIds = [...stoppedIds];
       throw error;
     }
     stoppedIds.push(containerId);
@@ -39,11 +57,30 @@ export async function stopContainersOneByOne(hostId: string, containerIds: strin
 }
 
 export async function startContainersOneByOne(hostId: string, containerIds: string[]) {
+  const failures: Array<{ id: string; message: string }> = [];
   for (const containerId of containerIds) {
-    const result = await runHostDockerCommand(hostId, `docker start ${shQuote(containerId)}`);
-    if (result.code !== 0) {
-      throw new Error(result.stderr || result.stdout || `Failed to start container ${containerId}`);
+    try {
+      const result = await runHostDockerCommand(hostId, `docker start ${shQuote(containerId)}`);
+      if (result.code !== 0) {
+        failures.push({
+          id: containerId,
+          message: result.stderr || result.stdout || `Failed to start container ${containerId}`
+        });
+      }
+    } catch (error) {
+      failures.push({
+        id: containerId,
+        message: error instanceof Error ? error.message : String(error)
+      });
     }
+  }
+  if (failures.length) {
+    const error = new Error(
+      `Failed to restart container${failures.length === 1 ? "" : "s"}: `
+        + failures.map(({ id, message }) => `${id} (${message})`).join("; ")
+    ) as ContainerRestartError;
+    error.restartFailedIds = failures.map(({ id }) => id);
+    throw error;
   }
 }
 
@@ -64,10 +101,11 @@ export async function stopContainersWithRestartOnFailure(
         const stopMessage = error instanceof Error ? error.message : String(error);
         const restartMessage = restartError instanceof Error ? restartError.message : String(restartError);
         const combined = new Error(
-          `${stopMessage}; restart failed for ${toRestart.join(", ")}: ${restartMessage}`
+          `${stopMessage}; ${restartMessage}`
         ) as ContainerStopError;
         combined.stoppedIds = stoppedIds;
-        combined.restartFailedIds = toRestart;
+        combined.restartFailedIds =
+          (restartError as Partial<ContainerRestartError>).restartFailedIds ?? toRestart;
         throw combined;
       }
     }

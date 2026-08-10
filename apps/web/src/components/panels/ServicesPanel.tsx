@@ -269,6 +269,7 @@ export function ServicesPanel({
   const [lastUpdateScanAt, setLastUpdateScanAt] = useState<string | null>(null);
   const [tagLookups, setTagLookups] = useState<Record<string, TagLookupState>>({});
   const tagLookupsRef = useRef<Record<string, TagLookupState>>({});
+  const imageUpdateReturnFocusRef = useRef<HTMLElement | null>(null);
 
   function replaceStackQuery(stackId: string | null) {
     if (typeof window === "undefined") return;
@@ -317,9 +318,13 @@ export function ServicesPanel({
       confirmLabel: "Forget only",
       message: `Forget '${advancedStack.name}' in ComposeBastion? Running containers and host files are not removed.`
     })) return;
-    await deleteJson(`/api/compose/${advancedStack.id}`);
-    closeAdvancedStack();
-    await refresh();
+    try {
+      await deleteJson(`/api/compose/${advancedStack.id}`);
+      closeAdvancedStack();
+      await refresh();
+    } catch (caught) {
+      pushToast(caught instanceof Error ? caught.message : String(caught), "error");
+    }
   }
 
   async function advancedStackAction(verb: "deploy" | "stop" | "remove") {
@@ -715,11 +720,14 @@ export function ServicesPanel({
       });
       setImageUpdateTarget(null);
       await refresh();
-    } catch (caught) {
-      pushToast(caught instanceof Error ? caught.message : String(caught), "error");
     } finally {
       setBusy(group.key, false);
     }
+  }
+
+  function openImageUpdate(group: ServiceGroup, trigger: HTMLElement) {
+    imageUpdateReturnFocusRef.current = trigger;
+    setImageUpdateTarget(group);
   }
 
   function memberDisplayState(member: ServiceMember) {
@@ -851,7 +859,10 @@ export function ServicesPanel({
                     <ButtonRow>
                       <button
                         type="button"
-                        onClick={() => app.update.kind === "git" ? openSourceLink(app) : setImageUpdateTarget(group)}
+                        onClick={(event) => {
+                          if (app.update.kind === "git") openSourceLink(app);
+                          else openImageUpdate(group, event.currentTarget);
+                        }}
                         disabled={app.update.kind !== "git" && group.members.length === 0}
                       >
                         More details
@@ -1062,7 +1073,7 @@ export function ServicesPanel({
                         type="button"
                         title={selfManaged ? selfManagedTitle : "Update service image tags"}
                         disabled={busy || selfManaged}
-                        onClick={() => setImageUpdateTarget(group)}
+                        onClick={(event) => openImageUpdate(group, event.currentTarget)}
                       >
                         <Tags size={15} />
                       </button>
@@ -1073,7 +1084,7 @@ export function ServicesPanel({
                         className={app.update.status === "update_available" ? "servicePrimaryAction" : undefined}
                         title={app.update.status === "update_available" ? "Apply available update" : "Run update action"}
                         disabled={busy || selfManaged}
-                        onClick={() => void updateApp(app)}
+                        onClick={() => void updateApp(app).catch(() => undefined)}
                       >
                         <RefreshCw size={15} />
                       </button>
@@ -1185,9 +1196,9 @@ export function ServicesPanel({
             </label>
             <ButtonRow>
               <button className="primary" disabled={savingSource}>Save deployment settings</button>
-              <button type="button" onClick={() => void advancedStackAction("deploy")}><UploadCloud size={16} />Redeploy</button>
-              <button type="button" onClick={() => void advancedStackAction("stop")}><Square size={16} />Stop</button>
-              <button type="button" className="danger" onClick={() => void advancedStackAction("remove")}><Trash2 size={16} />Remove</button>
+              <button type="button" onClick={() => void advancedStackAction("deploy").catch(() => undefined)}><UploadCloud size={16} />Redeploy</button>
+              <button type="button" onClick={() => void advancedStackAction("stop").catch(() => undefined)}><Square size={16} />Stop</button>
+              <button type="button" className="danger" onClick={() => void advancedStackAction("remove").catch(() => undefined)}><Trash2 size={16} />Remove</button>
               <button type="button" onClick={() => void forgetAdvancedStack()}>Forget only</button>
             </ButtonRow>
           </form>
@@ -1401,6 +1412,7 @@ export function ServicesPanel({
           images={images}
           availableImageUpdates={imageDigestUpdatesForApp(appByGroupKey.get(imageUpdateTarget.key))}
           busy={busyKeys.has(imageUpdateTarget.key)}
+          returnFocus={imageUpdateReturnFocusRef.current}
           onClose={() => setImageUpdateTarget(null)}
           onUpdate={(targets) => updateServiceImages(imageUpdateTarget, targets)}
         />

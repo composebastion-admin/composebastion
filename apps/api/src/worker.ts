@@ -6,11 +6,22 @@ import { runMigrations } from "./db/migrate.js";
 import { pool } from "./db/pool.js";
 import { deleteExpiredSessions } from "./services/auth.js";
 import { runAlertChecks } from "./services/alerts.js";
-import { runBackupDrill, runBackupVerify, runHostPathBackup, runHostPathRestore, runVolumeBackup, runVolumeClone, runVolumeRestore } from "./services/backups.js";
+import {
+  cleanupStaleBackupTemporaryDirectories,
+  reconcileClaimedBackupDeletions,
+  runBackupDrill,
+  runBackupVerify,
+  runHostPathBackup,
+  runHostPathRestore,
+  runVolumeBackup,
+  runVolumeClone,
+  runVolumeRestore
+} from "./services/backups.js";
 import { executeDockerAction } from "./services/docker.js";
 import {
   analyzeDeployment,
   backfillDeploymentSourceEncryptedEnvironment,
+  cleanupStaleDeploymentGitCredentialFiles,
   cleanupExpiredDeploymentAnalyses,
   configureRegistryTrust,
   executeDeployment
@@ -28,11 +39,14 @@ import {
   JOB_LEASE_MAINTENANCE_INTERVAL_MS,
   JobLeaseLostError,
   markJobProgressStep,
+  markSelfUpdateHandoffPending,
   markWorkerDraining,
   markWorkerStopped,
   recoverExpiredJobs,
   registerWorkerInstance,
   renewJobLease,
+  shouldResumeWorkerClaimsAfterReconciliation,
+  shouldStopWorkerClaimsAfterHandoff,
   updateJobProgress,
   withActiveJobLeaseTransaction,
   WORKER_HEARTBEAT_INTERVAL_MS,
@@ -41,15 +55,37 @@ import {
 } from "./services/jobs.js";
 import { startRedisWakeupSubscription, type RedisWakeupSubscription } from "./services/redisWakeups.js";
 import { runDueBackupSchedules } from "./services/backupSchedules.js";
-import { markRecoveryDrillResult, runDueRecoverySchedules, runMigrationExecute, runRecoveryCreate, runRecoveryRestore, runRecoveryVerify } from "./services/recoveryCenter.js";
-import { runSelfUpdate } from "./services/selfUpdate.js";
+import {
+  markRecoveryDrillResult,
+  runDueRecoverySchedules,
+  runMigrationExecute,
+  runRecoveryCreate,
+  runRecoveryVerify
+} from "./services/recoveryCenter.js";
+import { runWorkerRecoveryRestore } from "./services/workerRecoveryRestore.js";
+import { cleanupStaleRcloneConfigDirectories } from "./services/recoveryRclone.js";
+import { reconcileRecoverySourceRestartObligations } from "./services/recoveryRestartReconciliation.js";
+import { reconcileRecoveryRestoreAttempts } from "./services/recoveryRestoreAttempts.js";
+import { reconcileClaimedRecoveryPointDeletions } from "./services/recoveryPointDelete.js";
+import { cleanupStaleRecoveryTemporaryResidue } from "./services/recoveryTemporaryStorage.js";
+import { reconcileRemoteArtifactOrphans } from "./services/recoveryRemoteOrphans.js";
+import { reconcileAmbiguousRemoteOutcomes } from "./services/remoteOutcomeReconciliation.js";
+import { cleanupTerminalRemoteOperationProofs } from "./services/remoteOperationProofCleanup.js";
+import { confirmSelfUpdateHandoff, reconcileSelfUpdateHandoffs, runSelfUpdate } from "./services/selfUpdate.js";
 import { runStackUpdatePolicies } from "./services/stackUpdatePolicies.js";
 import { safeErrorMessage, workerJobLogFields } from "./services/operationLogs.js";
 import { createNonOverlappingTask } from "./services/nonOverlappingTask.js";
 import { APP_VERSION } from "./services/version.js";
+import {
+  clearWorkerReadinessMarker,
+  publishWorkerReadinessMarker
+} from "./services/workerReadiness.js";
 
 let processing = false;
-let acceptingJobs = true;
+// Fail closed until startup has reconciled every durable self-update handoff.
+// A replacement worker must not claim unrelated work while an update outcome
+// is still pending.
+let acceptingJobs = false;
 let shuttingDown = false;
 let workerRegistered = false;
 const workerId = randomUUID();
@@ -81,6 +117,8 @@ async function processAvailableJobs() {
       const lease: JobLease = { workerId: job.workerId, attemptCount: job.attemptCount };
       let leaseLost = false;
       const executionFence: JobExecutionFence = {
+        jobId: job.id,
+        attemptCount: job.attemptCount,
         assertActive: async () => {
           if (leaseLost) throw new JobLeaseLostError(job.id);
           await assertJobLeaseActive(job.id, lease);
@@ -103,6 +141,7 @@ async function processAvailableJobs() {
 
       let actionForFailure: { type: string; payload: Record<string, unknown> } | null = null;
       let activeStepForFailure: string | undefined;
+      let selfUpdateHandoffPending = false;
       const jobStartedAtMs = Date.now();
       try {
         console.info("worker.job", workerJobLogFields(job, "running", jobStartedAtMs));
@@ -119,25 +158,46 @@ async function processAvailableJobs() {
 
         let result: Record<string, unknown>;
         if (action.type === "deploy.analyze") {
-          result = await analyzeDeployment(action.payload.analysisId);
+          result = await analyzeDeployment(
+            action.payload.analysisId,
+            executionFence,
+            { jobId: job.id, attemptCount: job.attemptCount }
+          );
         } else if (action.type === "deploy.execute") {
-          result = await executeDeployment(action.payload.analysisId);
+          result = await executeDeployment(
+            action.payload.analysisId,
+            executionFence,
+            { jobId: job.id, attemptCount: job.attemptCount }
+          );
         } else if (action.type === "host.configureRegistryTrust") {
-          result = await configureRegistryTrust(action.hostId, action.payload.registry);
+          result = await configureRegistryTrust(
+            action.hostId,
+            action.payload.registry,
+            executionFence,
+            { jobId: job.id, attemptCount: job.attemptCount }
+          );
         } else if (action.type === "volume.backup") {
           result = await runVolumeBackup(action.hostId, action.payload.backupId, action.payload.volumeName, executionFence);
         } else if (action.type === "volume.restore") {
-          result = await runVolumeRestore(action.hostId, action.payload.backupId, action.payload.targetVolumeName, action.payload.overwrite, executionFence);
+          result = await runVolumeRestore(action.hostId, action.payload.backupId, action.payload.targetVolumeName, action.payload.overwrite, executionFence, job.id);
         } else if (action.type === "volume.clone") {
-          result = await runVolumeClone(action.hostId, action.payload.targetHostId, action.payload.sourceVolumeName, action.payload.targetVolumeName, action.payload.overwrite, action.payload.backupId, executionFence);
+          result = await runVolumeClone(action.hostId, action.payload.targetHostId, action.payload.sourceVolumeName, action.payload.targetVolumeName, action.payload.overwrite, action.payload.backupId, executionFence, job.id);
         } else if (action.type === "hostPath.backup") {
           result = await runHostPathBackup(action.hostId, action.payload.backupId, action.payload.sourcePath, executionFence);
         } else if (action.type === "hostPath.restore") {
-          result = await runHostPathRestore(action.hostId, action.payload.backupId, action.payload.targetPath, action.payload.overwrite, executionFence);
+          result = await runHostPathRestore(action.hostId, action.payload.backupId, action.payload.targetPath, action.payload.overwrite, executionFence, job.id);
         } else if (action.type === "backup.verify") {
           result = await runBackupVerify(action.hostId, action.payload.backupId, { testArchive: action.payload.testArchive }, executionFence);
         } else if (action.type === "backup.drill") {
-          result = await runBackupDrill(action.hostId, action.payload.backupId, executionFence);
+          result = await runBackupDrill(
+            action.hostId,
+            action.payload.backupId,
+            executionFence,
+            job.id,
+            (action.payload as {
+              drillId?: string;
+            }).drillId
+          );
         } else if (action.type === "recovery.create" || action.type === "recovery.capture") {
           result = await runRecoveryCreate(action.hostId, action.payload.recoveryPointId, {
             stopFirst: action.payload.stopFirst,
@@ -146,7 +206,7 @@ async function processAvailableJobs() {
         } else if (action.type === "recovery.verify") {
           result = await runRecoveryVerify(action.hostId, action.payload.recoveryPointId, executionFence);
         } else if (action.type === "recovery.restore") {
-          result = await runRecoveryRestore(action.hostId, {
+          const restoreRequest = {
             recoveryPointId: action.payload.recoveryPointId,
             targetHostId: action.hostId,
             options: {
@@ -158,9 +218,24 @@ async function processAvailableJobs() {
               remapPorts: action.payload.remapPorts,
               networkMode: action.payload.networkMode
             }
-          }, executionFence);
+          };
           if (action.payload.drill) {
+            result = await runWorkerRecoveryRestore(
+              action.hostId,
+              restoreRequest,
+              true,
+              executionFence,
+              job.id
+            );
             await markRecoveryDrillResult(action.payload.recoveryPointId, "completed", null, executionFence);
+          } else {
+            result = await runWorkerRecoveryRestore(
+              action.hostId,
+              restoreRequest,
+              false,
+              executionFence,
+              job.id
+            );
           }
         } else if (action.type === "migration.execute") {
           result = await runMigrationExecute(action.hostId, action.payload.migrationRunId, {
@@ -170,30 +245,55 @@ async function processAvailableJobs() {
             remapPorts: action.payload.remapPorts,
             networkMode: action.payload.networkMode,
             executionFence,
+            operationJobId: job.id,
             onProgress: async (stepId, detail) => {
               activeStepForFailure = stepId;
               await markJobProgressStep(job.id, action.type, stepId, detail, lease);
             }
           });
         } else if (action.type === "system.self_update") {
-          result = await runSelfUpdate(action.hostId, action.payload, {
+          const handoff = await runSelfUpdate(action.hostId, action.payload, {
+            jobId: job.id,
             onProgress: async (stepId, detail) => {
               await executionFence.assertActive();
               activeStepForFailure = stepId;
               await markJobProgressStep(job.id, action.type, stepId, detail, lease);
             }
           });
+          result = handoff;
+          const handoffPersisted = await markSelfUpdateHandoffPending(job.id, handoff, lease);
+          if (!handoffPersisted) throw new JobLeaseLostError(job.id);
+          selfUpdateHandoffPending = true;
+          // The detached script is about to recreate the worker. Do not claim
+          // another job in the handoff window; the replacement worker resumes
+          // normal polling after it reconciles this operation.
+          if (shouldStopWorkerClaimsAfterHandoff(action.type, selfUpdateHandoffPending)) acceptingJobs = false;
+          leaseRenewal.stop();
+          clearInterval(leaseRenewalTimer);
+          await confirmSelfUpdateHandoff(action.hostId, handoff).catch((error) => {
+            // The detached script has a confirmation timeout and writes a
+            // sanitized failure outcome. Keep the durable handoff pending so a
+            // replacement worker can reconcile that authoritative result.
+            console.warn("worker.self_update.confirm", {
+              jobId: job.id,
+              error: safeErrorMessage(error)
+            });
+          });
         } else {
           await executionFence.assertActive();
           result = await executeDockerAction(action, executionFence);
         }
-        await updateJobProgress(job.id, buildJobProgress(action.type, "completed"), lease);
-        const completed = await completeJob(job.id, result, lease);
-        if (completed) {
-          console.info("worker.job", workerJobLogFields(job, "completed", jobStartedAtMs));
+        if (selfUpdateHandoffPending) {
+          console.info("worker.job", workerJobLogFields(job, "running", jobStartedAtMs));
         } else {
-          leaseLost = true;
-          console.warn("worker.job.lease_lost", { jobId: job.id, attemptCount: job.attemptCount });
+          await updateJobProgress(job.id, buildJobProgress(action.type, "completed"), lease);
+          const completed = await completeJob(job.id, result, lease);
+          if (completed) {
+            console.info("worker.job", workerJobLogFields(job, "completed", jobStartedAtMs));
+          } else {
+            leaseLost = true;
+            console.warn("worker.job.lease_lost", { jobId: job.id, attemptCount: job.attemptCount });
+          }
         }
       } catch (error) {
         if (actionForFailure?.type === "recovery.restore" && actionForFailure.payload.drill === true && typeof actionForFailure.payload.recoveryPointId === "string") {
@@ -268,6 +368,57 @@ function schedule(name: string, intervalMs: number, task: () => Promise<unknown>
   timers.add(timer);
 }
 
+async function cleanupWorkerTemporaryResidue() {
+  const remote = await cleanupStaleDeploymentGitCredentialFiles();
+  if (remote.failures.length > 0) {
+    console.warn("worker.credentials.git_cleanup", {
+      checked: remote.checked,
+      cleaned: remote.cleaned,
+      failedHostIds: remote.failures.map((failure) => failure.hostId)
+    });
+  }
+  const local = await cleanupStaleRcloneConfigDirectories();
+  const backups = await cleanupStaleBackupTemporaryDirectories();
+  const recovery = await cleanupStaleRecoveryTemporaryResidue();
+  const remoteArtifacts = await reconcileRemoteArtifactOrphans();
+  const remoteOperationProofs = await cleanupTerminalRemoteOperationProofs();
+  if (remoteOperationProofs.failures.length > 0) {
+    console.warn("worker.remote_operation_proofs.cleanup", {
+      checked: remoteOperationProofs.checked,
+      removed: remoteOperationProofs.removed,
+      failedHostIds: remoteOperationProofs.failures.map(
+        (failure) => failure.hostId
+      )
+    });
+  }
+  if (
+    remote.cleaned
+    || local.removed
+    || backups.removed
+    || recovery.removed
+    || remoteArtifacts.cleaned
+    || remoteArtifacts.failed
+    || remoteOperationProofs.removed
+  ) {
+    console.info("worker.residue.cleaned", {
+      remoteGitFiles: remote.cleaned,
+      localRcloneDirectories: local.removed,
+      localBackupDirectories: backups.removed,
+      localRecoveryPaths: recovery.removed,
+      remoteArtifactOrphansCleaned: remoteArtifacts.cleaned,
+      remoteArtifactOrphansFailed: remoteArtifacts.failed,
+      remoteOperationProofsRemoved: remoteOperationProofs.removed
+    });
+  }
+}
+
+async function reconcileClaimedDeletions() {
+  const backups = await reconcileClaimedBackupDeletions();
+  const recoveryPoints =
+    await reconcileClaimedRecoveryPointDeletions();
+  return { backups, recoveryPoints };
+}
+
 async function shutdown(signal: string) {
   if (shuttingDown) return;
   shuttingDown = true;
@@ -275,6 +426,10 @@ async function shutdown(signal: string) {
   console.info(`ComposeBastion worker received ${signal}, draining...`);
   for (const timer of timers) clearInterval(timer);
   timers.clear();
+
+  await clearWorkerReadinessMarker().catch((error) => {
+    console.error("worker.readiness.clear", { error: safeErrorMessage(error) });
+  });
 
   if (workerRegistered) {
     await markWorkerDraining(workerId).catch((error) => {
@@ -304,11 +459,33 @@ process.once("SIGTERM", () => void shutdown("SIGTERM"));
 process.once("SIGINT", () => void shutdown("SIGINT"));
 
 async function main() {
+  // A container restart preserves its writable layer. Remove any marker left
+  // by an abruptly terminated predecessor before doing startup work.
+  await clearWorkerReadinessMarker();
   await runMigrations();
   await registerWorkerInstance({ id: workerId, version: APP_VERSION, hostname: hostname() });
   workerRegistered = true;
   await cleanupWorkerInstances();
+  const startupReconciliation = await reconcileSelfUpdateHandoffs();
+  // Migration 031 deliberately leaves legacy deployment environments empty
+  // until they can be encrypted with the runtime secret. Complete that
+  // backfill before Redis subscriptions, timers, or job claims can expose a
+  // partially upgraded deployment source.
+  await backfillDeploymentSourceEncryptedEnvironment();
+  // Bound the lifetime of credentials and backup artifacts left behind by an
+  // ungraceful worker termination before this process can claim fresh work.
+  await cleanupWorkerTemporaryResidue();
+  if (!shuttingDown) acceptingJobs = startupReconciliation.pending === 0;
   await recoverExpiredJobs();
+  await reconcileAmbiguousRemoteOutcomes();
+  await reconcileRecoveryRestoreAttempts();
+  await reconcileClaimedDeletions();
+  await reconcileRecoverySourceRestartObligations();
+
+  // Publish only after this exact worker has registered and completed every
+  // fail-closed startup reconciliation. The self-updater verifies this marker
+  // inside the replacement container instead of trusting aggregate heartbeats.
+  await publishWorkerReadinessMarker({ workerId, version: APP_VERSION });
 
   redisWakeups = startRedisWakeupSubscription({
     onWakeup: () => void runScheduled("job-poll", processAvailableJobs)
@@ -321,6 +498,45 @@ async function main() {
   schedule("lease-recovery", JOB_LEASE_MAINTENANCE_INTERVAL_MS, async () => {
     const recovered = await recoverExpiredJobs();
     if (recovered.requeued || recovered.failed) console.warn("worker.jobs.recovered", recovered);
+    const restartedSources = await reconcileRecoverySourceRestartObligations();
+    if (restartedSources.restarted || restartedSources.failed) {
+      console.warn("worker.recovery_sources.reconciled", restartedSources);
+    }
+  });
+  schedule("self-update-reconciliation", JOB_LEASE_MAINTENANCE_INTERVAL_MS, async () => {
+    const reconciled = await reconcileSelfUpdateHandoffs();
+    if (reconciled.pending > 0) {
+      acceptingJobs = false;
+    } else if (!shuttingDown && !acceptingJobs && shouldResumeWorkerClaimsAfterReconciliation(reconciled)) {
+      acceptingJobs = true;
+    }
+    if (reconciled.completed || reconciled.failed) console.info("worker.self_update.reconciled", reconciled);
+  });
+  schedule("remote-outcome-reconciliation", 60_000, async () => {
+    const reconciled = await reconcileAmbiguousRemoteOutcomes();
+    if (reconciled.reconciled || reconciled.pending) {
+      console.info("worker.remote_outcomes.reconciled", reconciled);
+    }
+  });
+  schedule("recovery-restore-reconciliation", 60_000, async () => {
+    const reconciled = await reconcileRecoveryRestoreAttempts();
+    if (reconciled.cleaned || reconciled.failed) {
+      console.info("worker.recovery_restores.reconciled", reconciled);
+    }
+  });
+  schedule("deletion-claim-reconciliation", 60_000, async () => {
+    const reconciled = await reconcileClaimedDeletions();
+    if (
+      reconciled.backups.deleted
+      || reconciled.backups.failed
+      || reconciled.recoveryPoints.deleted
+      || reconciled.recoveryPoints.failed
+    ) {
+      console.info(
+        "worker.deletion_claims.reconciled",
+        reconciled
+      );
+    }
   });
   schedule("host-checks", env.HOST_CHECK_INTERVAL_MS, enqueueHostChecks);
   schedule("inventory-syncs", env.INVENTORY_SYNC_INTERVAL_MS, enqueueInventorySyncs);
@@ -330,16 +546,17 @@ async function main() {
   schedule("stack-update-policies", 30 * 60_000, runStackUpdatePolicies);
   schedule("session-cleanup", 60 * 60_000, deleteExpiredSessions);
   schedule("deployment-analysis-cleanup", 30 * 60_000, cleanupExpiredDeploymentAnalyses);
+  schedule("temporary-residue-cleanup", 15 * 60_000, cleanupWorkerTemporaryResidue);
   schedule("worker-cleanup", 60 * 60_000, cleanupWorkerInstances);
   await runScheduled("session-cleanup-initial", deleteExpiredSessions);
   await runScheduled("deployment-analysis-cleanup-initial", cleanupExpiredDeploymentAnalyses);
-  await runScheduled("deployment-source-secret-backfill", backfillDeploymentSourceEncryptedEnvironment);
   await runScheduled("job-poll", processAvailableJobs);
 
   console.info(`ComposeBastion worker started for ${env.DATABASE_URL.replace(/:\/\/.*@/, "://***@")}`);
 }
 
-main().catch((error) => {
+main().catch(async (error) => {
+  await clearWorkerReadinessMarker().catch(() => undefined);
   console.error(error);
   process.exit(1);
 });

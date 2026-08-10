@@ -3,6 +3,13 @@ import { parseReleaseVersion } from "./versions.js";
 export * from "./versions.js";
 import { normalizeSavedRegistryOrigin } from "./registry.js";
 export * from "./registry.js";
+import {
+  gitRepositoryUrlIssue,
+  gitRepositoryUrlSchema,
+  githubRepositoryUrlSchema,
+  plaintextHttpSourceUrlIssue
+} from "./gitUrls.js";
+export * from "./gitUrls.js";
 import { validatePasswordStrength } from "./password.js";
 import { paginationQuerySchema } from "./pagination.js";
 
@@ -94,6 +101,27 @@ export const demoSeedRequestSchema = z.object({
   includeDemoData: z.boolean().default(true)
 });
 
+const dockerHostAgentUrlSchema = z.string().url().refine((value) => {
+  try {
+    const protocol = new URL(value).protocol;
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    return false;
+  }
+}, "Agent URL must use http or https").refine((value) => {
+  try {
+    const parsed = new URL(value);
+    return !parsed.username
+      && !parsed.password
+      && !parsed.search
+      && !parsed.hash
+      && !value.includes("?")
+      && !value.includes("#");
+  } catch {
+    return false;
+  }
+}, "Agent URL must not contain embedded credentials, query parameters, or a fragment");
+
 const dockerHostBaseSchema = z.object({
   name: z.string().min(1).max(80),
   hostname: z.string().min(1).max(255),
@@ -104,7 +132,7 @@ const dockerHostBaseSchema = z.object({
   sshPrivateKey: z.string().optional(),
   sshKeyPassphrase: z.string().optional(),
   sshPassword: z.string().optional(),
-  agentUrl: z.string().url().optional(),
+  agentUrl: dockerHostAgentUrlSchema.optional(),
   agentToken: z.string().optional(),
   dockerSocketPath: z.string().min(1).default("/var/run/docker.sock"),
   tags: z.array(z.string().min(1).max(32)).default([])
@@ -122,7 +150,33 @@ export const dockerHostCreateSchema = dockerHostBaseSchema.superRefine((value, c
   }
 });
 
-export const dockerHostUpdateSchema = dockerHostBaseSchema.partial();
+export const dockerHostUpdateSchema = dockerHostBaseSchema.partial().extend({
+  sshPrivateKey: z.string().min(1).optional(),
+  sshKeyPassphrase: z.string().min(1).optional(),
+  sshPassword: z.string().min(1).optional(),
+  agentUrl: dockerHostAgentUrlSchema.nullable().optional(),
+  agentToken: z.string().min(1).optional(),
+  clearSshPrivateKey: z.boolean().optional(),
+  clearSshKeyPassphrase: z.boolean().optional(),
+  clearSshPassword: z.boolean().optional(),
+  clearAgentToken: z.boolean().optional()
+}).superRefine((value, ctx) => {
+  const secretChanges = [
+    ["sshPrivateKey", "clearSshPrivateKey"],
+    ["sshKeyPassphrase", "clearSshKeyPassphrase"],
+    ["sshPassword", "clearSshPassword"],
+    ["agentToken", "clearAgentToken"]
+  ] as const;
+  for (const [replacementField, clearField] of secretChanges) {
+    if (value[replacementField] !== undefined && value[clearField]) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Cannot replace and clear ${replacementField} in the same update`,
+        path: [clearField]
+      });
+    }
+  }
+});
 
 export type DockerHostStatus = "unknown" | "online" | "offline" | "checking";
 
@@ -231,9 +285,9 @@ export const composeStackCreateSchema = z.object({
 export const composeStackUpdateSchema = composeStackCreateSchema.partial();
 
 export const composeStackProxyFieldsSchema = z.object({
-  domains: z.array(z.string()).default([]),
-  exposedService: z.string().nullable().optional(),
-  exposedPort: z.number().nullable().optional(),
+  domains: z.array(z.string().trim().min(1).max(255)).default([]),
+  exposedService: z.string().trim().min(1).max(80).nullable().optional(),
+  exposedPort: z.number().int().min(1).max(65535).nullable().optional(),
   tlsDesired: z.boolean().default(false),
   updatePolicyEnabled: z.boolean().default(false),
   updatePolicyChannel: z.enum(["digest", "patch", "minor"]).nullable().optional()
@@ -246,6 +300,7 @@ export const composeStackSchema = z.object({
   projectName: z.string(),
   composeYaml: z.string(),
   env: z.string(),
+  sensitiveFieldsRedacted: z.boolean().optional(),
   status: z.string(),
   currentVersionId: idSchema.nullable().optional(),
   currentVersionNumber: z.number().int().nullable().optional(),
@@ -473,7 +528,15 @@ export const selfUpdateComposeFileSchema = z.string()
   .trim()
   .min(1)
   .max(1024)
-  .refine((value) => !/[\x00-\x1F\x7F]/.test(value), "Compose file contains invalid control characters");
+  .refine((value) => !/[\x00-\x1F\x7F]/.test(value), "Compose file contains invalid control characters")
+  .refine(
+    (value) => !value.startsWith("/") && !value.includes("\\"),
+    "Compose file must be a relative Linux path beneath the working directory"
+  )
+  .refine(
+    (value) => value.split("/").every((segment) => Boolean(segment) && segment !== "." && segment !== ".."),
+    "Compose file must not contain empty, current-directory, or parent-directory segments"
+  );
 
 export const selfUpdateVersionSchema = z.string()
   .trim()
@@ -527,7 +590,7 @@ export const dockerActionSchema = z.discriminatedUnion("type", [
   withHost("host.sync", {}),
   withHost("host.mkdir", { path: z.string().min(1).max(1024) }),
   withHost("git.clone", {
-    repositoryUrl: z.string().min(1).max(2048),
+    repositoryUrl: gitRepositoryUrlSchema,
     directory: z.string().min(1).max(1024),
     branch: z.string().min(1).max(255).optional(),
     shallow: z.boolean().default(true)
@@ -537,16 +600,18 @@ export const dockerActionSchema = z.discriminatedUnion("type", [
     branch: z.string().min(1).max(255).optional()
   }),
   withHost("git.testRemote", {
-    repositoryUrl: z.string().min(1).max(2048),
+    repositoryUrl: gitRepositoryUrlSchema,
     branch: z.string().min(1).max(255).optional()
   }),
   withHost("git.cloneDeploy", {
-    repositoryUrl: z.string().min(1).max(2048),
+    repositoryUrl: gitRepositoryUrlSchema,
     directory: z.string().min(1).max(1024),
     branch: z.string().min(1).max(255).optional(),
     composePath: z.string().min(1).max(1024).default("docker-compose.yml"),
     projectName: z.string().regex(/^[a-z0-9][a-z0-9_-]*$/, "Project name must be lowercase and contain only letters, numbers, hyphens, and underscores"),
-    repositoryId: idSchema.optional()
+    repositoryId: idSchema.optional(),
+    sourceCommitSha: z.string().regex(/^[0-9a-f]{40}([0-9a-f]{24})?$/).optional(),
+    composeSha256: z.string().regex(/^[0-9a-f]{64}$/).optional()
   }),
   withHost("deploy.analyze", {
     analysisId: idSchema
@@ -603,7 +668,10 @@ export const dockerActionSchema = z.discriminatedUnion("type", [
   withHost("hostPath.backup", { backupId: idSchema, sourcePath: hostPathSchema }),
   withHost("hostPath.restore", { backupId: idSchema, targetPath: hostPathSchema, overwrite: z.boolean().default(false) }),
   withHost("backup.verify", { backupId: idSchema, testArchive: z.boolean().default(false) }),
-  withHost("backup.drill", { backupId: idSchema }),
+  withHost("backup.drill", {
+    backupId: idSchema,
+    drillId: idSchema.optional()
+  }),
   withHost("recovery.create", { recoveryPointId: idSchema, stopFirst: z.boolean().default(false) }),
   withHost("recovery.capture", { recoveryPointId: idSchema, stopFirst: z.boolean().default(false) }),
   withHost("recovery.verify", { recoveryPointId: idSchema }),
@@ -629,7 +697,9 @@ export const dockerActionSchema = z.discriminatedUnion("type", [
   withHost("compose.deployPath", {
     projectName: composeProjectNameSchema,
     workingDir: hostPathSchema,
-    composePath: composePathSchema
+    composePath: composePathSchema,
+    gitPullBeforeDeploy: z.boolean().optional(),
+    branch: z.string().min(1).max(255).optional()
   }),
   withHost("compose.writeDeployPath", {
     projectName: composeProjectNameSchema,
@@ -640,7 +710,10 @@ export const dockerActionSchema = z.discriminatedUnion("type", [
     overwrite: z.boolean().default(false),
     pullBeforeDeploy: z.boolean().default(false)
   }),
-  withHost("compose.deploy", { stackId: idSchema }),
+  withHost("compose.deploy", {
+    stackId: idSchema,
+    pullBeforeDeploy: z.boolean().default(false)
+  }),
   withHost("compose.stop", { stackId: idSchema }),
   withHost("compose.remove", { stackId: idSchema, removeVolumes: z.boolean().default(false) }),
   withHost("registry.login", { registryId: idSchema }),
@@ -652,8 +725,38 @@ export const dockerActionSchema = z.discriminatedUnion("type", [
   })
 ]);
 
+export const directHostActionTypes = [
+  "host.check",
+  "host.sync",
+  "host.mkdir",
+  "git.clone",
+  "git.pull",
+  "git.testRemote",
+  "container.run",
+  "container.start",
+  "container.stop",
+  "container.restart",
+  "container.rename",
+  "container.update",
+  "container.remove",
+  "image.pull",
+  "image.remove",
+  "image.prune",
+  "image.cleanup",
+  "network.create",
+  "network.remove",
+  "network.prune",
+  "volume.create",
+  "volume.remove",
+  "volume.prune",
+  "compose.deployPath"
+] as const;
+
+export const directHostActionTypeSchema = z.enum(directHostActionTypes);
+
 export type DockerActionRequest = z.infer<typeof dockerActionSchema>;
 export type DockerActionType = DockerActionRequest["type"];
+export type DirectHostActionType = z.infer<typeof directHostActionTypeSchema>;
 export type ImageCleanupCandidate = z.infer<typeof imageCleanupCandidateSchema>;
 export type ImageCleanupTarget = z.infer<typeof imageCleanupTargetSchema>;
 
@@ -672,6 +775,7 @@ export const operationJobSchema = z.object({
   payload: z.record(z.unknown()),
   result: z.record(z.unknown()).nullable(),
   progress: z.array(jobProgressStepSchema).default([]),
+  sensitiveFieldsRedacted: z.boolean().optional(),
   correlationId: z.string(),
   error: z.string().nullable(),
   createdBy: idSchema.nullable(),
@@ -736,13 +840,13 @@ export const favoriteImageSchema = z.object({
 
 export const githubRepositoryCreateSchema = z.object({
   name: z.string().min(1).max(80),
-  repositoryUrl: z.string().url(),
+  repositoryUrl: githubRepositoryUrlSchema,
   branch: z.string().min(1).max(120).default("main"),
   composePath: z.string().min(1).max(255).default("docker-compose.yml"),
   projectName: composeProjectNameSchema.optional(),
   env: z.string().default(""),
   defaultHostId: idSchema.optional(),
-  hostCloneUrl: z.string().max(2048).optional(),
+  hostCloneUrl: z.union([z.literal(""), gitRepositoryUrlSchema]).optional(),
   hostCloneDirectory: z.string().max(1024).optional(),
   githubToken: z.string().max(4096).optional()
 });
@@ -752,7 +856,7 @@ export const githubRepositoryUpdateSchema = githubRepositoryCreateSchema.partial
 });
 
 export const githubRepositoryAccessCheckSchema = z.object({
-  repositoryUrl: z.string().url(),
+  repositoryUrl: githubRepositoryUrlSchema,
   branch: z.string().min(1).max(120).default("main"),
   composePath: z.string().min(1).max(255).default("docker-compose.yml"),
   githubToken: z.string().max(4096).optional()
@@ -794,7 +898,7 @@ export const githubRepositoryDeploySchema = z.object({
   composeYaml: z.string().min(1).optional(),
   env: z.string().optional(),
   mode: z.enum(["api", "host_clone"]).default("api").optional(),
-  hostCloneUrl: z.string().min(1).max(2048).optional(),
+  hostCloneUrl: gitRepositoryUrlSchema.optional(),
   hostCloneDirectory: z.string().min(1).max(1024).optional()
 });
 
@@ -856,6 +960,21 @@ export const deploymentAnalysisCreateSchema = z.object({
       message: "Enter both the HTTPS username and token/password"
     });
   }
+  if (value.sourceType === "git") {
+    const issue = gitRepositoryUrlIssue(value.source);
+    if (issue) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["source"], message: issue });
+  }
+  if (value.sourceType === "compose_url") {
+    const issue = plaintextHttpSourceUrlIssue(value.source);
+    if (issue) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["source"], message: issue });
+    if (value.credentialUsername || value.credentialSecret) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["credentialSecret"],
+        message: "Compose URL credentials are not supported; upload the Compose file instead"
+      });
+    }
+  }
 });
 
 export const deploymentAnalysisDeploySchema = z.object({
@@ -888,6 +1007,21 @@ export const deploymentSourceCreateSchema = z.object({
       path: value.credentialUsername ? ["credentialSecret"] : ["credentialUsername"],
       message: "Enter both the HTTPS username and token/password"
     });
+  }
+  if (value.sourceType === "git") {
+    const issue = gitRepositoryUrlIssue(value.sourceLocator);
+    if (issue) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["sourceLocator"], message: issue });
+  }
+  if (value.sourceType === "compose_url") {
+    const issue = plaintextHttpSourceUrlIssue(value.sourceLocator);
+    if (issue) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["sourceLocator"], message: issue });
+    if (value.credentialUsername || value.credentialSecret) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["credentialSecret"],
+        message: "Compose URL credentials are not supported; upload the Compose file instead"
+      });
+    }
   }
 });
 
@@ -971,7 +1105,7 @@ export const registryTrustSchema = z.object({
 });
 
 export const githubRepositoryBranchesRequestSchema = z.object({
-  repositoryUrl: z.string().url(),
+  repositoryUrl: githubRepositoryUrlSchema,
   githubToken: z.string().max(4096).optional()
 });
 
@@ -1008,6 +1142,11 @@ export const userUpdateSchema = z.object({
   role: z.enum(["owner", "admin", "operator", "viewer"]).optional(),
   isActive: z.boolean().optional(),
   password: z.string().min(12).optional()
+}).superRefine((value, ctx) => {
+  if (!value.password) return;
+  for (const message of validatePasswordStrength(value.password)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message, path: ["password"] });
+  }
 });
 
 export const notificationChannelCreateSchema = z.object({
@@ -1289,6 +1428,7 @@ export const networkDriverExplanations = {
 export type NetworkDriver = keyof typeof networkDriverExplanations;
 
 export * from "./dockerResource.js";
+export * from "./dockerStats.js";
 export * from "./pagination.js";
 export * from "./password.js";
 export * from "./auditActions.js";

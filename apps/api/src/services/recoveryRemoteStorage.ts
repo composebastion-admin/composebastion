@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
-import type { WorkerBackupTarget } from "./recoveryBackupTargets.js";
+import { assertBackupTargetS3EndpointAllowed, type WorkerBackupTarget } from "./recoveryBackupTargets.js";
 import {
   buildS3ObjectKey,
   createS3Client,
@@ -16,6 +16,7 @@ import {
   headRecoveryArtifactOnRclone,
   uploadRecoveryArtifactToRclone
 } from "./recoveryRclone.js";
+import { trackRecoveryTemporaryDownload } from "./recoveryTemporaryStorage.js";
 
 export type RemoteArtifactUpload = {
   remoteObjectKey: string;
@@ -30,6 +31,21 @@ export type RemoteArtifactHead = {
   etag?: string | null;
 };
 
+export type RemoteArtifactUploadFailure = Error & {
+  code: "REMOTE_ARTIFACT_UPLOAD_FAILED";
+  uploadError: string;
+  expectedRemoteObject: {
+    key: string;
+    backend: "s3" | "rclone";
+  };
+  remoteObjectDeletedAfterAmbiguousUpload: boolean;
+  orphanRemoteObject: {
+    key: string;
+    backend: "s3" | "rclone";
+    cleanupError: string;
+  } | null;
+};
+
 function cleanStorageKey(value: string) {
   return value.replace(/^\/+/, "");
 }
@@ -41,6 +57,53 @@ export function buildRemoteObjectKey(target: WorkerBackupTarget, namespaceId: st
   return [namespaceId, cleanStorageKey(storageKey)].filter(Boolean).join("/").replace(/\/+/g, "/");
 }
 
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function compensateAmbiguousUpload(
+  target: WorkerBackupTarget,
+  objectKey: string,
+  backend: "s3" | "rclone",
+  uploadError: unknown
+): Promise<never> {
+  const uploadMessage = errorMessage(uploadError);
+  try {
+    // The backend may have committed the deterministic object even though the
+    // client observed a timeout or a post-upload metadata failure. Deleting the
+    // attempt key is idempotent and prevents an untracked object from escaping.
+    await deleteRemoteArtifact(target, objectKey);
+  } catch (cleanupError) {
+    const cleanupMessage = errorMessage(cleanupError);
+    throw Object.assign(
+      new Error(
+        `Remote upload failed (${uploadMessage}) and ambiguous object cleanup failed (${cleanupMessage})`
+      ),
+      {
+        code: "REMOTE_ARTIFACT_UPLOAD_FAILED" as const,
+        uploadError: uploadMessage,
+        expectedRemoteObject: { key: objectKey, backend },
+        remoteObjectDeletedAfterAmbiguousUpload: false,
+        orphanRemoteObject: {
+          key: objectKey,
+          backend,
+          cleanupError: cleanupMessage
+        }
+      }
+    ) satisfies RemoteArtifactUploadFailure;
+  }
+  throw Object.assign(
+    new Error(`Remote upload failed: ${uploadMessage}`),
+    {
+      code: "REMOTE_ARTIFACT_UPLOAD_FAILED" as const,
+      uploadError: uploadMessage,
+      expectedRemoteObject: { key: objectKey, backend },
+      remoteObjectDeletedAfterAmbiguousUpload: true,
+      orphanRemoteObject: null
+    }
+  ) satisfies RemoteArtifactUploadFailure;
+}
+
 export async function uploadRemoteArtifact(input: {
   target: WorkerBackupTarget;
   namespaceId: string;
@@ -50,35 +113,59 @@ export async function uploadRemoteArtifact(input: {
 }): Promise<RemoteArtifactUpload | null> {
   const { target, namespaceId, storageKey, localPath, checksum } = input;
   if (target.kind === "s3" && target.s3) {
-    const client = createS3Client(target.s3.config, target.s3.credentials);
+    await assertBackupTargetS3EndpointAllowed(target);
     const objectKey = buildRemoteObjectKey(target, namespaceId, storageKey);
-    const uploaded = await uploadRecoveryArtifactToS3(client, target.s3.config.bucket, objectKey, localPath, checksum);
-    return {
-      remoteObjectKey: objectKey,
-      remoteBackend: "s3",
-      remoteSizeBytes: uploaded.sizeBytes,
-      remoteEtag: uploaded.etag
-    };
+    const client = createS3Client(target.s3.config, target.s3.credentials);
+    try {
+      try {
+        const uploaded = await uploadRecoveryArtifactToS3(
+          client,
+          target.s3.config.bucket,
+          objectKey,
+          localPath,
+          checksum
+        );
+        return {
+          remoteObjectKey: objectKey,
+          remoteBackend: "s3",
+          remoteSizeBytes: uploaded.sizeBytes,
+          remoteEtag: uploaded.etag
+        };
+      } catch (error) {
+        return await compensateAmbiguousUpload(target, objectKey, "s3", error);
+      }
+    } finally {
+      client.destroy();
+    }
   }
   if (target.kind === "rclone" && target.rclone) {
     const objectKey = buildRemoteObjectKey(target, namespaceId, storageKey);
-    const uploaded = await uploadRecoveryArtifactToRclone(target, objectKey, localPath);
-    const localStat = await stat(localPath);
-    return {
-      remoteObjectKey: objectKey,
-      remoteBackend: "rclone",
-      remoteSizeBytes: uploaded.sizeBytes ?? localStat.size,
-      remoteEtag: null
-    };
+    try {
+      const uploaded = await uploadRecoveryArtifactToRclone(target, objectKey, localPath);
+      const localStat = await stat(localPath);
+      return {
+        remoteObjectKey: objectKey,
+        remoteBackend: "rclone",
+        remoteSizeBytes: uploaded.sizeBytes ?? localStat.size,
+        remoteEtag: null
+      };
+    } catch (error) {
+      return compensateAmbiguousUpload(target, objectKey, "rclone", error);
+    }
   }
   return null;
 }
 
 export async function headRemoteArtifact(target: WorkerBackupTarget, objectKey: string): Promise<RemoteArtifactHead> {
   if (target.kind === "s3" && target.s3) {
+    await assertBackupTargetS3EndpointAllowed(target);
     const client = createS3Client(target.s3.config, target.s3.credentials);
-    const head = await headRecoveryArtifactOnS3(client, target.s3.config.bucket, objectKey);
-    return { sizeBytes: head.sizeBytes, checksum: head.checksum, etag: head.etag };
+    try {
+      const head = await headRecoveryArtifactOnS3(client, target.s3.config.bucket, objectKey);
+      return { sizeBytes: head.sizeBytes, checksum: head.checksum, etag: head.etag };
+    } finally {
+      client.destroy();
+    }
   }
   if (target.kind === "rclone" && target.rclone) {
     return headRecoveryArtifactOnRclone(target, objectKey);
@@ -88,8 +175,13 @@ export async function headRemoteArtifact(target: WorkerBackupTarget, objectKey: 
 
 export async function downloadRemoteArtifact(target: WorkerBackupTarget, objectKey: string, localPath: string) {
   if (target.kind === "s3" && target.s3) {
+    await assertBackupTargetS3EndpointAllowed(target);
     const client = createS3Client(target.s3.config, target.s3.credentials);
-    return downloadRecoveryArtifactFromS3(client, target.s3.config.bucket, objectKey, localPath);
+    try {
+      return await downloadRecoveryArtifactFromS3(client, target.s3.config.bucket, objectKey, localPath);
+    } finally {
+      client.destroy();
+    }
   }
   if (target.kind === "rclone" && target.rclone) {
     return downloadRecoveryArtifactFromRclone(target, objectKey, localPath);
@@ -99,9 +191,14 @@ export async function downloadRemoteArtifact(target: WorkerBackupTarget, objectK
 
 export async function deleteRemoteArtifact(target: WorkerBackupTarget, objectKey: string) {
   if (target.kind === "s3" && target.s3) {
+    await assertBackupTargetS3EndpointAllowed(target);
     const client = createS3Client(target.s3.config, target.s3.credentials);
-    await deleteRecoveryArtifactFromS3(client, target.s3.config.bucket, objectKey);
-    return;
+    try {
+      await deleteRecoveryArtifactFromS3(client, target.s3.config.bucket, objectKey);
+      return;
+    } finally {
+      client.destroy();
+    }
   }
   if (target.kind === "rclone" && target.rclone) {
     await deleteRecoveryArtifactFromRclone(target, objectKey);
@@ -112,13 +209,20 @@ export async function deleteRemoteArtifact(target: WorkerBackupTarget, objectKey
 
 export async function downloadRemoteArtifactAtomically(target: WorkerBackupTarget, objectKey: string, localPath: string) {
   const tempPath = path.join(path.dirname(localPath), `.download-${path.basename(localPath)}-${randomUUID()}.tmp`);
+  const releaseRecoveryLease = await trackRecoveryTemporaryDownload(tempPath);
   try {
-    await mkdir(path.dirname(tempPath), { recursive: true });
+    if (!releaseRecoveryLease) await mkdir(path.dirname(tempPath), { recursive: true });
     const downloaded = await downloadRemoteArtifact(target, objectKey, tempPath);
     await rename(tempPath, localPath);
     return downloaded;
   } catch (error) {
     await rm(tempPath, { force: true }).catch(() => undefined);
     throw error;
+  } finally {
+    await releaseRecoveryLease?.().catch((error) => {
+      console.warn("Failed to release a recovery temporary-download lease", {
+        error: errorMessage(error)
+      });
+    });
   }
 }

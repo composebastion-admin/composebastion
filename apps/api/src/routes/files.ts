@@ -3,6 +3,7 @@ import { z } from "zod";
 import { listHostDirectory, normalizeRemotePath, readHostTextFile, statHostPath, writeHostTextFile } from "../services/files.js";
 import { requireRole } from "../services/auth.js";
 import { auditContextFromRequest, writeAuditEvent } from "../services/audit.js";
+import { withSynchronousDockerMutationAdmission } from "../services/jobs.js";
 import { hostFileRateLimit } from "../services/rateLimits.js";
 
 const pathQuerySchema = z.object({
@@ -24,13 +25,22 @@ export async function registerFileRoutes(app: FastifyInstance) {
   app.get("/api/hosts/:hostId/files", { preHandler: operator, config: { rateLimit: hostFileRateLimit } }, async (request) => {
     const { hostId } = request.params as { hostId: string };
     const query = pathQuerySchema.parse(request.query);
+    await writeAuditEvent({
+      userId: request.user?.id,
+      hostId,
+      action: "host.file.list",
+      targetKind: "directory",
+      targetId: normalizeRemotePath(query.path),
+      ...auditContextFromRequest(request)
+    });
     return { directory: await listHostDirectory(hostId, query.path) };
   });
 
   app.get("/api/hosts/:hostId/files/read", { preHandler: operator, config: { rateLimit: hostFileRateLimit } }, async (request) => {
     const { hostId } = request.params as { hostId: string };
     const query = pathQuerySchema.parse(request.query);
-    const file = await readHostTextFile(hostId, query.path);
+    // Audit before accessing host data so an audit-store failure prevents any
+    // sensitive content from being returned.
     await writeAuditEvent({
       userId: request.user?.id,
       hostId,
@@ -39,19 +49,29 @@ export async function registerFileRoutes(app: FastifyInstance) {
       targetId: normalizeRemotePath(query.path),
       ...auditContextFromRequest(request)
     });
+    const file = await readHostTextFile(hostId, query.path);
     return { file };
   });
 
   app.get("/api/hosts/:hostId/files/exists", { preHandler: operator, config: { rateLimit: hostFileRateLimit } }, async (request) => {
     const { hostId } = request.params as { hostId: string };
     const query = pathQuerySchema.parse(request.query);
+    await writeAuditEvent({
+      userId: request.user?.id,
+      hostId,
+      action: "host.file.stat",
+      targetKind: "file",
+      targetId: normalizeRemotePath(query.path),
+      ...auditContextFromRequest(request)
+    });
     return { file: await statHostPath(hostId, query.path) };
   });
 
   app.post("/api/hosts/:hostId/files/write", { preHandler: operator, config: { rateLimit: hostFileRateLimit } }, async (request) => {
     const { hostId } = request.params as { hostId: string };
     const body = writeFileSchema.parse(request.body);
-    const file = await writeHostTextFile(hostId, body.path, body.content);
+    // Host filesystem writes are external effects. A durable intent is
+    // required before starting the write; an audit failure stops execution.
     await writeAuditEvent({
       userId: request.user?.id,
       hostId,
@@ -60,6 +80,14 @@ export async function registerFileRoutes(app: FastifyInstance) {
       targetId: normalizeRemotePath(body.path),
       ...auditContextFromRequest(request)
     });
+    const file = await withSynchronousDockerMutationAdmission(
+      {
+        type: "host.mkdir",
+        hostId,
+        payload: { path: normalizeRemotePath(body.path) }
+      },
+      () => writeHostTextFile(hostId, body.path, body.content)
+    );
     return { file };
   });
 }

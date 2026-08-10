@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   buildS3ObjectKey,
+  createS3Client,
   deleteRecoveryArtifactFromS3,
+  headRecoveryArtifactOnS3,
   redactS3Credentials,
   resolveRecoveryPointStatus
 } from "../src/services/recoveryS3.js";
@@ -60,5 +62,23 @@ describe("recovery S3 helpers", () => {
       Bucket: "recovery",
       Key: "stored/exact/object.tar.gz"
     });
+  });
+
+  it("enforces the private-network policy again in the live S3 socket lookup", async () => {
+    const resolve = vi.fn(async () => [{ address: "169.254.169.254", family: 4 }]);
+    const client = createS3Client(
+      {
+        endpoint: "http://s3-rebind.example.test:4567",
+        bucket: "recovery",
+        forcePathStyle: true
+      },
+      { accessKeyId: "test-access", secretAccessKey: "test-secret" },
+      { blockPrivateEndpoints: true, resolve }
+    );
+
+    await expect(headRecoveryArtifactOnS3(client, "recovery", "point/artifact"))
+      .rejects.toThrow("S3 endpoint resolved to a private network address");
+    expect(resolve).toHaveBeenCalled();
+    client.destroy();
   });
 });

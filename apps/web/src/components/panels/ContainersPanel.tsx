@@ -316,7 +316,7 @@ export function ContainersPanel({
           onRun={async (payload) => { await onAction("container.run", payload, host.id); await refresh(); setShowRunForm(false); }}
         />
       )}
-      {action.error && <div className="notice error">{action.error}</div>}
+      {action.error && <div className="notice error" role="alert">{action.error}</div>}
       {lastContainerUpdate && (
         <div className="notice success" role="status">
           Container update successful for <strong>{lastContainerUpdate.containerName}</strong>. Now using <code>{lastContainerUpdate.targetImage}</code> as of {formatDate(lastContainerUpdate.completedAt)}.
@@ -379,16 +379,16 @@ export function ContainersPanel({
             </span>,
             <button key="console" className="containerIconButton" title={canOperate ? "Open logs, stats, inspect, and exec" : "Open logs, stats, and inspect"} onClick={() => setSelected(container)}><Terminal size={16} /></button>,
             ...(canOperate ? [<ButtonRow key="actions" className="containerActionRow">
-              <button title="Start" disabled={isTransitioning} onClick={() => void onAction("container.start", { containerId: container.externalId }, container.hostId)}><Play size={16} /></button>
-              <button title="Stop" disabled={isTransitioning} onClick={() => void onAction("container.stop", { containerId: container.externalId }, container.hostId)}><Square size={16} /></button>
-              <button title="Restart" disabled={isTransitioning} onClick={() => void onAction("container.restart", { containerId: container.externalId }, container.hostId)}><RotateCcw size={16} /></button>
+              <button title="Start" disabled={isTransitioning} onClick={() => void onAction("container.start", { containerId: container.externalId }, container.hostId).catch(() => undefined)}><Play size={16} /></button>
+              <button title="Stop" disabled={isTransitioning} onClick={() => void onAction("container.stop", { containerId: container.externalId }, container.hostId).catch(() => undefined)}><Square size={16} /></button>
+              <button title="Restart" disabled={isTransitioning} onClick={() => void onAction("container.restart", { containerId: container.externalId }, container.hostId).catch(() => undefined)}><RotateCcw size={16} /></button>
               <details className="overflowMenu" style={{ pointerEvents: isTransitioning ? "none" : "auto", opacity: isTransitioning ? 0.5 : 1 }}>
                 <summary title="More actions"><MoreHorizontal size={16} /></summary>
                 <div className="overflowMenuPanel">
-                  <button onClick={() => { const name = window.prompt("Rename container", String(data.Names ?? container.name)); if (name) void onAction("container.rename", { containerId: container.externalId, name }, container.hostId); }}><Pencil size={16} />Rename</button>
+                  <button onClick={() => { const name = window.prompt("Rename container", String(data.Names ?? container.name)); if (name) void onAction("container.rename", { containerId: container.externalId, name }, container.hostId).catch(() => undefined); }}><Pencil size={16} />Rename</button>
                   <button onClick={() => setAuditTarget(container)}><Eye size={16} />Audit</button>
                   <button onClick={() => setUpdateTarget(container)}><Tags size={16} />Update Tag</button>
-                  <button onClick={() => void backupContainer(container)}><ShieldCheck size={16} />Backup</button>
+                  <button onClick={() => void backupContainer(container).catch(() => undefined)}><ShieldCheck size={16} />Backup</button>
                   <button
                     className="danger"
                     onClick={() => void (async () => {
@@ -398,9 +398,9 @@ export function ContainersPanel({
                         confirmLabel: "Delete",
                         message: `Delete container "${data.Names ?? container.name}"?`
                       })) {
-                        void onAction("container.remove", { containerId: container.externalId, force: true, removeVolumes: false }, container.hostId);
+                        await onAction("container.remove", { containerId: container.externalId, force: true, removeVolumes: false }, container.hostId);
                       }
-                    })()}
+                    })().catch(() => undefined)}
                   >
                     <Trash2 size={16} />Delete
                   </button>
@@ -415,10 +415,10 @@ export function ContainersPanel({
         <div className="bulkActionBar">
           <span>{selectedIds.size} container(s) selected</span>
           <ButtonRow>
-            <button className="primary" onClick={() => void handleBulkAction("container.start")} title="Start selected"><Play size={16} />Start</button>
-            <button className="secondary" onClick={() => void handleBulkAction("container.stop")} title="Stop selected"><Square size={16} />Stop</button>
-            <button className="secondary" onClick={() => void handleBulkAction("container.restart")} title="Restart selected"><RotateCcw size={16} />Restart</button>
-            <button className="danger" onClick={() => void handleBulkDelete()} title="Delete selected"><Trash2 size={16} />Delete</button>
+            <button className="primary" onClick={() => void handleBulkAction("container.start").catch(() => undefined)} title="Start selected"><Play size={16} />Start</button>
+            <button className="secondary" onClick={() => void handleBulkAction("container.stop").catch(() => undefined)} title="Stop selected"><Square size={16} />Stop</button>
+            <button className="secondary" onClick={() => void handleBulkAction("container.restart").catch(() => undefined)} title="Restart selected"><RotateCcw size={16} />Restart</button>
+            <button className="danger" onClick={() => void handleBulkDelete().catch(() => undefined)} title="Delete selected"><Trash2 size={16} />Delete</button>
           </ButtonRow>
         </div>
       )}

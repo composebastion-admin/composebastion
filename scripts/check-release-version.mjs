@@ -55,7 +55,7 @@ const documentedStableMarkers = [
   ["docs/operations-runbook.md", `tags are \`${stableVersion}\` and \`v${stableVersion}\`.`],
   ["docs/connect-hosts.md", `manager and agent release is \`${stableVersion}\`.`],
   ["docs/how-to.md", `Version covered: \`v${stableVersion}\`.`],
-  ["docker-compose.image.yml", `# ${stableVersion}. For homelab/NAS auto-updates`],
+  ["docker-compose.image.yml", `currently published stable release\n# is ${stableVersion};`],
   ["agent-compose.image.example.yml", `manager, for example ${stableVersion}.`]
 ];
 for (const [file, marker] of [...documentedCandidateMarkers, ...documentedStableMarkers]) {

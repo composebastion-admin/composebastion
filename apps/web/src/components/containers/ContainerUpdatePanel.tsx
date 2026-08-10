@@ -102,7 +102,7 @@ export function ContainerUpdatePanel({ container, images, onUpdate, onClose }: {
         ))}
         {visibleTags.length === 0 && <div className="notice">No tags match this filter.</div>}
       </div>
-      {updateError && <div className="notice error">{updateError}</div>}
+      {updateError && <div className="notice error" role="alert">{updateError}</div>}
       <ButtonRow>
         <button className="primary" disabled={isUpdating || !targetImage.trim()} onClick={() => void submitUpdate()}>
           {isUpdating ? <RefreshCw className="spin" size={18} /> : <Download size={18} />}

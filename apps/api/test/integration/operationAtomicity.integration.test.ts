@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { v4 as uuid } from "uuid";
 import { runMigrations } from "../../src/db/migrate.js";
 import { pool } from "../../src/db/pool.js";
@@ -10,6 +10,35 @@ import { updateApp } from "../../src/services/apps.js";
 
 const integrationEnabled = process.env.COMPOSEBASTION_INTEGRATION === "1";
 const prefix = "atomic-fail-";
+const githubCommitSha = "a".repeat(40);
+const githubComposeYaml = "services:\n  app:\n    image: nginx:alpine\n";
+
+function stubGithubHostCloneSource() {
+  vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+    const url = typeof input === "string"
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input.url;
+    if (url.includes("/commits/")) {
+      return new Response(JSON.stringify({ sha: githubCommitSha }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    }
+    if (url.includes("/contents/")) {
+      return new Response(JSON.stringify({
+        content: Buffer.from(githubComposeYaml).toString("base64"),
+        encoding: "base64",
+        sha: githubCommitSha
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    }
+    throw new Error(`Unexpected GitHub fixture request: ${url}`);
+  }));
+}
 
 function hostInput(name: string) {
   return {
@@ -26,6 +55,7 @@ function hostInput(name: string) {
 
 describe.skipIf(!integrationEnabled)("operation domain/job atomicity", () => {
   let hostId: string;
+  const repositoryIds = new Set<string>();
 
   beforeAll(async () => {
     await runMigrations();
@@ -64,12 +94,22 @@ describe.skipIf(!integrationEnabled)("operation domain/job atomicity", () => {
     hostId = host.id;
   });
 
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   afterAll(async () => {
     vi.unstubAllGlobals();
     await pool.query("DROP TRIGGER IF EXISTS operation_jobs_atomicity_test_trigger ON operation_jobs");
     await pool.query("DROP FUNCTION IF EXISTS operation_jobs_atomicity_test_reject()");
     if (hostId) {
       await pool.query("DELETE FROM operation_jobs WHERE host_id = $1", [hostId]);
+      if (repositoryIds.size) {
+        await pool.query(
+          "DELETE FROM github_repositories WHERE id = ANY($1::uuid[])",
+          [[...repositoryIds]]
+        );
+      }
       await pool.query("DELETE FROM docker_hosts WHERE id = $1", [hostId]);
     }
   });
@@ -93,6 +133,37 @@ describe.skipIf(!integrationEnabled)("operation domain/job atomicity", () => {
     expect(stacks.rowCount).toBe(0);
   });
 
+  it("rolls back catalog stack, version, and job writes when its audit callback fails", async () => {
+    const projectName = `atomic-audit-catalog-${uuid().slice(0, 8)}`;
+    const beforeJobs = await pool.query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM operation_jobs WHERE host_id = $1 AND type = 'compose.deploy'",
+      [hostId]
+    );
+    const auditFailure = new Error("intentional audit insert failure");
+
+    await expect(deployCatalogTemplate({
+      templateId: "nginx",
+      hostId,
+      projectName,
+      env: {}
+    }, null, async () => {
+      throw auditFailure;
+    })).rejects.toBe(auditFailure);
+
+    const [stacks, afterJobs] = await Promise.all([
+      pool.query(
+        "SELECT id FROM compose_stacks WHERE host_id = $1 AND project_name = $2",
+        [hostId, projectName]
+      ),
+      pool.query<{ count: string }>(
+        "SELECT count(*)::text AS count FROM operation_jobs WHERE host_id = $1 AND type = 'compose.deploy'",
+        [hostId]
+      )
+    ]);
+    expect(stacks.rowCount).toBe(0);
+    expect(afterJobs.rows[0]?.count).toBe(beforeJobs.rows[0]?.count);
+  });
+
   it("rolls back GitHub host-clone metadata when enqueue fails", async () => {
     const unique = uuid().slice(0, 8);
     const projectName = `${prefix}clone-${unique}`;
@@ -105,6 +176,8 @@ describe.skipIf(!integrationEnabled)("operation domain/job atomicity", () => {
       env: "",
       defaultHostId: hostId
     });
+    repositoryIds.add(repository.id);
+    stubGithubHostCloneSource();
 
     await expect(deployGithubRepository(repository.id, {
       mode: "host_clone",
@@ -121,6 +194,55 @@ describe.skipIf(!integrationEnabled)("operation domain/job atomicity", () => {
     expect(saved.rows[0]).toMatchObject({ host_clone_url: null, host_clone_directory: null });
   });
 
+  it("rolls back a GitHub host-clone job and metadata without stamping last_error when its audit fails", async () => {
+    const unique = uuid().slice(0, 8);
+    const projectName = `atomic-audit-clone-${unique}`;
+    const repository = await createGithubRepository({
+      name: "Atomic audited clone",
+      repositoryUrl: `https://github.com/composebastion-tests/atomic-audit-clone-${unique}`,
+      branch: "main",
+      composePath: "docker-compose.yml",
+      projectName,
+      env: "",
+      defaultHostId: hostId
+    });
+    repositoryIds.add(repository.id);
+    stubGithubHostCloneSource();
+    const auditFailure = new Error("intentional audit insert failure");
+
+    await expect(deployGithubRepository(repository.id, {
+      mode: "host_clone",
+      hostId,
+      projectName,
+      hostCloneUrl: `git@github.com:composebastion-tests/atomic-audit-clone-${unique}.git`,
+      hostCloneDirectory: `/srv/${projectName}`
+    }, null, async () => {
+      throw auditFailure;
+    })).rejects.toBe(auditFailure);
+
+    const [saved, jobs] = await Promise.all([
+      pool.query(
+        `SELECT host_clone_url, host_clone_directory, last_error
+         FROM github_repositories
+         WHERE id = $1`,
+        [repository.id]
+      ),
+      pool.query(
+        `SELECT id
+         FROM operation_jobs
+         WHERE type = 'git.cloneDeploy'
+           AND payload->>'repositoryId' = $1`,
+        [repository.id]
+      )
+    ]);
+    expect(saved.rows[0]).toMatchObject({
+      host_clone_url: null,
+      host_clone_directory: null,
+      last_error: null
+    });
+    expect(jobs.rowCount).toBe(0);
+  });
+
   it("rolls back GitHub API stack/version writes when deploy enqueue fails", async () => {
     const unique = uuid().slice(0, 8);
     const projectName = `${prefix}github-${unique}`;
@@ -133,10 +255,8 @@ describe.skipIf(!integrationEnabled)("operation domain/job atomicity", () => {
       env: "",
       defaultHostId: hostId
     });
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ message: "not found" }), {
-      status: 404,
-      headers: { "content-type": "application/json" }
-    })));
+    repositoryIds.add(repository.id);
+    stubGithubHostCloneSource();
 
     await expect(deployGithubRepository(repository.id, {
       mode: "api",
@@ -149,7 +269,6 @@ describe.skipIf(!integrationEnabled)("operation domain/job atomicity", () => {
     const saved = await pool.query("SELECT last_deployed_at FROM github_repositories WHERE id = $1", [repository.id]);
     expect(stacks.rowCount).toBe(0);
     expect(saved.rows[0]?.last_deployed_at).toBeNull();
-    vi.unstubAllGlobals();
   });
 
   it("rolls back stack content and both rollback snapshots when deploy enqueue fails", async () => {
@@ -183,7 +302,7 @@ describe.skipIf(!integrationEnabled)("operation domain/job atomicity", () => {
     expect(after.rows[0]?.count).toBe(before.rows[0]?.count);
   });
 
-  it("does not leave a partial first job when the second app-update insert fails", async () => {
+  it("rolls back the composite app-update when its job insert fails", async () => {
     const projectName = `${prefix}batch-${uuid().slice(0, 8)}`;
     const stackId = uuid();
     await pool.query(
@@ -206,6 +325,43 @@ describe.skipIf(!integrationEnabled)("operation domain/job atomicity", () => {
     const jobs = await pool.query(
       "SELECT type FROM operation_jobs WHERE host_id = $1 AND type IN ('git.pull', 'compose.deployPath')",
       [hostId]
+    );
+    expect(jobs.rowCount).toBe(0);
+  });
+
+  it("rolls back every app-update job when its transactional audit callback fails", async () => {
+    const projectName = `atomic-audit-batch-${uuid().slice(0, 8)}`;
+    const stackId = uuid();
+    await pool.query(
+      `INSERT INTO compose_stacks (
+         id, host_id, name, project_name, compose_yaml, env, status, source_type,
+         source_repository_url, source_branch, source_working_dir, source_compose_path
+       )
+       VALUES ($1, $2, 'Atomic audited batch', $3, $4, '', 'deployed', 'git', $5, 'main', $6, 'docker-compose.yml')`,
+      [
+        stackId,
+        hostId,
+        projectName,
+        "services:\n  app:\n    image: nginx:alpine\n",
+        `https://github.com/composebastion-tests/${projectName}`,
+        `/srv/${projectName}`
+      ]
+    );
+    const auditFailure = new Error("intentional audit insert failure");
+
+    await expect(updateApp(`stack:${stackId}`, null, async () => {
+      throw auditFailure;
+    })).rejects.toBe(auditFailure);
+
+    const jobs = await pool.query(
+      `SELECT type
+       FROM operation_jobs
+       WHERE host_id = $1
+         AND (
+           payload->>'directory' = $2
+           OR payload->>'workingDir' = $2
+         )`,
+      [hostId, `/srv/${projectName}`]
     );
     expect(jobs.rowCount).toBe(0);
   });

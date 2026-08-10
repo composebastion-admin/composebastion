@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import type { BackupTarget, DockerApp, DockerHost, RecoverySchedule } from "@composebastion/shared";
 import { deleteJson, postJson } from "../../../api.js";
@@ -36,6 +36,21 @@ export function RecoverySchedulesPanel({
     enabled: true
   });
 
+  useEffect(() => {
+    setForm((current) => {
+      const hostId = hosts.some((host) => host.id === current.hostId)
+        ? current.hostId
+        : hosts[0]?.id ?? "";
+      const availableApps = apps.filter((app) => app.hostId === hostId);
+      const appId = availableApps.some((app) => app.id === current.appId)
+        ? current.appId
+        : availableApps[0]?.id ?? "";
+      return hostId === current.hostId && appId === current.appId
+        ? current
+        : { ...current, hostId, appId };
+    });
+  }, [apps, hosts]);
+
   const hostApps = useMemo(
     () => apps.filter((app) => app.hostId === form.hostId),
     [apps, form.hostId]
@@ -46,8 +61,8 @@ export function RecoverySchedulesPanel({
     <Panel title="Recovery Schedules" count={schedules.length}>
       <InlineForm
         onSubmit={async () => {
-          if (!selectedApp || !form.name.trim()) throw new Error("Schedule name and app are required");
           await action.run(async () => {
+            if (!selectedApp || !form.name.trim()) throw new Error("Schedule name and app are required");
             await postJson("/api/recovery/schedules", {
               hostId: selectedApp.hostId,
               name: form.name.trim(),
@@ -122,7 +137,7 @@ export function RecoverySchedulesPanel({
         </button>
       </InlineForm>
 
-      {action.error && <div className="notice error">{action.error}</div>}
+      {action.error && <div className="notice error" role="alert">{action.error}</div>}
 
       <DataTable
         rows={schedules}
@@ -151,9 +166,11 @@ export function RecoverySchedulesPanel({
                 message: `Delete recovery schedule ${schedule.name}?`
               });
               if (!ok) return;
-              await deleteJson(`/api/recovery/schedules/${schedule.id}`);
-              await refresh();
-            })()}
+              await action.run(async () => {
+                await deleteJson(`/api/recovery/schedules/${schedule.id}`);
+                await refresh();
+              });
+            })().catch(() => undefined)}
           >
             <Trash2 size={16} />
           </button>

@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/composebastion-admin/composebastion/releases"><img alt="Release" src="https://img.shields.io/badge/release-v1.1.2-e0a23f"></a>
+  <a href="https://github.com/composebastion-admin/composebastion/releases"><img alt="Release" src="https://img.shields.io/badge/release-v1.1.6-e0a23f"></a>
   <a href="https://github.com/composebastion-admin/composebastion/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/composebastion-admin/composebastion/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/composebastion-admin/composebastion/pkgs/container/composebastion-app"><img alt="Container image" src="https://img.shields.io/badge/ghcr.io-composebastion--app-2496ed"></a>
   <a href="https://discord.gg/g25tEafYDX"><img alt="Discord" src="https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?logo=discord&amp;logoColor=white"></a>
@@ -31,11 +31,11 @@ devices, Proxmox Docker VMs/LXCs, Portainer stacks, and any native Docker host o
 
 ## Published Release
 
-Latest published stable release: `v1.1.2`.
+Latest published stable release: `v1.1.6`.
 
-- Package and OpenAPI version: `1.2.0-beta.1`.
-- Current beta candidate: `v1.2.0-beta.1`.
-- GitHub stable release images: `1.1.2` and `v1.1.2`.
+- Package and OpenAPI version: `1.2.0-beta.2`.
+- Current beta candidate: `v1.2.0-beta.2`.
+- GitHub stable release images: `1.1.6` and `v1.1.6`.
 - GitHub beta images: `beta` for both app and agent.
 - Published platforms: `linux/amd64` and `linux/arm64` for both app and agent.
 - Release gates include CI/OpenAPI, per-workspace coverage, separate
@@ -112,6 +112,9 @@ the [installation guide](docs/installation.md).
 Use the published image install for NAS devices, Proxmox Docker VMs/LXCs,
 Portainer stacks, and home servers. Use the source build only when you are
 developing ComposeBastion or intentionally customizing the checkout.
+Normal users should update through a published `latest`, `beta`, version, or
+immutable `sha-*` image; they should not check out `dev` and compile the
+release toolchain on the server.
 
 Published images:
 
@@ -123,15 +126,15 @@ Image tags:
 | Tag | Use |
 |-----|-----|
 | `latest` | Latest verified stable release for simple homelab/NAS updates. |
-| `1.1.2` or `v1.1.2` | Exact V1 release pin for controlled production upgrades. |
+| `1.1.6` or `v1.1.6` | Exact V1 compatibility-bridge pin for controlled production upgrades. |
 | `main` | Latest fully scanned build from the protected main branch. |
 | `beta` | Latest fully scanned beta candidate for app and agent testing. |
 | `sha-*` | Immutable full-commit verification or rollback testing. |
 
 Main and beta builds publish their branch alias and full-commit `sha-*` indexes
 from the already scanned platform archives. Stable release tags rescan the
-protected main indexes and then promote them to version tags such as `1.1.2`
-and `v1.1.2`, the minor tag, and `latest`; they do not rebuild. See the
+protected main indexes and then promote them to version tags such as `1.1.6`
+and `v1.1.6`, the minor tag, and `latest`; they do not rebuild. See the
 [beta testing notes](docs/beta-release.md) before using the beta channel.
 
 ### Option B: Build From Source
@@ -150,19 +153,37 @@ docker compose up -d --build
 
 ## Update Commands
 
-Image installs can update from Admin -> Operations -> ComposeBastion
-self-update. Choose the SSH host that runs the ComposeBastion stack, save the
-Compose directory and Compose file, then start the handoff. ComposeBastion
-writes a short host-side update script, pulls the selected app and worker
-images, restarts them, and shows the latest handoff job so you can confirm the
-update completed.
+Disposable evaluation and homelab image installs can update from Admin ->
+Operations -> ComposeBastion self-update. Choose the SSH host that runs the
+ComposeBastion stack, save the Compose directory and Compose file, then start
+the handoff. ComposeBastion writes a short host-side update script, pulls the
+selected app and worker images, restarts them, and shows the latest handoff job
+so you can confirm the update completed.
+
+The release-qualified in-app path is `1.0.6/1.1.2/1.1.3/1.1.4/1.1.5 -> 1.1.6 -> 1.2`. Update to
+the compatibility-only 1.1.6 bridge first; direct pre-1.2-to-1.2 updates are not
+qualified. The bridge can retain the pre-1.2 `docker-compose.image.yml`, pull
+and prepare the 1.2 candidate, and start only app/worker with dependency
+recreation disabled. Manual image updates must download the matching
+target-release Compose file so its initializer services and durable transition
+receipt volume are available, and must use the target release's
+`scripts/upgrade-image.sh` so those files are promoted only after verification.
+
+In-app self-update currently accepts `latest` or a SemVer tag; it does not
+consume a durable signed app/agent release-pair manifest. Production updates
+must instead resolve one reviewed release revision, pin every participating
+app and agent image to that revision's `sha-<40-character-sha>` index, and use
+the manual procedure in the [upgrade guide](docs/upgrade-guide.md).
 
 Manual image update fallback:
 
 ```bash
 cd ~/composebastion
-docker compose -f docker-compose.image.yml pull
-docker compose -f docker-compose.image.yml up -d
+export REVIEWED_REVISION="REPLACE_WITH_REVIEWED_40_CHARACTER_COMMIT"
+chmod 755 upgrade-image.target.sh
+./upgrade-image.target.sh \
+  --version "sha-${REVIEWED_REVISION}" \
+  --compose docker-compose.image.yml docker-compose.image.target.yml
 ```
 
 Source install:
@@ -170,7 +191,8 @@ Source install:
 ```bash
 cd ~/composebastion
 git pull --ff-only
-docker compose up -d --build app worker
+npm ci
+npm run upgrade:source
 ```
 
 ## Why Operators Use It
@@ -240,8 +262,9 @@ project discussion, questions, and updates.
   default; use `false` only for a trusted, direct-HTTP evaluation.
 - Set `CORS_ORIGINS` when the UI and API are served from different origins.
 - Restrict agent port `8090` to the manager network.
-- Consider the opt-in read-only/non-root container overlays after preparing
-  backup and scanner-cache ownership.
+- The manager runs as UID/GID `1000:1000`; pre-create bind-mounted backup
+  storage with that ownership. Consider the optional read-only/capability
+  hardening overlay after preparing backup and scanner-cache ownership.
 - Configure `BACKUP_HOST_PATH_ALLOWED_ROOTS` for production host-path recovery.
 - Test at least one recovery point, verify, and clone restore drill before
   relying on a backup target.
@@ -287,8 +310,12 @@ licensing and written permission requests go to `support@composebastion.com`.
 
 ## Development
 
+Source development and release checks require Node.js 24 and npm 11.19 or
+newer within npm 11. Dependency install scripts are denied by default; the
+reviewed, version-pinned exceptions are recorded in `package.json`.
+
 ```bash
-npm install
+npm ci
 npm run typecheck
 npm test
 npm run smoke:web

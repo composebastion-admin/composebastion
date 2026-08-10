@@ -25,9 +25,9 @@ function lookupFamily(options: dns.LookupOptions) {
   return undefined;
 }
 
-function privateAgentAddressError(address: string) {
+function privateAgentAddressError(address: string, resourceLabel = "Agent URL") {
   return Object.assign(
-    new Error(`Agent URL resolved to a private network address (${address}), which is blocked by default to prevent request forgery.`),
+    new Error(`${resourceLabel} resolved to a private network address (${address}), which is blocked by default to prevent request forgery.`),
     { code: "PRIVATE_AGENT_ADDRESS" }
   );
 }
@@ -122,27 +122,36 @@ export async function resolveAgentHostname(hostname: string, resolve: LookupAll 
   return resolve(host, { all: true, verbatim: true });
 }
 
-export function selectAgentAddress(addresses: ResolvedAddress[], allowPrivateAgentUrls: boolean, family?: number) {
+export function selectAgentAddress(
+  addresses: ResolvedAddress[],
+  allowPrivateAgentUrls: boolean,
+  family?: number,
+  resourceLabel = "Agent URL"
+) {
   if (!allowPrivateAgentUrls) {
     for (const entry of addresses) {
-      if (isPrivateIp(entry.address)) throw privateAgentAddressError(entry.address);
+      if (isPrivateIp(entry.address)) throw privateAgentAddressError(entry.address, resourceLabel);
     }
   }
   const candidates = family === 4 || family === 6
     ? addresses.filter((entry) => addressFamily(entry.address, entry.family) === family)
     : addresses;
   if (candidates.length === 0) {
-    throw Object.assign(new Error("Agent hostname did not resolve to a usable address"), { code: "ENOTFOUND" });
+    throw Object.assign(new Error(`${resourceLabel} hostname did not resolve to a usable address`), { code: "ENOTFOUND" });
   }
   const selected = candidates[0]!;
   return { address: selected.address, family: addressFamily(selected.address, selected.family) };
 }
 
-export function createAgentLookup(allowPrivateAgentUrls: boolean, resolve: LookupAll = lookup): AgentLookup {
+export function createAgentLookup(
+  allowPrivateAgentUrls: boolean,
+  resolve: LookupAll = lookup,
+  resourceLabel = "Agent URL"
+): AgentLookup {
   return (hostname, options, callback) => {
     const returnAll = options.all === true;
     resolveAgentHostname(hostname, resolve)
-      .then((addresses) => selectAgentAddress(addresses, allowPrivateAgentUrls, lookupFamily(options)))
+      .then((addresses) => selectAgentAddress(addresses, allowPrivateAgentUrls, lookupFamily(options), resourceLabel))
       .then((selected) => {
         if (returnAll) {
           (callback as (error: NodeJS.ErrnoException | null, addresses: LookupAddress[]) => void)(null, [selected]);

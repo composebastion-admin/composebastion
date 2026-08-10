@@ -72,6 +72,8 @@ export function CatalogPanel({
   const [customForm, setCustomForm] = useState(emptyCustomForm);
   const [customError, setCustomError] = useState<string | null>(null);
   const [savingCustom, setSavingCustom] = useState(false);
+  const [templatesLoading, setTemplatesLoading] = useState(false);
+  const [templatesError, setTemplatesError] = useState<string | null>(null);
   const [externalCatalog, setExternalCatalog] = useState<ExternalCatalogResponse | null>(null);
   const [externalQuery, setExternalQuery] = useState("");
   const [externalLimit, setExternalLimit] = useState(100);
@@ -84,11 +86,22 @@ export function CatalogPanel({
   );
 
   async function loadTemplates() {
-    const result = await api<{ templates: CatalogTemplateView[] }>("/api/catalog/templates");
-    const list = result.templates ?? [];
-    setTemplates(list);
-    if (!selectedId && list[0]) {
-      pickTemplate(list[0]);
+    setTemplatesLoading(true);
+    setTemplatesError(null);
+    try {
+      const result = await api<{ templates: CatalogTemplateView[] }>("/api/catalog/templates");
+      const list = result.templates ?? [];
+      setTemplates(list);
+      if (list.length === 0) {
+        setSelectedId("");
+      } else if (!list.some((template) => template.id === selectedId)) {
+        pickTemplate(list[0]!);
+      }
+    } catch (caught) {
+      setTemplatesError(caught instanceof Error ? caught.message : String(caught));
+      throw caught;
+    } finally {
+      setTemplatesLoading(false);
     }
   }
 
@@ -134,9 +147,15 @@ export function CatalogPanel({
       confirmLabel: "Delete",
       message: `Delete custom template "${template.name}"? Existing deployed stacks are not changed.`
     })) return;
-    await deleteJson(`/api/catalog/templates/${encodeURIComponent(template.id)}`);
-    if (selectedId === template.id) setSelectedId("");
-    await loadTemplates();
+    setTemplatesError(null);
+    try {
+      await deleteJson(`/api/catalog/templates/${encodeURIComponent(template.id)}`);
+      if (selectedId === template.id) setSelectedId("");
+      await loadTemplates();
+    } catch (caught) {
+      setTemplatesError(caught instanceof Error ? caught.message : String(caught));
+      throw caught;
+    }
   }
 
   async function loadExternalCatalog() {
@@ -175,7 +194,7 @@ export function CatalogPanel({
   }
 
   useEffect(() => {
-    void loadTemplates();
+    void loadTemplates().catch(() => undefined);
   }, []);
 
   async function deploy(event: React.FormEvent) {
@@ -197,7 +216,10 @@ export function CatalogPanel({
     <Panel title="Catalog" count={templates.length}>
       <div className="formHint">Built-in and custom templates for self-hosted services. Review env values and compose YAML before deploying to your selected host.</div>
       <ButtonRow>
-        <button type="button" onClick={() => void loadTemplates()}><RefreshCw size={16} />Refresh catalog</button>
+        <button type="button" disabled={templatesLoading} onClick={() => void loadTemplates().catch(() => undefined)}>
+          <RefreshCw size={16} className={templatesLoading ? "spin" : undefined} />
+          Refresh catalog
+        </button>
         <button type="button" onClick={() => void loadExternalCatalog()} disabled={loadingExternal}>
           <Search size={16} className={loadingExternal ? "spin" : undefined} />
           Discover top apps
@@ -207,6 +229,7 @@ export function CatalogPanel({
           {showCustomForm ? "Close" : "Add template"}
         </button>
       </ButtonRow>
+      {templatesError && <div className="notice error" role="alert">{templatesError}</div>}
       <section className="subPanel externalCatalogPanel" aria-label="External catalog discovery">
         <div className="externalCatalogToolbar">
           <div>
@@ -312,7 +335,10 @@ export function CatalogPanel({
         </form>
       )}
       {templates.length === 0 ? (
-        <EmptyState headline="Catalog loading" hint="Refresh to load built-in templates." />
+        <EmptyState
+          headline={templatesLoading ? "Catalog loading" : templatesError ? "Catalog unavailable" : "No catalog templates"}
+          hint={templatesError ? "Refresh the catalog after the service is available." : "Refresh to load built-in templates."}
+        />
       ) : (
         <DataTable
           rows={templates}
@@ -326,7 +352,7 @@ export function CatalogPanel({
             <ButtonRow key="actions">
               <button type="button" onClick={() => pickTemplate(template)}>Configure</button>
               {template.source === "custom" && (
-                <button type="button" className="danger" title="Delete custom template" onClick={() => void removeCustomTemplate(template)}>
+                <button type="button" className="danger" title="Delete custom template" onClick={() => void removeCustomTemplate(template).catch(() => undefined)}>
                   <Trash2 size={16} />
                 </button>
               )}
@@ -335,7 +361,7 @@ export function CatalogPanel({
         />
       )}
       {selected && (
-        <form className="subPanel composeForm" onSubmit={deploy}>
+        <form className="subPanel composeForm" onSubmit={(event) => void deploy(event).catch(() => undefined)}>
           <h3>Deploy {selected.name}</h3>
           <p>{selected.description}</p>
           <HostSelect hosts={hosts} value={hostId} onChange={setHostId} />

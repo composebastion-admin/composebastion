@@ -47,7 +47,9 @@ export function AuthPanel({
       <section className="authPanel">
         <BrandLockup titleAs="h1" />
         <p className="authIntro">{needsSetup ? "Create the first administrator account." : "Sign in to manage your Docker hosts."}</p>
-        <form onSubmit={submit} className="stack">
+        <form onSubmit={(event) => {
+          void submit(event).catch(() => undefined);
+        }} className="stack">
           {needsSetup ? (
             <>
               <label>

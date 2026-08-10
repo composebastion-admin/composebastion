@@ -14,6 +14,10 @@ export function hostFormPayload(form: {
   sshPassword?: string;
   agentUrl?: string;
   agentToken?: string;
+  clearSshPrivateKey?: boolean;
+  clearSshKeyPassphrase?: boolean;
+  clearSshPassword?: boolean;
+  clearAgentToken?: boolean;
   dockerSocketPath: string;
   tags?: string;
 }) {
@@ -29,6 +33,10 @@ export function hostFormPayload(form: {
     sshPassword: form.connectionMode === "ssh" && form.sshAuthType === "password" ? emptyToUndefined(form.sshPassword ?? "") : undefined,
     agentUrl: form.connectionMode === "agent" ? emptyToUndefined(form.agentUrl ?? "") : undefined,
     agentToken: form.connectionMode === "agent" ? emptyToUndefined(form.agentToken ?? "") : undefined,
+    clearSshPrivateKey: form.clearSshPrivateKey || undefined,
+    clearSshKeyPassphrase: form.clearSshKeyPassphrase || undefined,
+    clearSshPassword: form.clearSshPassword || undefined,
+    clearAgentToken: form.clearAgentToken || undefined,
     dockerSocketPath: form.dockerSocketPath,
     tags: form.tags ? form.tags.split(",").map((tag) => tag.trim()).filter(Boolean) : []
   };

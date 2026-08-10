@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const query = vi.hoisted(() => vi.fn());
+const transactionQuery = vi.hoisted(() => vi.fn());
+const withTransaction = vi.hoisted(() => vi.fn());
 const postJsonWebhook = vi.hoisted(() => vi.fn());
 const validateWebhookUrl = vi.hoisted(() => vi.fn(async () => true));
 
-vi.mock("../src/db/pool.js", () => ({ query }));
+vi.mock("../src/db/pool.js", () => ({ query, withTransaction }));
 vi.mock("../src/services/webhooks.js", () => ({
   postJsonWebhook,
   shouldAllowPrivateWebhookUrls: (nodeEnv: string, allowPrivateWebhookUrls: boolean) => nodeEnv !== "production" || allowPrivateWebhookUrls,
@@ -27,10 +29,33 @@ const eventRow = {
 describe("alert channel test history", () => {
   beforeEach(() => {
     query.mockReset();
+    transactionQuery.mockReset();
+    withTransaction.mockReset();
+    withTransaction.mockImplementation(async (
+      callback: (client: { query: typeof transactionQuery }) => Promise<unknown>
+    ) => callback({ query: transactionQuery }));
     postJsonWebhook.mockReset();
     validateWebhookUrl.mockReset();
     validateWebhookUrl.mockResolvedValue(true);
     vi.unstubAllGlobals();
+  });
+
+  it("does not return credentials embedded in a webhook target", async () => {
+    const { mapChannel } = await import("../src/services/alerts.js");
+    const mapped = mapChannel({
+      id: channelId,
+      name: "Secret hook",
+      type: "webhook",
+      email_to: null,
+      webhook_url: "https://user:password@hooks.example.test/notify?token=very-secret#fragment",
+      enabled: true,
+      created_at: new Date(0),
+      updated_at: new Date(0)
+    });
+
+    expect(mapped.webhookUrl).toBe("https://hooks.example.test/notify");
+    expect(JSON.stringify(mapped)).not.toContain("password");
+    expect(JSON.stringify(mapped)).not.toContain("very-secret");
   });
 
   it("rejects blocked webhook targets before inserting the channel", async () => {
@@ -43,6 +68,42 @@ describe("alert channel test history", () => {
       enabled: true
     })).rejects.toThrow("private network address");
     expect(query).not.toHaveBeenCalled();
+    expect(withTransaction).not.toHaveBeenCalled();
+  });
+
+  it("runs channel persistence and its audit callback on one transaction client", async () => {
+    const auditFailure = new Error("audit insert failed");
+    transactionQuery.mockResolvedValueOnce({
+      rows: [{
+        id: channelId,
+        name: "Operations email",
+        type: "email",
+        email_to: "ops@example.test",
+        webhook_url: null,
+        enabled: true,
+        created_at: new Date(0),
+        updated_at: new Date(0)
+      }]
+    });
+    const onChanged = vi.fn(async (client: { query: typeof transactionQuery }) => {
+      expect(client.query).toBe(transactionQuery);
+      throw auditFailure;
+    });
+
+    await expect(createChannel({
+      name: "Operations email",
+      type: "email",
+      emailTo: "ops@example.test",
+      enabled: true
+    }, onChanged)).rejects.toBe(auditFailure);
+
+    expect(transactionQuery.mock.calls[0]?.[0]).toContain(
+      "INSERT INTO notification_channels"
+    );
+    expect(onChanged).toHaveBeenCalledWith(
+      expect.objectContaining({ query: transactionQuery }),
+      expect.objectContaining({ id: channelId })
+    );
   });
 
   it("records a successful channel test", async () => {

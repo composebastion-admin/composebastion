@@ -152,6 +152,9 @@ export function ImagesPanel({
       pushToast("Failed to copy", "error");
     }
   };
+  const reportError = useCallback((caught: unknown) => {
+    pushToast(caught instanceof Error ? caught.message : String(caught), "error");
+  }, [pushToast]);
 
   const runHost = hosts.find((item) => item.id === runPreset?.hostId) ?? host;
 
@@ -184,9 +187,9 @@ export function ImagesPanel({
   }, [loadScans, loadUpdates, refresh]);
 
   useEffect(() => {
-    void loadScans();
-    void loadUpdates();
-  }, [loadScans, loadUpdates]);
+    void loadScans().catch(reportError);
+    void loadUpdates().catch(reportError);
+  }, [loadScans, loadUpdates, reportError]);
 
   const runImage = (imageName: string, hostId = host.id) => {
     setRunPreset({ image: imageName, hostId, nonce: Date.now() });
@@ -308,7 +311,7 @@ export function ImagesPanel({
               setShowRunTools(false);
               setShowCleanupTools(false);
             }}><Star size={16} />Saved images</button>
-            <button type="button" className="imagesPanelToolbarButton" onClick={() => void loadCleanupPreview()}>
+            <button type="button" className="imagesPanelToolbarButton" onClick={() => void loadCleanupPreview().catch(reportError)}>
               <Search size={16} />Clean unused
             </button>
             <button
@@ -316,10 +319,10 @@ export function ImagesPanel({
               className="imagesPanelToolbarButton"
               onClick={() => void (async () => {
                 if (await confirm({ title: "Prune dangling layers", tone: "danger", confirmLabel: "Prune", message: "Remove dangling image layers on this host? Tagged images are not removed." })) {
-                  void onAction("image.prune", { all: false }, host.id);
+                  await onAction("image.prune", { all: false }, host.id);
                   await refreshImageInventory();
                 }
-            })()}
+            })().catch(reportError)}
           ><Trash2 size={16} />Prune dangling</button>
           </>}
         </ButtonRow>
@@ -384,13 +387,13 @@ export function ImagesPanel({
                   className={`imageActionButton ${update?.status === "update_available" ? "imagesActionButtonPrimary" : ""}`}
                   title={dangling ? "Dangling images cannot be pulled by tag" : "Pull latest"}
                   disabled={dangling}
-                  onClick={() => void pullImage(imageName, rowHostId)}
+                  onClick={() => void pullImage(imageName, rowHostId).catch(reportError)}
                 >
                   <Download size={14} />
                 </button>
                 <button className="imageActionButton" title={dangling ? "Dangling images cannot be saved as favorites" : "Add to favorites"} disabled={dangling} onClick={() => void postJson("/api/favorite-images", { image: imageName }).then(() => {
-                  void refreshImageInventory();
-                })}>
+                  return refreshImageInventory();
+                }).catch(reportError)}>
                   <Star size={14} className={isFavoriteImage.has(imageName) ? "imagesFavorite" : undefined} />
                 </button>
                 <button className="imageActionButton" title={dangling ? "Dangling images cannot be run by tag" : "Run image"} disabled={dangling} onClick={() => runImage(imageName, rowHostId)}>
@@ -399,7 +402,16 @@ export function ImagesPanel({
                 <button
                   className="imageActionButton danger"
                   title="Remove image"
-                  onClick={() => void onAction("image.remove", { imageId: imageRow.externalId, force: false }, rowHostId)}
+                  onClick={() => void (async () => {
+                    const confirmed = await confirm({
+                      title: "Remove image",
+                      tone: "danger",
+                      confirmLabel: "Remove image",
+                      message: `Remove ${imageName} from ${hosts.find((item) => item.id === rowHostId)?.name ?? host.name}? The operation will fail safely if a container still uses it.`
+                    });
+                    if (!confirmed) return;
+                    await onAction("image.remove", { imageId: imageRow.externalId, force: false }, rowHostId);
+                  })().catch(() => undefined)}
                 >
                   <Trash2 size={14} />
                 </button>
@@ -455,7 +467,7 @@ export function ImagesPanel({
           <div className="compactDrawerHeader">
             <h4>Clean unused images</h4>
             <ButtonRow>
-              <button type="button" onClick={() => void loadCleanupPreview()} disabled={cleanupLoading}>
+              <button type="button" onClick={() => void loadCleanupPreview().catch(reportError)} disabled={cleanupLoading}>
                 <RefreshCw size={14} className={cleanupLoading ? "spin" : undefined} />Refresh
               </button>
               <button type="button" onClick={() => setShowCleanupTools(false)}>Close</button>
@@ -497,7 +509,7 @@ export function ImagesPanel({
                 ]}
               />
               <ButtonRow className="recoveryActionRow">
-                <button type="button" className="danger" disabled={selectedCleanupCount === 0} onClick={() => void cleanSelectedImages()}>
+                <button type="button" className="danger" disabled={selectedCleanupCount === 0} onClick={() => void cleanSelectedImages().catch(reportError)}>
                   <Trash2 size={16} />Delete selected
                 </button>
               </ButtonRow>
@@ -517,8 +529,8 @@ export function ImagesPanel({
               event.preventDefault();
               void postJson("/api/favorite-images", favorite).then(() => {
                 setFavorite({ image: "", name: "", notes: "" });
-                void refreshImageInventory();
-              });
+                return refreshImageInventory();
+              }).catch(reportError);
             }}
           >
             <input placeholder="Image reference" value={favorite.image} onChange={(event) => setFavorite({ ...favorite, image: event.target.value })} required />
@@ -534,9 +546,9 @@ export function ImagesPanel({
                   <code>{item.image}</code>
                   {item.notes && <small>{item.notes}</small>}
                   <ButtonRow>
-                    <button title={`Pull image on ${host.name}`} onClick={() => void pullImage(item.image)}><Download size={14} />Pull</button>
+                    <button title={`Pull image on ${host.name}`} onClick={() => void pullImage(item.image).catch(reportError)}><Download size={14} />Pull</button>
                     <button title="Run image" onClick={() => runImage(item.image)}><Play size={14} />Run</button>
-                    <button title="Remove favorite" className="danger" onClick={() => void deleteJson(`/api/favorite-images/${item.id}`).then(refreshImageInventory)}><Trash2 size={14} />Remove</button>
+                    <button title="Remove favorite" className="danger" onClick={() => void deleteJson(`/api/favorite-images/${item.id}`).then(refreshImageInventory).catch(reportError)}><Trash2 size={14} />Remove</button>
                   </ButtonRow>
                 </div>
               ))}

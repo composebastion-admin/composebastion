@@ -1,6 +1,11 @@
 # Optional manager hardening overlay. Apply after docker-compose.image.yml, or
 # after docker-compose.yml and docker-compose.prod.example.yml for source builds.
 services:
+  storage-init:
+    environment:
+      COMPOSEBASTION_UID: ${COMPOSEBASTION_UID:-1000}
+      COMPOSEBASTION_GID: ${COMPOSEBASTION_GID:-1000}
+
   app:
     user: "${COMPOSEBASTION_UID:-1000}:${COMPOSEBASTION_GID:-1000}"
     read_only: true

@@ -1,12 +1,26 @@
 #!/usr/bin/env node
 
 import { createHash } from "node:crypto";
-import { createReadStream, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  createReadStream,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync
+} from "node:fs";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { isStrictSemVer } from "./release-semver.mjs";
 import { assertSafeTestResultsPath, digestGitBuildContext, materializeGitBuildContext } from "./materialize-git-context.mjs";
+import {
+  addLayerEntry,
+  normalizeLayerPath,
+  resolveLayerTarget
+} from "./oci-rootfs.mjs";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const safeResultPath = (name, label) => assertSafeTestResultsPath({
@@ -19,12 +33,55 @@ const trivyCacheDirectory = safeResultPath("release-image-trivy-cache", "Release
 const buildContextDirectory = safeResultPath("release-image-git-context", "Release-image Git context directory");
 const trivyImage = "aquasec/trivy:0.72.0@sha256:cffe3f5161a47a6823fbd23d985795b3ed72a4c806da4c4df16266c02accdd6f";
 const expectedTrivyVersion = "0.72.0";
+const expectedSourceUrl =
+  "https://github.com/composebastion-admin/composebastion";
+const expectedLicense =
+  "LicenseRef-ComposeBastion-SourceAvailable-PrivateUse-1.0";
+const sharedLegalArtifacts = Object.freeze([
+  "LICENSE.md",
+  "LICENSING_SUMMARY.md",
+  "COMMERCIAL-LICENSE.md",
+  "NOTICE.md",
+  "THIRD-PARTY-NOTICES.md",
+  "TRADEMARKS.md",
+  "LICENSES/go-modules/manifest.json"
+]);
+const componentLegalArtifacts = Object.freeze({
+  app: [
+    "third-party/trivy-LICENSE.txt",
+    "third-party/trivy-NOTICE.txt",
+    "third-party/oras-go-LICENSE.txt",
+    "third-party/rclone-LICENSE.txt",
+    "third-party/go-LICENSE.txt",
+    "third-party/go-PATENTS.txt",
+    "third-party/go-buildinfo/trivy.modules.tsv",
+    "third-party/go-buildinfo/trivy.artifacts.sha256",
+    "third-party/go-buildinfo/rclone.modules.tsv",
+    "third-party/go-buildinfo/rclone.artifacts.sha256"
+  ],
+  agent: [
+    "third-party/docker-cli-LICENSE.txt",
+    "third-party/docker-cli-NOTICE.txt",
+    "third-party/docker-compose-LICENSE.txt",
+    "third-party/docker-compose-NOTICE.txt",
+    "third-party/go-LICENSE.txt",
+    "third-party/go-PATENTS.txt",
+    "third-party/go-buildinfo/docker-cli.modules.tsv",
+    "third-party/go-buildinfo/docker-compose.modules.tsv",
+    "third-party/go-buildinfo/agent.artifacts.sha256"
+  ]
+});
 const builds = [
-  { component: "app", architecture: "amd64", platform: "linux/amd64", dockerfile: "Dockerfile" },
-  { component: "app", architecture: "arm64", platform: "linux/arm64", dockerfile: "Dockerfile" },
-  { component: "agent", architecture: "amd64", platform: "linux/amd64", dockerfile: "Dockerfile.agent" },
-  { component: "agent", architecture: "arm64", platform: "linux/arm64", dockerfile: "Dockerfile.agent" }
+  { component: "app", title: "ComposeBastion", architecture: "amd64", platform: "linux/amd64", dockerfile: "Dockerfile" },
+  { component: "app", title: "ComposeBastion", architecture: "arm64", platform: "linux/arm64", dockerfile: "Dockerfile" },
+  { component: "agent", title: "ComposeBastion Agent", architecture: "amd64", platform: "linux/amd64", dockerfile: "Dockerfile.agent" },
+  { component: "agent", title: "ComposeBastion Agent", architecture: "arm64", platform: "linux/arm64", dockerfile: "Dockerfile.agent" }
 ];
+
+process.chdir(repositoryRoot);
+// Clear prior ignored evidence before argument validation or any preflight can
+// fail so a stale passing report is never discoverable after an invocation.
+rmSync(reportDirectory, { recursive: true, force: true });
 
 if (process.argv.includes("--help")) {
   console.log(`Usage: npm run release:verify-images
@@ -38,8 +95,6 @@ Reports are written below test-results/release-images/.`);
 if (process.argv.length > 2) {
   throw new Error(`Unknown argument: ${process.argv.slice(2).join(" ")}`);
 }
-
-process.chdir(repositoryRoot);
 
 function commandText(command, args) {
   return [command, ...args].map((value) => (/^[A-Za-z0-9_./:@=,+-]+$/.test(value) ? value : JSON.stringify(value))).join(" ");
@@ -135,10 +190,118 @@ function requireSha256Digest(value, description) {
 function assertSafeArchivePaths(archive) {
   const listing = capture("tar", ["-tf", archive]);
   for (const entry of listing.split(/\r?\n/)) {
-    const normalized = entry.replaceAll("\\", "/");
-    const segments = normalized.split("/");
-    assert(!normalized.startsWith("/") && !segments.includes(".."), `${path.basename(archive)} contains unsafe archive path ${JSON.stringify(entry)}`);
+    const segments = entry.split("/");
+    assert(!entry.startsWith("/") && !segments.includes(".."), `${path.basename(archive)} contains unsafe archive path ${JSON.stringify(entry)}`);
   }
+}
+
+function layerEntries(layerBlob, cache) {
+  const cached = cache.get(layerBlob);
+  if (cached) return cached;
+  const entries = new Map();
+  for (const entry of capture("tar", ["-tf", layerBlob]).split(/\r?\n/)) {
+    if (!entry) continue;
+    addLayerEntry(entries, entry);
+  }
+  cache.set(layerBlob, entries);
+  return entries;
+}
+
+function rootfsFile(layout, layerDigests, target, cache) {
+  const normalizedTarget = normalizeLayerPath(target);
+  for (const digest of [...layerDigests].reverse()) {
+    const layerBlob = path.join(
+      layout,
+      "blobs",
+      "sha256",
+      digest.slice("sha256:".length)
+    );
+    const entries = layerEntries(layerBlob, cache);
+    const resolution = resolveLayerTarget(entries, normalizedTarget);
+    if (!resolution.entry) {
+      if (resolution.whiteout) {
+        throw new Error(`Image root filesystem hides /${normalizedTarget} with OCI whiteout ${resolution.whiteout}`);
+      }
+      continue;
+    }
+    const result = spawnSync("tar", ["-xOf", layerBlob, resolution.entry], {
+      cwd: repositoryRoot,
+      encoding: null,
+      maxBuffer: 128 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    if (result.error) throw result.error;
+    if (result.status !== 0) {
+      throw new Error(
+        `Could not read ${normalizedTarget} from image layer ${digest}: `
+          + String(result.stderr).trim()
+      );
+    }
+    return result.stdout;
+  }
+  throw new Error(`Image root filesystem is missing /${normalizedTarget}`);
+}
+
+function verifyLegalArtifacts(image, layout) {
+  const cache = new Map();
+  const verified = [];
+  for (const artifact of sharedLegalArtifacts) {
+    const contents = rootfsFile(
+      layout,
+      image.layerDigests,
+      `licenses/${artifact}`,
+      cache
+    );
+    const source = readFileSync(path.join(repositoryRoot, artifact));
+    assert(
+      contents.equals(source),
+      `${image.component} ${image.platform} /licenses/${artifact} differs from the exact candidate source`
+    );
+    verified.push({
+      path: `/licenses/${artifact}`,
+      sizeBytes: contents.length,
+      sha256: sha256Buffer(contents),
+      exactCandidateSource: true
+    });
+  }
+  const attributionManifest = rootfsFile(
+    layout,
+    image.layerDigests,
+    "licenses/third-party/go-modules/manifest.json",
+    cache
+  );
+  const attributionSource = readFileSync(
+    path.join(repositoryRoot, "LICENSES/go-modules/manifest.json")
+  );
+  assert(
+    attributionManifest.equals(attributionSource),
+    `${image.component} ${image.platform} runtime Go attribution manifest differs from the exact candidate source`
+  );
+  verified.push({
+    path: "/licenses/third-party/go-modules/manifest.json",
+    sizeBytes: attributionManifest.length,
+    sha256: sha256Buffer(attributionManifest),
+    exactCandidateSource: true
+  });
+  for (const artifact of componentLegalArtifacts[image.component]) {
+    const contents = rootfsFile(
+      layout,
+      image.layerDigests,
+      `licenses/${artifact}`,
+      cache
+    );
+    assert(
+      contents.length > 0,
+      `${image.component} ${image.platform} /licenses/${artifact} is empty`
+    );
+    verified.push({
+      path: `/licenses/${artifact}`,
+      sizeBytes: contents.length,
+      sha256: sha256Buffer(contents),
+      exactCandidateSource: false
+    });
+  }
+  return verified;
 }
 
 async function inspectArchive(build, archive, metadata) {
@@ -166,6 +329,11 @@ async function inspectArchive(build, archive, metadata) {
 
   const labels = config.config?.Labels ?? {};
   for (const [label, expected] of [
+    ["org.opencontainers.image.title", build.title],
+    ["org.opencontainers.image.url", expectedSourceUrl],
+    ["org.opencontainers.image.source", expectedSourceUrl],
+    ["org.opencontainers.image.vendor", "ComposeBastion Admin"],
+    ["org.opencontainers.image.licenses", expectedLicense],
     ["org.opencontainers.image.version", metadata.version],
     ["org.opencontainers.image.revision", metadata.revision],
     ["org.opencontainers.image.created", metadata.created]
@@ -184,6 +352,7 @@ async function inspectArchive(build, archive, metadata) {
 
   return {
     component: build.component,
+    title: build.title,
     architecture: build.architecture,
     platform: build.platform,
     archive: path.relative(repositoryRoot, archive),
@@ -191,6 +360,16 @@ async function inspectArchive(build, archive, metadata) {
     manifestDigest,
     configDigest,
     layerDigests,
+    labels: {
+      title: labels["org.opencontainers.image.title"],
+      url: labels["org.opencontainers.image.url"],
+      source: labels["org.opencontainers.image.source"],
+      vendor: labels["org.opencontainers.image.vendor"],
+      licenses: labels["org.opencontainers.image.licenses"],
+      version: labels["org.opencontainers.image.version"],
+      revision: labels["org.opencontainers.image.revision"],
+      created: labels["org.opencontainers.image.created"]
+    },
     version: metadata.version,
     revision: metadata.revision,
     created: metadata.created
@@ -218,11 +397,11 @@ function markdownReport(report) {
     `- Build context: \`${report.sourceContext.strategy}\` tree \`${report.sourceContext.treeSha}\` (\`${report.sourceContext.contextDigest}\`)`,
     `- Scanner: \`${report.scanner.version}\` via \`${report.scanner.image}\``,
     "",
-    "| Component | Platform | Archive SHA-256 | Manifest digest | Config digest | High | Critical | Scan |",
-    "| --- | --- | --- | --- | --- | ---: | ---: | --- |"
+    "| Component | Platform | Archive SHA-256 | Manifest digest | Config digest | Legal | High | Critical | Scan |",
+    "| --- | --- | --- | --- | --- | --- | ---: | ---: | --- |"
   ];
   for (const image of report.images) {
-    lines.push(`| ${image.component} | ${image.platform} | \`${image.archiveDigest ?? "not-built"}\` | \`${image.manifestDigest ?? "not-verified"}\` | \`${image.configDigest ?? "not-verified"}\` | ${image.vulnerabilities?.HIGH ?? "-"} | ${image.vulnerabilities?.CRITICAL ?? "-"} | ${image.scanStatus ?? "not-run"} |`);
+    lines.push(`| ${image.component} | ${image.platform} | \`${image.archiveDigest ?? "not-built"}\` | \`${image.manifestDigest ?? "not-verified"}\` | \`${image.configDigest ?? "not-verified"}\` | ${image.legalArtifactsStatus ?? "not-verified"} | ${image.vulnerabilities?.HIGH ?? "-"} | ${image.vulnerabilities?.CRITICAL ?? "-"} | ${image.scanStatus ?? "not-run"} |`);
   }
   if (report.failures.length > 0) {
     lines.push("", "## Failures", "", ...report.failures.map((failure) => `- ${failure}`));
@@ -259,8 +438,8 @@ for (const platform of new Set(builds.map((build) => build.platform))) {
 }
 console.log(builderInformation);
 
-rmSync(reportDirectory, { recursive: true, force: true });
 mkdirSync(reportDirectory, { recursive: true });
+rmSync(trivyCacheDirectory, { recursive: true, force: true });
 mkdirSync(trivyCacheDirectory, { recursive: true });
 const sourceContext = materializeGitBuildContext({
   repositoryRoot,
@@ -315,20 +494,36 @@ try {
     const scanFilename = `trivy-${image.component}-${image.architecture}.json`;
     const scanPath = path.join(reportDirectory, scanFilename);
     const scanInput = path.join(reportDirectory, `scan-input-${image.component}-${image.architecture}`);
+    const scanOutputDirectory = mkdtempSync(
+      path.join(reportDirectory, `.trivy-output-${image.component}-${image.architecture}-`)
+    );
+    const generatedScanPath = path.join(scanOutputDirectory, scanFilename);
+    rmSync(scanPath, { force: true });
     rmSync(scanInput, { recursive: true, force: true });
     mkdirSync(scanInput, { recursive: true });
-    // Trivy 0.72 accepts an OCI layout directory, not a tarred OCI archive.
-    // The archive and every referenced blob were verified immediately above;
-    // extract that exact archive into a fresh, read-only scan input directory.
-    assertSafeArchivePaths(path.join(repositoryRoot, image.archive));
-    run("tar", ["-xf", path.join(repositoryRoot, image.archive), "-C", scanInput]);
-    console.log(`\nScanning the exact verified OCI layout from ${image.archive}...`);
     let scan;
     try {
+      // Trivy 0.72 accepts an OCI layout directory, not a tarred OCI archive.
+      // The archive and every referenced blob were verified immediately above;
+      // extract that exact archive into a fresh, read-only scan input directory.
+      assertSafeArchivePaths(path.join(repositoryRoot, image.archive));
+      run("tar", ["-xf", path.join(repositoryRoot, image.archive), "-C", scanInput]);
+      try {
+        image.legalArtifacts = verifyLegalArtifacts(image, scanInput);
+        image.legalArtifactsStatus = "passed";
+      } catch (error) {
+        image.legalArtifacts = [];
+        image.legalArtifactsStatus = "failed";
+        report.failures.push(
+          `${image.component} ${image.platform}: legal artifact verification failed `
+            + `(${error instanceof Error ? error.message : String(error)})`
+        );
+      }
+      console.log(`\nScanning the exact verified OCI layout from ${image.archive}...`);
       scan = run("docker", [
         "run", "--rm",
         "--volume", `${repositoryRoot}:/workspace:ro`,
-        "--volume", `${reportDirectory}:/reports`,
+        "--volume", `${scanOutputDirectory}:/scan-output`,
         "--volume", `${trivyCacheDirectory}:/trivy-cache`,
         trivyImage,
         "image",
@@ -336,15 +531,19 @@ try {
         "--cache-dir", "/trivy-cache",
         "--ignorefile", "/workspace/.trivyignore.yaml",
         "--format", "json",
-        "--output", `/reports/${scanFilename}`,
+        "--output", `/scan-output/${scanFilename}`,
         "--exit-code", "1",
         "--ignore-unfixed=false",
         "--scanners", "vuln",
         "--pkg-types", "os,library",
         "--severity", "HIGH,CRITICAL"
       ], { allowFailure: true });
+      if (existsSync(generatedScanPath)) {
+        copyFileSync(generatedScanPath, scanPath);
+      }
     } finally {
       rmSync(scanInput, { recursive: true, force: true });
+      rmSync(scanOutputDirectory, { recursive: true, force: true });
     }
 
     if (!existsSync(scanPath)) {
@@ -375,6 +574,13 @@ try {
   const finalContext = digestGitBuildContext(buildContextDirectory);
   assert(finalContext.digest === sourceContext.contextDigest && finalContext.fileCount === sourceContext.fileCount,
     "Exact Git-derived Docker build context changed during release image verification");
+  for (const image of report.images) {
+    const finalArchiveDigest = await sha256File(path.join(repositoryRoot, image.archive));
+    assert(
+      finalArchiveDigest === image.archiveDigest,
+      `${image.component} ${image.platform} archive changed after verification or scanning`
+    );
+  }
   const finalDirty = capture("git", ["status", "--porcelain=v1", "--untracked-files=all"]);
   assert(finalDirty === "", `Checkout changed during release image verification:\n${finalDirty}`);
   if (report.failures.length > 0) throw new Error(report.failures.join("\n"));

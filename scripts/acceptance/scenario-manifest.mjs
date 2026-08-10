@@ -1,3 +1,74 @@
+import { acceptanceUpgradeBaselines } from "./upgrade-baselines.mjs";
+
+const upgradeRequiredEvidence = Object.freeze([
+  "from",
+  "to",
+  "publicImage.id",
+  "publicImage.repoDigest",
+  "publicImage.version",
+  "bridge.repoDigest",
+  "bridge.version",
+  "bridgeVersion",
+  "imageBindings.publicApp.id",
+  "imageBindings.publicWorker.id",
+  "imageBindings.bridgeApp.id",
+  "imageBindings.bridgeWorker.id",
+  "imageBindings.candidateApp.id",
+  "imageBindings.candidateWorker.id",
+  "oldUpdaterApiHop",
+  "oldUpdaterJobId",
+  "realApiHandoff",
+  "protectedEnvironmentFile",
+  "candidatePreparationTransitionRecorded",
+  "credentialPreparation.credentialTransition",
+  "credentialPreparation.environmentAction",
+  "credentialPreparation.rawEnvironmentCanonicalized",
+  "hardenedUpdaterJobs.failed.jobId",
+  "hardenedUpdaterJobs.failed.outcomeFile",
+  "hardenedUpdaterJobs.successful.jobId",
+  "hardenedUpdaterJobs.successful.outcomeFile",
+  "bridgeComposeDefinitionRetained",
+  "preservedConfiguration",
+  "preservedEncryptedConfiguration",
+  "preservedDatabase",
+  "preservedCompletedJob",
+  "preservedQueuedJob",
+  "workerMigrationHealthy",
+  "recoveryRestoreAttemptMigrationHealthy",
+  "deploymentAnalysisBindingMigrationHealthy",
+  "stackSourceEnvironmentBindingMigrationHealthy",
+  "githubCloneDeploymentBindingMigrationHealthy",
+  "legacyEnvironmentPlaceholderHandled",
+  "legacyBackupOwnershipMigrated",
+  "pre12ComposeInitializerServicesAbsent",
+  "candidateCompatibilityEntrypointUsed",
+  "recursiveOwnershipSymlinkSafe"
+]);
+
+const rollbackRequiredEvidence = Object.freeze([
+  "imageBindings.rollbackApp.id",
+  "imageBindings.rollbackWorker.id",
+  "imageBindings.reupgradeApp.id",
+  "imageBindings.reupgradeWorker.id",
+  "rollbackVersion",
+  "rollbackPreservedConfiguration",
+  "rollbackPreservedDatabase",
+  "reupgradeVersion",
+  "reupgradePreservedConfiguration",
+  "reupgradePreservedDatabase",
+  "volumesRetained",
+  "rollbackReupgradeHealthy",
+  "credentialRollbackVerified",
+  "credentialRestoration",
+  "rollbackDependenciesBypassed",
+  "immutableBridgeRollback",
+  "dependencyContainerIdsPreserved",
+  "forcedFailureStage",
+  "updaterOutcome",
+  "successfulReupgrade",
+  "canonicalEnvironmentPersisted"
+]);
+
 export const acceptanceScenarioManifest = Object.freeze([
   {
     id: "candidate-images",
@@ -21,6 +92,9 @@ export const acceptanceScenarioManifest = Object.freeze([
     name: "Fresh production-image installation and recovery",
     requiredEvidence: [
       "productionImageCompose",
+      "imageBindings.app.id",
+      "imageBindings.worker.id",
+      "imageBindings.agent.id",
       "firstRunSetup",
       "loginSession",
       "operationsReadiness",
@@ -28,6 +102,17 @@ export const acceptanceScenarioManifest = Object.freeze([
       "liveBrowser.database",
       "liveBrowser.redis",
       "liveBrowser.worker",
+      "liveBrowser.readOnlyQualificationSmoke",
+      "liveBrowser.projectCount",
+      "liveBrowser.matrix.chromiumDesktop.passed",
+      "liveBrowser.matrix.chromiumMobile.passed",
+      "liveBrowser.matrix.firefoxDesktop.passed",
+      "liveBrowser.matrix.firefoxMobile.passed",
+      "liveBrowser.matrix.webkitDesktop.passed",
+      "liveBrowser.matrix.webkitMobile.passed",
+      "liveBrowser.rawSecretBearingArtifactsExcluded",
+      "liveBrowser.evidenceFile",
+      "liveBrowser.evidenceSha256",
       "about.aboutBundle",
       "mail.testNotification",
       "mail.workerNotification",
@@ -40,6 +125,7 @@ export const acceptanceScenarioManifest = Object.freeze([
       "workerReliability.redisDatabasePollingCompleted",
       "workerReliability.redisDiagnosticRecovered",
       "leaseRecovery.recoveredAttempt",
+      "leaseRecovery.candidateImageRebound",
       "workload.namedVolumes",
       "workload.allowedBindMount",
       "workload.database",
@@ -54,7 +140,9 @@ export const acceptanceScenarioManifest = Object.freeze([
       "recovery.restoredDataVerified",
       "recovery.exactVolumeMarkerRestored",
       "recovery.restoredNetworkBehaviorVerified",
-      "recovery.cleanupVerified"
+      "recovery.cleanupVerified",
+      "storageCleanup.minioObjectsAbsent",
+      "storageCleanup.smbFilesAbsent"
     ]
   },
   {
@@ -64,8 +152,15 @@ export const acceptanceScenarioManifest = Object.freeze([
       "productionSourceCompose",
       "exactGitContext",
       "treeSha",
+      "sourceImages.app.id",
+      "sourceImages.app.revision",
+      "sourceImages.app.created",
+      "sourceImages.worker.id",
+      "sourceImages.worker.revision",
+      "sourceImages.worker.created",
       "runtimeVersion",
       "firstRunSetup",
+      "demoDataSeeded",
       "loginSession",
       "configurationWrite",
       "backupWrite"
@@ -76,6 +171,12 @@ export const acceptanceScenarioManifest = Object.freeze([
     name: "Hardened manager and agent overlays",
     requiredEvidence: [
       "productionImageCompose",
+      "imageBindings.app.id",
+      "imageBindings.worker.id",
+      "imageBindings.agent.id",
+      "imageBindings.recreatedApp.id",
+      "imageBindings.recreatedWorker.id",
+      "imageBindings.recreatedAgent.id",
       "managerIdentity",
       "managerRootfs",
       "managerCapabilitiesDropped",
@@ -97,20 +198,11 @@ export const acceptanceScenarioManifest = Object.freeze([
       "agentRegistryLoginPersistence"
     ]
   },
-  {
-    id: "public-upgrade",
-    name: "Upgrade from public 1.0.6 with state preservation",
-    requiredEvidence: [
-      "from",
-      "to",
-      "publicImage.id",
-      "publicImage.repoDigest",
-      "preservedConfiguration",
-      "preservedEncryptedConfiguration",
-      "preservedDatabase",
-      "preservedCompletedJob",
-      "preservedQueuedJob",
-      "workerMigrationHealthy"
-    ]
-  }
+  ...acceptanceUpgradeBaselines.map((baseline) => Object.freeze({
+    id: baseline.scenarioId,
+    name: baseline.name,
+    requiredEvidence: baseline.rollbackRehearsal
+      ? [...upgradeRequiredEvidence, ...rollbackRequiredEvidence]
+      : [...upgradeRequiredEvidence]
+  }))
 ]);

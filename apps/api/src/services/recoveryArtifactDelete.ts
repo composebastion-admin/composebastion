@@ -2,9 +2,13 @@ import type { RecoveryPointDetail } from "@composebastion/shared";
 import { loadWorkerBackupTarget } from "./recoveryBackupTargets.js";
 import { deleteRemoteArtifact } from "./recoveryRemoteStorage.js";
 
-function remoteObjectKey(metadata: Record<string, unknown>) {
-  const key = metadata.remoteObjectKey;
-  return typeof key === "string" && key ? key : null;
+function remoteObjectKeys(metadata: Record<string, unknown>) {
+  const keys = [
+    metadata.remoteObjectKey,
+    metadata.orphanRemoteObjectKey,
+    ...(Array.isArray(metadata.orphanRemoteObjectKeys) ? metadata.orphanRemoteObjectKeys : [])
+  ];
+  return [...new Set(keys.filter((key): key is string => typeof key === "string" && key.length > 0))];
 }
 
 export async function deleteRecoveryPointRemoteArtifacts(point: RecoveryPointDetail) {
@@ -12,8 +16,8 @@ export async function deleteRecoveryPointRemoteArtifacts(point: RecoveryPointDet
   const deletedObjectKeys: string[] = [];
 
   for (const artifact of point.artifacts) {
-    const objectKey = remoteObjectKey(artifact.metadata);
-    if (!objectKey) continue;
+    const objectKeys = remoteObjectKeys(artifact.metadata);
+    if (!objectKeys.length) continue;
 
     const backupTargetId = artifact.backupTargetId ?? point.backupTargetId;
     if (!backupTargetId) {
@@ -30,8 +34,10 @@ export async function deleteRecoveryPointRemoteArtifacts(point: RecoveryPointDet
       throw new Error(`Recovery artifact ${artifact.storageKey} remote target does not support deletes`);
     }
 
-    await deleteRemoteArtifact(target, objectKey);
-    deletedObjectKeys.push(objectKey);
+    for (const objectKey of objectKeys) {
+      await deleteRemoteArtifact(target, objectKey);
+      deletedObjectKeys.push(objectKey);
+    }
   }
 
   return { deletedObjectKeys };

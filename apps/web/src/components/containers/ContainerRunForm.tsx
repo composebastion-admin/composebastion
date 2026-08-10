@@ -88,7 +88,7 @@ export function ContainerRunForm({
     <div className="subPanel">
       <button onClick={() => setOpen((value) => !value)}><Plus size={18} />{buttonLabel}</button>
       {open && (
-        <form className="composeForm" onSubmit={submit}>
+        <form className="composeForm" onSubmit={(event) => void submit(event).catch(() => undefined)}>
           <div className="formHint">{hint ?? `New containers are created on ${host.name}. Select a host in the sidebar first to run it somewhere else.`}</div>
           <div className="two">
             <input placeholder="Image, e.g. nginx:alpine" value={form.image} onChange={(event) => setForm({ ...form, image: event.target.value })} required />
@@ -128,7 +128,7 @@ export function ContainerRunForm({
           <textarea placeholder={"Environment, one per line: KEY=value"} value={form.env} onChange={(event) => setForm({ ...form, env: event.target.value })} />
           <textarea placeholder={"Volumes, one per line: volume:/path[:ro]"} value={form.volumes} onChange={(event) => setForm({ ...form, volumes: event.target.value })} />
           <input placeholder="Optional command" value={form.command} onChange={(event) => setForm({ ...form, command: event.target.value })} />
-          {action.error && <div className="notice error">{action.error}</div>}
+          {action.error && <div className="notice error" role="alert">{action.error}</div>}
           <button className="primary" disabled={action.busy}><Play size={18} />Run</button>
         </form>
       )}

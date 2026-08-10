@@ -29,7 +29,8 @@ Create a fine-grained GitHub token in GitHub:
 
 In ComposeBastion:
 
-1. Paste the repository URL.
+1. Paste the credential-free HTTPS GitHub repository URL
+   (`https://github.com/owner/repository`).
 2. Paste the token into the private repository token field.
 3. Click `Test Access` to validate repository metadata, the selected ref,
    Compose file contents, tags, and releases.
@@ -68,6 +69,20 @@ In ComposeBastion:
 2. Click `Test Host Access`; ComposeBastion runs read-only `git ls-remote` on
    the host to confirm the deploy key works.
 3. Clone and deploy after the access check passes.
+
+Do not embed a username, password, or token in a Git URL. ComposeBastion rejects
+HTTP(S) and `git://` user information, SSH URL passwords, query parameters, and
+fragments so credentials cannot be retained in operation history, tracked
+repositories, config backups, or source links. Use the separate encrypted
+GitHub token field for GitHub API access, and a read-only host deploy key with
+an `ssh://git@host/...` or `git@host-alias:owner/repository.git` clone URL for
+private host-side clones.
+
+My Library and universal deployment apply the same URL rule. HTTPS Git
+credentials belong only in the encrypted username/token fields. A direct
+Compose URL must be a public HTTP(S) URL without user information, a query, or
+a fragment; upload the Compose file when the source is private or requires a
+signed/query URL.
 
 For tracked GitHub repositories, `Preview and customize compose` still uses the
 GitHub API and a managed Compose copy. It is useful for image-only Compose files,

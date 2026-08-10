@@ -1,38 +1,83 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { DockerHost } from "@composebastion/shared";
+import {
+  dockerStatsRecordsMatch,
+  isDockerStatsLifecycleTombstone,
+  isDockerStatsRecord,
+  type DockerHost,
+  type DockerStatsRecord
+} from "@composebastion/shared";
 import { api } from "../api.js";
 
-export type ContainerUsageRows = Record<string, Record<string, unknown>[]>;
+export type ContainerUsageRows = Record<string, DockerStatsRecord[]>;
 export const CONTAINER_USAGE_STREAM_STALE_MS = 15_000;
 export const CONTAINER_USAGE_STREAM_RETRY_MS = 60_000;
+export const CONTAINER_USAGE_SNAPSHOT_RECONCILE_MS = 60_000;
 
-export function containerUsageStreamDecision(now: number, startedAt: number | undefined, lastMessageAt: number | undefined) {
+export function containerUsageStreamDecision(
+  now: number,
+  startedAt: number | undefined,
+  lastMessageAt: number | undefined,
+  lastSuccessfulSnapshotAt: number | undefined
+) {
   const freshnessReference = lastMessageAt ?? startedAt;
   return {
-    poll: lastMessageAt === undefined || now - lastMessageAt >= CONTAINER_USAGE_STREAM_STALE_MS,
+    poll: lastMessageAt === undefined
+      || now - lastMessageAt >= CONTAINER_USAGE_STREAM_STALE_MS
+      || lastSuccessfulSnapshotAt === undefined
+      || now - lastSuccessfulSnapshotAt >= CONTAINER_USAGE_SNAPSHOT_RECONCILE_MS,
     reconnect: freshnessReference !== undefined && now - freshnessReference >= CONTAINER_USAGE_STREAM_RETRY_MS
   };
 }
 
-function sameUsageRow(left: Record<string, unknown>, right: Record<string, unknown>) {
-  const leftId = String(left.ID ?? "");
-  const rightId = String(right.ID ?? "");
-  if (leftId && rightId) return leftId === rightId;
-  const leftName = String(left.Name ?? left.Names ?? "");
-  const rightName = String(right.Name ?? right.Names ?? "");
-  return Boolean(leftName && rightName && leftName === rightName);
+export function containerUsageSnapshotRequestGeneration(
+  activeGeneration: number | undefined,
+  inFlightGeneration: number | undefined
+) {
+  return activeGeneration !== undefined && activeGeneration !== inFlightGeneration
+    ? activeGeneration
+    : null;
 }
 
-function replaceUsageRow(rows: Record<string, unknown>[], stats: Record<string, unknown>) {
-  return [...rows.filter((row) => !sameUsageRow(row, stats)), stats];
+export function isContainerUsageSnapshotRequestCurrent(
+  activeGeneration: number | undefined,
+  requestGeneration: number
+) {
+  return activeGeneration === requestGeneration;
+}
+
+export function shouldApplyContainerUsageSnapshot(
+  streamSequenceAtRequestStart: number,
+  currentStreamSequence: number
+) {
+  return streamSequenceAtRequestStart === currentStreamSequence;
+}
+
+export function reduceContainerUsageRows(rows: DockerStatsRecord[], stats: unknown) {
+  if (!isDockerStatsRecord(stats)) return rows;
+  return [...rows.filter((row) => !dockerStatsRecordsMatch(row, stats)), stats];
+}
+
+export function parseContainerUsageSnapshot(value: unknown) {
+  if (!Array.isArray(value)) return null;
+  let rows: DockerStatsRecord[] = [];
+  for (const stats of value) {
+    if (isDockerStatsLifecycleTombstone(stats)) continue;
+    if (!isDockerStatsRecord(stats)) return null;
+    rows = reduceContainerUsageRows(rows, stats);
+  }
+  return rows;
 }
 
 export function useContainerUsage(hosts: DockerHost[]) {
   const [usage, setUsage] = useState<ContainerUsageRows>({});
-  const inFlight = useRef(new Set<string>());
+  const lifecycleGeneration = useRef(0);
+  const activeHostGenerations = useRef(new Map<string, number>());
+  const inFlightGenerations = useRef(new Map<string, number>());
   const streams = useRef(new Map<string, EventSource>());
   const streamStartedAt = useRef(new Map<string, number>());
   const streamLastMessageAt = useRef(new Map<string, number>());
+  const streamMessageSequences = useRef(new Map<string, number>());
+  const lastSuccessfulSnapshotAt = useRef(new Map<string, number>());
   const retryTimers = useRef(new Map<string, number>());
   const onlineHostIds = useMemo(
     () => hosts.filter((host) => host.lastStatus === "online").map((host) => host.id).sort(),
@@ -41,21 +86,49 @@ export function useContainerUsage(hosts: DockerHost[]) {
   const onlineHostKey = onlineHostIds.join(",");
 
   const loadSnapshot = useCallback(async (hostId: string) => {
-    if (document.visibilityState === "hidden" || inFlight.current.has(hostId)) return;
-    inFlight.current.add(hostId);
+    if (document.visibilityState === "hidden") return;
+    const requestGeneration = containerUsageSnapshotRequestGeneration(
+      activeHostGenerations.current.get(hostId),
+      inFlightGenerations.current.get(hostId)
+    );
+    if (requestGeneration === null) return;
+    const streamSequenceAtRequestStart = streamMessageSequences.current.get(hostId) ?? 0;
+    inFlightGenerations.current.set(hostId, requestGeneration);
+    const requestIsCurrent = () => isContainerUsageSnapshotRequestCurrent(
+      activeHostGenerations.current.get(hostId),
+      requestGeneration
+    );
     try {
-      const result = await api<{ usage: Record<string, unknown>[] }>(`/api/hosts/${hostId}/containers/usage`);
-      setUsage((current) => ({ ...current, [hostId]: result.usage }));
+      const result = await api<{ usage: unknown }>(`/api/hosts/${hostId}/containers/usage`);
+      const snapshot = parseContainerUsageSnapshot(result.usage);
+      if (!snapshot) throw new Error("Container usage snapshot is malformed");
+      if (!requestIsCurrent()) return;
+      lastSuccessfulSnapshotAt.current.set(hostId, Date.now());
+      if (!shouldApplyContainerUsageSnapshot(
+        streamSequenceAtRequestStart,
+        streamMessageSequences.current.get(hostId) ?? 0
+      )) return;
+      setUsage((current) => requestIsCurrent()
+        ? { ...current, [hostId]: snapshot }
+        : current);
     } catch {
-      setUsage((current) => ({ ...current, [hostId]: current[hostId] ?? [] }));
+      if (!requestIsCurrent()) return;
+      setUsage((current) => requestIsCurrent()
+        ? { ...current, [hostId]: current[hostId] ?? [] }
+        : current);
     } finally {
-      inFlight.current.delete(hostId);
+      if (inFlightGenerations.current.get(hostId) === requestGeneration) {
+        inFlightGenerations.current.delete(hostId);
+      }
     }
   }, []);
 
   useEffect(() => {
     const hostIds = onlineHostKey.split(",").filter(Boolean);
     const currentHostIds = new Set(hostIds);
+    const generation = lifecycleGeneration.current + 1;
+    lifecycleGeneration.current = generation;
+    for (const hostId of hostIds) activeHostGenerations.current.set(hostId, generation);
     setUsage((current) => Object.fromEntries(Object.entries(current).filter(([hostId]) => currentHostIds.has(hostId))));
 
     const clearHost = (hostId: string) => {
@@ -63,35 +136,50 @@ export function useContainerUsage(hosts: DockerHost[]) {
       streams.current.delete(hostId);
       streamStartedAt.current.delete(hostId);
       streamLastMessageAt.current.delete(hostId);
+      lastSuccessfulSnapshotAt.current.delete(hostId);
       const timer = retryTimers.current.get(hostId);
       if (timer !== undefined) window.clearTimeout(timer);
       retryTimers.current.delete(hostId);
     };
 
     const connect = (hostId: string) => {
+      if (!isContainerUsageSnapshotRequestCurrent(activeHostGenerations.current.get(hostId), generation)) return;
       clearHost(hostId);
       if (document.visibilityState === "hidden" || !("EventSource" in window)) return;
       const source = new EventSource(`/api/hosts/${hostId}/containers/usage-stream`);
       streams.current.set(hostId, source);
       streamStartedAt.current.set(hostId, Date.now());
       source.onmessage = (event) => {
+        if (
+          !isContainerUsageSnapshotRequestCurrent(activeHostGenerations.current.get(hostId), generation)
+          || streams.current.get(hostId) !== source
+        ) return;
         try {
           const payload = JSON.parse(event.data) as { stats?: unknown };
-          if (!payload.stats || typeof payload.stats !== "object") return;
+          if (!isDockerStatsRecord(payload.stats)) return;
           streamLastMessageAt.current.set(hostId, Date.now());
-          setUsage((current) => ({
-            ...current,
-            [hostId]: replaceUsageRow(current[hostId] ?? [], payload.stats as Record<string, unknown>)
-          }));
+          streamMessageSequences.current.set(
+            hostId,
+            (streamMessageSequences.current.get(hostId) ?? 0) + 1
+          );
+          setUsage((current) => (
+            isContainerUsageSnapshotRequestCurrent(activeHostGenerations.current.get(hostId), generation)
+              ? {
+                  ...current,
+                  [hostId]: reduceContainerUsageRows(current[hostId] ?? [], payload.stats)
+                }
+              : current
+          ));
         } catch {
           // A malformed frame does not invalidate the last good snapshot.
         }
       };
       source.onerror = () => {
-        source.close();
-        streams.current.delete(hostId);
-        streamStartedAt.current.delete(hostId);
-        streamLastMessageAt.current.delete(hostId);
+        if (
+          !isContainerUsageSnapshotRequestCurrent(activeHostGenerations.current.get(hostId), generation)
+          || streams.current.get(hostId) !== source
+        ) return;
+        clearHost(hostId);
         void loadSnapshot(hostId);
         retryTimers.current.set(hostId, window.setTimeout(() => connect(hostId), 60_000));
       };
@@ -117,7 +205,8 @@ export function useContainerUsage(hosts: DockerHost[]) {
         const decision = containerUsageStreamDecision(
           Date.now(),
           streamStartedAt.current.get(hostId),
-          streamLastMessageAt.current.get(hostId)
+          streamLastMessageAt.current.get(hostId),
+          lastSuccessfulSnapshotAt.current.get(hostId)
         );
         if (decision.poll) void loadSnapshot(hostId);
         if (decision.reconnect) connect(hostId);
@@ -127,6 +216,15 @@ export function useContainerUsage(hosts: DockerHost[]) {
     return () => {
       window.clearInterval(fallback);
       document.removeEventListener("visibilitychange", onVisibilityChange);
+      for (const hostId of hostIds) {
+        if (activeHostGenerations.current.get(hostId) === generation) {
+          activeHostGenerations.current.delete(hostId);
+        }
+        if (inFlightGenerations.current.get(hostId) === generation) {
+          inFlightGenerations.current.delete(hostId);
+        }
+        streamMessageSequences.current.delete(hostId);
+      }
       stop();
     };
   }, [loadSnapshot, onlineHostKey]);

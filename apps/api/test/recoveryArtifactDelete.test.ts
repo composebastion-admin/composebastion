@@ -3,8 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const loadWorkerBackupTarget = vi.fn();
 const createS3Client = vi.fn();
 const deleteRecoveryArtifactFromS3 = vi.fn();
+const destroyS3Client = vi.fn();
 
 vi.mock("../src/services/recoveryBackupTargets.js", () => ({
+  assertBackupTargetS3EndpointAllowed: vi.fn().mockResolvedValue(undefined),
   loadWorkerBackupTarget: (...args: unknown[]) => loadWorkerBackupTarget(...args)
 }));
 
@@ -73,7 +75,11 @@ function point() {
         checksum: null,
         status: "completed",
         error: null,
-        metadata: {},
+        metadata: {
+          orphanRemoteObjectKey: "stored/orphan/from-failed-verification.tar.gz",
+          remoteVerificationError: "checksum verification failed",
+          remoteVerified: false
+        },
         createdAt: "2026-06-15T12:00:00.000Z",
         completedAt: "2026-06-15T12:00:00.000Z"
       }
@@ -92,27 +98,33 @@ describe("recovery artifact remote deletion", () => {
         credentials: { accessKeyId: "key", secretAccessKey: "secret" }
       }
     }));
-    createS3Client.mockImplementation((config: { bucket: string }) => ({ bucket: config.bucket }));
+    createS3Client.mockImplementation((config: { bucket: string }) => ({
+      bucket: config.bucket,
+      destroy: destroyS3Client
+    }));
     deleteRecoveryArtifactFromS3.mockResolvedValue(undefined);
   });
 
-  it("deletes only stored remote object keys", async () => {
+  it("deletes canonical and retained orphan object keys without reconstructing paths", async () => {
     const { deleteRecoveryPointRemoteArtifacts } = await import("../src/services/recoveryArtifactDelete.js");
     const result = await deleteRecoveryPointRemoteArtifacts(point() as never);
 
     expect(result.deletedObjectKeys).toEqual([
       "stored/key/from-db/manifest.json",
-      "other-target/exact-volume-key.tar.gz"
+      "other-target/exact-volume-key.tar.gz",
+      "stored/orphan/from-failed-verification.tar.gz"
     ]);
     expect(deleteRecoveryArtifactFromS3.mock.calls.map((call) => call[2])).toEqual([
       "stored/key/from-db/manifest.json",
-      "other-target/exact-volume-key.tar.gz"
+      "other-target/exact-volume-key.tar.gz",
+      "stored/orphan/from-failed-verification.tar.gz"
     ]);
     expect(deleteRecoveryArtifactFromS3).not.toHaveBeenCalledWith(
       expect.anything(),
       expect.any(String),
       expect.stringContaining("volumes/data.tar.gz")
     );
+    expect(destroyS3Client).toHaveBeenCalledTimes(3);
   });
 
   it("fails rather than reconstructing a key when the backup target is missing", async () => {

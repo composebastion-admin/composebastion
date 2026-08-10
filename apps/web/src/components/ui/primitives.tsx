@@ -20,7 +20,7 @@ export function InlineForm({ children, onSubmit }: { children: ReactNode; onSubm
       className="inlineForm"
       onSubmit={(event) => {
         event.preventDefault();
-        void onSubmit();
+        void Promise.resolve(onSubmit()).catch(() => undefined);
       }}
     >
       {children}

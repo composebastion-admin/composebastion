@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { gitRepositoryUrlIssue } from "./gitUrls.js";
 
 const idSchema = z.string().uuid();
 const composeProjectNameSchema = z.string()
@@ -107,6 +108,12 @@ export const appSourceLinkInputSchema = z.object({
   composePath: z.string().trim().max(500).nullable().optional(),
   imageReference: z.string().trim().max(500).nullable().optional()
 }).superRefine((value, ctx) => {
+  if (value.repositoryUrl) {
+    const issue = gitRepositoryUrlIssue(value.repositoryUrl);
+    if (issue) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: issue, path: ["repositoryUrl"] });
+    }
+  }
   if (value.sourceType === "image" && !value.imageReference) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Image reference is required", path: ["imageReference"] });
   }
@@ -161,6 +168,7 @@ export const dockerAppSchema = z.object({
   stackId: idSchema.nullable(),
   repositoryId: idSchema.nullable(),
   repositoryUrl: z.string().nullable(),
+  sensitiveFieldsRedacted: z.boolean().optional(),
   branch: z.string().nullable(),
   projectName: z.string().nullable(),
   sourceLink: appSourceLinkSchema.nullable(),

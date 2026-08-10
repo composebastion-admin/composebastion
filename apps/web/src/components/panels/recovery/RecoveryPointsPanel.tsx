@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
-import { Copy, Play, Plus, ShieldCheck } from "lucide-react";
+import { Copy, Play, Plus, ShieldCheck, Trash2 } from "lucide-react";
 import type { BackupTarget, DockerApp, DockerHost, RecoveryAnalysis, RecoveryDataMount, RecoveryPointListItem, RecoveryReadiness } from "@composebastion/shared";
-import { api, postJson, putJson } from "../../../api.js";
+import { api, deleteJson, postJson, putJson } from "../../../api.js";
 import { useAsyncAction } from "../../../hooks/useAsyncAction.js";
 import type { Jobish, JobResult } from "../../../lib/dashboardTypes.js";
 import { formatBytes, formatDate } from "../../../lib/format.js";
@@ -153,6 +153,22 @@ export function RecoveryPointsPanel({
     });
   }
 
+  async function deleteProfile() {
+    if (!analysis?.profile) return;
+    const profile = analysis.profile;
+    const confirmed = await confirm({
+      title: "Delete recovery profile",
+      tone: "danger",
+      confirmLabel: "Delete profile",
+      message: `Delete ${profile.name}? Future captures will use detected defaults until a new profile is saved.`
+    });
+    if (!confirmed) return;
+    await action.run(async () => {
+      await deleteJson(`/api/recovery/profiles/${profile.id}`);
+      setAnalysis((current) => current ? { ...current, profile: null } : current);
+    });
+  }
+
   return (
     <Panel title="Recovery Points" count={points.length}>
       {canOperate && <InlineForm
@@ -258,6 +274,12 @@ export function RecoveryPointsPanel({
             <Plus size={16} />
             Save profile
           </button>
+          {analysis?.profile && (
+            <button type="button" className="danger" disabled={action.busy} onClick={() => void deleteProfile().catch(() => undefined)}>
+              <Trash2 size={16} />
+              Delete profile
+            </button>
+          )}
         </ButtonRow>
         <button type="submit" className="primary" disabled={action.busy || !selectedApp}>
           <Plus size={16} />

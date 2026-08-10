@@ -22,13 +22,20 @@ function payloadForInject(body: unknown) {
   return JSON.stringify(body);
 }
 
-function proxyHeaders(headers: Record<string, unknown>, requestId: string) {
+function proxyHeaders(headers: Record<string, unknown>, requestId: string, effectiveHost: string) {
   const next: Record<string, string> = {};
   for (const [key, value] of Object.entries(headers)) {
     if (value === undefined || Array.isArray(value)) continue;
-    if (["connection", "content-length", "host"].includes(key.toLowerCase())) continue;
+    const normalizedKey = key.toLowerCase();
+    // The injected request originates from loopback, so forwarding proxy identity
+    // headers would re-evaluate them under a different trust boundary.
+    if (
+      ["connection", "content-length", "forwarded", "host", "x-real-ip"].includes(normalizedKey) ||
+      normalizedKey.startsWith("x-forwarded-")
+    ) continue;
     next[key] = String(value);
   }
+  if (effectiveHost) next.host = effectiveHost;
   next["x-request-id"] = requestId;
   return next;
 }
@@ -49,7 +56,12 @@ export async function registerApiVersionAliasRoutes(app: FastifyInstance) {
         app.inject({
           method: request.method as AliasMethod,
           url,
-          headers: proxyHeaders(request.headers, request.id),
+          // The outer origin hook compares against the literal Host header, so
+          // the injected request must use that same value. Using request.host
+          // here would let a trusted-proxy X-Forwarded-Host value change the
+          // second origin decision after forwarded identity headers are removed.
+          headers: proxyHeaders(request.headers, request.id, request.headers.host ?? request.host),
+          remoteAddress: request.ip,
           payload: payloadForInject(request.body)
         }, (error, injectedResponse) => {
           if (error) {

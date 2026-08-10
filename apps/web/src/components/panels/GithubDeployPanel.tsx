@@ -104,6 +104,10 @@ export function GithubDeployPanel({
   });
   const [success, setSuccess] = useState<string | null>(null);
 
+  function reportError(caught: unknown) {
+    action.setError(caught instanceof Error ? caught.message : String(caught));
+  }
+
   useEffect(() => {
     if (!hostId && hosts[0]?.id) setHostId(hosts[0].id);
   }, [hostId, hosts]);
@@ -118,7 +122,7 @@ export function GithubDeployPanel({
   }
 
   useEffect(() => {
-    void loadSources().catch(() => undefined);
+    void loadSources().catch(reportError);
   }, []);
 
   async function loadFinishedAnalysis(id: string) {
@@ -289,7 +293,7 @@ export function GithubDeployPanel({
 
         <form className="deploySourceForm" onSubmit={(event) => {
           event.preventDefault();
-          void analyze();
+          void analyze().catch(() => undefined);
         }}>
           <textarea
             aria-label="Deployment source"
@@ -312,7 +316,7 @@ export function GithubDeployPanel({
               hidden
               onChange={(event) => {
                 const file = event.target.files?.[0];
-                if (file) void uploadCompose(file);
+                if (file) void uploadCompose(file).catch(reportError);
               }}
             />
             <button type="button" onClick={() => fileInput.current?.click()}><FileUp size={17} />Upload Compose</button>
@@ -356,7 +360,7 @@ export function GithubDeployPanel({
         {selectedHost?.connectionMode === "agent" && (
           <div className="notice warning">This is an agent host. Compose and image inputs work; Git analysis currently requires an SSH-connected host.</div>
         )}
-        {action.error && <div className="notice error">{action.error}</div>}
+        {action.error && <div className="notice error" role="alert">{action.error}</div>}
         {success && <div className="notice success"><CheckCircle2 size={17} />{success}</div>}
       </Panel>
 
@@ -374,7 +378,7 @@ export function GithubDeployPanel({
               <button
                 className="primary"
                 disabled={action.busy || deployBlocked}
-                onClick={() => void deploy()}
+                onClick={() => void deploy().catch(() => undefined)}
               ><Play size={18} />Deploy &amp; save</button>
             </ButtonRow>
           </div>
@@ -404,7 +408,7 @@ export function GithubDeployPanel({
                 <span>{issue.message}</span>
               </div>
               {!issue.trusted && issue.canApply && (
-                <button type="button" onClick={() => void repairRegistry(issue.registry)} disabled={action.busy}>
+                <button type="button" onClick={() => void repairRegistry(issue.registry).catch(() => undefined)} disabled={action.busy}>
                   Repair safely
                 </button>
               )}
@@ -427,7 +431,7 @@ export function GithubDeployPanel({
                 <span>Compose file</span>
                 <select
                   value={analysis.composePath ?? ""}
-                  onChange={(event) => void analyze({ composePath: event.target.value, sourceValue: analysis.sourceInput })}
+                  onChange={(event) => void analyze({ composePath: event.target.value, sourceValue: analysis.sourceInput }).catch(() => undefined)}
                   disabled={action.busy}
                 >
                   {analysis.summary.composeCandidates.map((candidate) => <option key={candidate}>{candidate}</option>)}
@@ -516,7 +520,7 @@ export function GithubDeployPanel({
                       <HostSelect hosts={hosts} value={sourceEdit.defaultHostId} onChange={(defaultHostId) => setSourceEdit({ ...sourceEdit, defaultHostId })} />
                     </label>
                     <ButtonRow>
-                      <button className="primary" onClick={() => void saveSourceEdit()}>Save defaults</button>
+                      <button className="primary" onClick={() => void saveSourceEdit().catch(() => undefined)}>Save defaults</button>
                       <button onClick={() => setEditingSource(null)}>Cancel</button>
                     </ButtonRow>
                   </>
@@ -544,9 +548,9 @@ export function GithubDeployPanel({
                       />
                     </label>
                     <ButtonRow>
-                      <button className="primary" onClick={() => void deploySource(sourceCard)} disabled={action.busy}><Play size={16} />Analyze / Deploy</button>
+                      <button className="primary" onClick={() => void deploySource(sourceCard).catch(() => undefined)} disabled={action.busy}><Play size={16} />Analyze / Deploy</button>
                       <button title="Edit safe defaults" onClick={() => beginSourceEdit(sourceCard)}><Pencil size={16} /></button>
-                      <button className="danger" title="Remove from library" onClick={() => void removeSource(sourceCard)}><Trash2 size={16} /></button>
+                      <button className="danger" title="Remove from library" onClick={() => void removeSource(sourceCard).catch(() => undefined)}><Trash2 size={16} /></button>
                     </ButtonRow>
                   </>
                 )}

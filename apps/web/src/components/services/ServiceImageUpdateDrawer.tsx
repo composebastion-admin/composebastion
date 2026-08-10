@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Download, RefreshCw, Search, X } from "lucide-react";
 import type { ResourceSnapshot } from "@composebastion/shared";
 import { imageRepository, imageTag, imageWithTag } from "@composebastion/shared";
 import { api } from "../../api.js";
 import { filterImageTags, isImageChannelTag, summarizeImageVersionTags, uniqueSortedImageTags } from "../../lib/imageTagOptions.js";
+import { captureFocusReturn, scheduleFocusRestoration } from "../../lib/focusRestoration.js";
 import type { ServiceGroup, ServiceMember } from "../../lib/serviceGroups.js";
 import { ButtonRow } from "../ui/primitives.js";
 
@@ -20,6 +21,15 @@ type ImageDigestUpdate = {
   currentDigest?: string | null;
   remoteDigest?: string | null;
 };
+
+const drawerFocusableSelector = [
+  "button:not(:disabled)",
+  "[href]",
+  "input:not(:disabled)",
+  "textarea:not(:disabled)",
+  "select:not(:disabled)",
+  "[tabindex]:not([tabindex='-1'])"
+].join(", ");
 
 export type ServiceImageUpdateTarget = {
   containerId: string;
@@ -84,6 +94,7 @@ export function ServiceImageUpdateDrawer({
   images,
   availableImageUpdates = [],
   busy,
+  returnFocus,
   onClose,
   onUpdate
 }: {
@@ -91,6 +102,7 @@ export function ServiceImageUpdateDrawer({
   images: ResourceSnapshot[];
   availableImageUpdates?: ImageDigestUpdate[];
   busy: boolean;
+  returnFocus: HTMLElement | null;
   onClose: () => void;
   onUpdate: (targets: ServiceImageUpdateTarget[]) => Promise<void>;
 }) {
@@ -100,6 +112,43 @@ export function ServiceImageUpdateDrawer({
   const [tagFilters, setTagFilters] = useState<Record<string, string>>({});
   const [loadingRepositories, setLoadingRepositories] = useState<Set<string>>(new Set());
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const drawerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const context = captureFocusReturn(returnFocus);
+    const frame = window.requestAnimationFrame(() => {
+      drawerRef.current?.querySelector<HTMLElement>("[data-initial-focus]")?.focus();
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+      scheduleFocusRestoration(context, { afterRender: true });
+    };
+  }, [returnFocus]);
+
+  const handleDrawerKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      onClose();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const focusable = Array.from(drawerRef.current?.querySelectorAll<HTMLElement>(drawerFocusableSelector) ?? [])
+      .filter((element) => element.getClientRects().length > 0);
+    if (focusable.length === 0) {
+      event.preventDefault();
+      drawerRef.current?.focus();
+      return;
+    }
+    const first = focusable[0]!;
+    const last = focusable[focusable.length - 1]!;
+    if (event.shiftKey && (document.activeElement === first || !drawerRef.current?.contains(document.activeElement))) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && (document.activeElement === last || !drawerRef.current?.contains(document.activeElement))) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
 
   useEffect(() => {
     setTargetTags(Object.fromEntries(families.map((family) => [family.repository, family.currentTags[0] ?? "latest"])));
@@ -162,7 +211,15 @@ export function ServiceImageUpdateDrawer({
   });
 
   return (
-    <div className="drawer serviceImageUpdateDrawer" role="dialog" aria-modal="true" aria-label={`Update images for ${group.name}`}>
+    <div
+      ref={drawerRef}
+      className="drawer serviceImageUpdateDrawer"
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Update images for ${group.name}`}
+      tabIndex={-1}
+      onKeyDown={handleDrawerKeyDown}
+    >
       <div className="panelHeader">
         <div>
           <h3>Update {group.name} images</h3>
@@ -241,12 +298,15 @@ export function ServiceImageUpdateDrawer({
       </div>
 
       <ButtonRow>
-        <button type="button" onClick={onClose}>Cancel</button>
-        <button type="button" className="primary" disabled={busy || changedTargets.length === 0} onClick={() => void onUpdate(changedTargets)}>
+        <button type="button" onClick={onClose} data-initial-focus>Cancel</button>
+        <button type="button" className="primary" disabled={busy || changedTargets.length === 0} onClick={() => void onUpdate(changedTargets).catch((caught) => {
+          setErrors((current) => ({ ...current, __update: caught instanceof Error ? caught.message : String(caught) }));
+        })}>
           <Download size={16} />
           Update {changedTargets.length} container{changedTargets.length === 1 ? "" : "s"}
         </button>
       </ButtonRow>
+      {errors.__update && <div className="notice error" role="alert">{errors.__update}</div>}
     </div>
   );
 }

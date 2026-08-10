@@ -1,17 +1,17 @@
 import { useState } from "react";
-import { Pencil, Plus, ShieldCheck } from "lucide-react";
+import { Pencil, Plus, ShieldCheck, Trash2 } from "lucide-react";
 import type { BackupTarget } from "@composebastion/shared";
-import { patchJson, postJson } from "../../../api.js";
+import { deleteJson, patchJson, postJson } from "../../../api.js";
 import { useAsyncAction } from "../../../hooks/useAsyncAction.js";
 import { formatDate, emptyToUndefined } from "../../../lib/format.js";
+import { useConfirm } from "../../ConfirmProvider.js";
 import { ButtonRow, DataTable, InlineForm, Panel } from "../../ui/primitives.js";
 
-type TargetForm = {
+export type TargetForm = {
   name: string;
   type: "local" | "s3" | "rclone";
   enabled: boolean;
   localCachePolicy: "keep" | "remote_only";
-  basePath: string;
   endpoint: string;
   bucket: string;
   region: string;
@@ -19,6 +19,7 @@ type TargetForm = {
   forcePathStyle: boolean;
   accessKeyId: string;
   secretAccessKey: string;
+  clearS3Credentials: boolean;
   provider: "smb" | "drive" | "onedrive" | "iclouddrive" | "webdav" | "sftp" | "custom";
   remoteName: string;
   remotePath: string;
@@ -29,6 +30,7 @@ type TargetForm = {
   domain: string;
   username: string;
   password: string;
+  clearPassword: boolean;
   port: string;
 };
 
@@ -47,7 +49,6 @@ const emptyForm = (): TargetForm => ({
   type: "local",
   enabled: true,
   localCachePolicy: "keep",
-  basePath: "",
   endpoint: "",
   bucket: "",
   region: "",
@@ -55,6 +56,7 @@ const emptyForm = (): TargetForm => ({
   forcePathStyle: false,
   accessKeyId: "",
   secretAccessKey: "",
+  clearS3Credentials: false,
   provider: "smb",
   remoteName: "",
   remotePath: "",
@@ -65,16 +67,20 @@ const emptyForm = (): TargetForm => ({
   domain: "",
   username: "",
   password: "",
+  clearPassword: false,
   port: ""
 });
 
-function formFromTarget(target: BackupTarget): TargetForm {
+export function formFromTarget(target: BackupTarget): TargetForm {
+  const smb = target.config.smb && typeof target.config.smb === "object" && !Array.isArray(target.config.smb)
+    ? target.config.smb as Record<string, unknown>
+    : {};
+  const smbText = (key: string) => typeof smb[key] === "string" ? smb[key] as string : "";
   return {
     name: target.name,
     type: target.type,
     enabled: target.enabled,
-    localCachePolicy: target.localCachePolicy,
-    basePath: target.basePath ?? "",
+    localCachePolicy: target.type === "local" ? "keep" : target.localCachePolicy,
     endpoint: target.endpoint ?? "",
     bucket: target.bucket ?? "",
     region: target.region ?? "",
@@ -82,9 +88,32 @@ function formFromTarget(target: BackupTarget): TargetForm {
     forcePathStyle: target.forcePathStyle,
     accessKeyId: target.accessKeyId ?? "",
     secretAccessKey: "",
+    clearS3Credentials: false,
     provider: target.rcloneProvider ?? "smb",
     remoteName: target.remoteName ?? "composebastion",
     remotePath: target.remotePath ?? "",
+    rcloneConfig: "",
+    server: smbText("server"),
+    share: smbText("share"),
+    subPath: smbText("subPath"),
+    domain: smbText("domain"),
+    username: smbText("username"),
+    password: "",
+    clearPassword: false,
+    port: typeof smb.port === "number" || typeof smb.port === "string" ? String(smb.port) : ""
+  };
+}
+
+export function formWithRcloneProvider(
+  form: TargetForm,
+  provider: TargetForm["provider"]
+): TargetForm {
+  if (provider === form.provider) return form;
+  return {
+    ...form,
+    provider,
+    remoteName: "",
+    remotePath: "",
     rcloneConfig: "",
     server: "",
     share: "",
@@ -92,18 +121,21 @@ function formFromTarget(target: BackupTarget): TargetForm {
     domain: "",
     username: "",
     password: "",
+    clearPassword: false,
     port: ""
   };
 }
 
-function buildPayload(form: TargetForm, editing: BackupTarget | null) {
+function optionalPatchText(value: string, editing: BackupTarget | null) {
+  return emptyToUndefined(value) ?? (editing ? null : undefined);
+}
+
+export function buildBackupTargetPayload(form: TargetForm, editing: BackupTarget | null) {
   if (form.type === "local") {
     return {
       name: form.name,
       type: "local",
-      enabled: form.enabled,
-      localCachePolicy: form.localCachePolicy,
-      basePath: emptyToUndefined(form.basePath)
+      enabled: form.enabled
     };
   }
   if (form.type === "rclone") {
@@ -113,19 +145,22 @@ function buildPayload(form: TargetForm, editing: BackupTarget | null) {
       enabled: form.enabled,
       localCachePolicy: form.localCachePolicy,
       provider: form.provider,
-      remoteName: emptyToUndefined(form.remoteName),
-      remotePath: emptyToUndefined(form.remotePath)
+      remoteName: emptyToUndefined(form.remoteName)
     };
     if (form.provider === "smb") {
       payload.server = form.server;
       payload.share = form.share;
-      payload.subPath = emptyToUndefined(form.subPath);
-      payload.domain = emptyToUndefined(form.domain);
-      payload.username = emptyToUndefined(form.username);
-      payload.port = form.port.trim() ? Number(form.port) : undefined;
-      if (form.password.trim()) payload.password = form.password;
+      payload.subPath = optionalPatchText(form.subPath, editing);
+      payload.domain = optionalPatchText(form.domain, editing);
+      payload.username = optionalPatchText(form.username, editing);
+      payload.port = form.port.trim() ? Number(form.port) : editing ? null : undefined;
+      if (form.clearPassword) payload.password = null;
+      else if (form.password.trim()) payload.password = form.password;
     } else if (form.rcloneConfig.trim()) {
       payload.rcloneConfig = form.rcloneConfig;
+      payload.remotePath = emptyToUndefined(form.remotePath);
+    } else {
+      payload.remotePath = emptyToUndefined(form.remotePath);
     }
     return payload;
   }
@@ -136,12 +171,15 @@ function buildPayload(form: TargetForm, editing: BackupTarget | null) {
     localCachePolicy: form.localCachePolicy,
     endpoint: form.endpoint,
     bucket: form.bucket,
-    region: emptyToUndefined(form.region),
-    prefix: emptyToUndefined(form.prefix),
+    region: optionalPatchText(form.region, editing),
+    prefix: optionalPatchText(form.prefix, editing),
     forcePathStyle: form.forcePathStyle,
-    accessKeyId: emptyToUndefined(form.accessKeyId)
+    accessKeyId: form.clearS3Credentials ? null : emptyToUndefined(form.accessKeyId)
   };
-  if (form.secretAccessKey.trim()) payload.secretAccessKey = form.secretAccessKey;
+  if (form.clearS3Credentials) {
+    payload.enabled = false;
+    payload.secretAccessKey = null;
+  } else if (form.secretAccessKey.trim()) payload.secretAccessKey = form.secretAccessKey;
   else if (editing?.hasSecretAccessKey) payload.secretAccessKey = undefined;
   return payload;
 }
@@ -153,6 +191,7 @@ export function StorageTargetsPanel({
   targets: BackupTarget[];
   refresh: () => Promise<void>;
 }) {
+  const { confirm } = useConfirm();
   const action = useAsyncAction();
   const [form, setForm] = useState<TargetForm>(emptyForm());
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -163,13 +202,30 @@ export function StorageTargetsPanel({
       await refresh();
     });
   };
+  const deleteTarget = async (target: BackupTarget) => {
+    const confirmed = await confirm({
+      title: "Delete backup target",
+      tone: "danger",
+      confirmLabel: "Delete target",
+      message: `Delete ${target.name}? Existing backup records will be preserved, but remote artifacts may no longer be reachable through this target.`
+    });
+    if (!confirmed) return;
+    await action.run(async () => {
+      await deleteJson(`/api/recovery/targets/${target.id}`);
+      if (editingId === target.id) {
+        setEditingId(null);
+        setForm(emptyForm());
+      }
+      await refresh();
+    });
+  };
 
   return (
     <Panel title="Backup Storage" count={targets.length}>
       <InlineForm
         onSubmit={async () => {
           await action.run(async () => {
-            const payload = buildPayload(form, editing);
+            const payload = buildBackupTargetPayload(form, editing);
             if (editing) {
               await patchJson(`/api/recovery/targets/${editing.id}`, payload);
             } else {
@@ -195,34 +251,65 @@ export function StorageTargetsPanel({
           <input type="checkbox" checked={form.enabled} onChange={(event) => setForm((current) => ({ ...current, enabled: event.target.checked }))} />
           Enabled
         </label>
-        <select value={form.localCachePolicy} onChange={(event) => setForm((current) => ({ ...current, localCachePolicy: event.target.value as TargetForm["localCachePolicy"] }))}>
-          <option value="keep">Keep local cache</option>
-          <option value="remote_only">Remote only after upload</option>
-        </select>
-        {form.type === "local" ? (
-          <input placeholder="Base path (optional)" value={form.basePath} onChange={(event) => setForm((current) => ({ ...current, basePath: event.target.value }))} />
-        ) : form.type === "s3" ? (
+        {form.type !== "local" && (
+          <select value={form.localCachePolicy} onChange={(event) => setForm((current) => ({ ...current, localCachePolicy: event.target.value as TargetForm["localCachePolicy"] }))}>
+            <option value="keep">Keep local cache</option>
+            <option value="remote_only">Remote only after verified upload</option>
+          </select>
+        )}
+        {form.type === "s3" ? (
           <>
             <input placeholder="Endpoint URL" value={form.endpoint} onChange={(event) => setForm((current) => ({ ...current, endpoint: event.target.value }))} required />
             <input placeholder="Bucket" value={form.bucket} onChange={(event) => setForm((current) => ({ ...current, bucket: event.target.value }))} required />
             <input placeholder="Region" value={form.region} onChange={(event) => setForm((current) => ({ ...current, region: event.target.value }))} />
             <input placeholder="Prefix" value={form.prefix} onChange={(event) => setForm((current) => ({ ...current, prefix: event.target.value }))} />
-            <input placeholder="Access key ID" value={form.accessKeyId} onChange={(event) => setForm((current) => ({ ...current, accessKeyId: event.target.value }))} required={!editing} />
+            <input
+              placeholder="Access key ID"
+              value={form.accessKeyId}
+              onChange={(event) => setForm((current) => ({
+                ...current,
+                accessKeyId: event.target.value,
+                clearS3Credentials: false
+              }))}
+              required={!editing}
+              disabled={form.clearS3Credentials}
+            />
             <input
               type="password"
               placeholder={editing?.hasSecretAccessKey ? "Secret access key (leave blank to keep)" : "Secret access key"}
               value={form.secretAccessKey}
-              onChange={(event) => setForm((current) => ({ ...current, secretAccessKey: event.target.value }))}
+              onChange={(event) => setForm((current) => ({
+                ...current,
+                secretAccessKey: event.target.value,
+                clearS3Credentials: false
+              }))}
               required={!editing}
+              disabled={form.clearS3Credentials}
             />
+            {editing && (editing.accessKeyId || editing.hasSecretAccessKey) && (
+              <label className="checkLine">
+                <input
+                  type="checkbox"
+                  checked={form.clearS3Credentials}
+                  onChange={(event) => setForm((current) => ({
+                    ...current,
+                    clearS3Credentials: event.target.checked,
+                    enabled: event.target.checked ? false : current.enabled,
+                    accessKeyId: event.target.checked ? "" : current.accessKeyId,
+                    secretAccessKey: event.target.checked ? "" : current.secretAccessKey
+                  }))}
+                />
+                Clear saved S3 credentials and disable target
+              </label>
+            )}
             <label className="checkLine">
               <input type="checkbox" checked={form.forcePathStyle} onChange={(event) => setForm((current) => ({ ...current, forcePathStyle: event.target.checked }))} />
               Force path-style URLs
             </label>
           </>
-        ) : (
+        ) : form.type === "rclone" ? (
           <>
-            <select value={form.provider} onChange={(event) => setForm((current) => ({ ...current, provider: event.target.value as TargetForm["provider"] }))}>
+            <select value={form.provider} onChange={(event) => setForm((current) => formWithRcloneProvider(current, event.target.value as TargetForm["provider"]))}>
               {rcloneProviderOptions.map((option) => (
                 <option key={option.value} value={option.value}>{option.label}</option>
               ))}
@@ -235,17 +322,42 @@ export function StorageTargetsPanel({
                 <input placeholder="Subpath (optional)" value={form.subPath} onChange={(event) => setForm((current) => ({ ...current, subPath: event.target.value }))} />
                 <input placeholder="Domain / workgroup" value={form.domain} onChange={(event) => setForm((current) => ({ ...current, domain: event.target.value }))} />
                 <input placeholder="Username" value={form.username} onChange={(event) => setForm((current) => ({ ...current, username: event.target.value }))} />
-                <input type="password" placeholder={editing?.hasGenericCredentials ? "Password (leave blank to keep)" : "Password"} value={form.password} onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))} />
+                <input
+                  type="password"
+                  placeholder={editing?.hasGenericCredentials ? "Password (leave blank to keep)" : "Password"}
+                  value={form.password}
+                  onChange={(event) => setForm((current) => ({ ...current, password: event.target.value, clearPassword: false }))}
+                  disabled={form.clearPassword}
+                />
+                {editing?.hasGenericCredentials && (
+                  <label className="checkLine">
+                    <input
+                      type="checkbox"
+                      checked={form.clearPassword}
+                      onChange={(event) => setForm((current) => ({
+                        ...current,
+                        clearPassword: event.target.checked,
+                        password: event.target.checked ? "" : current.password
+                      }))}
+                    />
+                    Clear saved password
+                  </label>
+                )}
                 <input placeholder="Port" inputMode="numeric" value={form.port} onChange={(event) => setForm((current) => ({ ...current, port: event.target.value }))} />
               </>
             ) : (
               <>
                 <input placeholder="Remote path" value={form.remotePath} onChange={(event) => setForm((current) => ({ ...current, remotePath: event.target.value }))} />
-                <textarea placeholder={editing?.hasGenericConfig ? "Imported rclone config (leave blank to keep)" : "Paste rclone config for this remote"} value={form.rcloneConfig} onChange={(event) => setForm((current) => ({ ...current, rcloneConfig: event.target.value }))} required={!editing} />
+                <textarea
+                  placeholder={editing?.hasGenericConfig ? "Imported rclone config (leave blank to keep)" : "Paste rclone config for this remote"}
+                  value={form.rcloneConfig}
+                  onChange={(event) => setForm((current) => ({ ...current, rcloneConfig: event.target.value }))}
+                  required={!editing || (editing.type === "rclone" && editing.rcloneProvider !== form.provider)}
+                />
               </>
             )}
           </>
-        )}
+        ) : null}
         <ButtonRow>
           <button type="submit" className="primary" disabled={action.busy}>
             <Plus size={16} />
@@ -259,7 +371,7 @@ export function StorageTargetsPanel({
         </ButtonRow>
       </InlineForm>
 
-      {action.error && <div className="notice error">{action.error}</div>}
+      {action.error && <div className="notice error" role="alert">{action.error}</div>}
 
       <DataTable
         rows={targets}
@@ -267,7 +379,7 @@ export function StorageTargetsPanel({
         render={(target) => [
           target.name,
           target.type === "rclone" ? `rclone:${target.rcloneProvider ?? "custom"}` : target.type,
-          target.type === "s3" ? target.endpoint : target.type === "rclone" ? target.remotePath ?? "remote root" : (target.basePath ?? "default"),
+          target.type === "s3" ? target.endpoint : target.type === "rclone" ? target.remotePath ?? "remote root" : "manager backup directory",
           target.bucket ?? "—",
           target.localCachePolicy === "remote_only" ? "remote only" : "keep",
           target.healthStatus === "healthy" ? "healthy" : target.healthStatus === "failed" ? (target.healthError ?? "failed") : "unknown",
@@ -275,11 +387,14 @@ export function StorageTargetsPanel({
           target.enabled ? "yes" : "no",
           formatDate(target.updatedAt),
           <ButtonRow key="actions">
-            <button type="button" title="Test target" onClick={() => void testTarget(target)} disabled={action.busy}>
+            <button type="button" title="Test target" onClick={() => void testTarget(target).catch(() => undefined)} disabled={action.busy}>
               <ShieldCheck size={16} />
             </button>
             <button type="button" title="Edit target" onClick={() => { setEditingId(target.id); setForm(formFromTarget(target)); }}>
               <Pencil size={16} />
+            </button>
+            <button type="button" className="danger" title="Delete target" onClick={() => void deleteTarget(target).catch(() => undefined)} disabled={action.busy}>
+              <Trash2 size={16} />
             </button>
           </ButtonRow>
         ]}

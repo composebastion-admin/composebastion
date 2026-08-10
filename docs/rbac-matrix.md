@@ -19,12 +19,13 @@ capabilities, and operator includes viewer capabilities.
 |------|--------|----------|---------------|-------|
 | Hosts and inventory | Read | Mutate/check/sync | Mutate/check/sync | Host secrets are never returned. |
 | Containers | Logs/stats/inspect/usage | Exec, backup, mutate, migrate | Exec, backup, mutate, migrate | Inspect env values are redacted for viewers. |
-| Compose, apps, catalog | Read | Deploy/update/rollback/remove | Deploy/update/rollback/remove | All mutations flow through typed jobs. |
+| Compose, apps, catalog | Read redacted metadata | Deploy/update/rollback/remove and read definitions | Deploy/update/rollback/remove and read definitions | Viewer stack and service responses omit Compose YAML, environment data, embedded repository credentials, host source paths, and raw source/deploy errors. |
+| Deployment analyses and My Library | None | Full management | Full management | Source definitions, environment defaults, and analysis drafts can contain deployment secrets. |
 | Backups and recovery | Read recovery points | Create, restore, verify, drill, delete | Create, restore, verify, drill, delete | Download is operator-gated because archives may contain secrets. |
 | Host files and terminal | None | File browser/read/write | Terminal access | Host terminal is admin/owner only. |
 | Alerts | Read status/history/silences/test history | Manage rules/channels/silences/tests | Manage rules/channels/silences/tests | Viewer reads expose alert metadata only; mutations remain operator-gated. |
 | Registries | None | Full management | Full management | Registry credentials may expose operational secrets. |
-| Jobs | Read | Read | Read | Job creation is done through the feature-specific operator routes. |
+| Jobs | Read redacted status | Read details | Read details | Viewer responses omit payloads, results, progress detail, and raw errors because jobs may carry deployment or environment secrets. |
 | Audit | None | None | Read | Audit details are administrative records. |
 | Platform self-update | None | None | Configure and run | Self-update can restart the manager app and worker, so it is admin/owner only. |
 | Users and config import/export | None | None | Full management | Config export may include encrypted secret material. |
@@ -40,5 +41,7 @@ capabilities, and operator includes viewer capabilities.
 - Viewer routes must not return secret material. Redact env values, credentials,
   tokens, private keys, archive contents, and host file contents unless the route
   is intentionally operator/admin gated.
+- Audit records must describe sensitive actions without retaining command text,
+  environment values, credentials, tokens, private keys, or file contents.
 - Prefer additive response changes before 1.0; document any shape that becomes
   part of the compatibility contract.

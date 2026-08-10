@@ -7,6 +7,7 @@ import { ButtonRow, DataTable, Panel, StatusPill, VirtualDataTable } from "../ui
 import { HostSelect } from "../dashboard/HostSelect.js";
 import { useConfirm } from "../ConfirmProvider.js";
 import { useAuthorization } from "../AuthorizationContext.js";
+import { useAsyncAction } from "../../hooks/useAsyncAction.js";
 
 const hostMetricConditionLabels: Record<HostMetricAlertCondition, string> = {
   "host.cpu": "Host CPU",
@@ -55,6 +56,7 @@ function toApiDateTime(value: string) {
 export function AlertsPanel({ hosts, containers, refresh }: { hosts: DockerHost[]; containers: ResourceSnapshot[]; refresh: () => Promise<void> }) {
   const { confirm } = useConfirm();
   const { canOperate: canManage } = useAuthorization();
+  const action = useAsyncAction();
   const [channels, setChannels] = useState<NotificationChannel[]>([]);
   const [rules, setRules] = useState<AlertRule[]>([]);
   const [silences, setSilences] = useState<AlertSilence[]>([]);
@@ -104,7 +106,9 @@ export function AlertsPanel({ hosts, containers, refresh }: { hosts: DockerHost[
     setRules(ruleResult.rules);
   }, [canManage]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void action.run(load).catch(() => undefined);
+  }, [action.run, load]);
   useEffect(() => {
     if (!ruleForm.hostId && hosts[0]?.id) setRuleForm((current) => ({ ...current, hostId: hosts[0]!.id }));
   }, [hosts, ruleForm.hostId]);
@@ -113,52 +117,59 @@ export function AlertsPanel({ hosts, containers, refresh }: { hosts: DockerHost[
   }, [hosts, silenceForm.hostId]);
 
   const submitRule = async () => {
-    const payload: Record<string, unknown> = {
-      name: ruleForm.name,
-      condition: ruleForm.condition,
-      hostId: ruleForm.hostId,
-      channelId: ruleForm.channelId,
-      enabled: true
-    };
-    if (ruleForm.condition === "container.not_running" && ruleForm.containerId) {
-      payload.containerId = ruleForm.containerId;
-    }
-    if (isHostMetricCondition(ruleForm.condition)) {
-      const params: Record<string, unknown> = {
-        comparator: ruleForm.comparator,
-        threshold: Number(ruleForm.threshold),
-        durationSeconds: Math.max(1, Math.round(Number(ruleForm.durationMinutes) || 5)) * 60
+    await action.run(async () => {
+      const payload: Record<string, unknown> = {
+        name: ruleForm.name,
+        condition: ruleForm.condition,
+        hostId: ruleForm.hostId,
+        channelId: ruleForm.channelId,
+        enabled: true
       };
-      if (ruleForm.condition === "host.disk" && ruleForm.mount.trim()) params.mount = ruleForm.mount.trim();
-      payload.params = params;
-    }
-    await postJson("/api/alerts/rules", payload);
-    await load();
-    await refresh();
+      if (ruleForm.condition === "container.not_running" && ruleForm.containerId) {
+        payload.containerId = ruleForm.containerId;
+      }
+      if (isHostMetricCondition(ruleForm.condition)) {
+        const params: Record<string, unknown> = {
+          comparator: ruleForm.comparator,
+          threshold: Number(ruleForm.threshold),
+          durationSeconds: Math.max(1, Math.round(Number(ruleForm.durationMinutes) || 5)) * 60
+        };
+        if (ruleForm.condition === "host.disk" && ruleForm.mount.trim()) params.mount = ruleForm.mount.trim();
+        payload.params = params;
+      }
+      await postJson("/api/alerts/rules", payload);
+      setRuleForm((current) => ({ ...current, name: "" }));
+      await load();
+      await refresh();
+    });
   };
 
   const submitSilence = async () => {
-    const payload: Record<string, unknown> = {
-      name: silenceForm.name,
-      endsAt: toApiDateTime(silenceForm.endsAt),
-      reason: silenceForm.reason.trim() || undefined
-    };
-    if (silenceForm.scope === "rule") payload.ruleId = silenceForm.ruleId;
-    else payload.hostId = silenceForm.hostId;
-    await postJson("/api/alerts/silences", payload);
-    setSilenceForm((current) => ({ ...current, name: "", reason: "", endsAt: defaultSilenceEnd() }));
-    await load();
+    await action.run(async () => {
+      const payload: Record<string, unknown> = {
+        name: silenceForm.name,
+        endsAt: toApiDateTime(silenceForm.endsAt),
+        reason: silenceForm.reason.trim() || undefined
+      };
+      if (silenceForm.scope === "rule") payload.ruleId = silenceForm.ruleId;
+      else payload.hostId = silenceForm.hostId;
+      await postJson("/api/alerts/silences", payload);
+      setSilenceForm((current) => ({ ...current, name: "", reason: "", endsAt: defaultSilenceEnd() }));
+      await load();
+    });
   };
 
   const testChannel = async (channelId: string) => {
-    setChannelTestError(null);
-    try {
-      await postJson(`/api/alerts/channels/${channelId}/test`, {});
-    } catch (caught) {
-      setChannelTestError(caught instanceof Error ? caught.message : String(caught));
-    } finally {
-      await load();
-    }
+    await action.run(async () => {
+      setChannelTestError(null);
+      try {
+        await postJson(`/api/alerts/channels/${channelId}/test`, {});
+      } catch (caught) {
+        setChannelTestError(caught instanceof Error ? caught.message : String(caught));
+      } finally {
+        await load();
+      }
+    });
   };
 
   async function confirmDelete(kind: "rule" | "channel" | "silence", id: string, label: string) {
@@ -169,8 +180,31 @@ export function AlertsPanel({ hosts, containers, refresh }: { hosts: DockerHost[
       message: `Delete ${kind} “${label}”? This cannot be undone.`
     });
     if (!confirmed) return;
-    await deleteJson(`/api/alerts/${kind === "rule" ? "rules" : kind === "channel" ? "channels" : "silences"}/${id}`);
-    await load();
+    await action.run(async () => {
+      await deleteJson(`/api/alerts/${kind === "rule" ? "rules" : kind === "channel" ? "channels" : "silences"}/${id}`);
+      await load();
+    });
+  }
+
+  async function submitChannel() {
+    await action.run(async () => {
+      const payload = channelForm.type === "email"
+        ? {
+            name: channelForm.name,
+            type: "email",
+            emailTo: channelForm.emailTo,
+            enabled: true
+          }
+        : {
+            name: channelForm.name,
+            type: "webhook",
+            webhookUrl: channelForm.webhookUrl,
+            enabled: true
+          };
+      await postJson("/api/alerts/channels", payload);
+      setChannelForm({ name: "", type: channelForm.type, emailTo: "", webhookUrl: "" });
+      await load();
+    });
   }
 
   return (
@@ -178,18 +212,27 @@ export function AlertsPanel({ hosts, containers, refresh }: { hosts: DockerHost[
       {canManage && (
         <>
           <div className="split">
-            <form className="stack" onSubmit={(event) => { event.preventDefault(); void postJson("/api/alerts/channels", { ...channelForm, enabled: true }).then(load); }}>
+            <form className="stack" onSubmit={(event) => {
+              event.preventDefault();
+              void submitChannel().catch(() => undefined);
+            }}>
               <strong>Notification Channel</strong>
-              <input placeholder="Name" value={channelForm.name} onChange={(event) => setChannelForm({ ...channelForm, name: event.target.value })} required />
-              <select value={channelForm.type} onChange={(event) => setChannelForm({ ...channelForm, type: event.target.value })}>
+              <input aria-label="Channel name" placeholder="Name" value={channelForm.name} onChange={(event) => setChannelForm({ ...channelForm, name: event.target.value })} required />
+              <select aria-label="Channel type" value={channelForm.type} onChange={(event) => setChannelForm({ ...channelForm, type: event.target.value })}>
                 <option value="email">Email</option>
                 <option value="webhook">Webhook</option>
               </select>
-              <input placeholder="Email recipient" value={channelForm.emailTo} onChange={(event) => setChannelForm({ ...channelForm, emailTo: event.target.value })} />
-              <input placeholder="Webhook URL" value={channelForm.webhookUrl} onChange={(event) => setChannelForm({ ...channelForm, webhookUrl: event.target.value })} />
-              <button className="primary"><Bell size={18} />Save Channel</button>
+              {channelForm.type === "email" ? (
+                <input aria-label="Email recipient" type="email" placeholder="Email recipient" value={channelForm.emailTo} onChange={(event) => setChannelForm({ ...channelForm, emailTo: event.target.value })} required />
+              ) : (
+                <input aria-label="Webhook URL" type="url" placeholder="Webhook URL" value={channelForm.webhookUrl} onChange={(event) => setChannelForm({ ...channelForm, webhookUrl: event.target.value })} required />
+              )}
+              <button className="primary" disabled={action.busy}><Bell size={18} />Save Channel</button>
             </form>
-            <form className="stack" onSubmit={(event) => { event.preventDefault(); void submitRule(); }}>
+            <form className="stack" onSubmit={(event) => {
+              event.preventDefault();
+              void submitRule().catch(() => undefined);
+            }}>
               <strong>Alert Rule</strong>
               <input placeholder="Rule name" value={ruleForm.name} onChange={(event) => setRuleForm({ ...ruleForm, name: event.target.value })} required />
               <select value={ruleForm.condition} onChange={(event) => {
@@ -257,7 +300,7 @@ export function AlertsPanel({ hosts, containers, refresh }: { hosts: DockerHost[
                 <option value="">Channel</option>
                 {channels.map((channel) => <option key={channel.id} value={channel.id}>{channel.name}</option>)}
               </select>
-              <button className="primary"><Bell size={18} />Save Rule</button>
+              <button className="primary" disabled={action.busy}><Bell size={18} />Save Rule</button>
             </form>
           </div>
           <DataTable rows={rules} columns={["Name", "Condition", "State", "Actions"]} render={(rule) => [
@@ -271,16 +314,20 @@ export function AlertsPanel({ hosts, containers, refresh }: { hosts: DockerHost[
               {rule.breachingSince && <small>Breaching since {formatDate(rule.breachingSince)}</small>}
               {rule.lastError && <small className="errorText">{rule.lastError}</small>}
             </div>,
-            <button key="delete" className="danger" onClick={() => void confirmDelete("rule", rule.id, rule.name)}><Trash2 size={16} /></button>
+            <button key="delete" className="danger" disabled={action.busy} onClick={() => void confirmDelete("rule", rule.id, rule.name).catch(() => undefined)}><Trash2 size={16} /></button>
           ]} />
           <DataTable rows={channels} columns={["Channel", "Type", "Target", "Actions"]} render={(channel) => [
             channel.name,
             channel.type,
             channel.emailTo ?? channel.webhookUrl ?? "",
-            <ButtonRow key="actions"><button onClick={() => void testChannel(channel.id)}>Test</button><button className="danger" onClick={() => void confirmDelete("channel", channel.id, channel.name)}><Trash2 size={16} /></button></ButtonRow>
+            <ButtonRow key="actions">
+              <button disabled={action.busy} onClick={() => void testChannel(channel.id).catch(() => undefined)}>Test</button>
+              <button className="danger" disabled={action.busy} onClick={() => void confirmDelete("channel", channel.id, channel.name).catch(() => undefined)}><Trash2 size={16} /></button>
+            </ButtonRow>
           ]} />
         </>
       )}
+      {action.error && <div className="notice error" role="alert">{action.error}</div>}
       {channelTestError && <div className="notice error">{channelTestError}</div>}
       <div className="panelSectionTitle">Channel Test History</div>
       <VirtualDataTable rows={channelTestEvents} maxRows={60} columns={["When", "Channel", "Status", "Error"]} render={(event) => [
@@ -291,7 +338,10 @@ export function AlertsPanel({ hosts, containers, refresh }: { hosts: DockerHost[
       ]} />
       <div className="panelSectionTitle">Silences</div>
       {canManage && (
-        <form className="inlineForm" onSubmit={(event) => { event.preventDefault(); void submitSilence(); }}>
+        <form className="inlineForm" onSubmit={(event) => {
+          event.preventDefault();
+          void submitSilence().catch(() => undefined);
+        }}>
           <strong>Maintenance window</strong>
           <input placeholder="Name" value={silenceForm.name} onChange={(event) => setSilenceForm({ ...silenceForm, name: event.target.value })} required />
           <select value={silenceForm.scope} onChange={(event) => setSilenceForm({ ...silenceForm, scope: event.target.value as "host" | "rule" })}>
@@ -308,7 +358,7 @@ export function AlertsPanel({ hosts, containers, refresh }: { hosts: DockerHost[
           )}
           <input type="datetime-local" value={silenceForm.endsAt} onChange={(event) => setSilenceForm({ ...silenceForm, endsAt: event.target.value })} required />
           <input placeholder="Reason, optional" value={silenceForm.reason} onChange={(event) => setSilenceForm({ ...silenceForm, reason: event.target.value })} />
-          <button className="primary"><Clock size={16} />Silence</button>
+          <button className="primary" disabled={action.busy}><Clock size={16} />Silence</button>
         </form>
       )}
       <VirtualDataTable rows={silences} maxRows={80} columns={canManage ? ["Name", "Scope", "Window", "Reason", "Actions"] : ["Name", "Scope", "Window", "Reason"]} render={(silence) => [
@@ -316,7 +366,7 @@ export function AlertsPanel({ hosts, containers, refresh }: { hosts: DockerHost[
         silence.ruleId ? `Rule ${rules.find((rule) => rule.id === silence.ruleId)?.name ?? silence.ruleId}` : `Host ${hosts.find((host) => host.id === silence.hostId)?.name ?? silence.hostId ?? "all"}`,
         `${formatDate(silence.startsAt)} - ${formatDate(silence.endsAt)}`,
         silence.reason ?? "",
-        ...(canManage ? [<button key="delete" className="danger" onClick={() => void confirmDelete("silence", silence.id, silence.name)}><Trash2 size={16} /></button>] : [])
+        ...(canManage ? [<button key="delete" className="danger" disabled={action.busy} onClick={() => void confirmDelete("silence", silence.id, silence.name).catch(() => undefined)}><Trash2 size={16} /></button>] : [])
       ]} />
       <div className="panelSectionTitle">History</div>
       <VirtualDataTable rows={events} maxRows={100} columns={["When", "State", "Message", "Delivery"]} render={(event) => [

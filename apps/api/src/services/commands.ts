@@ -110,10 +110,28 @@ export function buildDockerActionCommand(action: DockerActionRequest) {
   }
 }
 
-export function buildComposeCommand(projectName: string, remoteComposePath: string, action: "up" | "stop" | "down" | "pull", removeVolumes = false) {
-  const base = `docker compose -p ${shQuote(projectName)} -f ${shQuote(remoteComposePath)}`;
+export function buildComposeCommand(
+  projectName: string,
+  remoteComposePath: string,
+  action: "up" | "stop" | "down" | "pull",
+  removeVolumes = false,
+  environmentFile?:
+    | { path: string }
+    | { environmentVariable: "COMPOSEBASTION_REMOTE_INPUT" },
+  buildBeforeUp = false
+) {
+  const envFile = environmentFile
+    ? ` --env-file ${
+        "path" in environmentFile
+          ? shQuote(environmentFile.path)
+          : `"$${environmentFile.environmentVariable}"`
+      }`
+    : "";
+  const base = `docker compose${envFile} -p ${shQuote(projectName)} -f ${shQuote(remoteComposePath)}`;
   if (action === "pull") return `${base} pull`;
-  if (action === "up") return `${base} up -d --remove-orphans --force-recreate`;
+  if (action === "up") {
+    return `${base} up -d${buildBeforeUp ? " --build" : ""} --remove-orphans --force-recreate`;
+  }
   if (action === "stop") return `${base} stop`;
   return `${base} down --remove-orphans${removeVolumes ? " --volumes" : ""}`;
 }

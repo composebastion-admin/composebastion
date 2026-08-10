@@ -23,8 +23,10 @@ export function ConfigBackupPanel({ onImported }: { onImported: () => Promise<vo
       const anchor = document.createElement("a");
       anchor.href = url;
       anchor.download = `composebastion-config-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.append(anchor);
       anchor.click();
-      URL.revokeObjectURL(url);
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
     });
   }
 
@@ -66,20 +68,20 @@ export function ConfigBackupPanel({ onImported }: { onImported: () => Promise<vo
         <h3>Config Backup</h3>
       </div>
       <div className="two">
-        <input placeholder="Backup passphrase" type="password" minLength={12} value={passphrase} onChange={(event) => setPassphrase(event.target.value)} />
+        <input aria-label="Backup passphrase" placeholder="Backup passphrase" type="password" minLength={12} value={passphrase} onChange={(event) => setPassphrase(event.target.value)} />
         <ButtonRow>
-          <button type="button" onClick={() => void exportConfig()}><Download size={16} />Export</button>
+          <button type="button" disabled={action.busy || passphrase.length < 12} onClick={() => void exportConfig().catch(() => undefined)}><Download size={16} />Export</button>
           <label className="buttonLike">
             <Upload size={16} />
             Choose JSON
-            <input type="file" accept="application/json,.json" onChange={(event) => void loadBackupFile(event)} />
+            <input aria-label="Choose encrypted config JSON" type="file" accept="application/json,.json" disabled={action.busy} onChange={(event) => void loadBackupFile(event).catch(() => undefined)} />
           </label>
-          <button type="button" onClick={() => void importConfig()}><Upload size={16} />Import</button>
+          <button type="button" disabled={action.busy || passphrase.length < 12} onClick={() => void importConfig().catch(() => undefined)}><Upload size={16} />Import</button>
         </ButtonRow>
       </div>
-      <textarea className="monoTextarea" placeholder="Encrypted config JSON" value={backupText} onChange={(event) => setBackupText(event.target.value)} />
-      {message && <div className="notice success">{message}</div>}
-      {action.error && <div className="notice error">{action.error}</div>}
+      <textarea aria-label="Encrypted config JSON" className="monoTextarea" placeholder="Encrypted config JSON" value={backupText} onChange={(event) => setBackupText(event.target.value)} />
+      {message && <div className="notice success" role="status">{message}</div>}
+      {action.error && <div className="notice error" role="alert">{action.error}</div>}
     </div>
   );
 }

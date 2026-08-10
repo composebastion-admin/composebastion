@@ -18,6 +18,8 @@ describe.skipIf(!integrationEnabled)("auth API integration", () => {
   });
 
   beforeEach(async () => {
+    await pool.query("DROP TRIGGER IF EXISTS auth_atomicity_audit_reject ON audit_events");
+    await pool.query("DROP FUNCTION IF EXISTS auth_atomicity_audit_reject_fn()");
     await pool.query("DELETE FROM audit_events");
     await pool.query("DELETE FROM sessions");
     await pool.query("DELETE FROM admin_users");
@@ -42,6 +44,7 @@ describe.skipIf(!integrationEnabled)("auth API integration", () => {
     const response = await app.inject({
       method: "POST",
       url: "/api/auth/setup",
+      remoteAddress: "192.0.2.1",
       payload: { username: "admin", password: strongPassword }
     });
     expect(response.statusCode).toBe(200);
@@ -76,12 +79,193 @@ describe.skipIf(!integrationEnabled)("auth API integration", () => {
     expect(responses.map((response) => response.statusCode).sort()).toEqual([200, 409]);
     const owners = await pool.query("SELECT id FROM admin_users WHERE role = 'owner' AND is_active = true");
     expect(owners.rowCount).toBe(1);
+    const sessions = await pool.query("SELECT id FROM sessions");
+    expect(sessions.rowCount).toBe(1);
+    const setupAudits = await pool.query(
+      "SELECT id FROM audit_events WHERE action = 'auth.setup'"
+    );
+    expect(setupAudits.rowCount).toBe(1);
+  });
+
+  it("rolls back owner, demo data, audit, and session when demo setup fails", async () => {
+    const conflictHostId = randomUUID();
+    await pool.query(
+      `INSERT INTO docker_hosts (
+         id, name, hostname, username, ssh_key_encrypted
+       )
+       VALUES ($1, 'Demo Production Node', $2, 'conflict', 'not-a-real-key')`,
+      [conflictHostId, `${randomUUID()}.invalid`]
+    );
+
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/auth/setup",
+        remoteAddress: "192.0.2.20",
+        payload: {
+          username: "atomic-owner",
+          password: strongPassword,
+          includeDemoData: true
+        }
+      });
+      expect(response.statusCode).toBe(409);
+
+      const [users, sessions, setupAudits, demoHosts] = await Promise.all([
+        pool.query("SELECT id FROM admin_users"),
+        pool.query("SELECT id FROM sessions"),
+        pool.query("SELECT id FROM audit_events WHERE action = 'auth.setup'"),
+        pool.query(
+          "SELECT id FROM docker_hosts WHERE tags @> ARRAY['demo']::text[]"
+        )
+      ]);
+      expect(users.rowCount).toBe(0);
+      expect(sessions.rowCount).toBe(0);
+      expect(setupAudits.rowCount).toBe(0);
+      expect(demoHosts.rowCount).toBe(0);
+    } finally {
+      await pool.query("DELETE FROM docker_hosts WHERE id = $1", [conflictHostId]);
+    }
+  });
+
+  it("rolls back first-owner setup when its required audit insert fails", async () => {
+    await pool.query(`
+      CREATE FUNCTION auth_atomicity_audit_reject_fn() RETURNS trigger AS $$
+      BEGIN
+        IF NEW.action = 'auth.setup' THEN
+          RAISE EXCEPTION 'intentional auth setup audit failure';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql
+    `);
+    await pool.query(`
+      CREATE TRIGGER auth_atomicity_audit_reject
+      BEFORE INSERT ON audit_events
+      FOR EACH ROW EXECUTE FUNCTION auth_atomicity_audit_reject_fn()
+    `);
+
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/auth/setup",
+        remoteAddress: "192.0.2.30",
+        payload: { username: "atomic-owner", password: strongPassword }
+      });
+      expect(response.statusCode).toBe(500);
+
+      const [users, sessions] = await Promise.all([
+        pool.query("SELECT id FROM admin_users"),
+        pool.query("SELECT id FROM sessions")
+      ]);
+      expect(users.rowCount).toBe(0);
+      expect(sessions.rowCount).toBe(0);
+    } finally {
+      await pool.query("DROP TRIGGER IF EXISTS auth_atomicity_audit_reject ON audit_events");
+      await pool.query("DROP FUNCTION IF EXISTS auth_atomicity_audit_reject_fn()");
+    }
+  });
+
+  it("rolls back login session and last-login timestamp when login audit fails", async () => {
+    const setup = await app.inject({
+      method: "POST",
+      url: "/api/auth/setup",
+      remoteAddress: "192.0.2.40",
+      payload: { username: "atomic-owner", password: strongPassword }
+    });
+    expect(setup.statusCode).toBe(200);
+    const userId = setup.json().user.id as string;
+    const baseline = new Date("2026-01-02T03:04:05.000Z");
+    await pool.query("DELETE FROM sessions");
+    await pool.query(
+      "UPDATE admin_users SET last_login_at = $2 WHERE id = $1",
+      [userId, baseline]
+    );
+    await pool.query(`
+      CREATE FUNCTION auth_atomicity_audit_reject_fn() RETURNS trigger AS $$
+      BEGIN
+        IF NEW.action = 'auth.login' THEN
+          RAISE EXCEPTION 'intentional auth login audit failure';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql
+    `);
+    await pool.query(`
+      CREATE TRIGGER auth_atomicity_audit_reject
+      BEFORE INSERT ON audit_events
+      FOR EACH ROW EXECUTE FUNCTION auth_atomicity_audit_reject_fn()
+    `);
+
+    try {
+      const login = await app.inject({
+        method: "POST",
+        url: "/api/auth/login",
+        payload: { identifier: "atomic-owner", password: strongPassword }
+      });
+      expect(login.statusCode).toBe(500);
+
+      const [sessions, saved] = await Promise.all([
+        pool.query("SELECT id FROM sessions WHERE user_id = $1", [userId]),
+        pool.query<{ last_login_at: Date }>(
+          "SELECT last_login_at FROM admin_users WHERE id = $1",
+          [userId]
+        )
+      ]);
+      expect(sessions.rowCount).toBe(0);
+      expect(saved.rows[0]?.last_login_at.toISOString()).toBe(
+        baseline.toISOString()
+      );
+    } finally {
+      await pool.query("DROP TRIGGER IF EXISTS auth_atomicity_audit_reject ON audit_events");
+      await pool.query("DROP FUNCTION IF EXISTS auth_atomicity_audit_reject_fn()");
+    }
+  });
+
+  it("does not return session metadata when its read audit fails", async () => {
+    const setup = await app.inject({
+      method: "POST",
+      url: "/api/auth/setup",
+      remoteAddress: "192.0.2.70",
+      headers: { "user-agent": "Sensitive Session Agent" },
+      payload: { username: "session-owner", password: strongPassword }
+    });
+    expect(setup.statusCode).toBe(200);
+    const cookie = firstSetCookie(setup);
+    await pool.query(`
+      CREATE FUNCTION auth_atomicity_audit_reject_fn() RETURNS trigger AS $$
+      BEGIN
+        IF NEW.action = 'auth.sessions_read' THEN
+          RAISE EXCEPTION 'intentional session read audit failure';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql
+    `);
+    await pool.query(`
+      CREATE TRIGGER auth_atomicity_audit_reject
+      BEFORE INSERT ON audit_events
+      FOR EACH ROW EXECUTE FUNCTION auth_atomicity_audit_reject_fn()
+    `);
+
+    try {
+      const listed = await app.inject({
+        method: "GET",
+        url: "/api/auth/sessions",
+        headers: { cookie }
+      });
+      expect(listed.statusCode).toBe(500);
+      expect(listed.body).not.toContain("Sensitive Session Agent");
+    } finally {
+      await pool.query("DROP TRIGGER IF EXISTS auth_atomicity_audit_reject ON audit_events");
+      await pool.query("DROP FUNCTION IF EXISTS auth_atomicity_audit_reject_fn()");
+    }
   });
 
   it("rejects weak setup passwords", async () => {
     const response = await app.inject({
       method: "POST",
       url: "/api/auth/setup",
+      remoteAddress: "192.0.2.50",
       payload: { username: "admin2", password: "short" }
     });
     expect(response.statusCode).toBe(400);
@@ -91,6 +275,7 @@ describe.skipIf(!integrationEnabled)("auth API integration", () => {
     const setup = await app.inject({
       method: "POST",
       url: "/api/auth/setup",
+      remoteAddress: "192.0.2.60",
       headers: { "user-agent": "Chrome Test Agent" },
       payload: { username: "admin", password: strongPassword }
     });

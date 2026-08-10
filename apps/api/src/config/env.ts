@@ -3,6 +3,7 @@ import { z } from "zod";
 
 export const DEFAULT_APP_SECRET = "change-me-to-a-long-random-secret-at-least-32-characters";
 export const DOCUMENTED_APP_SECRET_PLACEHOLDER = "replace-with-a-unique-random-value-of-at-least-32-characters";
+export const LEGACY_COMPOSE_DATABASE_URL = "postgres://composebastion:composebastion@postgres:5432/composebastion";
 
 export const REPOSITORY_APP_SECRET_PLACEHOLDERS = Object.freeze([
   DEFAULT_APP_SECRET,
@@ -94,7 +95,20 @@ export const envSchema = z.object({
 });
 
 export function parseEnv(input: NodeJS.ProcessEnv = process.env) {
-  const parsed = envSchema.parse(input);
+  // v1.1.0's checked-in .env template populated DATABASE_URL with a fixed
+  // placeholder even though its Compose files derived the real connection
+  // string from POSTGRES_PASSWORD. v1.1.1 began honoring non-empty overrides,
+  // which can surface that dormant placeholder during a later upgrade. Treat
+  // only that exact repository-owned value as legacy; every other explicit
+  // DATABASE_URL remains an operator-owned compatibility/external override.
+  const normalizedInput = input.DATABASE_URL === LEGACY_COMPOSE_DATABASE_URL
+    && input.POSTGRES_PASSWORD
+    ? {
+        ...input,
+        DATABASE_URL: `postgres://composebastion:${encodeURIComponent(input.POSTGRES_PASSWORD)}@postgres:5432/composebastion`
+      }
+    : input;
+  const parsed = envSchema.parse(normalizedInput);
   // In production, ship Secure session cookies unless the operator explicitly opts out.
   if (parsed.NODE_ENV === "production" && input.SECURE_COOKIES === undefined) {
     parsed.SECURE_COOKIES = true;

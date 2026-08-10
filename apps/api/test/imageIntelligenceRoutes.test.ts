@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchRegistryTags = vi.hoisted(() => vi.fn());
 const findRegistryAuthForReference = vi.hoisted(() => vi.fn());
+const writeAuditEvent = vi.hoisted(() => vi.fn(async () => undefined));
 
 vi.mock("../src/services/auth.js", () => ({
   requireRole: vi.fn(() => async (request: any) => {
@@ -43,7 +44,7 @@ vi.mock("../src/services/demo.js", () => ({
 
 vi.mock("../src/services/audit.js", () => ({
   auditContextFromRequest: vi.fn(() => ({})),
-  writeAuditEvent: vi.fn(async () => undefined)
+  writeAuditEvent
 }));
 
 const { registerImageIntelligenceRoutes } = await import("../src/routes/imageIntelligence.js");
@@ -60,6 +61,8 @@ describe("image intelligence routes", () => {
     fetchRegistryTags.mockReset();
     findRegistryAuthForReference.mockReset();
     findRegistryAuthForReference.mockResolvedValue(null);
+    writeAuditEvent.mockReset();
+    writeAuditEvent.mockResolvedValue(undefined);
   });
 
   it("returns a registry error envelope when image tags cannot be listed", async () => {
@@ -129,6 +132,22 @@ describe("image intelligence routes", () => {
       insecure: true,
       trustedOrigin: "http://registry.internal:5000"
     });
+    await app.close();
+  });
+
+  it("does not decrypt registry credentials or call the registry when audit persistence fails", async () => {
+    const auditFailure = new Error("audit insert failed");
+    writeAuditEvent.mockRejectedValueOnce(auditFailure);
+    const app = await buildApp();
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/image-tags?image=registry.example.com%2Facme%2Fapp"
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(findRegistryAuthForReference).not.toHaveBeenCalled();
+    expect(fetchRegistryTags).not.toHaveBeenCalled();
     await app.close();
   });
 });

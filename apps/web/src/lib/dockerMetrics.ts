@@ -1,5 +1,5 @@
 import type { ResourceSnapshot } from "@composebastion/shared";
-import { containerData } from "@composebastion/shared";
+import { containerData, dockerStatsRecordsMatch } from "@composebastion/shared";
 import type { OverviewMetricHistory } from "./dashboardTypes.js";
 
 export const OVERVIEW_HISTORY_KEY = "composebastion.overview.history.v1";
@@ -30,10 +30,11 @@ export function pushMetricSample(samples: number[], value: number) {
 
 export function findUsageRow(container: ResourceSnapshot, rows: Record<string, unknown>[]) {
   const data = containerData(container);
-  return rows.find((item) => {
-    const row = item as { ID?: string; Name?: string };
-    return String(container.externalId).startsWith(String(row.ID)) || String(row.Name) === String(data.Names ?? container.name);
-  }) as Record<string, unknown> | undefined;
+  const containerIdentity = {
+    ID: String(container.externalId),
+    Name: String(data.Names ?? container.name)
+  };
+  return rows.find((item) => dockerStatsRecordsMatch(item, containerIdentity));
 }
 
 export function loadOverviewHistory(): OverviewMetricHistory {

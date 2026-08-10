@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const query = vi.fn();
+const withTransaction = vi.fn();
 const deleteRecoveryPointLocalFiles = vi.fn();
 const deleteRecoveryPointRemoteArtifacts = vi.fn();
 
 vi.mock("../src/db/pool.js", () => ({
-  query: (...args: unknown[]) => query(...args)
+  query: (...args: unknown[]) => query(...args),
+  withTransaction: (...args: unknown[]) => withTransaction(...args)
 }));
 
 vi.mock("../src/services/recoveryStorage.js", () => ({
@@ -80,11 +82,15 @@ function artifactRow(recoveryPointId: string) {
 describe("scheduled recovery retention", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    withTransaction.mockImplementation(async (
+      callback: (client: { query: typeof query }) => Promise<unknown>
+    ) => callback({ query }));
     deleteRecoveryPointLocalFiles.mockResolvedValue(undefined);
     deleteRecoveryPointRemoteArtifacts.mockResolvedValue({ deletedObjectKeys: [] });
   });
 
   it("deletes recovery points beyond the scheduled retention count", async () => {
+    const claimedMetadata = new Map<string, Record<string, unknown>>();
     query.mockImplementation(async (sql: string, params?: unknown[]) => {
       if (sql.includes("SELECT id") && sql.includes("OFFSET")) {
         return {
@@ -94,11 +100,28 @@ describe("scheduled recovery retention", () => {
           ]
         };
       }
-      if (sql === "SELECT * FROM recovery_points WHERE id = $1") {
-        return { rows: [oldPointRow(String(params?.[0]))] };
+      if (sql.includes("SELECT * FROM recovery_points WHERE id = $1")) {
+        const id = String(params?.[0]);
+        return {
+          rows: [{
+            ...oldPointRow(id),
+            metadata: claimedMetadata.get(id) ?? currentPoint.metadata
+          }]
+        };
+      }
+      if (sql.includes("UPDATE recovery_points") && params) {
+        const id = String(params[0]);
+        claimedMetadata.set(id, {
+          ...(claimedMetadata.get(id) ?? currentPoint.metadata),
+          ...JSON.parse(String(params[1]))
+        });
+        return { rows: [], rowCount: 1 };
       }
       if (sql.includes("SELECT * FROM recovery_artifacts")) {
         return { rows: [artifactRow(String(params?.[0]))] };
+      }
+      if (sql.includes("DELETE FROM recovery_points")) {
+        return { rows: [], rowCount: 1 };
       }
       return { rows: [] };
     });
@@ -118,13 +141,13 @@ describe("scheduled recovery retention", () => {
     expect(deleteRecoveryPointRemoteArtifacts).toHaveBeenCalledTimes(2);
     expect(deleteRecoveryPointLocalFiles).toHaveBeenCalledTimes(2);
     expect(query).toHaveBeenCalledWith(
-      "DELETE FROM recovery_points WHERE id = $1",
-      ["00000000-0000-4000-8000-000000000023"]
+      expect.stringContaining("DELETE FROM recovery_points"),
+      ["00000000-0000-4000-8000-000000000023", expect.any(String)]
     );
     const firstRemoteOrder = deleteRecoveryPointRemoteArtifacts.mock.invocationCallOrder[0];
     const firstLocalOrder = deleteRecoveryPointLocalFiles.mock.invocationCallOrder[0];
     const firstDbDeleteCallIndex = query.mock.calls.findIndex((call) =>
-      call[0] === "DELETE FROM recovery_points WHERE id = $1"
+      String(call[0]).includes("DELETE FROM recovery_points")
       && (call[1] as string[])[0] === "00000000-0000-4000-8000-000000000023"
     );
     expect(firstRemoteOrder).toBeLessThan(firstLocalOrder);
@@ -147,7 +170,7 @@ describe("scheduled recovery retention", () => {
     const oldId = "00000000-0000-4000-8000-000000000025";
     query.mockImplementation(async (sql: string, params?: unknown[]) => {
       if (sql.includes("SELECT id") && sql.includes("OFFSET")) return { rows: [{ id: oldId }] };
-      if (sql === "SELECT * FROM recovery_points WHERE id = $1") return { rows: [oldPointRow(String(params?.[0]))] };
+      if (sql.includes("SELECT * FROM recovery_points WHERE id = $1")) return { rows: [oldPointRow(String(params?.[0]))] };
       if (sql.includes("SELECT * FROM recovery_artifacts")) return { rows: [artifactRow(String(params?.[0]))] };
       return { rows: [] };
     });
@@ -159,8 +182,11 @@ describe("scheduled recovery retention", () => {
     expect(result.deletedIds).toEqual([]);
     expect(result.failures[0]).toContain("local rm failed");
     expect(deleteRecoveryPointRemoteArtifacts).toHaveBeenCalledTimes(1);
-    expect(query).not.toHaveBeenCalledWith("DELETE FROM recovery_points WHERE id = $1", [oldId]);
-    const updateCall = query.mock.calls.find((call) => String(call[0]).includes("UPDATE recovery_points"));
+    expect(query.mock.calls.some(([sql]) => String(sql).includes("DELETE FROM recovery_points"))).toBe(false);
+    const updateCall = query.mock.calls.find((call) =>
+      String(call[1]?.[0]) === currentPoint.id
+      && String(call[1]?.[1]).includes("local rm failed")
+    );
     expect(updateCall?.[1]).toEqual([currentPoint.id, expect.stringContaining("local rm failed")]);
   });
 
@@ -168,7 +194,7 @@ describe("scheduled recovery retention", () => {
     const oldId = "00000000-0000-4000-8000-000000000028";
     query.mockImplementation(async (sql: string, params?: unknown[]) => {
       if (sql.includes("SELECT id") && sql.includes("OFFSET")) return { rows: [{ id: oldId }] };
-      if (sql === "SELECT * FROM recovery_points WHERE id = $1") return { rows: [oldPointRow(String(params?.[0]))] };
+      if (sql.includes("SELECT * FROM recovery_points WHERE id = $1")) return { rows: [oldPointRow(String(params?.[0]))] };
       if (sql.includes("SELECT * FROM recovery_artifacts")) return { rows: [artifactRow(String(params?.[0]))] };
       return { rows: [] };
     });
@@ -180,8 +206,11 @@ describe("scheduled recovery retention", () => {
     expect(result.deletedIds).toEqual([]);
     expect(result.failures[0]).toContain("s3 delete failed");
     expect(deleteRecoveryPointLocalFiles).not.toHaveBeenCalled();
-    expect(query).not.toHaveBeenCalledWith("DELETE FROM recovery_points WHERE id = $1", [oldId]);
-    const updateCall = query.mock.calls.find((call) => String(call[0]).includes("UPDATE recovery_points"));
+    expect(query.mock.calls.some(([sql]) => String(sql).includes("DELETE FROM recovery_points"))).toBe(false);
+    const updateCall = query.mock.calls.find((call) =>
+      String(call[1]?.[0]) === currentPoint.id
+      && String(call[1]?.[1]).includes("s3 delete failed")
+    );
     expect(updateCall?.[1]).toEqual([currentPoint.id, expect.stringContaining("s3 delete failed")]);
   });
 });

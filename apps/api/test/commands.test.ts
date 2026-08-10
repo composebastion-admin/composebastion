@@ -48,5 +48,28 @@ describe("Docker command builders", () => {
 
   it("force recreates compose services on deploy so config changes apply", () => {
     expect(buildComposeCommand("sampleapp", "/tmp/compose.yml", "up")).toContain("up -d --remove-orphans --force-recreate");
+    expect(
+      buildComposeCommand(
+        "sampleapp",
+        "/tmp/compose.yml",
+        "up",
+        false,
+        undefined,
+        true
+      )
+    ).toContain("up -d --build --remove-orphans --force-recreate");
+  });
+
+  it("quotes an explicit in-memory Compose environment file without embedding its contents", () => {
+    const command = buildComposeCommand(
+      "sampleapp",
+      "/tmp/compose.yml",
+      "up",
+      false,
+      { environmentVariable: "COMPOSEBASTION_REMOTE_INPUT" }
+    );
+    expect(command).toBe(
+      "docker compose --env-file \"$COMPOSEBASTION_REMOTE_INPUT\" -p 'sampleapp' -f '/tmp/compose.yml' up -d --remove-orphans --force-recreate"
+    );
   });
 });

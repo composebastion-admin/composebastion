@@ -34,6 +34,7 @@ vi.mock("../src/services/alerts.js", () => ({
 }));
 
 vi.mock("../src/services/audit.js", () => ({
+  auditContextFromRequest: () => ({}),
   writeAuditEvent: passthrough
 }));
 

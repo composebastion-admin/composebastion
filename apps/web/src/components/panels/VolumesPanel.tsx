@@ -48,14 +48,14 @@ export function VolumesPanel({
               verificationText: host.name,
               verificationLabel: `Type the host name ${host.name} to continue`
             })) {
-              void onAction("volume.prune", {}, host.id);
+              await onAction("volume.prune", {}, host.id);
             }
-          })()}
+          })().catch(() => undefined)}
         >
           <Trash2 size={18} />Prune
         </button>
       </InlineForm>}
-      {action.error && <div className="notice error">{action.error}</div>}
+      {action.error && <div className="notice error" role="alert">{action.error}</div>}
       <DataTable
         rows={volumes}
         columns={showHostColumn
@@ -68,7 +68,7 @@ export function VolumesPanel({
             data.Driver ?? "",
             data.Scope ?? "",
             ...(canOperate ? [<ButtonRow key="actions">
-              <button title="Back up volume" disabled={action.busy} onClick={() => void backupVolume(volume)}><ShieldCheck size={16} /></button>
+              <button title="Back up volume" disabled={action.busy} onClick={() => void backupVolume(volume).catch(() => undefined)}><ShieldCheck size={16} /></button>
               <button title="Remove volume" className="danger" onClick={() => void (async () => {
                 if (await confirm({
                   title: "Permanently remove volume",
@@ -78,7 +78,7 @@ export function VolumesPanel({
                   verificationText: volume.name,
                   verificationLabel: `Type the volume name ${volume.name} to continue`
                 })) await onAction("volume.remove", { volumeName: volume.name, force: false }, volume.hostId);
-              })()}><Trash2 size={16} /></button>
+              })().catch(() => undefined)}><Trash2 size={16} /></button>
             </ButtonRow>] : [])
           ];
           return showHostColumn ? [hostName(hosts, volume.hostId), ...cells] : cells;

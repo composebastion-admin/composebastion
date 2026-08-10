@@ -8,6 +8,7 @@ import {
   generatedDockerfileCompose,
   lanComposeResolver,
   mergeDockerDaemonRegistryTrust,
+  normalizeRegistryTrustAuthority,
   selectComposeCandidates,
   selectGeneratedHostPorts
 } from "../src/services/deployments.js";
@@ -61,11 +62,32 @@ describe("universal deployment source detection", () => {
 
   it("rejects credentials embedded in manually selected URL sources", () => {
     expect(() => canonicalizeDeploymentSource("https://user:token@git.example.test/team/app", "git"))
-      .toThrow("URLs containing credentials");
+      .toThrow("Repository URL must not contain credentials");
+    for (const [source, sourceType] of [
+      ["https://git.example.test/team/app.git?token=secret", "git"],
+      ["ssh://git:secret@git.example.test/team/app.git", "git"],
+      ["git://git:secret@git.example.test/team/app.git", "git"],
+      ["https://compose-user:secret@example.test/compose.yaml", "compose_url"],
+      ["https://example.test/compose.yaml?token=secret", "compose_url"],
+      ["https://example.test/compose.yaml#secret", "compose_url"]
+    ] as const) {
+      expect(() => canonicalizeDeploymentSource(source, sourceType)).toThrow();
+    }
   });
 });
 
 describe("Compose analysis helpers", () => {
+  it("preserves exact Git filenames from NUL-delimited source inventory", () => {
+    expect(deploymentAnalysisInternals.trackedGitFiles(
+      "compose.yaml\0dir/line\nbreak.env\0 leading-space\0unicodé.env\0"
+    )).toEqual([
+      "compose.yaml",
+      "dir/line\nbreak.env",
+      " leading-space",
+      "unicodé.env"
+    ]);
+  });
+
   it("prioritizes root Compose files in the documented order", () => {
     expect(selectComposeCandidates([
       "examples/compose.yaml",
@@ -180,6 +202,26 @@ describe("deployment analyzer parsing and redaction branches", () => {
       createdAt: timestamp
     });
 
+    const legacySource = mapSource({
+      id: "23232323-2323-4232-8232-232323232323",
+      source_type: "git",
+      name: "Legacy App",
+      source_locator: "https://git-user:git-secret@git.example.test/team/app.git?token=git-secret",
+      branch: null,
+      compose_path: null,
+      working_dir: null,
+      project_name: "legacy-app",
+      default_host_id: null,
+      target_host_ids: [],
+      env_encrypted: null,
+      credential_secret_encrypted: null,
+      metadata: {},
+      last_deployed_at: null,
+      created_at: timestamp,
+      updated_at: timestamp
+    });
+    expect(legacySource.sourceLocator).toBe("https://git.example.test/team/app.git");
+
     const mapped = mapAnalysis({
       id: "22222222-2222-4222-8222-222222222222",
       host_id: "11111111-1111-4111-8111-111111111111",
@@ -221,6 +263,37 @@ describe("deployment analyzer parsing and redaction branches", () => {
       blockers: [],
       registryIssues: [],
       deployedAt: null
+    });
+    const legacyAnalysis = mapAnalysis({
+      id: "24242424-2424-4242-8242-242424242424",
+      host_id: mapped.hostId,
+      source_id: null,
+      source_type: "compose_url",
+      source_input: "https://compose-user:compose-secret@example.test/compose.yaml?token=compose-secret",
+      source_locator: "https://compose-user:compose-secret@example.test/compose.yaml#compose-secret",
+      status: "failed",
+      display_name: null,
+      project_name: null,
+      branch: null,
+      compose_path: null,
+      working_dir: null,
+      compose_yaml: null,
+      env_encrypted: null,
+      summary: null,
+      variables: null,
+      warnings: null,
+      blockers: null,
+      registry_issues: null,
+      error: "Fetch failed for https://compose-user:compose-secret@example.test/compose.yaml?token=compose-secret",
+      expires_at: "2999-07-25T00:00:00.000Z",
+      created_at: timestamp,
+      updated_at: timestamp,
+      deployed_at: null
+    });
+    expect(legacyAnalysis).toMatchObject({
+      sourceInput: "https://example.test/compose.yaml",
+      sourceLocator: "https://example.test/compose.yaml",
+      error: "Fetch failed for https://example.test/compose.yaml"
     });
     expect(mapAnalysis({
       ...{
@@ -327,9 +400,9 @@ services:
 
     const raw = rawEnvValues("A=one\nexport B=\"two\"\nC='three'\ninvalid\n");
     expect(Array.from(raw.entries())).toEqual([["A", "one"], ["B", "two"], ["C", "three"]]);
-    expect(serializeEnv(raw)).toBe("A=one\nB=two\nC=three");
+    expect(serializeEnv(raw)).toBe("A='one'\nB='two'\nC='three'");
     expect(sanitizeEnvForResponse("PORT=3000\nAPI_TOKEN=secret", new Set(["API_TOKEN"])))
-      .toBe("PORT=3000\nAPI_TOKEN=");
+      .toBe("PORT='3000'\nAPI_TOKEN=''");
 
     const variables = [
       { key: "PORT", value: "3000", defaultValue: "3000", required: false, secret: false, source: "compose" as const },
@@ -337,7 +410,7 @@ services:
       { key: "OPTIONAL", value: "", defaultValue: null, required: false, secret: false, source: "compose" as const }
     ];
     expect(mergeStoredAnalysisEnv("PORT=3000", "PORT=4000\nAPI_TOKEN=stored", variables)).toEqual({
-      env: "PORT=4000\nAPI_TOKEN=stored",
+      env: "PORT='4000'\nAPI_TOKEN='stored'",
       variables: [
         { ...variables[0], value: "4000" },
         variables[1],
@@ -348,8 +421,8 @@ services:
       "API_TOKEN=stored\nPORT=3000",
       "API_TOKEN=\nPORT=4000\nNEW=value",
       variables
-    )).toBe("API_TOKEN=stored\nPORT=4000\nNEW=value");
-    expect(variablesToEnv(variables)).toBe("PORT=3000\nOPTIONAL=");
+    )).toBe("API_TOKEN='stored'\nPORT='4000'\nNEW='value'");
+    expect(variablesToEnv(variables)).toBe("PORT='3000'\nOPTIONAL=''");
   });
 
   it("filters unresolved images and normalizes Git remotes", () => {
@@ -389,14 +462,36 @@ services:
     expect(dockerRegistryTrust({ "https://secure.test": { Secure: true } }, "secure.test")).toBe(false);
   });
 
+  it("normalizes registry trust authorities with shared DNS, IP, and port validation", () => {
+    expect(normalizeRegistryTrustAuthority("Registry.Example.Test:5000"))
+      .toBe("registry.example.test:5000");
+    expect(normalizeRegistryTrustAuthority("https://[2001:db8::1]:5000/"))
+      .toBe("[2001:db8::1]:5000");
+    for (const registry of [
+      "bad_host.example:5000",
+      "registry.example.test:65536",
+      "2001:db8::1:5000",
+      "https://registry.example.test/path",
+      "https://registry.example.test?",
+      "https://user:secret@registry.example.test",
+      "ftp://registry.example.test"
+    ]) {
+      expect(() => normalizeRegistryTrustAuthority(registry)).toThrow();
+    }
+  });
+
   it("handles remaining source canonicalization variants", () => {
     expect(canonicalizeDeploymentSource("git@example.test:team/app.git/", "git"))
       .toBe("git@example.test:team/app.git");
-    expect(canonicalizeDeploymentSource("https://example.test/team/app.git?token=no#fragment", "git"))
-      .toBe("https://example.test/team/app.git");
+    expect(() => canonicalizeDeploymentSource(
+      "https://example.test/team/app.git?token=no#fragment",
+      "git"
+    )).toThrow();
     expect(canonicalizeDeploymentSource("docker://nginx:latest/", "image")).toBe("nginx:latest");
-    expect(canonicalizeDeploymentSource("https://example.test/compose.yaml?raw=1#fragment", "compose_url"))
-      .toBe("https://example.test/compose.yaml?raw=1");
+    expect(() => canonicalizeDeploymentSource(
+      "https://example.test/compose.yaml?raw=1#fragment",
+      "compose_url"
+    )).toThrow();
     expect(canonicalizeDeploymentSource("services:\n  app: {}\n", "compose_upload"))
       .toMatch(/^inline-compose:[a-f0-9]{16}$/);
     expect(canonicalizeDeploymentSource("", "compose_upload")).toBe("uploaded-compose.yaml");

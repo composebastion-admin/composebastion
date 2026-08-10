@@ -68,10 +68,12 @@ export function HostForm({
   }
 
   return (
-    <form className="hostForm" onSubmit={submit}>
+    <form className="hostForm" onSubmit={(event) => {
+      void submit(event).catch(() => undefined);
+    }}>
       <div className="formHint">{intro}</div>
       {showDemoWorkspace && (
-        <button type="button" onClick={() => void addDemoWorkspace()} disabled={action.busy}>
+        <button type="button" onClick={() => void addDemoWorkspace().catch(() => undefined)} disabled={action.busy}>
           <Server size={18} />
           Load Demo Workspace
         </button>
@@ -112,7 +114,7 @@ export function HostForm({
           <input placeholder="Agent token" type="password" value={form.agentToken} onChange={(event) => setForm({ ...form, agentToken: event.target.value })} required />
         </>
       )}
-      {action.error && <div className="notice error">{action.error}</div>}
+      {action.error && <div className="notice error" role="alert">{action.error}</div>}
       <button className="primary" type="submit" disabled={action.busy}>
         <Plus size={18} />
         {submitLabel}

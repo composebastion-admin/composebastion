@@ -1,5 +1,27 @@
 # Changelog
 
+## [v1.2.0-beta.2] - 2026-08-10
+
+> Beta channel only. This candidate supersedes the earlier beta build and does
+> not move `latest`.
+
+### Fixed
+- Bound self-update candidate and rollback verification to container-local
+  worker startup evidence, so a stale predecessor heartbeat cannot make an
+  unregistered replacement worker appear ready.
+- Allowed Docker-healthy handoff verification while the replacement worker is
+  deliberately draining pending authoritative outcome reconciliation.
+- Made local acceptance resolve the exact registry image IDs after push and
+  expanded post-1.2 upgrade recovery guidance.
+
+### Security and release qualification
+- Retained the hardened Git-context materialization and rebuilt Go-tool
+  dependency chain qualified on `dev` after the first beta build.
+- Advanced the immutable prerelease identity to `1.2.0-beta.2`; the existing
+  beta aliases must not be republished as a different beta.1 digest.
+- Qualified rollback continues to use the `1.1.6` compatibility bridge and the
+  saved pre-beta Compose definition.
+
 ## [v1.2.0-beta.1] - 2026-07-25
 
 > Beta channel only. This candidate is published from the GitHub `beta` branch
@@ -38,6 +60,44 @@
 - Established the GitHub `beta` branch as a scanned app-and-agent publication
   channel. Both images publish `beta` plus immutable per-commit multi-platform
   tags without changing stable aliases.
+- Deployment analyses and jobs are now bound to the selected Git revision,
+  Compose content, environment content, host lock, and lease. Worker restarts
+  reconcile durable outcomes instead of starting a duplicate deployment.
+- Backup and recovery now retain remote-orphan and restore-resource ledgers so
+  interrupted uploads, probes, restores, clone restores, and cleanup can be
+  reconciled without deleting unrelated resources.
+- Docker Desktop bind remapping, Docker 29 cleanup behavior, exact Git-context
+  materialization, host identity reconciliation, Docker stats lifecycle
+  handling, viewer redaction, session reauthorization, and audit atomicity are
+  hardened across manager and agent workflows.
+- The release toolchain is pinned to Node 24 and npm 11, install scripts are
+  policy-controlled, bundled Go tools are rebuilt from reviewed sources, and
+  all four app/agent architecture archives are verified before publication.
+
+### Fixed
+- Added a one-shot `storage-init` dependency that migrates existing backup and
+  recovery paths to the manager UID/GID before the app or worker starts. The
+  recursive same-filesystem pass skips all symlinks and removes the unsafe
+  ownership-marker shortcut. Base Compose remains fixed at `1000:1000`; the
+  hardening overlay applies custom identities consistently.
+- Recognize the exact managed `DATABASE_URL` used by older source installs and
+  shipped in the v1.1.0 environment template. A one-shot `database-init`
+  preflight first tests the preserved `POSTGRES_PASSWORD`, rotates only that
+  exact repository legacy role credential when required, and verifies the new
+  connection before app startup. Real explicit and external database URLs are
+  still preserved unchanged.
+- Hardened in-app updates so a pre-1.2 Compose file can bootstrap the candidate
+  compatibility entrypoint without initializer services. Updates retain prior
+  image IDs and protected transition state, verify app/worker identity and
+  readiness, restore a recorded legacy credential before rollback, and always
+  start historical images with `--no-deps`.
+- Added `npm run upgrade:source` for source deployments with candidate identity
+  verification and immutable prior-image rollback while leaving the Git
+  checkout untouched.
+- Expanded public-image upgrade qualification to retain the stale v1.1
+  environment value and root-owned recovery files, so database connectivity,
+  ownership migration, worker readiness, rollback, and re-upgrade all fail the
+  release gate if this compatibility path regresses.
 
 ### Security
 - Git credentials are encrypted per source and materialized only through
@@ -61,7 +121,25 @@
   gRPC versions without changing either tool's user-facing feature version.
 
 ### Migration and compatibility
-- Adds the additive `031_universal_deployments.sql` migration.
+- Adds migrations `031` through `038`:
+  - `031_universal_deployments.sql` adds reusable deployment sources, durable
+    analyses, source-linked stacks, and backfills existing Git/host-file
+    deployments.
+  - `032_normalize_local_backup_targets.sql` converts local recovery targets to
+    the managed recovery-points location with `keep` cache policy and resets all
+    stored target health to `unknown` so the stronger probe must run again.
+  - `033_remote_artifact_orphans.sql` records exact remote objects whose
+    compensating cleanup could not be confirmed.
+  - `034_github_deployment_jobs.sql` binds GitHub deployment jobs to an immutable
+    source revision and Compose digest.
+  - `035_recovery_restore_attempts.sql` adds restore-attempt and resource
+    ledgers and extends orphan tracking to target-health probes.
+  - `036_deployment_analysis_binding.sql` binds analyses to source revision,
+    Compose digest, and environment digest.
+  - `037_stack_source_environment_binding.sql` stores the encrypted qualified
+    runtime environment and its server-keyed binding on deployed stacks.
+  - `038_github_clone_deployment_jobs.sql` records immutable clone-deployment
+    inputs, destinations, and environment bindings.
 - Existing GitHub deployment endpoints remain available as compatibility
   adapters for this beta cycle.
 - Configuration exports now include the source library and encrypted deployment
@@ -83,9 +161,13 @@
 - One-click registry trust repair requires an owner/admin, Linux/systemd Docker,
   and passwordless sudo. Unsupported hosts retain the review and receive manual
   instructions.
-- To roll back, pin both app and agent to `1.1.2`, pull, and recreate the
-  services without deleting volumes. Migration 031 is additive; retain the
-  database and configuration backup for a later beta retry.
+- To roll back, restore the saved pre-beta Compose definition, pin both app and
+  agent to `1.1.6`, pull, and recreate the
+  services without deleting PostgreSQL, Redis, configuration, backup, or other
+  volumes. Qualification keeps migrations `031` through `038` in the database,
+  verifies stable readiness and preserved state, then re-upgrades the same
+  volumes. Migration `032` normalization is retained after rollback. Never use
+  `docker compose down -v`; keep the pre-upgrade backup for a later beta retry.
 
 ## [v1.1.3] - 2026-07-19
 

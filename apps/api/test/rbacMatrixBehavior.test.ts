@@ -4,8 +4,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const currentRole = vi.hoisted(() => ({ value: "viewer" }));
 const userId = "11111111-1111-4111-8111-111111111111";
 const hostId = "22222222-2222-4222-8222-222222222222";
+const targetHostId = "22222222-2222-4222-8222-222222222223";
 const backupId = "33333333-3333-4333-8333-333333333333";
 const jobId = "44444444-4444-4444-8444-444444444444";
+const channelId = "55555555-5555-4555-8555-555555555555";
+const ruleId = "66666666-6666-4666-8666-666666666666";
+const execInContainer = vi.hoisted(() => vi.fn());
+const writeAuditEvent = vi.hoisted(() => vi.fn(async () => undefined));
+const transactionQuery = vi.hoisted(() => vi.fn());
 
 const okJob = {
   id: jobId,
@@ -37,7 +43,14 @@ vi.mock("../src/services/auth.js", () => ({
 vi.mock("../src/services/audit.js", () => ({
   auditContextFromRequest: () => ({ ipAddress: "127.0.0.1", userAgent: "test" }),
   listAuditEvents: vi.fn(async () => ({ items: [], total: 0, limit: 20, offset: 0, hasMore: false })),
-  writeAuditEvent: vi.fn(async () => undefined)
+  writeAuditEvent
+}));
+
+vi.mock("../src/db/pool.js", () => ({
+  query: transactionQuery,
+  withTransaction: async (
+    handler: (client: { query: typeof transactionQuery }) => Promise<unknown>
+  ) => handler({ query: transactionQuery })
 }));
 
 vi.mock("../src/services/alerts.js", () => ({
@@ -57,7 +70,7 @@ vi.mock("../src/services/alerts.js", () => ({
 }));
 
 vi.mock("../src/services/docker.js", () => ({
-  execInContainer: vi.fn(async () => ({ stdout: "", stderr: "", code: 0 })),
+  execInContainer,
   getContainerInspect: vi.fn(async () => ({ env: ["SECRET=value"], mounts: [], networks: [], ports: [], labels: {} })),
   getContainerLogs: vi.fn(async () => ({ logs: "ok" })),
   getContainerStats: vi.fn(async () => ({ id: "container" })),
@@ -74,6 +87,15 @@ vi.mock("../src/services/backups.js", () => ({
   createHostPathBackupRecord: vi.fn(async () => ({ id: backupId, hostId, sourcePath: "/srv/app", kind: "host_path" })),
   createHostPathBackupWithJob: vi.fn(async () => ({ backup: { id: backupId, hostId, sourcePath: "/srv/app", kind: "host_path" }, job: okJob })),
   createVolumeBackupsWithJobs: vi.fn(async () => ({ backups: [], jobs: [] })),
+  createVolumeCloneWithJob: vi.fn(async (
+    _input: unknown,
+    _createdBy: unknown,
+    onCreated?: (client: { query: typeof transactionQuery }, result: unknown) => Promise<void>
+  ) => {
+    const result = { backup: { id: backupId, hostId, kind: "volume" }, job: okJob };
+    await onCreated?.({ query: transactionQuery }, result);
+    return result;
+  }),
   deleteBackup: vi.fn(async () => ({ id: backupId, hostId, kind: "volume", volumeName: "data" })),
   getBackup: vi.fn(async () => ({ id: backupId, hostId, kind: "volume", volumeName: "data" })),
   getBackupDownloadStream: vi.fn(async () => null),
@@ -84,10 +106,16 @@ vi.mock("../src/services/backups.js", () => ({
 vi.mock("../src/services/jobs.js", () => ({
   cancelQueuedJob: vi.fn(async () => ({ job: okJob, canceled: true })),
   enqueueJob: vi.fn(async () => okJob),
+  enqueueJobInTransaction: vi.fn(async () => okJob),
   getJob: vi.fn(async () => okJob),
   getWorkerStatus: vi.fn(async () => ({ queued: 0, running: 0, lastJobCompletedAt: null })),
   listJobs: vi.fn(async () => ({ items: [], total: 0, limit: 20, offset: 0, hasMore: false })),
-  retryJob: vi.fn(async () => ({ original: { ...okJob, status: "failed" }, retried: okJob }))
+  notifyJobQueued: vi.fn(async () => undefined),
+  retryJob: vi.fn(async () => ({ original: { ...okJob, status: "failed" }, retried: okJob })),
+  withSynchronousDockerMutationAdmission: (
+    _action: unknown,
+    operation: () => Promise<unknown>
+  ) => operation()
 }));
 
 vi.mock("../src/services/recoveryCenter.js", () => ({
@@ -101,8 +129,19 @@ vi.mock("../src/services/recoveryCenter.js", () => ({
   deleteRecoverySchedule: vi.fn(async () => undefined),
   enqueueRecoveryCreate: vi.fn(async () => okJob),
   enqueueRecoveryDrill: vi.fn(async () => ({ point: { id: "point", hostId }, job: okJob })),
-  enqueueRecoveryRestore: vi.fn(async () => okJob),
-  enqueueRecoveryVerify: vi.fn(async () => okJob),
+  enqueueRecoveryRestore: vi.fn(async () => ({ point: { id: "point", hostId }, job: okJob })),
+  enqueueRecoveryVerify: vi.fn(async (
+    _recoveryPointId: string,
+    _createdBy?: string | null,
+    onQueued?: (
+      client: { query: typeof transactionQuery },
+      result: { point: { id: string; hostId: string }; job: typeof okJob }
+    ) => Promise<void>
+  ) => {
+    const result = { point: { id: "point", hostId }, job: okJob };
+    await onQueued?.({ query: transactionQuery }, result);
+    return result;
+  }),
   getBackupTarget: vi.fn(async () => ({ id: "target" })),
   getMigrationRun: vi.fn(async () => ({ id: "migration" })),
   getRecoveryPoint: vi.fn(async () => ({ id: "point", hostId, appIdentity: {} })),
@@ -116,7 +155,9 @@ vi.mock("../src/services/recoveryCenter.js", () => ({
 
 vi.mock("../src/services/recoveryReadiness.js", () => ({
   analyzeRecoveryReadiness: vi.fn(async () => ({ id: "readiness" })),
-  listRecoveryReadiness: vi.fn(async () => [])
+  listRecoveryReadiness: vi.fn(async () => []),
+  redactRecoveryAnalysisForViewer: (value: unknown) => value,
+  redactRecoveryReadinessForViewer: (value: unknown) => value
 }));
 
 vi.mock("../src/services/files.js", () => ({
@@ -191,6 +232,212 @@ async function injectAs(app: Awaited<ReturnType<typeof buildApp>>, role: Role, o
 describe("RBAC matrix route behavior", () => {
   beforeEach(() => {
     currentRole.value = "viewer";
+    execInContainer.mockReset();
+    execInContainer.mockResolvedValue({ stdout: "", stderr: "", code: 0 });
+    writeAuditEvent.mockClear();
+    transactionQuery.mockReset();
+  });
+
+  it("records container exec without retaining the command text in audit details", async () => {
+    const app = await buildApp();
+    const sensitiveCommand = "sh -c 'export TOKEN=qualification-secret'";
+    try {
+      const response = await injectAs(app, "operator", {
+        method: "POST",
+        url: `/api/hosts/${hostId}/containers/web/exec`,
+        payload: { command: sensitiveCommand }
+      });
+      expect(response.statusCode).toBe(200);
+      const event = writeAuditEvent.mock.calls.find(([input]) => input.action === "container.exec")?.[0];
+      expect(event).toMatchObject({
+        hostId,
+        targetId: "web",
+        details: { commandRedacted: true }
+      });
+      expect(JSON.stringify(event)).not.toContain(sensitiveCommand);
+      expect(JSON.stringify(event)).not.toContain("qualification-secret");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("records a redacted container exec attempt even when execution fails", async () => {
+    const app = await buildApp();
+    const sensitiveCommand = "sh -c 'export TOKEN=failed-qualification-secret'";
+    execInContainer.mockRejectedValueOnce(new Error("Docker exec rejected the request"));
+    try {
+      const response = await injectAs(app, "operator", {
+        method: "POST",
+        url: `/api/hosts/${hostId}/containers/web/exec`,
+        payload: { command: sensitiveCommand }
+      });
+      expect(response.statusCode).toBe(500);
+      expect(writeAuditEvent).toHaveBeenCalledWith(expect.objectContaining({
+        userId,
+        hostId,
+        action: "container.exec",
+        targetKind: "container",
+        targetId: "web",
+        details: { commandRedacted: true }
+      }));
+      expect(JSON.stringify(writeAuditEvent.mock.calls)).not.toContain(sensitiveCommand);
+      expect(JSON.stringify(writeAuditEvent.mock.calls)).not.toContain("failed-qualification-secret");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("audits clone jobs without retaining user-supplied volume or target names", async () => {
+    const app = await buildApp();
+    const sensitiveVolumeName = "source-qualification-secret";
+    const sensitiveTargetVolumeName = "target-qualification-secret";
+    const sensitiveContainerName = "container-qualification-secret";
+    try {
+      const volumeResponse = await injectAs(app, "operator", {
+        method: "POST",
+        url: "/api/migrations/volume-clone",
+        payload: {
+          sourceHostId: hostId,
+          targetHostId,
+          sourceVolumeName: sensitiveVolumeName,
+          targetVolumeName: sensitiveTargetVolumeName,
+          overwrite: true
+        }
+      });
+      expect(volumeResponse.statusCode).toBe(200);
+
+      const containerResponse = await injectAs(app, "operator", {
+        method: "POST",
+        url: "/api/migrations/container-clone",
+        payload: {
+          sourceHostId: hostId,
+          targetHostId,
+          containerId: "source-web",
+          targetName: sensitiveContainerName,
+          start: true
+        }
+      });
+      expect(containerResponse.statusCode).toBe(200);
+
+      const volumeEvent = writeAuditEvent.mock.calls.find(([input]) => input.action === "volume.clone")?.[0];
+      expect(volumeEvent).toMatchObject({
+        userId,
+        hostId,
+        action: "volume.clone",
+        targetKind: "backup",
+        targetId: backupId,
+        details: { targetHostId, overwrite: true }
+      });
+      const containerEvent = writeAuditEvent.mock.calls.find(([input]) => input.action === "container.clone")?.[0];
+      expect(containerEvent).toMatchObject({
+        userId,
+        hostId,
+        action: "container.clone",
+        targetKind: "container",
+        targetId: "source-web",
+        details: { targetHostId, start: true }
+      });
+      const auditJson = JSON.stringify([volumeEvent, containerEvent]);
+      expect(auditJson).not.toContain(sensitiveVolumeName);
+      expect(auditJson).not.toContain(sensitiveTargetVolumeName);
+      expect(auditJson).not.toContain(sensitiveContainerName);
+      expect(auditJson).not.toContain("qualification-secret");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("audits recovery verification when its job is created", async () => {
+    const app = await buildApp();
+    try {
+      const response = await injectAs(app, "operator", {
+        method: "POST",
+        url: "/api/recovery/points/point/verify"
+      });
+      expect(response.statusCode).toBe(200);
+      expect(writeAuditEvent).toHaveBeenCalledWith(expect.objectContaining({
+        userId,
+        hostId,
+        action: "recovery.verify",
+        targetKind: "recovery_point",
+        targetId: "point",
+        ipAddress: "127.0.0.1",
+        userAgent: "test"
+      }), expect.anything());
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("audits alert channel and rule deletions using identifiers only", async () => {
+    const app = await buildApp();
+    try {
+      expect((await injectAs(app, "operator", {
+        method: "DELETE",
+        url: `/api/alerts/channels/${channelId}`
+      })).statusCode).toBe(200);
+      expect((await injectAs(app, "operator", {
+        method: "DELETE",
+        url: `/api/alerts/rules/${ruleId}`
+      })).statusCode).toBe(200);
+
+      expect(writeAuditEvent).toHaveBeenCalledWith(expect.objectContaining({
+        userId,
+        action: "alert.channel.delete",
+        targetKind: "notification_channel",
+        targetId: channelId,
+        ipAddress: "127.0.0.1",
+        userAgent: "test"
+      }), expect.anything());
+      expect(writeAuditEvent).toHaveBeenCalledWith(expect.objectContaining({
+        userId,
+        action: "alert.rule.delete",
+        targetKind: "alert_rule",
+        targetId: ruleId,
+        ipAddress: "127.0.0.1",
+        userAgent: "test"
+      }), expect.anything());
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("fails closed before returning sensitive administration indexes when audit persistence fails", async () => {
+    const alerts = await import("../src/services/alerts.js");
+    const registries = await import("../src/services/registries.js");
+    const users = await import("../src/services/users.js");
+    const cases = [
+      {
+        role: "operator" as const,
+        url: "/api/alerts/channels",
+        service: vi.mocked(alerts.listChannels)
+      },
+      {
+        role: "operator" as const,
+        url: "/api/registries",
+        service: vi.mocked(registries.listRegistries)
+      },
+      {
+        role: "admin" as const,
+        url: "/api/users",
+        service: vi.mocked(users.listUsers)
+      }
+    ];
+    const app = await buildApp();
+    try {
+      for (const testCase of cases) {
+        testCase.service.mockClear();
+        writeAuditEvent.mockRejectedValueOnce(new Error("audit insert failed"));
+        const response = await injectAs(app, testCase.role, {
+          method: "GET",
+          url: testCase.url
+        });
+        expect(response.statusCode, testCase.url).toBe(500);
+        expect(testCase.service, testCase.url).not.toHaveBeenCalled();
+      }
+    } finally {
+      await app.close();
+    }
   });
 
   it("keeps viewer-readable operational surfaces accessible", async () => {

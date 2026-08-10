@@ -78,7 +78,7 @@ export function ComposePanel({ host, hosts, stacks, refresh, runJob }: { host: D
 
   return (
     <Panel title="Compose Stacks" count={stacks.length}>
-      {canOperate && <form className="composeForm" onSubmit={createStack}>
+      {canOperate && <form className="composeForm" onSubmit={(event) => void createStack(event).catch(() => undefined)}>
         <div className="formHint">New stacks are saved on {host.name}. Use the fleet selector above to view stacks from multiple hosts.</div>
         <div className="two">
           <input placeholder="Stack name" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required />
@@ -86,7 +86,7 @@ export function ComposePanel({ host, hosts, stacks, refresh, runJob }: { host: D
         </div>
         <textarea value={form.composeYaml} onChange={(event) => setForm({ ...form, composeYaml: event.target.value })} required />
         <textarea placeholder="Optional .env content" value={form.env} onChange={(event) => setForm({ ...form, env: event.target.value })} />
-        {action.error && <div className="notice error">{action.error}</div>}
+        {action.error && <div className="notice error" role="alert">{action.error}</div>}
         <button className="primary"><Plus size={18} />Save Stack</button>
       </form>}
       <DataTable
@@ -109,16 +109,16 @@ export function ComposePanel({ host, hosts, stacks, refresh, runJob }: { host: D
             formatDate(stack.updatedAt),
             ...(canOperate ? [<ButtonRow key="actions">
               <button title="Versions & proxy" onClick={() => setFocusedStackId(stack.id)}><History size={16} /></button>
-              <button title="Deploy" onClick={() => void stackAction(stack.id, "deploy")}><Play size={16} /></button>
-              <button title="Stop" onClick={() => void stackAction(stack.id, "stop")}><Square size={16} /></button>
-              <button title="Remove from Docker" className="danger" onClick={() => void stackAction(stack.id, "remove", stack.name)}><Trash2 size={16} /></button>
+              <button title="Deploy" onClick={() => void stackAction(stack.id, "deploy").catch(() => undefined)}><Play size={16} /></button>
+              <button title="Stop" onClick={() => void stackAction(stack.id, "stop").catch(() => undefined)}><Square size={16} /></button>
+              <button title="Remove from Docker" className="danger" onClick={() => void stackAction(stack.id, "remove", stack.name).catch(() => undefined)}><Trash2 size={16} /></button>
               <button
                 title="Remove from Docker and delete named volumes"
                 aria-label={`Remove ${stack.name} and delete named volumes`}
                 className="danger"
-                onClick={() => void stackAction(stack.id, "remove", stack.name, true)}
+                onClick={() => void stackAction(stack.id, "remove", stack.name, true).catch(() => undefined)}
               ><Trash2 size={16} /></button>
-              <button title="Forget record only" onClick={() => void forgetStack(stack)}><X size={16} /></button>
+              <button title="Forget record only" onClick={() => void forgetStack(stack).catch(() => undefined)}><X size={16} /></button>
             </ButtonRow>] : [])
           ];
           return showHostColumn ? [hostName(hosts, stack.hostId), ...cells] : cells;

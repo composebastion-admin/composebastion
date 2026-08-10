@@ -1,13 +1,28 @@
 import { execFileSync, spawnSync } from "node:child_process";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 const postgresImage = "postgres:16.6-alpine3.20@sha256:1e59919c179e296eaf3cc701f4d50bab5c393d7ed9746c188c9d519489c998dc";
+const nodeImage = "node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a";
+const alpineImage = "alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b";
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const suffix = `${process.pid}-${Date.now()}`;
 const container = `composebastion-postgres-upgrade-${suffix}`;
 const network = `${container}-network`;
 const volume = `${container}-data`;
+const backupVolume = `${container}-backups`;
+const externalVolume = `${container}-external`;
+const nestedVolume = `${container}-nested`;
 const database = "composebastion";
 const user = "composebastion";
-const legacyPassword = "legacy-composebastion-password";
+const legacyPassword = "composebastion";
 const replacementPassword = "replacement-composebastion-password";
+const transitionDirectory = mkdtempSync(path.join(os.tmpdir(), "composebastion-postgres-transition-"));
+const composeConfigPath = path.join(transitionDirectory, "compose-config.json");
+const environmentProbePath = path.join(transitionDirectory, "source-env-probe.json");
+const storageHelperDirectory = path.join(transitionDirectory, "storage-helper");
+const storageHelperPath = path.join(storageHelperDirectory, "composebastion-prepare-storage");
 
 function docker(args, options = {}) {
   return execFileSync("docker", args, {
@@ -95,9 +110,69 @@ function assertLegacyConnectivity() {
   }
 }
 
+function runCompatibilityPreparation(mode) {
+  docker([
+    "run", "--rm", "--user", "0:0",
+    "--network", network,
+    "--volume", `${root}:/workspace:ro`,
+    "--volume", `${transitionDirectory}:/transition`,
+    "--volume", `${backupVolume}:/data/backups`,
+    "--volume", `${externalVolume}:/outside`,
+    "--volume", `${storageHelperPath}:/usr/local/bin/composebastion-prepare-storage:ro`,
+    "--env", "COMPOSEBASTION_STORAGE_HELPER_PATH=/usr/local/bin/composebastion-prepare-storage",
+    "--workdir", "/workspace",
+    nodeImage,
+    "node", "scripts/prepare-compose-upgrade.mjs", mode,
+    "--compose-config", "/transition/compose-config.json",
+    "--environment-probe", "/transition/source-env-probe.json",
+    "--state-file", "/transition/database-transition.json"
+  ]);
+}
+
+function runStoragePreparation(extraVolumes = []) {
+  return spawnSync("docker", [
+    "run", "--rm", "--user", "0:0",
+    "--read-only",
+    "--cap-drop", "ALL",
+    "--cap-add", "CHOWN",
+    "--cap-add", "DAC_READ_SEARCH",
+    "--security-opt", "no-new-privileges",
+    "--volume", `${root}:/workspace:ro`,
+    "--volume", `${backupVolume}:/data/backups`,
+    "--volume", `${externalVolume}:/outside`,
+    "--volume", `${storageHelperPath}:/usr/local/bin/composebastion-prepare-storage:ro`,
+    ...extraVolumes.flatMap((volumeMount) => ["--volume", volumeMount]),
+    "--env", "COMPOSEBASTION_STORAGE_HELPER_PATH=/usr/local/bin/composebastion-prepare-storage",
+    "--workdir", "/workspace",
+    nodeImage,
+    "node", "scripts/prepare-backup-storage.mjs"
+  ], { encoding: "utf8" });
+}
+
 try {
+  chmodSync(transitionDirectory, 0o700);
+  const protectedProbeOwner = statSync(transitionDirectory);
+  if ((protectedProbeOwner.mode & 0o777) !== 0o700) {
+    throw new Error("Database upgrade probe fixture must remain mode 0700");
+  }
+  if (typeof process.getuid !== "function" || process.getuid() === 1000) {
+    throw new Error("Database upgrade qualification requires a host UID other than the image runtime UID 1000");
+  }
+  if (protectedProbeOwner.uid !== process.getuid()) {
+    throw new Error("Database upgrade probe fixture is not owned by the invoking non-1000 host UID");
+  }
+  mkdirSync(storageHelperDirectory, { recursive: true });
+  docker([
+    "build", "--target", "storage-helper-artifacts",
+    "--output", `type=local,dest=${storageHelperDirectory}`,
+    root
+  ], { capture: false });
+  chmodSync(storageHelperPath, 0o755);
   docker(["network", "create", network]);
   docker(["volume", "create", volume]);
+  docker(["volume", "create", backupVolume]);
+  docker(["volume", "create", externalVolume]);
+  docker(["volume", "create", nestedVolume]);
   startPostgres(legacyPassword);
   await waitForPostgres();
 
@@ -131,9 +206,85 @@ try {
     }
   }
 
-  console.log("Existing PostgreSQL volumes retain connectivity through the DATABASE_URL compatibility override.");
+  writeFileSync(composeConfigPath, `${JSON.stringify({
+    services: {
+      app: {
+        user: "1000:1000",
+        environment: { DATABASE_URL: internalLegacyUrl }
+      },
+      worker: {
+        environment: { DATABASE_URL: internalLegacyUrl }
+      },
+      postgres: {
+        environment: { POSTGRES_PASSWORD: replacementPassword }
+      }
+    }
+  })}\n`, { mode: 0o600 });
+  chmodSync(composeConfigPath, 0o600);
+  writeFileSync(environmentProbePath, `${JSON.stringify({
+    services: {
+      "composebastion-upgrade-probe": {
+        environment: { COMPOSEBASTION_UPGRADE_SOURCE_DATABASE_URL: internalLegacyUrl }
+      }
+    }
+  })}\n`, { mode: 0o600 });
+  chmodSync(environmentProbePath, 0o600);
+  docker([
+    "run", "--rm",
+    "--volume", `${backupVolume}:/data/backups`,
+    "--volume", `${externalVolume}:/outside`,
+    alpineImage,
+    "sh", "-ceu",
+    "mkdir -p /data/backups/recovery/nested /data/backups/nested-mount; echo retained >/data/backups/recovery/nested/root-owned; chown -R 0:0 /data/backups; echo external >/outside/target; chown 123:456 /outside/target; ln -s /outside/target /data/backups/.composebastion-storage-owner; find /data/backups -type f -exec chmod 000 {} +; find /data/backups -type d -exec chmod 000 {} +"
+  ]);
+
+  const nestedFilesystem = runStoragePreparation([
+    `${nestedVolume}:/data/backups/nested-mount`
+  ]);
+  if (nestedFilesystem.status === 0
+      || !`${nestedFilesystem.stdout}\n${nestedFilesystem.stderr}`.includes("nested filesystem")) {
+    throw new Error(
+      `Storage helper did not reject a nested same-host filesystem:\n${nestedFilesystem.stdout}${nestedFilesystem.stderr}`
+    );
+  }
+  const minimumCapabilities = runStoragePreparation();
+  if (minimumCapabilities.status !== 0) {
+    throw new Error(
+      `Storage helper failed with only CHOWN and DAC_READ_SEARCH:\n${minimumCapabilities.stdout}${minimumCapabilities.stderr}`
+    );
+  }
+
+  runCompatibilityPreparation("reconcile");
+  if (query(replacementPassword).status !== 0 || query(legacyPassword).status === 0) {
+    throw new Error("Candidate compatibility entrypoint did not rotate and verify the exact managed legacy credential");
+  }
+  // A retry after rotation must retain the changed-state receipt so rollback
+  // remains authorized after an interrupted updater.
+  runCompatibilityPreparation("reconcile");
+  runCompatibilityPreparation("restore-legacy");
+  assertLegacyConnectivity();
+  // Reverse rotation is idempotent and verifies the already-restored state.
+  runCompatibilityPreparation("restore-legacy");
+
+  const backupEvidence = docker([
+    "run", "--rm",
+    "--volume", `${backupVolume}:/data/backups:ro`,
+    "--volume", `${externalVolume}:/outside:ro`,
+    alpineImage,
+    "sh", "-ceu",
+    "test \"$(stat -c %u:%g /data/backups/recovery/nested/root-owned)\" = 1000:1000; test -L /data/backups/.composebastion-storage-owner; test \"$(stat -c %u:%g /outside/target)\" = 123:456; test \"$(cat /outside/target)\" = external; printf safe"
+  ]).trim();
+  if (backupEvidence !== "safe") {
+    throw new Error("Recursive backup ownership compatibility evidence is incomplete");
+  }
+
+  console.log("Existing PostgreSQL volumes, credential rollback, and recursive storage preparation passed.");
 } finally {
   removeContainer();
   spawnSync("docker", ["volume", "rm", "-f", volume], { stdio: "ignore" });
+  spawnSync("docker", ["volume", "rm", "-f", backupVolume], { stdio: "ignore" });
+  spawnSync("docker", ["volume", "rm", "-f", externalVolume], { stdio: "ignore" });
+  spawnSync("docker", ["volume", "rm", "-f", nestedVolume], { stdio: "ignore" });
   spawnSync("docker", ["network", "rm", network], { stdio: "ignore" });
+  rmSync(transitionDirectory, { recursive: true, force: true });
 }

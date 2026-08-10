@@ -139,6 +139,7 @@ export function BackupsPanel({
   });
   const [backupsLoading, setBackupsLoading] = useState(false);
   const [backupPageError, setBackupPageError] = useState<string | null>(null);
+  const [auxiliaryError, setAuxiliaryError] = useState<string | null>(null);
   const [schedules, setSchedules] = useState<BackupSchedule[]>([]);
   const [targets, setTargets] = useState<BackupTarget[]>([]);
   const [points, setPoints] = useState<RecoveryPointListItem[]>([]);
@@ -169,6 +170,7 @@ export function BackupsPanel({
   );
 
   const loadAuxiliaryData = useCallback(async () => {
+    setAuxiliaryError(null);
     const [scheduleResult, targetResult, pointResult, healthResult] = await Promise.allSettled([
       canOperate
         ? api<{ schedules: BackupSchedule[] }>("/api/backup-schedules")
@@ -177,13 +179,33 @@ export function BackupsPanel({
       api<{ points: RecoveryPointListItem[] }>("/api/recovery/points"),
       api<{ health: BackupHealthSummary }>("/api/backups/health")
     ]);
-    if (scheduleResult.status === "fulfilled") setSchedules(arrayOrEmpty(scheduleResult.value.schedules));
-    if (targetResult.status === "fulfilled") setTargets(arrayOrEmpty(targetResult.value.targets));
-    if (pointResult.status === "fulfilled") setPoints(arrayOrEmpty(pointResult.value.points));
+    const failures: string[] = [];
+    if (scheduleResult.status === "fulfilled") {
+      setSchedules(arrayOrEmpty(scheduleResult.value.schedules));
+    } else {
+      setSchedules([]);
+      failures.push(`schedules — ${scheduleResult.reason instanceof Error ? scheduleResult.reason.message : String(scheduleResult.reason)}`);
+    }
+    if (targetResult.status === "fulfilled") {
+      setTargets(arrayOrEmpty(targetResult.value.targets));
+    } else {
+      setTargets([]);
+      failures.push(`storage targets — ${targetResult.reason instanceof Error ? targetResult.reason.message : String(targetResult.reason)}`);
+    }
+    if (pointResult.status === "fulfilled") {
+      setPoints(arrayOrEmpty(pointResult.value.points));
+    } else {
+      setPoints([]);
+      failures.push(`recovery points — ${pointResult.reason instanceof Error ? pointResult.reason.message : String(pointResult.reason)}`);
+    }
     if (healthResult.status === "fulfilled") {
       const healthSummary = healthResult.value.health;
       setHealth(healthSummary ? { ...healthSummary, hosts: arrayOrEmpty(healthSummary.hosts) } : null);
+    } else {
+      setHealth(null);
+      failures.push(`health — ${healthResult.reason instanceof Error ? healthResult.reason.message : String(healthResult.reason)}`);
     }
+    setAuxiliaryError(failures.length > 0 ? `Backup data is partially unavailable: ${failures.join("; ")}` : null);
   }, [canOperate]);
 
   useEffect(() => {
@@ -353,6 +375,35 @@ export function BackupsPanel({
     await action.run(() => runJob(() => postJson<JobResult>(`/api/backups/${backup.id}/drill`, {})));
   }
 
+  async function deleteSchedule(schedule: BackupSchedule) {
+    const ok = await confirm({
+      title: "Delete schedule",
+      tone: "danger",
+      confirmLabel: "Delete",
+      message: `Remove scheduled backup for ${scheduleTitle(schedule)}?`
+    });
+    if (!ok) return;
+    await action.run(async () => {
+      await deleteJson(`/api/backup-schedules/${schedule.id}`);
+      await loadAuxiliaryData();
+    });
+  }
+
+  async function deleteBackup(backup: Backup) {
+    const ok = await confirm({
+      title: "Delete backup",
+      tone: "danger",
+      confirmLabel: "Delete",
+      message: `Delete backup for ${backupTitle(backup)}?`
+    });
+    if (!ok) return;
+    await action.run(async () => {
+      await deleteJson(`/api/backups/${backup.id}`);
+      await refresh();
+      await loadAuxiliaryData();
+    });
+  }
+
   function restoreStateFor(backup: Backup): RestoreState {
     return restore[backup.id] ?? {
       hostId: backup.hostId,
@@ -415,7 +466,7 @@ export function BackupsPanel({
         </div>
 
         {canOperate && <div className="recoveryTaskGrid">
-          <form className="recoveryTaskCard" onSubmit={(event) => { event.preventDefault(); void createBackup(); }}>
+          <form className="recoveryTaskCard" onSubmit={(event) => { event.preventDefault(); void createBackup().catch(() => undefined); }}>
             <CardSection title="Create backup">
               <div className="recoveryFieldGrid twoColumn">
                 <Field label="Host">
@@ -460,7 +511,7 @@ export function BackupsPanel({
             </ButtonRow>
           </form>
 
-          <form className="recoveryTaskCard" onSubmit={(event) => { event.preventDefault(); void createSchedule(); }}>
+          <form className="recoveryTaskCard" onSubmit={(event) => { event.preventDefault(); void createSchedule().catch(() => undefined); }}>
             <CardSection title="Schedule backup">
               <div className="recoveryFieldGrid twoColumn">
                 <Field label="Host">
@@ -520,8 +571,9 @@ export function BackupsPanel({
         </div>}
       </div>
 
-      {action.error && <div className="notice error">{action.error}</div>}
-      {backupPageError && <div className="notice error">{backupPageError}</div>}
+      {action.error && <div className="notice error" role="alert">{action.error}</div>}
+      {auxiliaryError && <div className="notice error" role="alert">{auxiliaryError}</div>}
+      {backupPageError && <div className="notice error" role="alert">{backupPageError}</div>}
       {backupsLoading && <div className="notice">Loading backups…</div>}
 
       {activeBackupJobs.length > 0 && (
@@ -559,12 +611,7 @@ export function BackupsPanel({
               type="button"
               className="danger"
               title="Delete schedule"
-              onClick={() => void (async () => {
-                const ok = await confirm({ title: "Delete schedule", tone: "danger", confirmLabel: "Delete", message: `Remove scheduled backup for ${scheduleTitle(schedule)}?` });
-                if (!ok) return;
-                await deleteJson(`/api/backup-schedules/${schedule.id}`);
-                await loadAuxiliaryData();
-              })()}
+              onClick={() => void deleteSchedule(schedule).catch(() => undefined)}
             >
               <Trash2 size={16} />
             </button>
@@ -646,7 +693,7 @@ export function BackupsPanel({
                 />
                 Overwrite
               </label>
-              <button type="button" disabled={action.busy || !canUseArtifact} title="Restore" onClick={() => void restoreBackup(backup)}>
+              <button type="button" disabled={action.busy || !canUseArtifact} title="Restore" onClick={() => void restoreBackup(backup).catch(() => undefined)}>
                 <RotateCcw size={16} />
               </button>
             </div>,
@@ -655,7 +702,7 @@ export function BackupsPanel({
                 type="button"
                 title="Verify checksum and remote copy"
                 disabled={action.busy || !canUseArtifact}
-                onClick={() => void verifyBackup(backup, false)}
+                onClick={() => void verifyBackup(backup, false).catch(() => undefined)}
               >
                 <ShieldCheck size={16} />
               </button>
@@ -663,7 +710,7 @@ export function BackupsPanel({
                 type="button"
                 title="Deep verify archive"
                 disabled={action.busy || !canUseArtifact}
-                onClick={() => void verifyBackup(backup, true)}
+                onClick={() => void verifyBackup(backup, true).catch(() => undefined)}
               >
                 <FileArchive size={16} />
               </button>
@@ -671,7 +718,7 @@ export function BackupsPanel({
                 type="button"
                 title="Test restore"
                 disabled={action.busy || !canUseArtifact}
-                onClick={() => void drillBackup(backup)}
+                onClick={() => void drillBackup(backup).catch(() => undefined)}
               >
                 <FlaskConical size={16} />
               </button>
@@ -688,13 +735,7 @@ export function BackupsPanel({
                 type="button"
                 className="danger"
                 title="Delete backup"
-                onClick={() => void (async () => {
-                  const ok = await confirm({ title: "Delete backup", tone: "danger", confirmLabel: "Delete", message: `Delete backup for ${backupTitle(backup)}?` });
-                  if (!ok) return;
-                  await deleteJson(`/api/backups/${backup.id}`);
-                  await refresh();
-                  await loadAuxiliaryData();
-                })()}
+                onClick={() => void deleteBackup(backup).catch(() => undefined)}
               >
                 <Trash2 size={16} />
               </button>

@@ -132,7 +132,7 @@ describe("createRecoveryPoint transaction integrity", () => {
   });
 
   it("inserts a manual recovery point and job on the same transaction client", async () => {
-    transactionQuery.mockResolvedValue({ rows: [] });
+    transactionQuery.mockResolvedValue({ rows: [], rowCount: 1 });
     poolQuery.mockImplementation(async (sql: string) => {
       if (sql.includes("SELECT * FROM recovery_points")) {
         return {

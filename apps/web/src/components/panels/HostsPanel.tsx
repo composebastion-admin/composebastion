@@ -32,7 +32,7 @@ export function HostsPanel({
   onHostAction: (type: string, hostId: string) => Promise<void>;
   onOpenMetrics: (host: DockerHost) => void;
   onOpenAdmin: () => void;
-  onOpenTerminal: (host: DockerHost) => void;
+  onOpenTerminal: (host: DockerHost, returnFocus: HTMLElement) => void;
 }) {
   const { canOperate, canUseTerminal } = useAuthorization();
   const [showHostForm, setShowHostForm] = useState(false);
@@ -78,7 +78,7 @@ export function HostsPanel({
             runJob={runJob}
             onCreated={() => {
               setShowHostForm(false);
-              void refresh();
+              void refresh().catch(() => undefined);
             }}
             submitLabel="Save host"
           />
@@ -135,11 +135,11 @@ export function HostsPanel({
             </div>,
             formatDate(host.updatedAt),
             <ButtonRow key="actions">
-              {canOperate && <button title="Check host" onClick={() => void onHostAction("host.check", host.id)}><Activity size={16} /></button>}
+              {canOperate && <button title="Check host" onClick={() => void onHostAction("host.check", host.id).catch(() => undefined)}><Activity size={16} /></button>}
               <button title="View metrics" onClick={() => onOpenMetrics(host)}><Server size={16} /></button>
-              {canOperate && <button title="Refresh inventory" onClick={() => void onHostAction("host.sync", host.id)}><RefreshCw size={16} /></button>}
+              {canOperate && <button title="Refresh inventory" onClick={() => void onHostAction("host.sync", host.id).catch(() => undefined)}><RefreshCw size={16} /></button>}
               {canUseTerminal && canOpenHostTerminal(user, host) && (
-                <button title="Open SSH terminal" onClick={() => onOpenTerminal(host)}><Terminal size={16} /></button>
+                <button title="Open SSH terminal" onClick={(event) => onOpenTerminal(host, event.currentTarget)}><Terminal size={16} /></button>
               )}
               {canOperate && <button title="Host settings" onClick={() => { onSelectHost(host.id); onOpenAdmin(); }}><Settings size={16} /></button>}
             </ButtonRow>
