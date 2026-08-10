@@ -72,11 +72,11 @@ Run the same gates CI expects before release:
 - CodeQL, dependency review, container/image scanning, secret scanning, and
   image publishing checks when configured
 
-Go-module legal approval remains mandatory before beta, main, or public image
-publication. Real NAS/cloud evidence is collected against the published beta
-and is mandatory before promotion to `main` or a stable tag. Both are deferred
-for a non-publishing `dev` qualification and dev evidence alone is not valid
-for a public stable release.
+Go-module legal approval remains mandatory before `main` or stable-tag image
+publication. It is not a beta publication gate. Real NAS/cloud evidence is
+collected against the published beta and is mandatory before promotion to
+`main` or a stable tag. Both are deferred for a non-publishing `dev`
+qualification, and dev evidence alone is not valid for a public stable release.
 
 ## Version Bumps
 
@@ -109,7 +109,7 @@ for a public stable release.
   through `.github/workflows/publish-images.yml`.
 - Every push to `beta` publishes both scanned multi-architecture images to the
   moving `beta` alias, the exact prerelease version alias such as
-  `1.2.0-beta.1`, and immutable full-commit tags. The prerelease alias is
+  `1.2.0-beta.2`, and immutable full-commit tags. The prerelease alias is
   immutable: publishing a different digest requires a new prerelease version.
   Beta publication must never move `main`, `latest`, or stable/minor aliases.
 - Main image publishes must include `main`, deterministic per-platform

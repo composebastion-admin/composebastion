@@ -1,5 +1,27 @@
 # Changelog
 
+## [v1.2.0-beta.2] - 2026-08-10
+
+> Beta channel only. This candidate supersedes the earlier beta build and does
+> not move `latest`.
+
+### Fixed
+- Bound self-update candidate and rollback verification to container-local
+  worker startup evidence, so a stale predecessor heartbeat cannot make an
+  unregistered replacement worker appear ready.
+- Allowed Docker-healthy handoff verification while the replacement worker is
+  deliberately draining pending authoritative outcome reconciliation.
+- Made local acceptance resolve the exact registry image IDs after push and
+  expanded post-1.2 upgrade recovery guidance.
+
+### Security and release qualification
+- Retained the hardened Git-context materialization and rebuilt Go-tool
+  dependency chain qualified on `dev` after the first beta build.
+- Advanced the immutable prerelease identity to `1.2.0-beta.2`; the existing
+  beta aliases must not be republished as a different beta.1 digest.
+- Qualified rollback continues to use the `1.1.6` compatibility bridge and the
+  saved pre-beta Compose definition.
+
 ## [v1.2.0-beta.1] - 2026-07-25
 
 > Beta channel only. This candidate is published from the GitHub `beta` branch
@@ -139,7 +161,8 @@
 - One-click registry trust repair requires an owner/admin, Linux/systemd Docker,
   and passwordless sudo. Unsupported hosts retain the review and receive manual
   instructions.
-- To roll back, pin both app and agent to `1.1.2`, pull, and recreate the
+- To roll back, restore the saved pre-beta Compose definition, pin both app and
+  agent to `1.1.6`, pull, and recreate the
   services without deleting PostgreSQL, Redis, configuration, backup, or other
   volumes. Qualification keeps migrations `031` through `038` in the database,
   verifies stable readiness and preserved state, then re-upgrades the same

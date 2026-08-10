@@ -358,8 +358,8 @@ const metadataSteps = publishJobs.metadata?.steps ?? [];
 const releaseMetadataStep = metadataSteps.find((step) => step.id === "release");
 const stableTagStep = metadataSteps.find((step) => step.id === "stable-tag");
 const publicationStep = metadataSteps.find((step) => step.id === "publication");
-const attributionInstallStep = metadataSteps.find((step) => step.name === "Install attribution policy dependencies");
-const strictAttributionStep = metadataSteps.find((step) => step.name === "Require approved Go attribution before public image publication");
+const attributionInstallStep = metadataSteps.find((step) => step.name === "Install stable attribution policy dependencies");
+const strictAttributionStep = metadataSteps.find((step) => step.name === "Require approved Go attribution before stable image publication");
 if (!String(stableTagStep?.run ?? "").includes('echo "stable=true" >> "${GITHUB_OUTPUT}"')) {
   fail(`${publishFile}:metadata: stable tag validation must expose a successful stable-tag output`);
 }
@@ -375,21 +375,23 @@ const publicationRun = String(publicationStep?.run ?? "");
 for (const invariant of [
   "refs/tags/*",
   "refs/heads/main",
-  "refs/heads/beta",
   'echo "required=${required}" >> "${GITHUB_OUTPUT}"'
 ]) {
   if (!publicationRun.includes(invariant)) {
     fail(`${publishFile}:metadata: public publication classification is missing ${invariant}`);
   }
 }
+if (publicationRun.includes("refs/heads/beta")) {
+  fail(`${publishFile}:metadata: beta publication must not require stable legal approval`);
+}
 if (String(strictAttributionStep?.if ?? "") !== "steps.publication.outputs.required == 'true'"
     || String(strictAttributionStep?.run ?? "").trim() !== "npm run check:go-attribution:release") {
-  fail(`${publishFile}:metadata: beta, main, and stable publications must require approved Go attribution`);
+  fail(`${publishFile}:metadata: main and stable publications must require approved Go attribution`);
 }
 if (String(attributionInstallStep?.if ?? "") !== "steps.publication.outputs.required == 'true'"
     || String(attributionInstallStep?.run ?? "").trim()
       !== "npm ci --engine-strict --dangerously-allow-all-scripts=false --ignore-scripts") {
-  fail(`${publishFile}:metadata: every public publication must install locked attribution policy dependencies`);
+  fail(`${publishFile}:metadata: every stable publication must install locked attribution policy dependencies`);
 }
 const stableTagIndex = metadataSteps.indexOf(stableTagStep);
 const publicationIndex = metadataSteps.indexOf(publicationStep);

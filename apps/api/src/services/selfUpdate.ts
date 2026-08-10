@@ -22,6 +22,7 @@ import {
 import { mapJob } from "./mappers.js";
 import { runSshCommand, writeRemoteFile } from "./ssh.js";
 import { runtimeVersionMetadata } from "./version.js";
+import { WORKER_READINESS_MARKER_PATH } from "./workerReadiness.js";
 
 const SELF_UPDATE_CONFIG_KEY = "self_update.config";
 const SELF_UPDATE_LATEST_KEY = "self_update.latest";
@@ -29,7 +30,6 @@ const GITHUB_API_REPO = "https://api.github.com/repos/composebastion-admin/compo
 const GITHUB_REPO_URL = "https://github.com/composebastion-admin/composebastion";
 const DOCKER_SSH_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin";
 export const SELF_UPDATE_LOCK_PATH = "/tmp/composebastion-self-update.lock";
-const SELF_UPDATE_MISSING_OUTCOME_GRACE_MS = 2 * 60_000;
 const SELF_UPDATE_HANDOFF_TIMEOUT_MS = 30 * 60_000;
 const COMPOSEBASTION_IMAGE_SOURCE = "https://github.com/composebastion-admin/composebastion";
 
@@ -296,6 +296,7 @@ export type SelfUpdateHandoff = {
   outcomePath: string;
   gatePath: string;
   lockPath: string;
+  handoffStartedAt: string;
   handedOffAt: string;
 };
 
@@ -432,7 +433,7 @@ export function buildSelfUpdateScript(
     "  ready_worker_id=\"$(container_id worker)\"",
     "  [ -n \"$ready_app_id\" ] && [ -n \"$ready_worker_id\" ] || return 1",
     "  [ \"$(\"$DOCKER_BIN\" inspect --format '{{.State.Running}}' \"$ready_app_id\" 2>/dev/null || true)\" = \"true\" ] || return 1",
-    "  if [ \"$verification_mode\" = ready ]; then",
+    "  if [ \"$verification_mode\" = ready ] || [ \"$verification_mode\" = candidate_handoff ]; then",
     "    [ \"$(\"$DOCKER_BIN\" inspect --format '{{.State.Health.Status}}' \"$ready_app_id\" 2>/dev/null || true)\" = \"healthy\" ] || return 1",
     "  fi",
     "  [ \"$(\"$DOCKER_BIN\" inspect --format '{{.State.Running}}' \"$ready_worker_id\" 2>/dev/null || true)\" = \"true\" ] || return 1",
@@ -457,12 +458,16 @@ export function buildSelfUpdateScript(
     "  [ \"$ready_app_version\" = \"$ready_worker_version\" ] || return 1",
     "  if [ -n \"$expected_app_image_id\" ]; then [ \"$ready_app_image_id\" = \"$expected_app_image_id\" ] || return 1; fi",
     "  if [ -n \"$expected_worker_image_id\" ]; then [ \"$ready_worker_image_id\" = \"$expected_worker_image_id\" ] || return 1; fi",
+    `  "$DOCKER_BIN" compose -f "$COMPOSE_FILE" exec -T worker node -e 'const fs=require("node:fs");const expected=process.argv[1].replace(/^v/, "");const label=process.argv[2].replace(/^v/, "");try{const marker=JSON.parse(fs.readFileSync(process.argv[3], "utf8"));const actual=String(marker.version||"").replace(/^v/, "");if(marker.schema!==1||typeof marker.workerId!=="string"||!marker.workerId||typeof marker.registeredAt!=="string"||!Number.isFinite(Date.parse(marker.registeredAt))||!actual||actual==="unknown"||actual!==label||(expected!=="latest"&&actual!==expected))process.exit(1)}catch{process.exit(1)}' "$expected_worker_version" "$ready_worker_version" ${shQuote(WORKER_READINESS_MARKER_PATH)} >/dev/null 2>&1 || return 1`,
     "  case \"$verification_mode\" in",
     "    ready)",
     "      \"$DOCKER_BIN\" compose -f \"$COMPOSE_FILE\" exec -T app node -e 'const expected=process.argv[1].replace(/^v/, \"\"); const label=process.argv[2].replace(/^v/, \"\"); Promise.all([fetch(\"http://127.0.0.1:8080/api/health\").then(r=>r.ok?r.json():Promise.reject(new Error(\"health\"))),fetch(\"http://127.0.0.1:8080/api/health/ready\").then(r=>r.ok?r.json():Promise.reject(new Error(\"ready\")))]).then(([health,ready])=>{const actual=String(health.version||\"\").replace(/^v/, \"\"); if(!health.ok||!ready.ok||!ready.checks?.worker?.ok||!actual||actual===\"unknown\"||actual!==label||(expected!==\"latest\"&&actual!==expected))process.exit(1)}).catch(()=>process.exit(1))' \"$expected_app_version\" \"$ready_app_version\" >/dev/null 2>&1",
     "      ;;",
-    "    handoff)",
-    "      # A restored manager intentionally keeps its worker draining until this outcome is reconciled.",
+    "    candidate_handoff|handoff)",
+    "      # Candidate success and restored-manager rollback both keep the worker",
+    "      # draining until the authoritative outcome is reconciled. Candidate mode",
+    "      # still requires Docker healthy above so a candidate-only health failure",
+    "      # cannot hide behind the draining handoff.",
     "      \"$DOCKER_BIN\" compose -f \"$COMPOSE_FILE\" exec -T app node -e 'const expected=process.argv[1].replace(/^v/, \"\"); const label=process.argv[2].replace(/^v/, \"\"); Promise.all([fetch(\"http://127.0.0.1:8080/api/health\").then(r=>r.ok?r.json():Promise.reject(new Error(\"health\"))),fetch(\"http://127.0.0.1:8080/api/health/ready\").then(r=>r.json())]).then(([health,ready])=>{const actual=String(health.version||\"\").replace(/^v/, \"\");const worker=ready.checks?.worker;if(!health.ok||!ready.checks?.database?.ok||worker?.ok||worker?.state!==\"draining\"||!(worker?.activeWorkers>0)||!worker?.lastHeartbeatAt||!actual||actual===\"unknown\"||actual!==label||(expected!==\"latest\"&&actual!==expected))process.exit(1)}).catch(()=>process.exit(1))' \"$expected_app_version\" \"$ready_app_version\" >/dev/null 2>&1",
     "      ;;",
     "    *) return 1 ;;",
@@ -622,7 +627,7 @@ export function buildSelfUpdateScript(
     "  *) fail_update prepare_result 1 ;;",
     "esac",
     "if ! \"$DOCKER_BIN\" compose -f \"$COMPOSE_FILE\" -f \"$CANDIDATE_COMPOSE_PATH\" up -d --pull never --no-deps --force-recreate app worker; then fail_update up 1; fi",
-    "if ! wait_for_stack \"$TARGET_VERSION\" \"$TARGET_VERSION\" \"$CANDIDATE_APP_IMAGE_ID\" \"$CANDIDATE_WORKER_IMAGE_ID\"; then fail_update verification 1; fi",
+    "if ! wait_for_stack \"$TARGET_VERSION\" \"$TARGET_VERSION\" \"$CANDIDATE_APP_IMAGE_ID\" \"$CANDIDATE_WORKER_IMAGE_ID\" candidate_handoff; then fail_update verification 1; fi",
     "if ! write_outcome passed complete not_required 0; then fail_update outcome_publication 1; fi",
     "trap - HUP INT TERM",
     "success_cleanup_failed=0",
@@ -830,6 +835,7 @@ export async function runSelfUpdate(
     throw new Error(launchResult.stderr || launchResult.stdout || "Self-update handoff failed");
   }
 
+  const handedOffAt = new Date().toISOString();
   return {
     handoffStarted: true,
     handoffPending: true,
@@ -842,7 +848,8 @@ export async function runSelfUpdate(
     outcomePath,
     gatePath,
     lockPath,
-    handedOffAt: new Date().toISOString()
+    handoffStartedAt: handedOffAt,
+    handedOffAt
   } satisfies SelfUpdateHandoff;
 }
 
@@ -975,11 +982,36 @@ async function failUnreconciledSelfUpdate(jobId: string, message: string) {
 }
 
 function pendingHandoffAgeMs(row: any) {
-  const handedOffAt = typeof row.result?.handedOffAt === "string"
-    ? Date.parse(row.result.handedOffAt)
+  const handoffStartedAt = typeof row.result?.handoffStartedAt === "string"
+    ? Date.parse(row.result.handoffStartedAt)
+    : typeof row.result?.handedOffAt === "string"
+      ? Date.parse(row.result.handedOffAt)
     : Number.NaN;
   const fallback = new Date(row.updated_at ?? row.started_at ?? row.created_at).getTime();
-  return Date.now() - (Number.isFinite(handedOffAt) ? handedOffAt : fallback);
+  return Date.now() - (Number.isFinite(handoffStartedAt) ? handoffStartedAt : fallback);
+}
+
+async function refreshBridgeCompatibilityHandoffLease(row: any) {
+  const fallback = new Date(row.updated_at ?? row.started_at ?? row.created_at).toISOString();
+  const handoffStartedAt = typeof row.result?.handoffStartedAt === "string"
+    ? row.result.handoffStartedAt
+    : typeof row.result?.handedOffAt === "string"
+      ? row.result.handedOffAt
+      : fallback;
+  const handedOffAt = new Date().toISOString();
+  await query(
+    `UPDATE operation_jobs
+     SET result = COALESCE(result, '{}'::jsonb) || jsonb_build_object(
+           'handoffStartedAt', $2::text,
+           'handedOffAt', $3::text
+         ),
+         updated_at = now()
+     WHERE id = $1
+       AND type = 'system.self_update'
+       AND status = 'running'
+       AND result ->> 'handoffPending' = 'true'`,
+    [row.id, handoffStartedAt, handedOffAt]
+  );
 }
 
 function expectedHandoffArtifacts(row: any) {
@@ -992,8 +1024,7 @@ function expectedHandoffArtifacts(row: any) {
   const executionId = String(row.id).replace(/[^a-zA-Z0-9_-]/g, "");
   return {
     action,
-    outcomePath: selfUpdateArtifactPath(action.payload.workingDir, executionId, "outcome"),
-    scriptPath: selfUpdateArtifactPath(action.payload.workingDir, executionId, "sh")
+    outcomePath: selfUpdateArtifactPath(action.payload.workingDir, executionId, "outcome")
   };
 }
 
@@ -1014,7 +1045,7 @@ export async function reconcileSelfUpdateHandoffs() {
   for (const row of pending.rows) {
     const ageMs = pendingHandoffAgeMs(row);
     try {
-      const { action, outcomePath, scriptPath } = expectedHandoffArtifacts(row);
+      const { action, outcomePath } = expectedHandoffArtifacts(row);
       const host = await getHostForWorker(action.hostId);
       if (host.connectionMode !== "ssh") {
         if (await failUnreconciledSelfUpdate(row.id, "Self-update outcome could not be reconciled because the manager host is no longer configured for SSH.")) failed += 1;
@@ -1040,38 +1071,27 @@ export async function reconcileSelfUpdateHandoffs() {
         continue;
       }
 
-      const lockResult = await runSshCommand(
-        host.ssh,
-        [
-          `owner="$(sed -n '1p' ${shQuote(`${SELF_UPDATE_LOCK_PATH}/owner`)} 2>/dev/null || true)"`,
-          `owner_job="$(sed -n '1p' ${shQuote(`${SELF_UPDATE_LOCK_PATH}/job`)} 2>/dev/null || true)"`,
-          `owner_script="$(sed -n '1p' ${shQuote(`${SELF_UPDATE_LOCK_PATH}/script`)} 2>/dev/null || true)"`,
-          `if [ "$owner_job" = ${shQuote(row.id)} ] && [ "$owner_script" = ${shQuote(scriptPath)} ] && case "$owner" in ''|*[!0-9]*) false ;; *) kill -0 "$owner" 2>/dev/null ;; esac; then`,
-          "  process_args=\"$(tr '\\000' ' ' < \"/proc/$owner/cmdline\" 2>/dev/null || true)\"",
-          "  process_cwd=\"$(readlink -f -- \"/proc/$owner/cwd\" 2>/dev/null || true)\"",
-          `  expected_cwd="$(readlink -f -- ${shQuote(action.payload.workingDir)} 2>/dev/null || true)"`,
-          `  case "$process_args" in *${shQuote(scriptPath)}*) [ "$process_cwd" = "$expected_cwd" ] && exit 0 ;; esac`,
-          "fi",
-          "exit 1"
-        ].join("\n"),
-        { timeoutMs: 30_000 }
-      );
-      if (lockResult.code === 0 && ageMs < SELF_UPDATE_HANDOFF_TIMEOUT_MS) {
+      // Verification and rollback can legitimately outlive the old two-minute
+      // missing-outcome grace period. The lock is also briefly unavailable
+      // while Compose replaces the worker. Refresh handedOffAt as a bounded
+      // compatibility lease for the immutable 1.1.6 bridge, whose reconciler
+      // otherwise fails a valid handoff after two minutes if that lock probe
+      // races the replacement. handoffStartedAt remains immutable so this
+      // worker still enforces the full timeout.
+      if (ageMs < SELF_UPDATE_HANDOFF_TIMEOUT_MS) {
+        await refreshBridgeCompatibilityHandoffLease(row);
         pendingCount += 1;
         continue;
       }
-      if (ageMs < SELF_UPDATE_MISSING_OUTCOME_GRACE_MS) {
-        pendingCount += 1;
-        continue;
-      }
-      const message = ageMs >= SELF_UPDATE_HANDOFF_TIMEOUT_MS
-        ? "Self-update handoff timed out before an authoritative outcome was written."
-        : "Self-update process exited without writing an authoritative outcome.";
-      if (await failUnreconciledSelfUpdate(row.id, message)) failed += 1;
+      if (await failUnreconciledSelfUpdate(
+        row.id,
+        "Self-update handoff timed out before an authoritative outcome was written."
+      )) failed += 1;
     } catch {
       if (ageMs >= SELF_UPDATE_HANDOFF_TIMEOUT_MS) {
         if (await failUnreconciledSelfUpdate(row.id, "Self-update outcome could not be reconciled before the handoff timeout.")) failed += 1;
       } else {
+        await refreshBridgeCompatibilityHandoffLease(row);
         pendingCount += 1;
       }
     }

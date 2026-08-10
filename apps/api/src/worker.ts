@@ -76,6 +76,10 @@ import { runStackUpdatePolicies } from "./services/stackUpdatePolicies.js";
 import { safeErrorMessage, workerJobLogFields } from "./services/operationLogs.js";
 import { createNonOverlappingTask } from "./services/nonOverlappingTask.js";
 import { APP_VERSION } from "./services/version.js";
+import {
+  clearWorkerReadinessMarker,
+  publishWorkerReadinessMarker
+} from "./services/workerReadiness.js";
 
 let processing = false;
 // Fail closed until startup has reconciled every durable self-update handoff.
@@ -423,6 +427,10 @@ async function shutdown(signal: string) {
   for (const timer of timers) clearInterval(timer);
   timers.clear();
 
+  await clearWorkerReadinessMarker().catch((error) => {
+    console.error("worker.readiness.clear", { error: safeErrorMessage(error) });
+  });
+
   if (workerRegistered) {
     await markWorkerDraining(workerId).catch((error) => {
       console.error("worker.drain", { error: safeErrorMessage(error) });
@@ -451,6 +459,9 @@ process.once("SIGTERM", () => void shutdown("SIGTERM"));
 process.once("SIGINT", () => void shutdown("SIGINT"));
 
 async function main() {
+  // A container restart preserves its writable layer. Remove any marker left
+  // by an abruptly terminated predecessor before doing startup work.
+  await clearWorkerReadinessMarker();
   await runMigrations();
   await registerWorkerInstance({ id: workerId, version: APP_VERSION, hostname: hostname() });
   workerRegistered = true;
@@ -470,6 +481,11 @@ async function main() {
   await reconcileRecoveryRestoreAttempts();
   await reconcileClaimedDeletions();
   await reconcileRecoverySourceRestartObligations();
+
+  // Publish only after this exact worker has registered and completed every
+  // fail-closed startup reconciliation. The self-updater verifies this marker
+  // inside the replacement container instead of trusting aggregate heartbeats.
+  await publishWorkerReadinessMarker({ workerId, version: APP_VERSION });
 
   redisWakeups = startRedisWakeupSubscription({
     onWakeup: () => void runScheduled("job-poll", processAvailableJobs)
@@ -539,7 +555,8 @@ async function main() {
   console.info(`ComposeBastion worker started for ${env.DATABASE_URL.replace(/:\/\/.*@/, "://***@")}`);
 }
 
-main().catch((error) => {
+main().catch(async (error) => {
+  await clearWorkerReadinessMarker().catch(() => undefined);
   console.error(error);
   process.exit(1);
 });

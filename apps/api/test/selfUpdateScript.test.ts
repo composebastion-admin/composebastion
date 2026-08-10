@@ -87,6 +87,19 @@ if [ "$1" = "compose" ]; then
         sleep 1
         exit 1
       fi
+      case " $* " in
+        *'worker?.state!=="draining"'*)
+          # Handoff / candidate_handoff probes accept a draining worker.
+          exit 0
+          ;;
+        *'ready.checks?.worker?.ok'*)
+          # Full readiness requires worker.ok, which cannot pass before outcome publication.
+          exit 1
+          ;;
+      esac
+      exit 0 ;;
+    *" exec -T worker node "*)
+      if [ "$phase" = "new" ] && [ "$MOCK_FAIL" = "worker_marker" ]; then exit 1; fi
       exit 0 ;;
   esac
 fi
@@ -123,7 +136,7 @@ exit 1
 `;
 
 async function runGeneratedUpdate(
-  failure: "" | "pull" | "prepare" | "up" | "verification" | "finalization_interrupt",
+  failure: "" | "pull" | "prepare" | "up" | "verification" | "worker_marker" | "finalization_interrupt",
   targetVersion = "1.0.2",
   credentialChanged = false,
   restoreFails = false,
@@ -222,6 +235,7 @@ describe("generated self-update shell program", () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.outcome).toContain("status=passed\nstage=complete\nrollback=not_required");
+    expect(result.script).toContain("candidate_handoff");
     expect(result.environment).toContain("COMPOSEBASTION_VERSION=1.0.2");
     expect(result.environment).toContain("APP_SECRET=do-not-log-or-lose");
     expect(result.commands).toContain("prepare-compose-upgrade.mjs reconcile");
@@ -249,6 +263,16 @@ describe("generated self-update shell program", () => {
     expect(result.commands).toContain("image tag sha256:aaaaaaaa ghcr.io/composebastion-admin/composebastion-app:latest");
     expect(result.commands).toContain("-f");
     expect(result.commands).toContain(".rollback.yml up -d --pull never --no-deps --force-recreate app worker");
+    expect(await readFile(path.join(result.stateDirectory, "phase"), "utf8")).toBe("old\n");
+  });
+
+  it("rejects a candidate whose worker never publishes container-local readiness", async () => {
+    const result = await runGeneratedUpdate("worker_marker");
+
+    expect(result.exitCode).toBe(1);
+    expect(result.outcome).toContain("status=failed\nstage=verification\nrollback=succeeded");
+    expect(result.commands).toContain("exec -T worker node -e");
+    expect(result.commands).toContain("/tmp/composebastion-worker-ready.json");
     expect(await readFile(path.join(result.stateDirectory, "phase"), "utf8")).toBe("old\n");
   });
 

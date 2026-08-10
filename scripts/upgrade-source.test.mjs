@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const sourceUpgrade = path.join(root, "scripts", "upgrade-source.mjs");
+const candidateVersion = JSON.parse(await readFile(path.join(root, "package.json"), "utf8")).version;
 const oldAppImage = `sha256:${"a".repeat(64)}`;
 const oldWorkerImage = `sha256:${"b".repeat(64)}`;
 const candidateAppImage = `sha256:${"c".repeat(64)}`;
@@ -40,7 +41,7 @@ if (args[0] === "inspect") {
       ? (service === "app" ? ${JSON.stringify(candidateAppImage)} : ${JSON.stringify(candidateWorkerImage)})
       : (service === "app" ? ${JSON.stringify(oldAppImage)} : ${JSON.stringify(oldWorkerImage)})) + "\\n");
   } else if (format.includes("version")) {
-    process.stdout.write((phase === "candidate" ? "1.2.0-beta.1" : "1.1.2") + "\\n");
+    process.stdout.write((phase === "candidate" ? ${JSON.stringify(candidateVersion)} : "1.1.2") + "\\n");
   } else if (format.includes("revision")) {
     process.stdout.write("${"e".repeat(40)}\\n");
   } else if (format === "{{.State.Running}}") {

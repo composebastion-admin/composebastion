@@ -50,7 +50,7 @@ start. Both values are required and the examples refuse to render without
 them:
 
 ```bash
-export COMPOSEBASTION_AGENT_VERSION=1.1.2
+export COMPOSEBASTION_AGENT_VERSION=1.1.6
 export AGENT_TOKEN="$(openssl rand -hex 32)"
 export COMPOSEBASTION_AGENT_BIND_ADDRESS=192.0.2.10
 docker compose -f agent-compose.yml pull
@@ -61,7 +61,7 @@ Update the agent image with:
 
 ```bash
 cd ~/composebastion-agent
-export COMPOSEBASTION_AGENT_VERSION=1.1.2
+export COMPOSEBASTION_AGENT_VERSION=1.1.6
 export AGENT_TOKEN="$(openssl rand -hex 32)"
 export COMPOSEBASTION_AGENT_BIND_ADDRESS=192.0.2.10
 docker compose -f agent-compose.image.example.yml pull

@@ -153,8 +153,9 @@ describe("self update service", () => {
     expect(script).toContain("COMPOSEBASTION_DATABASE_ENVIRONMENT_ACTION");
     expect(script).toContain('"$DOCKER_BIN" compose -f "$COMPOSE_FILE" stop app worker');
     expect(script).toContain('up -d --pull never --no-deps --force-recreate app worker');
-    expect(script).toContain('wait_for_stack "$TARGET_VERSION" "$TARGET_VERSION" "$CANDIDATE_APP_IMAGE_ID" "$CANDIDATE_WORKER_IMAGE_ID"');
+    expect(script).toContain('wait_for_stack "$TARGET_VERSION" "$TARGET_VERSION" "$CANDIDATE_APP_IMAGE_ID" "$CANDIDATE_WORKER_IMAGE_ID" candidate_handoff');
     expect(script).toContain('wait_for_stack "$PREVIOUS_APP_VERSION" "$PREVIOUS_WORKER_VERSION" "$PREVIOUS_APP_IMAGE_ID" "$PREVIOUS_WORKER_IMAGE_ID" handoff');
+    expect(script).toContain('candidate_handoff|handoff');
     expect(script).toContain('worker?.state!=="draining"');
     expect(script).toContain("restore-legacy");
     expect(script).toContain("PREVIOUS_APP_IMAGE_ID");
@@ -193,6 +194,7 @@ describe("self update service", () => {
       outcomePath: `/srv/composebastion/.composebastion-self-update-${jobId}.outcome`,
       gatePath,
       lockPath: "/tmp/composebastion-self-update.lock",
+      handoffStartedAt: new Date().toISOString(),
       handedOffAt: new Date().toISOString()
     });
 
@@ -400,16 +402,52 @@ describe("self update service", () => {
     expect(query.mock.calls[1]?.[0]).toContain("result ->> 'handoffPending' = 'true'");
   });
 
-  it("keeps an active detached updater nonterminal", async () => {
-    query.mockResolvedValueOnce({ rows: [pendingRow()] });
-    runSshCommand.mockReset()
-      .mockResolvedValueOnce({ code: 44, stdout: "", stderr: "" })
-      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+  it("keeps a missing outcome nonterminal before the full handoff timeout", async () => {
+    query
+      .mockResolvedValueOnce({ rows: [pendingRow()] })
+      .mockResolvedValueOnce({ rowCount: 1 });
+    runSshCommand.mockReset().mockResolvedValueOnce({ code: 44, stdout: "", stderr: "" });
     const { reconcileSelfUpdateHandoffs } = await import("../src/services/selfUpdate.js");
 
     await expect(reconcileSelfUpdateHandoffs()).resolves.toEqual({ completed: 0, failed: 0, pending: 1 });
-    expect(query).toHaveBeenCalledTimes(1);
-    expect(runSshCommand.mock.calls[1]?.[1]).toContain("/proc/$owner/cmdline");
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(query.mock.calls[1]?.[0]).toContain("'handoffStartedAt', $2::text");
+    expect(runSshCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it("renews the immutable bridge compatibility lease without extending the full timeout", async () => {
+    const originalHandoff = new Date(Date.now() - 3 * 60_000).toISOString();
+    query
+      .mockResolvedValueOnce({
+        rows: [pendingRow({
+          result: {
+            handoffPending: true,
+            handedOffAt: originalHandoff
+          }
+        })]
+      })
+      .mockResolvedValueOnce({ rowCount: 1 });
+    runSshCommand.mockReset().mockResolvedValueOnce({ code: 44, stdout: "", stderr: "" });
+    const { reconcileSelfUpdateHandoffs } = await import("../src/services/selfUpdate.js");
+
+    await expect(reconcileSelfUpdateHandoffs()).resolves.toEqual({ completed: 0, failed: 0, pending: 1 });
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(query.mock.calls[1]?.[1]?.[1]).toBe(originalHandoff);
+    expect(Date.parse(String(query.mock.calls[1]?.[1]?.[2]))).toBeGreaterThan(Date.parse(originalHandoff));
+    expect(runSshCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails a missing outcome at the full handoff timeout", async () => {
+    query
+      .mockResolvedValueOnce({
+        rows: [pendingRow({ result: { handoffPending: true, handedOffAt: "2026-01-01T00:00:00.000Z" } })]
+      })
+      .mockResolvedValueOnce({ rows: [{ id: jobId }], rowCount: 1 });
+    runSshCommand.mockReset().mockResolvedValueOnce({ code: 44, stdout: "", stderr: "" });
+    const { reconcileSelfUpdateHandoffs } = await import("../src/services/selfUpdate.js");
+
+    await expect(reconcileSelfUpdateHandoffs()).resolves.toEqual({ completed: 0, failed: 1, pending: 0 });
+    expect(query.mock.calls[1]?.[1]?.[2]).toBe("Self-update handoff timed out before an authoritative outcome was written.");
   });
 
   it("fails a malformed outcome immediately with a sanitized error", async () => {
