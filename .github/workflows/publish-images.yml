@@ -337,7 +337,10 @@ jobs:
 
   publish-branch:
     name: Publish scanned branch images
-    if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/beta') && needs.metadata.result == 'success' && needs.build-scan.result == 'success' && needs.release-image-gate.result == 'success' }}
+    # The aggregate gate deliberately needs a skipped tag-only job on branch
+    # runs. always() prevents that skip from propagating while the explicit
+    # success predicates keep every mutating dependency fail-closed.
+    if: ${{ always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/beta') && needs.metadata.result == 'success' && needs.build-scan.result == 'success' && needs.release-image-gate.result == 'success' }}
     needs: [metadata, build-scan, release-image-gate]
     permissions:
       attestations: write
@@ -769,8 +772,11 @@ jobs:
 
   promote-tag:
     name: Promote verified stable image indexes
-    if: ${{ startsWith(github.ref, 'refs/tags/') && needs.metadata.result == 'success' && needs.release-image-gate.result == 'success' }}
-    needs: [metadata, release-image-gate]
+    # The aggregate gate deliberately needs the skipped branch-build job on a
+    # tag run, so retain explicit success predicates when overriding skip
+    # propagation for the stable mutation.
+    if: ${{ always() && startsWith(github.ref, 'refs/tags/') && needs.metadata.result == 'success' && needs.rescan-tag-images.result == 'success' && needs.release-image-gate.result == 'success' }}
+    needs: [metadata, rescan-tag-images, release-image-gate]
     permissions:
       attestations: read
       contents: read
