@@ -92,7 +92,7 @@ jobs:
           fi
           echo "stable=true" >> "${GITHUB_OUTPUT}"
 
-      - name: Identify public image publication
+      - name: Identify approval-gated stable publication
         id: publication
         shell: bash
         env:
@@ -103,16 +103,16 @@ jobs:
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             required=true
           elif [[ "${EVENT_NAME}" = push || "${EVENT_NAME}" = workflow_dispatch ]] \
-            && [[ "${GITHUB_REF}" = refs/heads/main || "${GITHUB_REF}" = refs/heads/beta ]]; then
+            && [[ "${GITHUB_REF}" = refs/heads/main ]]; then
             required=true
           fi
           echo "required=${required}" >> "${GITHUB_OUTPUT}"
 
-      - name: Install attribution policy dependencies
+      - name: Install stable attribution policy dependencies
         if: steps.publication.outputs.required == 'true'
         run: npm ci --engine-strict --dangerously-allow-all-scripts=false --ignore-scripts
 
-      - name: Require approved Go attribution before public image publication
+      - name: Require approved Go attribution before stable image publication
         if: steps.publication.outputs.required == 'true'
         run: npm run check:go-attribution:release
 

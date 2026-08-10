@@ -72,11 +72,11 @@ Run the same gates CI expects before release:
 - CodeQL, dependency review, container/image scanning, secret scanning, and
   image publishing checks when configured
 
-Go-module legal approval remains mandatory before beta, main, or public image
-publication. Real NAS/cloud evidence is collected against the published beta
-and is mandatory before promotion to `main` or a stable tag. Both are deferred
-for a non-publishing `dev` qualification and dev evidence alone is not valid
-for a public stable release.
+Go-module legal approval remains mandatory before `main` or stable-tag image
+publication. It is not a beta publication gate. Real NAS/cloud evidence is
+collected against the published beta and is mandatory before promotion to
+`main` or a stable tag. Both are deferred for a non-publishing `dev`
+qualification, and dev evidence alone is not valid for a public stable release.
 
 ## Version Bumps
 
