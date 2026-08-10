@@ -296,6 +296,7 @@ export type SelfUpdateHandoff = {
   outcomePath: string;
   gatePath: string;
   lockPath: string;
+  handoffStartedAt: string;
   handedOffAt: string;
 };
 
@@ -834,6 +835,7 @@ export async function runSelfUpdate(
     throw new Error(launchResult.stderr || launchResult.stdout || "Self-update handoff failed");
   }
 
+  const handedOffAt = new Date().toISOString();
   return {
     handoffStarted: true,
     handoffPending: true,
@@ -846,7 +848,8 @@ export async function runSelfUpdate(
     outcomePath,
     gatePath,
     lockPath,
-    handedOffAt: new Date().toISOString()
+    handoffStartedAt: handedOffAt,
+    handedOffAt
   } satisfies SelfUpdateHandoff;
 }
 
@@ -979,11 +982,36 @@ async function failUnreconciledSelfUpdate(jobId: string, message: string) {
 }
 
 function pendingHandoffAgeMs(row: any) {
-  const handedOffAt = typeof row.result?.handedOffAt === "string"
-    ? Date.parse(row.result.handedOffAt)
+  const handoffStartedAt = typeof row.result?.handoffStartedAt === "string"
+    ? Date.parse(row.result.handoffStartedAt)
+    : typeof row.result?.handedOffAt === "string"
+      ? Date.parse(row.result.handedOffAt)
     : Number.NaN;
   const fallback = new Date(row.updated_at ?? row.started_at ?? row.created_at).getTime();
-  return Date.now() - (Number.isFinite(handedOffAt) ? handedOffAt : fallback);
+  return Date.now() - (Number.isFinite(handoffStartedAt) ? handoffStartedAt : fallback);
+}
+
+async function refreshBridgeCompatibilityHandoffLease(row: any) {
+  const fallback = new Date(row.updated_at ?? row.started_at ?? row.created_at).toISOString();
+  const handoffStartedAt = typeof row.result?.handoffStartedAt === "string"
+    ? row.result.handoffStartedAt
+    : typeof row.result?.handedOffAt === "string"
+      ? row.result.handedOffAt
+      : fallback;
+  const handedOffAt = new Date().toISOString();
+  await query(
+    `UPDATE operation_jobs
+     SET result = COALESCE(result, '{}'::jsonb) || jsonb_build_object(
+           'handoffStartedAt', $2::text,
+           'handedOffAt', $3::text
+         ),
+         updated_at = now()
+     WHERE id = $1
+       AND type = 'system.self_update'
+       AND status = 'running'
+       AND result ->> 'handoffPending' = 'true'`,
+    [row.id, handoffStartedAt, handedOffAt]
+  );
 }
 
 function expectedHandoffArtifacts(row: any) {
@@ -1045,9 +1073,13 @@ export async function reconcileSelfUpdateHandoffs() {
 
       // Verification and rollback can legitimately outlive the old two-minute
       // missing-outcome grace period. The lock is also briefly unavailable
-      // while Compose replaces the worker. Only a strict outcome or the full
-      // handoff timeout may terminalize the authoritative job.
+      // while Compose replaces the worker. Refresh handedOffAt as a bounded
+      // compatibility lease for the immutable 1.1.6 bridge, whose reconciler
+      // otherwise fails a valid handoff after two minutes if that lock probe
+      // races the replacement. handoffStartedAt remains immutable so this
+      // worker still enforces the full timeout.
       if (ageMs < SELF_UPDATE_HANDOFF_TIMEOUT_MS) {
+        await refreshBridgeCompatibilityHandoffLease(row);
         pendingCount += 1;
         continue;
       }
@@ -1059,6 +1091,7 @@ export async function reconcileSelfUpdateHandoffs() {
       if (ageMs >= SELF_UPDATE_HANDOFF_TIMEOUT_MS) {
         if (await failUnreconciledSelfUpdate(row.id, "Self-update outcome could not be reconciled before the handoff timeout.")) failed += 1;
       } else {
+        await refreshBridgeCompatibilityHandoffLease(row);
         pendingCount += 1;
       }
     }

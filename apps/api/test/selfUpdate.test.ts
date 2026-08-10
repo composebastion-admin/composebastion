@@ -194,6 +194,7 @@ describe("self update service", () => {
       outcomePath: `/srv/composebastion/.composebastion-self-update-${jobId}.outcome`,
       gatePath,
       lockPath: "/tmp/composebastion-self-update.lock",
+      handoffStartedAt: new Date().toISOString(),
       handedOffAt: new Date().toISOString()
     });
 
@@ -402,29 +403,37 @@ describe("self update service", () => {
   });
 
   it("keeps a missing outcome nonterminal before the full handoff timeout", async () => {
-    query.mockResolvedValueOnce({ rows: [pendingRow()] });
+    query
+      .mockResolvedValueOnce({ rows: [pendingRow()] })
+      .mockResolvedValueOnce({ rowCount: 1 });
     runSshCommand.mockReset().mockResolvedValueOnce({ code: 44, stdout: "", stderr: "" });
     const { reconcileSelfUpdateHandoffs } = await import("../src/services/selfUpdate.js");
 
     await expect(reconcileSelfUpdateHandoffs()).resolves.toEqual({ completed: 0, failed: 0, pending: 1 });
-    expect(query).toHaveBeenCalledTimes(1);
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(query.mock.calls[1]?.[0]).toContain("'handoffStartedAt', $2::text");
     expect(runSshCommand).toHaveBeenCalledTimes(1);
   });
 
-  it("does not let a missing lock terminalize a handoff after the old two-minute grace period", async () => {
-    query.mockResolvedValueOnce({
-      rows: [pendingRow({
-        result: {
-          handoffPending: true,
-          handedOffAt: new Date(Date.now() - 3 * 60_000).toISOString()
-        }
-      })]
-    });
+  it("renews the immutable bridge compatibility lease without extending the full timeout", async () => {
+    const originalHandoff = new Date(Date.now() - 3 * 60_000).toISOString();
+    query
+      .mockResolvedValueOnce({
+        rows: [pendingRow({
+          result: {
+            handoffPending: true,
+            handedOffAt: originalHandoff
+          }
+        })]
+      })
+      .mockResolvedValueOnce({ rowCount: 1 });
     runSshCommand.mockReset().mockResolvedValueOnce({ code: 44, stdout: "", stderr: "" });
     const { reconcileSelfUpdateHandoffs } = await import("../src/services/selfUpdate.js");
 
     await expect(reconcileSelfUpdateHandoffs()).resolves.toEqual({ completed: 0, failed: 0, pending: 1 });
-    expect(query).toHaveBeenCalledTimes(1);
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(query.mock.calls[1]?.[1]?.[1]).toBe(originalHandoff);
+    expect(Date.parse(String(query.mock.calls[1]?.[1]?.[2]))).toBeGreaterThan(Date.parse(originalHandoff));
     expect(runSshCommand).toHaveBeenCalledTimes(1);
   });
 
