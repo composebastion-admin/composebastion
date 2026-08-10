@@ -566,14 +566,17 @@ for (const dependency of ["metadata", "build-scan", "rescan-tag-images"]) {
 for (const [jobName, dependency] of [["publish-branch", "release-image-gate"], ["promote-tag", "release-image-gate"]]) {
   if (!(publishJobs[jobName]?.needs ?? []).includes(dependency)) fail(`${publishFile}:${jobName}: must depend on ${dependency}`);
 }
+if (!(publishJobs["promote-tag"]?.needs ?? []).includes("rescan-tag-images")) {
+  fail(`${publishFile}:promote-tag: must directly depend on the successful tag rescans it promotes`);
+}
 
 if (!String(publish?.concurrency?.group ?? "").includes("publish-images-publication")) {
   fail(`${publishFile}: branch and tag registry mutations must share one concurrency group`);
 }
 const publishBranch = publishJobs["publish-branch"];
 const publishBranchCondition = String(publishBranch?.if ?? "");
-if (publishBranchCondition.includes("always()")) {
-  fail(`${publishFile}:publish-branch: mutating publication must not run after a failed dependency`);
+if (!publishBranchCondition.includes("always()")) {
+  fail(`${publishFile}:publish-branch: skipped tag-only dependencies must not suppress qualified branch publication`);
 }
 for (const successGate of [
   "needs.metadata.result == 'success'",
@@ -764,11 +767,12 @@ if (copyIndex < 0 || legalIndex <= copyIndex || assembleIndex <= legalIndex
 }
 const promoteTag = publishJobs["promote-tag"];
 const promoteTagCondition = String(promoteTag?.if ?? "");
-if (promoteTagCondition.includes("always()")) {
-  fail(`${publishFile}:promote-tag: mutating stable promotion must not run after a failed dependency`);
+if (!promoteTagCondition.includes("always()")) {
+  fail(`${publishFile}:promote-tag: skipped branch-only dependencies must not suppress qualified stable promotion`);
 }
 for (const successGate of [
   "needs.metadata.result == 'success'",
+  "needs.rescan-tag-images.result == 'success'",
   "needs.release-image-gate.result == 'success'"
 ]) {
   if (!promoteTagCondition.includes(successGate)) {
