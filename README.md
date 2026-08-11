@@ -33,8 +33,8 @@ devices, Proxmox Docker VMs/LXCs, Portainer stacks, and any native Docker host o
 
 Latest published stable release: `v1.1.6`.
 
-- Package and OpenAPI version: `1.2.0-beta.2`.
-- Current beta candidate: `v1.2.0-beta.2`.
+- Package and OpenAPI version: `1.2.0-beta.3`.
+- Current beta candidate: `v1.2.0-beta.3`.
 - GitHub stable release images: `1.1.6` and `v1.1.6`.
 - GitHub beta images: `beta` for both app and agent.
 - Published platforms: `linux/amd64` and `linux/arm64` for both app and agent.
