@@ -1,5 +1,17 @@
 # Changelog
 
+## [v1.2.0-beta.3] - 2026-08-11
+
+> Beta channel only. This candidate supersedes beta.2 for final hands-on image
+> testing and does not move `main` or `latest`.
+
+### Changed
+- Advanced the immutable prerelease identity to `1.2.0-beta.3` so the existing
+  beta.2 alias is never republished from a different commit.
+- Retained the beta.2 product code and publication hardening unchanged while
+  producing a fresh, independently identifiable app/agent image pair for final
+  validation before stable promotion.
+
 ## [v1.2.0-beta.2] - 2026-08-10
 
 > Beta channel only. This candidate supersedes the earlier beta build and does
