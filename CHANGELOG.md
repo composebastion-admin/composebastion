@@ -1,5 +1,88 @@
 # Changelog
 
+## [v1.2.0] - 2026-08-15
+
+### Added
+- Replaced the separate manual deployment forms with a guided analyze, review,
+  and deploy workflow for Git repositories, Compose URLs or YAML, uploaded
+  Compose files, and OCI image references.
+- Added reusable library sources, host-side Git discovery, automatic
+  image-to-Compose generation, registry preflight and remediation, durable
+  deployment analyses, source-linked stacks, and encrypted backup/restore of
+  deployment credentials and entered secrets.
+- Added advanced service management for source details, Compose editing,
+  deployment history, proxy settings, and lifecycle actions.
+
+### Changed
+- Deploy is now the single place to create applications, Services remains the
+  deployed inventory, and Catalog remains the curated template marketplace.
+  Legacy Compose routes redirect to Services without removing existing stacks.
+- Deployment analyses and jobs are bound to the selected Git revision, Compose
+  content, environment content, host lock, and lease. Interrupted remote
+  operations reconcile durable outcomes rather than starting duplicate work.
+- Backup and recovery retain remote-orphan and restore-resource ledgers so
+  interrupted uploads, probes, restores, clone restores, and cleanup can be
+  reconciled without deleting unrelated resources.
+- The release toolchain now uses Node 24 and npm 11, controlled install scripts,
+  rebuilt reviewed Go tools, deterministic per-architecture image tags, and
+  verification of all four app/agent architecture archives before publication.
+- Promoted the exact beta.3 product tree after its independently versioned,
+  scanned, attested app/agent image pair completed final beta testing.
+
+### Fixed
+- Added one-shot storage and database initialization for the 1.2 runtime-user
+  transition. Existing managed backup paths and the exact legacy managed
+  database credential are migrated safely while explicit or external database
+  URLs remain unchanged.
+- Hardened image and source upgrades with immutable prior-image rollback,
+  protected transition state, candidate-only worker startup evidence, and
+  Docker-healthy handoff while authoritative outcome reconciliation drains.
+- Hardened Docker Desktop bind remapping, Docker 29 cleanup, host identity
+  reconciliation, Docker statistics lifecycle handling, viewer redaction,
+  session reauthorization, and audit atomicity.
+- Made local acceptance resolve the exact registry image IDs after push and
+  expanded upgrade, rollback, and recovery qualification from the public
+  `1.1.6` compatibility bridge.
+
+### Security and release qualification
+- Git credentials are encrypted per source and materialized only in protected
+  temporary askpass files. Direct Compose downloads enforce DNS and redirect
+  controls, reject unsafe targets, cap response size, and require valid YAML.
+- Hardened exact Git-context materialization with private staging, no-follow
+  descriptor reads, inode and mutation checks, verified atomic promotion, and
+  rollback that preserves the prior destination on failure.
+- Updated vulnerable web dependencies and rebuilt Docker Compose, Trivy, and
+  rclone with gRPC-Go 1.82.1 from reviewed sources. Deterministic linked-module
+  attribution evidence and runtime license-bundle verification cover the
+  rebuilt Go tools.
+- Added the public-hygiene release gate, deterministic full-commit platform
+  tags, attestation-aware paired image publication, and a scanned beta channel
+  that cannot move stable aliases.
+- Reworked public repository governance and the version-independent V1 release
+  checklist for protected branches and tags, immutable releases, private
+  vulnerability reporting, and explicit production-approval evidence.
+
+### Migration and configuration
+- Adds additive migrations `031` through `038` for reusable deployment sources,
+  durable analyses, source/environment bindings, remote artifact orphans,
+  restore-attempt resources, and immutable Git/clone job inputs.
+- Configuration exports now include encrypted source-library and deployment
+  data. Deleting a library source does not remove existing services or running
+  containers.
+- Existing GitHub deployment endpoints remain available as compatibility
+  adapters. Migration `032` normalizes local recovery targets and retained
+  migration state remains compatible with the qualified rollback path.
+
+### Known limitations and rollback
+- Git analysis is SSH-host first. Agent hosts support Compose and image inputs
+  but do not perform Git analysis.
+- One-click registry trust repair requires an owner/admin, Linux with systemd
+  Docker, and passwordless sudo; unsupported hosts receive manual steps.
+- Pre-1.2 image installs must first update to the immutable `1.1.6`
+  compatibility bridge. Rollback requires the saved pre-1.2 Compose definition
+  and retained PostgreSQL, Redis, configuration, backup, and application
+  volumes; never use `docker compose down -v` for this transition.
+
 ## [v1.2.0-beta.3] - 2026-08-11
 
 > Beta channel only. This candidate supersedes beta.2 for final hands-on image
@@ -181,35 +264,60 @@
   volumes. Migration `032` normalization is retained after rollback. Never use
   `docker compose down -v`; keep the pre-upgrade backup for a later beta retry.
 
-## [v1.1.3] - 2026-07-19
+## [v1.1.6] - 2026-08-07
+
+### Fixed
+
+- Removed the successful-upgrade handoff deadlock between the compatibility
+  bridge and the hardened 1.2 worker. Candidate verification now still requires
+  the candidate-only Docker healthcheck while accepting the connected worker's
+  intentional draining state until the authoritative outcome is published.
+- The immutable v1.1.5 artifacts remain published for historical recovery, but
+  v1.1.6 is the bridge qualified for the 1.2 transition.
+
+## [v1.1.5] - 2026-08-07
 
 ### Security
-- Hardened exact Git-context materialization with private staging, no-follow
-  descriptor reads, inode and mutation checks, verified atomic promotion, and
-  rollback that preserves the prior destination on failure.
-- Added a CI public-hygiene gate for approved GHCR namespaces, developer paths,
-  and project contact domains, and removed the remaining personal fixtures.
-- Changed per-architecture publication tags to deterministic
-  `sha-<full-commit>-<architecture>` names.
 
-### Changed
-- Reworked public repository governance and release documentation for the
-  sole-maintainer ruleset, protected release tags, private vulnerability
-  reporting, and immutable future releases.
-- Made the V1 release checklist version independent and retained real NAS and
-  cloud/S3 tests as production-approval evidence instead of homelab publication
-  blockers.
-- Added release-version checks for supported-release documentation and the
-  published-image Compose example.
+- Create detached updater logs with a restrictive process umask and a
+  no-clobber file descriptor before starting the updater. Recovery can now read
+  the log under its strict mode-0600 contract, while existing files and
+  symlinks are rejected instead of followed or overwritten.
+- The immutable v1.1.4 artifacts remain published for historical recovery.
 
-### Legal
-- Added deterministic Go-module attribution evidence and runtime license-bundle
-  verification. Qualified legal approval of the reviewed manifest remains a
-  release blocker; `v1.1.3` must not be tagged while that approval is pending.
+## [v1.1.4] - 2026-08-07
 
-### Compatibility
-- This patch adds no database migration, manager API/OpenAPI change, or UI
-  setting.
+### Fixed
+
+- Removed a circular rollback-readiness wait in the compatibility bridge. A
+  restored bridge now proves the exact immutable app/worker images, live API,
+  managed database, and connected draining worker before publishing the
+  authoritative outcome; full worker readiness resumes after reconciliation.
+- The immutable v1.1.3 artifacts remain published for history.
+
+## [v1.1.3] - 2026-08-07
+
+### Fixed
+
+- Added a compatibility-only, rollback-safe self-update bridge for the supported
+  1.1.3 to 1.2 transition. Runtime identity, Compose services, database behavior,
+  migrations, and product behavior remain unchanged from v1.1.2. The bridge now
+  keeps the originating API job running until the detached updater's exact
+  outcome is reconciled after app/worker replacement.
+
+### Security
+
+- Refreshed only the dependency versions required for a clean high/critical
+  audit, including Fastify/static routing, concurrent development tooling,
+  PostCSS, URI/router transitives, and the compatible React Router 6 line. The
+  1.1.3 compatibility claim permits these security-only dependency changes; it
+  does not permit UID/GID, Compose, migration, database, or product changes.
+- The release gate is zero high or critical npm findings. Two moderate React
+  Router 6 advisories remain recorded: the bridge UI builds every `Link` and
+  `navigate` destination from enumerated internal dashboard tabs, limiting the
+  open-redirect path, and it is a client-only `BrowserRouter` application with
+  no server-side hydration path. The advisories remain visible in `npm audit`
+  and are deferred to the post-bridge React Router major upgrade.
 
 ## [v1.1.2] - 2026-07-18
 
