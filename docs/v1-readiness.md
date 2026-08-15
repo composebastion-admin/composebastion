@@ -63,7 +63,8 @@ release evidence below `test-results/release-images/`.
   loopback acceptance stack.
 - Review the linked Go-module manifest, license expressions, upstream sources,
   required texts, and checksums. Record qualified legal approval and its date;
-  pending attribution blocks `beta`, `main`, and stable image publication.
+  pending attribution blocks `main` and stable-tag image publication. The
+  explicitly prerelease `beta` channel may retain pending review evidence.
 - Verify Admin -> About shows the intended version, copyright, license summary,
   and `support@composebastion.com`.
 - Verify unauthenticated pulls, image labels, multi-architecture indexes,

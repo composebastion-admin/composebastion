@@ -1033,9 +1033,8 @@ for (const invariant of [
 }
 const legacyAliasBootstrap = JSON.parse(readFileSync(".github/legacy-alias-bootstrap.json", "utf8"));
 const expectedLegacyAliasBootstrap = [
-  "refs/heads/beta:beta:5ef8ded5da914aa29c3caca5854fe2840dc7eb7f:sha256:3eca4a8405650896b82c9557b624828099c59ba45627571e00a8a519af74f431:sha256:7cd3358d80be4a0663f6cff51ca8b7cf325d831aea8b0a57dc7a36d8f6eb0f0d",
-  "refs/heads/main:main:4ec6871a20ce7014272b8f1390e74b5e9b958779:sha256:795d0c92953466a76f032ad46a8f652a68905a618e7ac01b7ff0f29f4da949d3:sha256:071df334ae03317eedf44a0dcd61ee0b7ebae4d265927471fce487f97bf00ac4",
-  "refs/tags/v1.2.0:latest:6127ddb16cbfc9cf13a3241bd80c96001e2df29f:sha256:53cceea331c04260ef30aba495ef912dc923e3636f0b5b70e66bfad02f284674:sha256:e517d9fe5a46f8cce16b7e5c491256e1b459df784f86107b0f42725b2ed55cba"
+  "refs/heads/main:main:5b90ea7b6d34c701692f8c3e0ee45cd693f1d123:sha256:af14de9e6a73173dfb0f06a1ac95ba3abbaf2fb2183c3433ac6e8e242ff4c374:sha256:897b7e17585f4dcd6018a8a61ffc5a2645325ea17fbd385c12db1a300f3a7e79",
+  "refs/tags/v1.2.0:latest:3f679ee96ffcdf3bd88470b8dd91eed052f4e173:sha256:7132e9301647d2b2a38eb9c4e9f1c046af2a61ad662d75a8faa3b2d31fae2e76:sha256:4559fd6c6ec343ff23cd7e0126d741defed10f5c08d6cc3c09c7a1ebed62acf8"
 ];
 const actualLegacyAliasBootstrap = (legacyAliasBootstrap?.entries ?? [])
   .map((entry) => `${entry.targetRef}:${entry.alias}:${entry.revision}:${entry.appDigest}:${entry.agentDigest}`);
@@ -1043,11 +1042,11 @@ if (legacyAliasBootstrap?.schemaVersion !== 1
     || JSON.stringify(actualLegacyAliasBootstrap) !== JSON.stringify(expectedLegacyAliasBootstrap)
     || legacyAliasBootstrap.entries.some((entry) =>
       entry.status !== "pending"
-      || entry.expiresOn !== "2026-08-31"
+      || entry.expiresOn !== "2026-09-30"
       || entry.appImage !== "ghcr.io/composebastion-admin/composebastion-app"
       || entry.agentImage !== "ghcr.io/composebastion-admin/composebastion-agent"
     )) {
-  fail(".github/legacy-alias-bootstrap.json: one-time migration must remain limited to the three observed unattested alias pairs");
+  fail(".github/legacy-alias-bootstrap.json: one-time migration must remain limited to the two observed unattested stable alias pairs");
 }
 const appDockerfile = readFileSync("Dockerfile", "utf8");
 const agentDockerfile = readFileSync("Dockerfile.agent", "utf8");

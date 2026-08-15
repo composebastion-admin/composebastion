@@ -31,13 +31,13 @@ the base images all support the device.
 
 ## Current Published Release
 
-The most recent published stable release is `v1.1.6`.
+The most recent published stable release is `v1.2.0`.
 
 - App image: `ghcr.io/composebastion-admin/composebastion-app`
 - Agent image: `ghcr.io/composebastion-admin/composebastion-agent`
-- Exact release tags: `1.1.6` and `v1.1.6`
-- Beta test tag: `beta` for both app and agent; see
-  [ComposeBastion Beta](beta-release.md).
+- Exact release tags: `1.2.0` and `v1.2.0`
+- The `beta` tag remains a prerelease channel for both app and agent; the
+  [archived 1.2 beta notes](beta-release.md) describe the promotion candidate.
 - Moving `main` alias, stable-only `latest`, and full-commit `sha-*` indexes
 
 Use `main` only when you intentionally test protected-branch candidates.

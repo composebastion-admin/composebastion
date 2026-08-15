@@ -1,9 +1,11 @@
-# ComposeBastion Beta
+# ComposeBastion 1.2 Beta Archive
 
-Beta version: `v1.2.0-beta.3`.
+Historical beta version: `v1.2.0-beta.3`.
 
-This candidate is published from the normal GitHub repository's `beta` branch.
-The app and agent images are available for `linux/amd64` and `linux/arm64`:
+This page records the final prerelease candidate that preceded stable `v1.2.0`.
+It is retained for historical test and rollback evidence, not as current
+installation guidance. The app and agent images were published for
+`linux/amd64` and `linux/arm64`:
 
 - `ghcr.io/composebastion-admin/composebastion-app:beta`
 - `ghcr.io/composebastion-admin/composebastion-agent:beta`
@@ -19,7 +21,7 @@ Trivy 0.72.0 and rclone 1.74.4 binaries from source with gRPC-Go 1.82.1. The
 linked-module inventory and third-party notices cover these patched source
 builds.
 
-## Install or update the beta
+## Historical install or update reference
 
 Use the Compose files from the same beta branch:
 
@@ -109,8 +111,7 @@ Do not include tokens, secrets, `.env` contents, or registry passwords.
   Compose and image inputs and return a Git capability blocker.
 - Registry trust automation requires an owner/admin, a supported Linux/systemd
   Docker host, and passwordless sudo. Other hosts receive exact manual steps.
-- This is the `1.2.0-beta.3` test channel. It is
-  not the supported stable release and is not covered by the `latest` tag.
+- This was the `1.2.0-beta.3` test channel. Stable `v1.2.0` supersedes it.
 
 ## Roll back
 

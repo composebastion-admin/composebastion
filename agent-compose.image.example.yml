@@ -4,7 +4,7 @@
 #
 # For production, pin COMPOSEBASTION_AGENT_VERSION to the exact same reviewed
 # sha-<40-character-commit> index as the manager.
-# For homelab/evaluation, use the same published tag as the manager, for example 1.1.6.
+# For homelab/evaluation, use the same published tag as the manager, for example 1.2.0.
 services:
   composebastion-agent:
     image: ${COMPOSEBASTION_AGENT_IMAGE:-ghcr.io/composebastion-admin/composebastion-agent}:${COMPOSEBASTION_AGENT_VERSION:-latest}

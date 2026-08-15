@@ -9,8 +9,17 @@ deployment, and runtime Docker images.
 - `main`, `beta`, and `dev` are the only persistent branches.
 - Normal changes use a short-lived `codex/*` branch and a pull request into
   `dev`. The branch must be deleted when the pull request is merged or closed.
-- Promote releases with direct `dev` to `beta` and `beta` to `main` pull
-  requests. Do not create a separate promotion branch.
+- Promote prereleases with a direct `dev` to `beta` pull request. Normally,
+  promote an unchanged stable candidate with a direct `beta` to `main` pull
+  request.
+- Stable promotion is the exception when `beta` contains a prerelease version
+  and its exact prerelease image alias is already immutable. Cut one short-lived
+  `codex/release-X.Y.Z` branch from the exact qualified `origin/beta` commit,
+  apply only the stable version bump and other release-only reconciliation on
+  that branch, and open it directly into `main`. Never push a stable version to
+  `beta`, and never republish an immutable prerelease alias from a different
+  commit. Delete the promotion branch after the pull request is merged or
+  closed.
 - A compatibility or security maintenance release for the current stable line
   may use a short-lived pull request directly into `main`.
 - Never force-push or directly push changes to a persistent branch. Historical
@@ -62,10 +71,10 @@ Run the same gates CI expects before release:
 - `npm audit --audit-level=high`
 - the serial PostgreSQL integration/concurrency suite, ephemeral SSH integration,
   and full live-stack acceptance
-- both exact public upgrade baselines: `1.1.2` current-stable
+- both exact public upgrade baselines: `1.1.2` intermediate
   upgrade/rollback/re-upgrade on retained volumes, and the `1.0.6` legacy
-  long-hop upgrade/credential-rollback/re-upgrade through the candidate
-  compatibility entrypoint with the exact pre-1.2 Compose definition
+  long-hop upgrade/credential-rollback/re-upgrade through the immutable
+  `1.1.6` compatibility bridge with the exact pre-1.2 Compose definition
 - `npm run release:verify-images` from the final clean candidate commit
 - Docker compose config validation and runtime image builds when Docker or
   deployment files changed
@@ -74,9 +83,11 @@ Run the same gates CI expects before release:
 
 Go-module legal approval remains mandatory before `main` or stable-tag image
 publication. It is not a beta publication gate. Real NAS/cloud evidence is
-collected against the published beta and is mandatory before promotion to
-`main` or a stable tag. Both are deferred for a non-publishing `dev`
-qualification, and dev evidence alone is not valid for a public stable release.
+collected against a published candidate and is mandatory before making a
+production-qualified claim. It does not block `main` promotion or a stable tag
+whose stated scope is homelab publication. Legal approval and applicable
+production evidence remain deferred for a non-publishing `dev` qualification;
+dev evidence alone is not valid for a public stable release.
 
 ## Version Bumps
 
@@ -108,8 +119,8 @@ qualification, and dev evidence alone is not valid for a public stable release.
 - Publish container images for every public release and every merge to `main`
   through `.github/workflows/publish-images.yml`.
 - Every push to `beta` publishes both scanned multi-architecture images to the
-  moving `beta` alias, the exact prerelease version alias such as
-  `1.2.0-beta.2`, and immutable full-commit tags. The prerelease alias is
+  moving `beta` alias, an exact prerelease version alias such as
+  `X.Y.Z-beta.N`, and immutable full-commit tags. The prerelease alias is
   immutable: publishing a different digest requires a new prerelease version.
   Beta publication must never move `main`, `latest`, or stable/minor aliases.
 - Main image publishes must include `main`, deterministic per-platform
@@ -198,8 +209,8 @@ qualification, and dev evidence alone is not valid for a public stable release.
   checked-in manifest and verify the runtime texts and checksums under
   `/licenses/third-party/go-modules/`. Every consuming binary, source URL, SPDX
   expression, version/replacement, required license/notice file, and checksum
-  must be covered. Qualified legal approval must be dated; a pending review is a
-  release blocker.
+  must be covered. Qualified legal approval must be dated; a pending review
+  blocks `main` and stable-tag publication.
 - Keep `support@composebastion.com` as the private contact path for commercial
   licensing and written permission.
 
@@ -314,9 +325,10 @@ full commit SHA and commit timestamp; and verified runtime legal-artifact
 digests. It does not replace the post-publication comparison of remote
 platform/index digests with the scanned digests.
 
-The strict attribution command above is required for `beta`, `main`, and stable
-tag publication. A pending review may still be inspected locally, but it must
-not be published to a public branch alias.
+The strict attribution command above is required for `main` and stable-tag
+publication. A pending review may still be inspected locally and may accompany
+the explicitly prerelease `beta` channel, but it must not be published to
+`main` or a stable tag.
 
 The pinned MinIO and Samba fixtures prove reproducible protocol behavior only.
 A real NAS and a real cloud/S3 target must still be tested and recorded manually

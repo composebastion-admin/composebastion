@@ -8,7 +8,8 @@ every production update.
 - `/api/v1` is the public compatibility boundary for V1.
 - Use additive API changes whenever possible.
 - Keep app and agent images on the same release when possible. The latest
-  published release is `v1.1.6`. It is the compatibility bridge for qualifying 1.2.
+  published release is `v1.2.0`. Pre-1.2 image installs must first use the
+  immutable 1.1.6 compatibility bridge described below.
 - New database migrations must use the next clean `NNN_snake_case.sql` filename.
   The existing duplicate `018_` migration prefix is a published legacy exception;
   do not create new duplicates.
@@ -41,8 +42,9 @@ release. The compatibility-only bridge keeps the existing pre-1.2 Compose file,
 then uses the pulled 1.2 image to prepare storage and the exact managed legacy
 credential before app and worker start. It records job-specific protected
 rollback state and recreates the immutable 1.1.6 app/worker images with
-`--no-deps` if startup or verification fails. Keep `latest` on 1.1.6 until the
-bridge rollout and both qualified hops are complete.
+`--no-deps` if startup or verification fails. Pin the first hop explicitly to
+1.1.6; `latest` now tracks the current stable release and does not replace the
+required bridge hop.
 Production, source-checkout, and agent-host updates use the manual pinned
 commands below.
 
