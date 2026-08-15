@@ -39,7 +39,7 @@ RUN cc -std=c17 -O2 -Wall -Wextra -Werror prepare-backup-storage.c -o /tmp/compo
 FROM scratch AS storage-helper-artifacts
 COPY --from=storage-helper-builder /tmp/composebastion-prepare-storage /composebastion-prepare-storage
 
-FROM --platform=$BUILDPLATFORM golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS trivy-builder
+FROM --platform=$BUILDPLATFORM golang:1.26.6-alpine@sha256:af8d6740070b8906d12eae1c3e3ea0957fb63f492051ea05e354c38ef9fe88df AS trivy-builder
 ENV GOTOOLCHAIN=local
 ARG TARGETOS
 ARG TARGETARCH
@@ -70,6 +70,7 @@ RUN set -eux; \
       go build -mod=readonly -buildvcs=false -trimpath \
         -ldflags="-s -w -extldflags '-static' -X github.com/aquasecurity/trivy/pkg/version/app.ver=${TRIVY_VERSION}" \
         -o /out/trivy ./cmd/trivy; \
+    go version -m /out/trivy | grep -F "go1.26.6"; \
     go version -m /out/trivy | grep -F "oras.land/oras-go/v2" | grep -F "${TRIVY_ORAS_VERSION}"; \
     go version -m /out/trivy | grep -F "github.com/go-git/go-git/v5" | grep -F "${TRIVY_GO_GIT_VERSION}"; \
     install -m 0644 /src/LICENSE /out/licenses/trivy-LICENSE.txt; \
@@ -87,7 +88,7 @@ RUN set -eux; \
     sha256sum trivy-LICENSE.txt trivy-NOTICE.txt oras-go-LICENSE.txt go-LICENSE.txt go-PATENTS.txt go-buildinfo/trivy.modules.tsv \
       | LC_ALL=C sort > go-buildinfo/trivy.artifacts.sha256
 
-FROM --platform=$BUILDPLATFORM golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS rclone-builder
+FROM --platform=$BUILDPLATFORM golang:1.26.6-alpine@sha256:af8d6740070b8906d12eae1c3e3ea0957fb63f492051ea05e354c38ef9fe88df AS rclone-builder
 ENV GOTOOLCHAIN=local
 ARG TARGETOS
 ARG TARGETARCH
@@ -115,7 +116,7 @@ RUN set -eux; \
         -o /out/rclone .; \
     chmod 0755 /out/rclone; \
     env -u RCLONE_VERSION /out/rclone version | grep -F "rclone v${RCLONE_VERSION}"; \
-    go version -m /out/rclone | grep -F "go1.26.5"; \
+    go version -m /out/rclone | grep -F "go1.26.6"; \
     install -m 0644 /src/COPYING /out/licenses/rclone-LICENSE.txt; \
     go version -m /out/rclone \
       | awk -F '\t' '$2 == "mod" || $2 == "dep" || $2 == "=>" { print $2 "\t" $3 "\t" $4 "\t" $5 }' \

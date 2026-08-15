@@ -1051,7 +1051,7 @@ if (legacyAliasBootstrap?.schemaVersion !== 1
 const appDockerfile = readFileSync("Dockerfile", "utf8");
 const agentDockerfile = readFileSync("Dockerfile.agent", "utf8");
 const nodeBase = "node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a";
-const goBuilder = "golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2";
+const goBuilder = "golang:1.26.6-alpine@sha256:af8d6740070b8906d12eae1c3e3ea0957fb63f492051ea05e354c38ef9fe88df";
 
 function requirePinnedExternalImages(file, dockerfile) {
   const stageAliases = new Set(
@@ -1100,6 +1100,8 @@ for (const [invariant, message] of [
   ['go get "google.golang.org/grpc@v${GO_GRPC_VERSION}"', "patched manager-tool gRPC dependency"],
   ['go get "golang.org/x/text@v${GO_TEXT_VERSION}"', "patched manager-tool text dependency"],
   ["go build -mod=readonly -buildvcs=false -trimpath", "read-only deterministic manager-tool builds"],
+  ["go version -m /out/trivy | grep -F \"go1.26.6\"", "Trivy Go version verification"],
+  ["go version -m /out/rclone | grep -F \"go1.26.6\"", "rclone Go version verification"],
   ["COPY --from=trivy-builder /out/licenses/ /licenses/third-party/", "Trivy/ORAS/Go licenses"],
   ["COPY --from=rclone-builder /out/licenses/ /licenses/third-party/", "rclone license and linked-module evidence"],
   ["node -e \"Promise.all([import('@composebastion/shared'), import('semver')])\"", "runtime workspace dependency resolution check"],
@@ -1144,8 +1146,8 @@ for (const [invariant, message] of [
   ["go build -mod=readonly -buildvcs=false -trimpath", "read-only deterministic Compose build"],
   ["go list -mod=readonly -tags \"e2e\" -deps ./cmd | LC_ALL=C sort -u", "e2e-tagged Compose dependency reachability evidence"],
   ['test "$(grep \'^github.com/docker/docker/\' /out/evidence/docker-compose-go-dependencies.txt)" = "github.com/docker/docker/pkg/namesgenerator"', "Docker daemon package exclusion"],
-  ["go version -m /out/docker | grep -F \"go1.26.5\"", "Docker CLI Go version verification"],
-  ["go version -m /out/docker-compose | grep -F \"go1.26.5\"", "Compose Go version verification"],
+  ["go version -m /out/docker | grep -F \"go1.26.6\"", "Docker CLI Go version verification"],
+  ["go version -m /out/docker-compose | grep -F \"go1.26.6\"", "Compose Go version verification"],
   ["go-buildinfo/docker-cli.modules.tsv", "Docker CLI linked-module inventory"],
   ["go-buildinfo/docker-compose.modules.tsv", "Compose linked-module inventory"],
   ["go-buildinfo/agent.artifacts.sha256", "agent tool legal-artifact checksums"],

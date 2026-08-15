@@ -29,7 +29,7 @@ truth for this status and its approval evidence.
 | rclone | 1.74.4 (5bc93a2a7ab0ebd0a11352bc4968eabeffb18027) | MIT | app |
 | Docker CLI | 29.6.1 (8900f1d330cb39e93e16d780a26bff1d7e07ba03) | Apache-2.0 | agent |
 | Docker Compose | 5.3.1 (f32009d4a2c687dd405398cc7975d12dccaf8dff) | Apache-2.0 | agent |
-| Go standard library | 1.26.5 | BSD-3-Clause | app and agent tool binaries |
+| Go standard library | 1.26.6 | BSD-3-Clause | app and agent tool binaries |
 
 ## License Summary
 

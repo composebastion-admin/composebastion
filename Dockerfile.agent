@@ -26,7 +26,7 @@ RUN npm run build --workspace @composebastion/shared
 RUN npm run build --workspace @composebastion/agent
 RUN npm prune --omit=dev
 
-FROM --platform=$BUILDPLATFORM golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS docker-tools-builder
+FROM --platform=$BUILDPLATFORM golang:1.26.6-alpine@sha256:af8d6740070b8906d12eae1c3e3ea0957fb63f492051ea05e354c38ef9fe88df AS docker-tools-builder
 ENV GOTOOLCHAIN=local
 ARG TARGETOS
 ARG TARGETARCH
@@ -65,8 +65,8 @@ RUN set -eux; \
         -ldflags="-s -w -X github.com/docker/compose/v5/internal.Version=v${COMPOSE_VERSION}" \
         -o /out/docker-compose ./cmd; \
     chmod 0755 /out/docker /out/docker-compose; \
-    go version -m /out/docker | grep -F "go1.26.5"; \
-    go version -m /out/docker-compose | grep -F "go1.26.5"; \
+    go version -m /out/docker | grep -F "go1.26.6"; \
+    go version -m /out/docker-compose | grep -F "go1.26.6"; \
     install -m 0644 /go/src/github.com/docker/cli/LICENSE /out/licenses/docker-cli-LICENSE.txt; \
     install -m 0644 /go/src/github.com/docker/cli/NOTICE /out/licenses/docker-cli-NOTICE.txt; \
     install -m 0644 /src/compose/LICENSE /out/licenses/docker-compose-LICENSE.txt; \
