@@ -26,8 +26,8 @@
 - The release toolchain now uses Node 24 and npm 11, controlled install scripts,
   rebuilt reviewed Go tools, deterministic per-architecture image tags, and
   verification of all four app/agent architecture archives before publication.
-- Promoted the exact beta.3 product tree after its independently versioned,
-  scanned, attested app/agent image pair completed final beta testing.
+- Promoted the exact beta.3 product tree while preserving its independently
+  versioned, scanned, and attested app/agent image pair.
 
 ### Fixed
 - Added one-shot storage and database initialization for the 1.2 runtime-user
