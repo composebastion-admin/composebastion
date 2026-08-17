@@ -1,5 +1,271 @@
 # Changelog
 
+## [v1.2.0] - 2026-08-15
+
+### Added
+- Replaced the separate manual deployment forms with a guided analyze, review,
+  and deploy workflow for Git repositories, Compose URLs or YAML, uploaded
+  Compose files, and OCI image references.
+- Added reusable library sources, host-side Git discovery, automatic
+  image-to-Compose generation, registry preflight and remediation, durable
+  deployment analyses, source-linked stacks, and encrypted backup/restore of
+  deployment credentials and entered secrets.
+- Added advanced service management for source details, Compose editing,
+  deployment history, proxy settings, and lifecycle actions.
+
+### Changed
+- Deploy is now the single place to create applications, Services remains the
+  deployed inventory, and Catalog remains the curated template marketplace.
+  Legacy Compose routes redirect to Services without removing existing stacks.
+- Deployment analyses and jobs are bound to the selected Git revision, Compose
+  content, environment content, host lock, and lease. Interrupted remote
+  operations reconcile durable outcomes rather than starting duplicate work.
+- Backup and recovery retain remote-orphan and restore-resource ledgers so
+  interrupted uploads, probes, restores, clone restores, and cleanup can be
+  reconciled without deleting unrelated resources.
+- The release toolchain now uses Node 24 and npm 11, controlled install scripts,
+  rebuilt reviewed Go tools, deterministic per-architecture image tags, and
+  verification of all four app/agent architecture archives before publication.
+- Promoted the beta.3 product source while rebuilding the independently
+  versioned, scanned, and attested app/agent image pair with Go 1.26.6.
+- Replaced the manual Go-module approval gate with deterministic attribution,
+  license-text, SPDX, checksum, and linked-inventory verification.
+
+### Fixed
+- Added one-shot storage and database initialization for the 1.2 runtime-user
+  transition. Existing managed backup paths and the exact legacy managed
+  database credential are migrated safely while explicit or external database
+  URLs remain unchanged.
+- Hardened image and source upgrades with immutable prior-image rollback,
+  protected transition state, candidate-only worker startup evidence, and
+  Docker-healthy handoff while authoritative outcome reconciliation drains.
+- Hardened Docker Desktop bind remapping, Docker 29 cleanup, host identity
+  reconciliation, Docker statistics lifecycle handling, viewer redaction,
+  session reauthorization, and audit atomicity.
+- Made local acceptance resolve the exact registry image IDs after push and
+  expanded upgrade, rollback, and recovery qualification from the public
+  `1.1.6` compatibility bridge.
+
+### Security and release qualification
+- Git credentials are encrypted per source and materialized only in protected
+  temporary askpass files. Direct Compose downloads enforce DNS and redirect
+  controls, reject unsafe targets, cap response size, and require valid YAML.
+- Hardened exact Git-context materialization with private staging, no-follow
+  descriptor reads, inode and mutation checks, verified atomic promotion, and
+  rollback that preserves the prior destination on failure.
+- Updated vulnerable web dependencies and rebuilt Docker Compose, Trivy, and
+  rclone with gRPC-Go 1.82.1 from reviewed sources. Deterministic linked-module
+  attribution evidence and runtime license-bundle verification cover the
+  rebuilt Go tools.
+- Added the public-hygiene release gate, deterministic full-commit platform
+  tags, attestation-aware paired image publication, and a scanned beta channel
+  that cannot move stable aliases.
+- Reworked public repository governance and the version-independent V1 release
+  checklist for protected branches and tags, immutable releases, private
+  vulnerability reporting, and explicit production-approval evidence.
+
+### Migration and configuration
+- Adds additive migrations `031` through `038` for reusable deployment sources,
+  durable analyses, source/environment bindings, remote artifact orphans,
+  restore-attempt resources, and immutable Git/clone job inputs.
+- Configuration exports now include encrypted source-library and deployment
+  data. Deleting a library source does not remove existing services or running
+  containers.
+- Existing GitHub deployment endpoints remain available as compatibility
+  adapters. Migration `032` normalizes local recovery targets and retained
+  migration state remains compatible with the qualified rollback path.
+
+### Known limitations and rollback
+- Git analysis is SSH-host first. Agent hosts support Compose and image inputs
+  but do not perform Git analysis.
+- One-click registry trust repair requires an owner/admin, Linux with systemd
+  Docker, and passwordless sudo; unsupported hosts receive manual steps.
+- Pre-1.2 image installs must first update to the immutable `1.1.6`
+  compatibility bridge. Rollback requires the saved pre-1.2 Compose definition
+  and retained PostgreSQL, Redis, configuration, backup, and application
+  volumes; never use `docker compose down -v` for this transition.
+
+## [v1.2.0-beta.3] - 2026-08-11
+
+> Beta channel only. This candidate supersedes beta.2 for final hands-on image
+> testing and does not move `main` or `latest`.
+
+### Changed
+- Advanced the immutable prerelease identity to `1.2.0-beta.3` so the existing
+  beta.2 alias is never republished from a different commit.
+- Retained the beta.2 product code and publication hardening unchanged while
+  producing a fresh, independently identifiable app/agent image pair for final
+  validation before stable promotion.
+
+## [v1.2.0-beta.2] - 2026-08-10
+
+> Beta channel only. This candidate supersedes the earlier beta build and does
+> not move `latest`.
+
+### Fixed
+- Bound self-update candidate and rollback verification to container-local
+  worker startup evidence, so a stale predecessor heartbeat cannot make an
+  unregistered replacement worker appear ready.
+- Allowed Docker-healthy handoff verification while the replacement worker is
+  deliberately draining pending authoritative outcome reconciliation.
+- Made local acceptance resolve the exact registry image IDs after push and
+  expanded post-1.2 upgrade recovery guidance.
+
+### Security and release qualification
+- Retained the hardened Git-context materialization and rebuilt Go-tool
+  dependency chain qualified on `dev` after the first beta build.
+- Advanced the immutable prerelease identity to `1.2.0-beta.2`; the existing
+  beta aliases must not be republished as a different beta.1 digest.
+- Qualified rollback continues to use the `1.1.6` compatibility bridge and the
+  saved pre-beta Compose definition.
+
+## [v1.2.0-beta.1] - 2026-07-25
+
+> Beta channel only. This candidate is published from the GitHub `beta` branch
+> as the `beta` app and agent image tags; it does not move `latest`.
+
+### Added
+- Replaced the separate manual Deploy forms with a guided analyze, review, and
+  deploy workflow for Git repositories, Compose URLs or YAML, uploaded Compose
+  files, and OCI image references.
+- Added host-side Git discovery for GitHub, Gitea, GitLab, SSH, and generic Git
+  sources, including Compose-file priority, Dockerfile fallback generation,
+  example environment discovery, protected credential handling, and safe reuse
+  checks for existing deployment directories.
+- Added automatic image-to-Compose generation, port selection, unresolved
+  variable classification, registry preflight, and friendly insecure-registry
+  diagnostics before Compose starts.
+- Added reusable My Library source cards and an advanced Services deployment
+  drawer for source details, Compose editing, history, proxy settings, and
+  lifecycle actions.
+- Added durable expiring deployment analyses, the `deployment_sources` data
+  model, source-linked Compose stacks, deployment and registry-trust APIs, new
+  job types, OpenAPI schemas, audit coverage, and encrypted backup/restore
+  support for source credentials and entered secrets.
+- Added confirmed owner/admin registry-trust remediation for supported SSH
+  hosts with passwordless sudo, daemon configuration backup, validation,
+  restart verification, rollback, and self-host reconnection handling.
+
+### Changed
+- Deploy is now the single place to create apps, Services remains the deployed
+  inventory, and Catalog remains the curated template marketplace.
+- Retired duplicate Compose creation navigation. Legacy Compose routes redirect
+  to Services while preserving access to existing stacks.
+- Successful deployments save their reusable source automatically. Existing
+  tracked repositories and host-file stacks are backfilled without duplicating
+  running services.
+- Established the GitHub `beta` branch as a scanned app-and-agent publication
+  channel. Both images publish `beta` plus immutable per-commit multi-platform
+  tags without changing stable aliases.
+- Deployment analyses and jobs are now bound to the selected Git revision,
+  Compose content, environment content, host lock, and lease. Worker restarts
+  reconcile durable outcomes instead of starting a duplicate deployment.
+- Backup and recovery now retain remote-orphan and restore-resource ledgers so
+  interrupted uploads, probes, restores, clone restores, and cleanup can be
+  reconciled without deleting unrelated resources.
+- Docker Desktop bind remapping, Docker 29 cleanup behavior, exact Git-context
+  materialization, host identity reconciliation, Docker stats lifecycle
+  handling, viewer redaction, session reauthorization, and audit atomicity are
+  hardened across manager and agent workflows.
+- The release toolchain is pinned to Node 24 and npm 11, install scripts are
+  policy-controlled, bundled Go tools are rebuilt from reviewed sources, and
+  all four app/agent architecture archives are verified before publication.
+
+### Fixed
+- Added a one-shot `storage-init` dependency that migrates existing backup and
+  recovery paths to the manager UID/GID before the app or worker starts. The
+  recursive same-filesystem pass skips all symlinks and removes the unsafe
+  ownership-marker shortcut. Base Compose remains fixed at `1000:1000`; the
+  hardening overlay applies custom identities consistently.
+- Recognize the exact managed `DATABASE_URL` used by older source installs and
+  shipped in the v1.1.0 environment template. A one-shot `database-init`
+  preflight first tests the preserved `POSTGRES_PASSWORD`, rotates only that
+  exact repository legacy role credential when required, and verifies the new
+  connection before app startup. Real explicit and external database URLs are
+  still preserved unchanged.
+- Hardened in-app updates so a pre-1.2 Compose file can bootstrap the candidate
+  compatibility entrypoint without initializer services. Updates retain prior
+  image IDs and protected transition state, verify app/worker identity and
+  readiness, restore a recorded legacy credential before rollback, and always
+  start historical images with `--no-deps`.
+- Added `npm run upgrade:source` for source deployments with candidate identity
+  verification and immutable prior-image rollback while leaving the Git
+  checkout untouched.
+- Expanded public-image upgrade qualification to retain the stale v1.1
+  environment value and root-owned recovery files, so database connectivity,
+  ownership migration, worker readiness, rollback, and re-upgrade all fail the
+  release gate if this compatibility path regresses.
+
+### Security
+- Git credentials are encrypted per source and materialized only through
+  protected temporary askpass files; credentials are excluded from remotes,
+  job payloads, responses, and logs.
+- Direct Compose downloads validate every DNS answer and redirect, reject
+  credential-bearing and unsafe network targets, cap response size, and require
+  valid Compose YAML.
+- Registry remediation preserves existing daemon settings and automatically
+  restores the prior configuration if Docker health verification fails.
+- Updated Fastify static serving and its routing/URL dependencies, PostCSS,
+  shell parsing, and brace expansion to patched releases. Migrated the browser
+  app to React Router 8.3.0 so the beta dependency audit has no known findings.
+- Rebuilt the agent's bundled Docker Compose v5.3.1 binary with gRPC-Go 1.82.1
+  and updated the exact linked-module attribution evidence, removing the
+  upstream v1.81.1 high-severity finding without changing the Compose CLI
+  feature version.
+- Rebuilt the manager's bundled Trivy 0.72.0 and rclone 1.74.4 binaries from
+  their pinned source commits with gRPC-Go 1.82.1, and refreshed their exact
+  linked-module attribution evidence. This removes the upstream vulnerable
+  gRPC versions without changing either tool's user-facing feature version.
+
+### Migration and compatibility
+- Adds migrations `031` through `038`:
+  - `031_universal_deployments.sql` adds reusable deployment sources, durable
+    analyses, source-linked stacks, and backfills existing Git/host-file
+    deployments.
+  - `032_normalize_local_backup_targets.sql` converts local recovery targets to
+    the managed recovery-points location with `keep` cache policy and resets all
+    stored target health to `unknown` so the stronger probe must run again.
+  - `033_remote_artifact_orphans.sql` records exact remote objects whose
+    compensating cleanup could not be confirmed.
+  - `034_github_deployment_jobs.sql` binds GitHub deployment jobs to an immutable
+    source revision and Compose digest.
+  - `035_recovery_restore_attempts.sql` adds restore-attempt and resource
+    ledgers and extends orphan tracking to target-health probes.
+  - `036_deployment_analysis_binding.sql` binds analyses to source revision,
+    Compose digest, and environment digest.
+  - `037_stack_source_environment_binding.sql` stores the encrypted qualified
+    runtime environment and its server-keyed binding on deployed stacks.
+  - `038_github_clone_deployment_jobs.sql` records immutable clone-deployment
+    inputs, destinations, and environment bindings.
+- Existing GitHub deployment endpoints remain available as compatibility
+  adapters for this beta cycle.
+- Configuration exports now include the source library and encrypted deployment
+  data. Existing services and running containers are not removed by deleting a
+  library source.
+
+### Beta verification
+- Verify paste → analyze → review → deploy for Git, Compose, upload, and image
+  sources; then verify redeploy from My Library and management from Services.
+- For the supplied Gitea repository, confirm root Compose discovery for
+  `linuxclitogui`, the explicit HTTP registry diagnosis for
+  `10.0.21.40:3000`, confirmed trust repair, and successful deployment.
+- Capture the analysis ID, job ID, Jobs progress, Audit event, compact review,
+  and Services deployment drawer when reporting beta feedback.
+
+### Known limitations and rollback
+- Git analysis is SSH-host first. Agent hosts support Compose and image inputs
+  but intentionally return a clear Git capability blocker.
+- One-click registry trust repair requires an owner/admin, Linux/systemd Docker,
+  and passwordless sudo. Unsupported hosts retain the review and receive manual
+  instructions.
+- To roll back, restore the saved pre-beta Compose definition, pin both app and
+  agent to `1.1.6`, pull, and recreate the
+  services without deleting PostgreSQL, Redis, configuration, backup, or other
+  volumes. Qualification keeps migrations `031` through `038` in the database,
+  verifies stable readiness and preserved state, then re-upgrades the same
+  volumes. Migration `032` normalization is retained after rollback. Never use
+  `docker compose down -v`; keep the pre-upgrade backup for a later beta retry.
+
 ## [v1.1.6] - 2026-08-07
 
 ### Fixed

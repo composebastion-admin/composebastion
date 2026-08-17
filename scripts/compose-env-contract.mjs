@@ -46,6 +46,7 @@ export const composeSentinels = Object.freeze({
 
 export const sharedServiceEnvironment = Object.freeze([
   "APP_SECRET",
+  "POSTGRES_PASSWORD",
   "REDIS_URL",
   "ALLOW_PRIVATE_AGENT_URLS",
   "ALLOW_PRIVATE_WEBHOOK_URLS",
@@ -79,15 +80,15 @@ export const workerOnlyEnvironment = Object.freeze([
 // unexpected environment key.
 export const sentinelEnvironmentServices = Object.freeze({
   APP_SECRET: Object.freeze(["app", "worker"]),
-  POSTGRES_PASSWORD: Object.freeze(["app", "worker", "postgres"]),
+  POSTGRES_PASSWORD: Object.freeze(["app", "worker", "database-init", "postgres"]),
   REDIS_URL: Object.freeze(["app", "worker"]),
   COMPOSEBASTION_BACKUP_DIR: Object.freeze([]),
   COMPOSEBASTION_IMAGE: Object.freeze([]),
   COMPOSEBASTION_VERSION: Object.freeze([]),
   COMPOSEBASTION_HTTP_PORT: Object.freeze([]),
   COMPOSEBASTION_HTTP_BIND_ADDRESS: Object.freeze([]),
-  COMPOSEBASTION_UID: Object.freeze([]),
-  COMPOSEBASTION_GID: Object.freeze([]),
+  COMPOSEBASTION_UID: Object.freeze(["storage-init"]),
+  COMPOSEBASTION_GID: Object.freeze(["storage-init"]),
   COMPOSEBASTION_AGENT_IMAGE: Object.freeze([]),
   COMPOSEBASTION_AGENT_VERSION: Object.freeze([]),
   COMPOSEBASTION_AGENT_PORT: Object.freeze([]),

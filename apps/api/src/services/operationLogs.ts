@@ -9,6 +9,7 @@ export function errorCode(error: unknown) {
   if (status === 403) return "FORBIDDEN";
   if (status === 404) return "NOT_FOUND";
   if (status === 409) return "CONFLICT";
+  if (status === 429) return "RATE_LIMITED";
   if (status >= 500) return "INTERNAL_ERROR";
   return "OPERATION_ERROR";
 }

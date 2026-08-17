@@ -1,21 +1,66 @@
 import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 import { v4 as uuid } from "uuid";
+import type { PoolClient } from "pg";
 import {
+  canonicalizeGithubRepositoryUrl,
+  canonicalizeGitRepositoryUrl,
+  gitRepositoryUrlIssue,
   githubRepositoryAccessCheckSchema,
   githubRepositoryCreateSchema,
   githubRepositoryUpdateSchema,
+  sanitizeGithubRepositoryUrl,
+  sanitizeGitRepositoryUrl,
+  sanitizeUrlDiagnosticText,
   type AppGithubVersionOption,
-  type AppGithubVersions
+  type AppGithubVersions,
+  type GithubRepository
 } from "@composebastion/shared";
 import { query, withTransaction } from "../db/pool.js";
 import { decryptSecret, encryptSecret } from "./crypto.js";
 import { isDemoHostId } from "./demo.js";
-import { enqueueJobInTransaction, notifyJobQueued } from "./jobs.js";
+import {
+  enqueueJobInTransaction,
+  lockComposeStackForMutation,
+  lockGithubRepositoryForMutation,
+  notifyJobQueued
+} from "./jobs.js";
 import { mapStack } from "./mappers.js";
 import { recordStackVersionInTransaction } from "./stackVersions.js";
+import { inspectGitComposeSourceIntegrity } from "./gitComposeIntegrity.js";
+import {
+  deploymentEnvironmentBinding,
+  parseDeploymentEnvironment,
+  serializeDeploymentEnvironment
+} from "./deploymentEnvironment.js";
+import { normalizeRemotePath } from "./files.js";
 
 const GITHUB_PAGE_SIZE = 100;
 const MAX_GITHUB_VERSION_PAGES = 20;
+const EXACT_GIT_COMMIT = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
+const repositoryDeploymentInputColumns = [
+  "name",
+  "repository_url",
+  "owner",
+  "repo",
+  "branch",
+  "compose_path",
+  "project_name",
+  "env",
+  "default_host_id",
+  "host_clone_url",
+  "host_clone_directory"
+] as const;
+
+function sameRepositoryDeploymentInputs(
+  expected: Record<string, unknown>,
+  current: Record<string, unknown>
+) {
+  return repositoryDeploymentInputColumns.every((column) =>
+    (expected[column] ?? null) === (current[column] ?? null)
+  );
+}
 
 type GithubBranchResponse = {
   name?: string;
@@ -64,8 +109,32 @@ function nullIfBlank(value?: string | null) {
   return trimmed ? trimmed : null;
 }
 
+function exactGithubCommitSha(value: unknown) {
+  const commitSha = typeof value === "string"
+    ? value.trim().toLowerCase()
+    : "";
+  if (!EXACT_GIT_COMMIT.test(commitSha)) {
+    throw new Error(
+      "GitHub did not resolve the selected ref to an exact commit. Retry after verifying the repository and branch."
+    );
+  }
+  return commitSha;
+}
+
+function composeSha256(composeYaml: string) {
+  return createHash("sha256")
+    .update(composeYaml, "utf8")
+    .digest("hex");
+}
+
 function defaultHostCloneUrl(owner: string, repo: string) {
   return `git@github.com:${owner}/${repo}.git`;
+}
+
+function defaultHostCloneUrlForRepositoryUrl(repositoryUrl: string | null) {
+  if (!repositoryUrl) return null;
+  const [owner, repo] = new URL(repositoryUrl).pathname.replace(/^\/|\/$/g, "").split("/");
+  return owner && repo ? defaultHostCloneUrl(owner, repo) : null;
 }
 
 function githubRepoParts(owner: string | undefined, repo: string | undefined) {
@@ -80,9 +149,22 @@ function githubRepoParts(owner: string | undefined, repo: string | undefined) {
 export function parseGithubUrl(repositoryUrl: string) {
   const trimmed = repositoryUrl.trim();
   const scpMatch = /^git@github\.com:([^/]+)\/(.+?)(?:\.git)?$/i.exec(trimmed);
-  if (scpMatch) return githubRepoParts(scpMatch[1], scpMatch[2]);
+  if (scpMatch && !gitRepositoryUrlIssue(trimmed)) {
+    return githubRepoParts(scpMatch[1], scpMatch[2]);
+  }
+  if (/^ssh:\/\//i.test(trimmed) && !gitRepositoryUrlIssue(trimmed)) {
+    const sshUrl = new URL(trimmed);
+    const sshPath = sshUrl.pathname.replace(/^\/|\/$/g, "").replace(/\.git$/i, "");
+    const [sshOwner, sshRepo] = sshPath.split("/");
+    if (
+      sshUrl.hostname.toLowerCase().replace(/^www\./, "") === "github.com"
+      && sshPath.split("/").filter(Boolean).length === 2
+    ) {
+      return githubRepoParts(sshOwner, sshRepo);
+    }
+  }
 
-  const url = new URL(trimmed);
+  const url = new URL(canonicalizeGithubRepositoryUrl(trimmed));
   const hostname = url.hostname.toLowerCase().replace(/^www\./, "");
   const path = url.pathname.replace(/^\/|\/$/g, "").replace(/\.git$/i, "");
   const [owner, repo] = path.split("/");
@@ -256,10 +338,16 @@ async function listGithubVersionOptions(
 
 export function mapGithubRepository(row: any) {
   const hasGithubToken = Boolean(row.github_token_encrypted);
+  const repositoryUrl = sanitizeGithubRepositoryUrl(row.repository_url, {
+    owner: row.owner,
+    repo: row.repo
+  });
+  const hostCloneUrl = sanitizeGitRepositoryUrl(row.host_clone_url)
+    ?? defaultHostCloneUrlForRepositoryUrl(repositoryUrl);
   return {
     id: row.id,
     name: row.name,
-    repositoryUrl: row.repository_url,
+    repositoryUrl: repositoryUrl ?? "",
     owner: row.owner,
     repo: row.repo,
     branch: row.branch,
@@ -267,18 +355,18 @@ export function mapGithubRepository(row: any) {
     projectName: row.project_name,
     env: row.env ?? "",
     defaultHostId: row.default_host_id,
-    hostCloneUrl: row.host_clone_url ?? defaultHostCloneUrl(row.owner, row.repo),
+    hostCloneUrl,
     hostCloneDirectory: row.host_clone_directory ?? null,
     lastDeployedAt: iso(row.last_deployed_at),
     lastDeployedCommitSha: row.last_deployed_commit_sha ?? null,
     latestCommitSha: row.latest_commit_sha ?? null,
     updateCheckedAt: iso(row.update_checked_at),
-    updateCheckError: row.update_check_error ?? null,
+    updateCheckError: sanitizeUrlDiagnosticText(row.update_check_error) as string | null,
     hasGithubToken,
     githubTokenStatus: githubTokenStatus(row),
     githubTokenCheckedAt: iso(row.github_token_checked_at),
-    githubTokenCheckError: row.github_token_check_error ?? null,
-    lastError: row.last_error,
+    githubTokenCheckError: sanitizeUrlDiagnosticText(row.github_token_check_error) as string | null,
+    lastError: sanitizeUrlDiagnosticText(row.last_error) as string | null,
     createdAt: iso(row.created_at)!,
     updatedAt: iso(row.updated_at)!
   };
@@ -368,14 +456,32 @@ async function requireValidGithubRepositoryAccess(input: GithubRepositoryAccessI
   return checkGithubRepositoryAccess(input);
 }
 
-export async function testGithubRepositoryStoredAccess(id: string) {
+export async function testGithubRepositoryStoredAccess(
+  id: string,
+  onChanged?: (
+    client: PoolClient,
+    result: {
+      repository: GithubRepository;
+      access: GithubRepositoryAccessResult;
+    }
+  ) => Promise<void>,
+  beforeAccess?: (repositoryId: string) => Promise<void>
+) {
   const result = await query<any>("SELECT * FROM github_repositories WHERE id = $1", [id]);
   const row = result.rows[0];
   if (!row) return null;
+  // The callback must complete before decrypting the stored token or making a
+  // GitHub request so an unavailable audit store fails closed.
+  await beforeAccess?.(id);
   let access: GithubRepositoryAccessResult;
   try {
+    const repositoryUrl = sanitizeGithubRepositoryUrl(row.repository_url, {
+      owner: row.owner,
+      repo: row.repo
+    });
+    if (!repositoryUrl) throw new Error("Stored GitHub repository URL is invalid");
     access = await checkGithubRepositoryAccess({
-      repositoryUrl: row.repository_url,
+      repositoryUrl,
       branch: row.branch,
       composePath: row.compose_path,
       githubToken: githubTokenForRow(row) ?? undefined
@@ -383,81 +489,124 @@ export async function testGithubRepositoryStoredAccess(id: string) {
   } catch (error) {
     access = await accessResultFromError(error);
   }
-  const updated = await query<any>(
-    `UPDATE github_repositories
-     SET github_token_checked_at = now(),
-         github_token_check_error = $2,
-         updated_at = now()
-     WHERE id = $1
-     RETURNING *`,
-    [id, access.ok ? null : access.error]
-  );
-  return { repository: mapGithubRepository(updated.rows[0]), access };
+  return withTransaction(async (client) => {
+    const updated = await client.query<any>(
+      `UPDATE github_repositories
+       SET github_token_checked_at = now(),
+           github_token_check_error = $2,
+           updated_at = now()
+       WHERE id = $1
+       RETURNING *`,
+      [id, access.ok ? null : access.error]
+    );
+    if (!updated.rows[0]) return null;
+    const changed = { repository: mapGithubRepository(updated.rows[0]), access };
+    await onChanged?.(client, changed);
+    return changed;
+  });
 }
 
-export async function createGithubRepository(input: unknown) {
+export async function createGithubRepository(
+  input: unknown,
+  onChanged?: (
+    client: PoolClient,
+    repository: GithubRepository
+  ) => Promise<void>
+) {
   const body = githubRepositoryCreateSchema.parse(input);
-  const { owner, repo } = parseGithubUrl(body.repositoryUrl);
+  const repositoryUrl = canonicalizeGithubRepositoryUrl(body.repositoryUrl);
+  const { owner, repo } = parseGithubUrl(repositoryUrl);
   const projectName = body.projectName ?? normalizeProjectName(repo);
   const githubToken = body.githubToken?.trim() || null;
-  const hostCloneUrl = nullIfBlank(body.hostCloneUrl);
+  const hostCloneUrl = body.hostCloneUrl
+    ? canonicalizeGitRepositoryUrl(body.hostCloneUrl)
+    : null;
   const hostCloneDirectory = nullIfBlank(body.hostCloneDirectory);
   if (githubToken) {
     await requireValidGithubRepositoryAccess({
-      repositoryUrl: body.repositoryUrl,
+      repositoryUrl,
       branch: body.branch,
       composePath: body.composePath,
       githubToken
     });
   }
-  const result = await query(
-    `INSERT INTO github_repositories
-      (id, name, repository_url, owner, repo, branch, compose_path, project_name, env, default_host_id,
-       host_clone_url, host_clone_directory, github_token_encrypted, github_token_updated_at, github_token_checked_at, github_token_check_error)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-             CASE WHEN $13::text IS NULL THEN null ELSE now() END,
-             CASE WHEN $13::text IS NULL THEN null ELSE now() END,
-             null)
-     ON CONFLICT (owner, repo, branch, compose_path)
-     DO UPDATE SET name = EXCLUDED.name,
-                   repository_url = EXCLUDED.repository_url,
-                   project_name = EXCLUDED.project_name,
-                   env = EXCLUDED.env,
-                   default_host_id = EXCLUDED.default_host_id,
-                   host_clone_url = EXCLUDED.host_clone_url,
-                   host_clone_directory = EXCLUDED.host_clone_directory,
-                   github_token_encrypted = COALESCE(EXCLUDED.github_token_encrypted, github_repositories.github_token_encrypted),
-                   github_token_updated_at = CASE WHEN EXCLUDED.github_token_encrypted IS NULL THEN github_repositories.github_token_updated_at ELSE now() END,
-                   github_token_checked_at = CASE WHEN EXCLUDED.github_token_encrypted IS NULL THEN github_repositories.github_token_checked_at ELSE now() END,
-                   github_token_check_error = CASE WHEN EXCLUDED.github_token_encrypted IS NULL THEN github_repositories.github_token_check_error ELSE null END,
-                   updated_at = now()
-     RETURNING *`,
-    [
-      uuid(),
-      body.name,
-      body.repositoryUrl,
-      owner,
-      repo,
-      body.branch,
-      body.composePath,
-      projectName,
-      body.env,
-      body.defaultHostId ?? null,
-      hostCloneUrl,
-      hostCloneDirectory,
-      githubToken ? encryptSecret(githubToken) : null
-    ]
-  );
-  return mapGithubRepository(result.rows[0]);
+  const result = await withTransaction(async (client) => {
+    const identityKey = `github-repository:${owner}/${repo}:${body.branch}:${body.composePath}`;
+    await client.query(
+      "SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))",
+      [identityKey]
+    );
+    const existing = await client.query<{ id: string }>(
+      `SELECT id
+       FROM github_repositories
+       WHERE owner = $1 AND repo = $2 AND branch = $3 AND compose_path = $4`,
+      [owner, repo, body.branch, body.composePath]
+    );
+    if (existing.rows[0]) {
+      await lockGithubRepositoryForMutation(client, existing.rows[0].id);
+    }
+    const saved = await client.query(
+      `INSERT INTO github_repositories
+        (id, name, repository_url, owner, repo, branch, compose_path, project_name, env, default_host_id,
+         host_clone_url, host_clone_directory, github_token_encrypted, github_token_updated_at, github_token_checked_at, github_token_check_error)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+               CASE WHEN $13::text IS NULL THEN null ELSE now() END,
+               CASE WHEN $13::text IS NULL THEN null ELSE now() END,
+               null)
+       ON CONFLICT (owner, repo, branch, compose_path)
+       DO UPDATE SET name = EXCLUDED.name,
+                     repository_url = EXCLUDED.repository_url,
+                     project_name = EXCLUDED.project_name,
+                     env = EXCLUDED.env,
+                     default_host_id = EXCLUDED.default_host_id,
+                     host_clone_url = EXCLUDED.host_clone_url,
+                     host_clone_directory = EXCLUDED.host_clone_directory,
+                     github_token_encrypted = COALESCE(EXCLUDED.github_token_encrypted, github_repositories.github_token_encrypted),
+                     github_token_updated_at = CASE WHEN EXCLUDED.github_token_encrypted IS NULL THEN github_repositories.github_token_updated_at ELSE now() END,
+                     github_token_checked_at = CASE WHEN EXCLUDED.github_token_encrypted IS NULL THEN github_repositories.github_token_checked_at ELSE now() END,
+                     github_token_check_error = CASE WHEN EXCLUDED.github_token_encrypted IS NULL THEN github_repositories.github_token_check_error ELSE null END,
+                     updated_at = now()
+       RETURNING *`,
+      [
+        uuid(),
+        body.name,
+        repositoryUrl,
+        owner,
+        repo,
+        body.branch,
+        body.composePath,
+        projectName,
+        body.env,
+        body.defaultHostId ?? null,
+        hostCloneUrl,
+        hostCloneDirectory,
+        githubToken ? encryptSecret(githubToken) : null
+      ]
+    );
+    const repository = mapGithubRepository(saved.rows[0]);
+    await onChanged?.(client, repository);
+    return repository;
+  });
+  return result;
 }
 
-export async function updateGithubRepository(id: string, input: unknown) {
+export async function updateGithubRepository(
+  id: string,
+  input: unknown,
+  onChanged?: (
+    client: PoolClient,
+    repository: GithubRepository
+  ) => Promise<void>
+) {
   const body = githubRepositoryUpdateSchema.parse(input);
   const current = await query<any>("SELECT * FROM github_repositories WHERE id = $1", [id]);
   const row = current.rows[0];
   if (!row) return null;
-  const repositoryUrl = body.repositoryUrl ?? row.repository_url;
-  const parsed = body.repositoryUrl ? parseGithubUrl(body.repositoryUrl) : { owner: row.owner, repo: row.repo };
+  const repositoryUrl = body.repositoryUrl
+    ? canonicalizeGithubRepositoryUrl(body.repositoryUrl)
+    : sanitizeGithubRepositoryUrl(row.repository_url, { owner: row.owner, repo: row.repo });
+  if (!repositoryUrl) throw Object.assign(new Error("Stored GitHub repository URL is invalid"), { statusCode: 400 });
+  const parsed = parseGithubUrl(repositoryUrl);
   const nextBranch = body.branch ?? row.branch;
   const nextComposePath = body.composePath ?? row.compose_path;
   const githubToken = body.githubToken?.trim() || null;
@@ -465,7 +614,11 @@ export async function updateGithubRepository(id: string, input: unknown) {
   const existingToken = clearGithubToken ? null : githubTokenForRow(row);
   const tokenForValidation = githubToken ?? existingToken;
   const changedAccessTarget = Boolean(body.repositoryUrl || body.branch || body.composePath);
-  const hostCloneUrl = body.hostCloneUrl === undefined ? row.host_clone_url : nullIfBlank(body.hostCloneUrl);
+  const hostCloneUrl = body.hostCloneUrl === undefined
+    ? sanitizeGitRepositoryUrl(row.host_clone_url) ?? defaultHostCloneUrl(parsed.owner, parsed.repo)
+    : body.hostCloneUrl
+      ? canonicalizeGitRepositoryUrl(body.hostCloneUrl)
+      : null;
   const hostCloneDirectory = body.hostCloneDirectory === undefined ? row.host_clone_directory : nullIfBlank(body.hostCloneDirectory);
   if (!clearGithubToken && tokenForValidation && (githubToken || changedAccessTarget)) {
     await requireValidGithubRepositoryAccess({
@@ -475,62 +628,89 @@ export async function updateGithubRepository(id: string, input: unknown) {
       githubToken: tokenForValidation
     });
   }
-  const result = await query(
-    `UPDATE github_repositories
-     SET name = $2,
-         repository_url = $3,
-         owner = $4,
-         repo = $5,
-         branch = $6,
-         compose_path = $7,
-         project_name = $8,
-         env = $9,
-         default_host_id = $10,
-         host_clone_url = $11,
-         host_clone_directory = $12,
-         github_token_encrypted = CASE WHEN $14::boolean THEN null ELSE COALESCE($13, github_token_encrypted) END,
-         github_token_updated_at = CASE
-           WHEN $14::boolean THEN null
-           WHEN $13::text IS NULL THEN github_token_updated_at
-           ELSE now()
-         END,
-         github_token_checked_at = CASE
-           WHEN $14::boolean THEN null
-           WHEN $13::text IS NOT NULL OR ($15::boolean AND github_token_encrypted IS NOT NULL) THEN now()
-           ELSE github_token_checked_at
-         END,
-         github_token_check_error = CASE
-           WHEN $14::boolean THEN null
-           WHEN $13::text IS NOT NULL OR ($15::boolean AND github_token_encrypted IS NOT NULL) THEN null
-           ELSE github_token_check_error
-         END,
-         updated_at = now()
-     WHERE id = $1
-     RETURNING *`,
-    [
-      id,
-      body.name ?? row.name,
-      repositoryUrl,
-      parsed.owner,
-      parsed.repo,
-      nextBranch,
-      nextComposePath,
-      body.projectName ?? row.project_name,
-      body.env ?? row.env,
-      body.defaultHostId ?? row.default_host_id,
-      hostCloneUrl,
-      hostCloneDirectory,
-      githubToken ? encryptSecret(githubToken) : null,
-      clearGithubToken,
-      changedAccessTarget
-    ]
-  );
-  return mapGithubRepository(result.rows[0]);
+  const result = await withTransaction(async (client) => {
+    const locked = await lockGithubRepositoryForMutation<any>(client, id);
+    if (!locked) return { rows: [] };
+    if (!sameRepositoryDeploymentInputs(row, locked)) {
+      throw Object.assign(
+        new Error("GitHub repository changed while the update was being validated. Retry with the latest settings."),
+        { statusCode: 409 }
+      );
+    }
+    const updated = await client.query(
+      `UPDATE github_repositories
+       SET name = $2,
+           repository_url = $3,
+           owner = $4,
+           repo = $5,
+           branch = $6,
+           compose_path = $7,
+           project_name = $8,
+           env = $9,
+           default_host_id = $10,
+           host_clone_url = $11,
+           host_clone_directory = $12,
+           github_token_encrypted = CASE WHEN $14::boolean THEN null ELSE COALESCE($13, github_token_encrypted) END,
+           github_token_updated_at = CASE
+             WHEN $14::boolean THEN null
+             WHEN $13::text IS NULL THEN github_token_updated_at
+             ELSE now()
+           END,
+           github_token_checked_at = CASE
+             WHEN $14::boolean THEN null
+             WHEN $13::text IS NOT NULL OR ($15::boolean AND github_token_encrypted IS NOT NULL) THEN now()
+             ELSE github_token_checked_at
+           END,
+           github_token_check_error = CASE
+             WHEN $14::boolean THEN null
+             WHEN $13::text IS NOT NULL OR ($15::boolean AND github_token_encrypted IS NOT NULL) THEN null
+             ELSE github_token_check_error
+           END,
+           updated_at = now()
+       WHERE id = $1
+       RETURNING *`,
+      [
+        id,
+        body.name ?? row.name,
+        repositoryUrl,
+        parsed.owner,
+        parsed.repo,
+        nextBranch,
+        nextComposePath,
+        body.projectName ?? row.project_name,
+        body.env ?? row.env,
+        body.defaultHostId ?? row.default_host_id,
+        hostCloneUrl,
+        hostCloneDirectory,
+        githubToken ? encryptSecret(githubToken) : null,
+        clearGithubToken,
+        changedAccessTarget
+      ]
+    );
+    if (!updated.rows[0]) return null;
+    const repository = mapGithubRepository(updated.rows[0]);
+    await onChanged?.(client, repository);
+    return repository;
+  });
+  return result;
 }
 
-export async function deleteGithubRepository(id: string) {
-  const result = await query("DELETE FROM github_repositories WHERE id = $1 RETURNING id", [id]);
-  return Boolean(result.rowCount);
+export async function deleteGithubRepository(
+  id: string,
+  onChanged?: (client: PoolClient) => Promise<void>
+) {
+  const result = await withTransaction(async (client) => {
+    const repository = await lockGithubRepositoryForMutation(client, id);
+    if (!repository) return false;
+    const deleted = await client.query(
+      "DELETE FROM github_repositories WHERE id = $1 RETURNING id",
+      [id]
+    );
+    if (!deleted.rowCount) return false;
+    await onChanged?.(client);
+    return true;
+  });
+  return result;
 }
 
 async function fetchComposeFileForRef(row: any, ref: string) {
@@ -655,7 +835,8 @@ export async function checkGithubRepositoryUpdates(id?: string) {
 }
 
 export async function listGithubBranchesForUrl(repositoryUrl: string, githubToken?: string) {
-  const { owner, repo } = parseGithubUrl(repositoryUrl);
+  const canonical = canonicalizeGithubRepositoryUrl(repositoryUrl);
+  const { owner, repo } = parseGithubUrl(canonical);
   return listGithubBranches(owner, repo, githubToken);
 }
 
@@ -664,8 +845,9 @@ export async function listGithubVersionsForUrl(
   githubToken?: string,
   context: { selectedRef?: string | null; currentCommitSha?: string | null } = {}
 ) {
-  const { owner, repo } = parseGithubUrl(repositoryUrl);
-  return listGithubVersionOptions(owner, repo, repositoryUrl, githubToken, context);
+  const canonical = canonicalizeGithubRepositoryUrl(repositoryUrl);
+  const { owner, repo } = parseGithubUrl(canonical);
+  return listGithubVersionOptions(owner, repo, canonical, githubToken, context);
 }
 
 export async function listGithubBranchesForRepository(id: string) {
@@ -683,7 +865,12 @@ export async function listGithubVersionsForRepository(
   const row = result.rows[0];
   if (!row) throw new Error("GitHub repository not found");
   const token = row.github_token_encrypted ? decryptSecret(row.github_token_encrypted) : undefined;
-  return listGithubVersionOptions(row.owner, row.repo, row.repository_url, token, {
+  const repositoryUrl = sanitizeGithubRepositoryUrl(row.repository_url, {
+    owner: row.owner,
+    repo: row.repo
+  });
+  if (!repositoryUrl) throw Object.assign(new Error("Stored GitHub repository URL is invalid"), { statusCode: 400 });
+  return listGithubVersionOptions(row.owner, row.repo, repositoryUrl, token, {
     selectedRef: context.selectedRef ?? row.branch,
     currentCommitSha: context.currentCommitSha ?? row.last_deployed_commit_sha ?? null
   });
@@ -729,7 +916,19 @@ export async function deployGithubRepository(
     hostCloneUrl?: string;
     hostCloneDirectory?: string;
   },
-  createdBy?: string | null
+  createdBy?: string | null,
+  onQueued?: (
+    client: PoolClient,
+    result: {
+      job: Awaited<ReturnType<typeof enqueueJobInTransaction>>;
+      stack?: ReturnType<typeof mapStack>;
+      branch: string;
+      mode: "api" | "host_clone";
+      sourceCommitSha?: string;
+      composeSha256?: string;
+      customCompose?: boolean;
+    }
+  ) => Promise<void>
 ) {
   const result = await query<any>("SELECT * FROM github_repositories WHERE id = $1", [id]);
   const row = result.rows[0];
@@ -739,19 +938,63 @@ export async function deployGithubRepository(
   const branch = options.branch ?? row.branch;
   const projectName = options.projectName ?? normalizeProjectName(row.project_name);
   const env = options.env ?? row.env ?? "";
-  let commitSha: string | null = null;
+  const repositoryUrl = sanitizeGithubRepositoryUrl(row.repository_url, {
+    owner: row.owner,
+    repo: row.repo
+  });
+  if (!repositoryUrl) throw Object.assign(new Error("Stored GitHub repository URL is invalid"), { statusCode: 400 });
+  let queuedCallbackError: unknown;
 
   try {
     if (options.mode === "host_clone") {
-      const hostCloneUrl = nullIfBlank(options.hostCloneUrl) ?? row.host_clone_url ?? defaultHostCloneUrl(row.owner, row.repo);
-      const hostCloneDirectory = nullIfBlank(options.hostCloneDirectory) ?? row.host_clone_directory;
-      if (!hostCloneDirectory) throw new Error("Choose a host clone directory before using Clone/Build Deploy.");
-      const transactionResult = await withTransaction(async (client) => {
-        const lockedRepository = await client.query(
-          "SELECT id FROM github_repositories WHERE id = $1 FOR UPDATE",
-          [id]
+      if (options.composeYaml !== undefined) {
+        throw Object.assign(
+          new Error(
+            "Clone/Build Deploy uses the Compose file from the pinned repository revision. Use API mode for a custom Compose definition."
+          ),
+          { statusCode: 400 }
         );
-        if (!lockedRepository.rows[0]) throw new Error("GitHub repository not found");
+      }
+      const requestedHostCloneUrl = nullIfBlank(options.hostCloneUrl);
+      const hostCloneUrl = requestedHostCloneUrl
+        ? canonicalizeGitRepositoryUrl(requestedHostCloneUrl)
+        : sanitizeGitRepositoryUrl(row.host_clone_url) ?? defaultHostCloneUrlForRepositoryUrl(repositoryUrl);
+      if (!hostCloneUrl) throw Object.assign(new Error("Stored host clone URL is invalid"), { statusCode: 400 });
+      const requestedHostCloneDirectory =
+        nullIfBlank(options.hostCloneDirectory) ?? row.host_clone_directory;
+      if (!requestedHostCloneDirectory) {
+        throw new Error(
+          "Choose a host clone directory before using Clone/Build Deploy."
+        );
+      }
+      const hostCloneDirectory = normalizeRemotePath(
+        requestedHostCloneDirectory
+      );
+      const sourceCommitSha = exactGithubCommitSha(
+        await fetchBranchCommitSha(row, branch)
+      );
+      const composeYaml = await fetchComposeFileForRef(
+        row,
+        sourceCommitSha
+      );
+      inspectGitComposeSourceIntegrity(composeYaml, row.compose_path);
+      const queuedComposeSha256 = composeSha256(composeYaml);
+      const canonicalEnvironment = serializeDeploymentEnvironment(
+        parseDeploymentEnvironment(env)
+      );
+      const environmentBinding = deploymentEnvironmentBinding(
+        canonicalEnvironment
+      );
+      const encryptedEnvironment = encryptSecret(canonicalEnvironment);
+      const transactionResult = await withTransaction(async (client) => {
+        const lockedRepository = await lockGithubRepositoryForMutation<any>(client, id);
+        if (!lockedRepository) throw new Error("GitHub repository not found");
+        if (!sameRepositoryDeploymentInputs(row, lockedRepository)) {
+          throw Object.assign(
+            new Error("GitHub repository changed while deployment was being prepared. Retry with the latest settings."),
+            { statusCode: 409 }
+          );
+        }
         await client.query(
           `UPDATE github_repositories
            SET host_clone_url = $2,
@@ -770,35 +1013,121 @@ export async function deployGithubRepository(
             branch,
             composePath: row.compose_path,
             projectName,
-            repositoryId: id
+            repositoryId: id,
+            sourceCommitSha,
+            composeSha256: queuedComposeSha256
           }
         }, createdBy);
+        await client.query(
+          `INSERT INTO github_clone_deployment_jobs (
+             operation_job_id, repository_id, host_id,
+             source_repository_url, clone_repository_url, source_branch,
+             source_commit_sha, source_compose_path, compose_yaml,
+             compose_sha256, project_name, working_dir,
+             environment_encrypted, environment_binding
+           )
+           VALUES (
+             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+           )`,
+          [
+            job.id,
+            id,
+            hostId,
+            repositoryUrl,
+            hostCloneUrl,
+            branch,
+            sourceCommitSha,
+            row.compose_path,
+            composeYaml,
+            queuedComposeSha256,
+            projectName,
+            hostCloneDirectory,
+            encryptedEnvironment,
+            environmentBinding
+          ]
+        );
+        try {
+          await onQueued?.(client, {
+            job,
+            branch,
+            mode: "host_clone",
+            sourceCommitSha,
+            composeSha256: queuedComposeSha256,
+            customCompose: false
+          });
+        } catch (error) {
+          queuedCallbackError = error;
+          throw error;
+        }
         return { job };
       });
       await notifyJobQueued(transactionResult.job.id);
       const { job } = transactionResult;
-      return { job, branch, mode: "host_clone" };
+      return {
+        job,
+        branch,
+        mode: "host_clone",
+        sourceCommitSha,
+        composeSha256: queuedComposeSha256,
+        customCompose: false
+      };
     }
 
-    try {
-      commitSha = await fetchBranchCommitSha(row, branch);
-    } catch {
-      commitSha = null;
-    }
-    const composeYaml = options.composeYaml ?? await fetchComposeFileForRef(row, branch);
-    const transactionResult = await withTransaction(async (client) => {
-      const lockedRepository = await client.query(
-        "SELECT id FROM github_repositories WHERE id = $1 FOR UPDATE",
-        [id]
+    const sourceCommitSha = exactGithubCommitSha(
+      await fetchBranchCommitSha(row, branch)
+    );
+    const customCompose = options.composeYaml !== undefined;
+    // Resolve the moving ref once, then fetch the reviewed file by that
+    // immutable object id. A caller-provided definition is an explicit custom
+    // deployment: it remains bound to the source revision for provenance, but
+    // completion must not claim that its bytes equal the upstream commit.
+    const composeYaml = customCompose
+      ? options.composeYaml!
+      : await fetchComposeFileForRef(row, sourceCommitSha);
+    const sourceIntegrity = inspectGitComposeSourceIntegrity(
+      composeYaml,
+      row.compose_path
+    );
+    if (
+      sourceIntegrity.buildContexts.length > 0
+      || sourceIntegrity.referencedFiles.some((file) =>
+        file !== sourceIntegrity.composePath
+      )
+    ) {
+      throw Object.assign(
+        new Error(
+          "GitHub API deployment cannot materialize build contexts or referenced source files. Use Clone/Build Deploy for this repository."
+        ),
+        { statusCode: 409 }
       );
-      if (!lockedRepository.rows[0]) throw new Error("GitHub repository not found");
+    }
+    const queuedComposeSha256 = composeSha256(composeYaml);
+    const transactionResult = await withTransaction(async (client) => {
+      const lockedRepository = await lockGithubRepositoryForMutation<any>(client, id);
+      if (!lockedRepository) throw new Error("GitHub repository not found");
+      if (!sameRepositoryDeploymentInputs(row, lockedRepository)) {
+        throw Object.assign(
+          new Error("GitHub repository changed while deployment was being prepared. Retry with the latest settings."),
+          { statusCode: 409 }
+        );
+      }
+      const existingStack = await client.query<{ id: string }>(
+        `SELECT id
+         FROM compose_stacks
+         WHERE host_id = $1 AND project_name = $2
+         FOR UPDATE`,
+        [hostId, projectName]
+      );
+      if (existingStack.rows[0]) {
+        await lockComposeStackForMutation(client, existingStack.rows[0].id);
+      }
       const stackResult = await client.query(
         `INSERT INTO compose_stacks (
            id, host_id, name, project_name, compose_yaml, env, status,
-           source_type, source_repository_url, source_branch, source_current_commit_sha,
+           source_type, source_repository_url, source_branch, source_compose_path, source_current_commit_sha,
            source_latest_commit_sha, source_checked_at, source_check_error
          )
-         VALUES ($1, $2, $3, $4, $5, $6, 'created', 'github', $7, $8, $9, $9, CASE WHEN $9::text IS NULL THEN null ELSE now() END, null)
+         VALUES ($1, $2, $3, $4, $5, $6, 'created', 'github', $7, $8, $9, null, $10, CASE WHEN $10::text IS NULL THEN null ELSE now() END, null)
          ON CONFLICT (host_id, project_name)
          DO UPDATE SET name = EXCLUDED.name,
                        compose_yaml = EXCLUDED.compose_yaml,
@@ -806,13 +1135,24 @@ export async function deployGithubRepository(
                        source_type = EXCLUDED.source_type,
                        source_repository_url = EXCLUDED.source_repository_url,
                        source_branch = EXCLUDED.source_branch,
-                       source_current_commit_sha = EXCLUDED.source_current_commit_sha,
+                       source_compose_path = EXCLUDED.source_compose_path,
                        source_latest_commit_sha = EXCLUDED.source_latest_commit_sha,
                        source_checked_at = EXCLUDED.source_checked_at,
                        source_check_error = null,
                        updated_at = now()
          RETURNING *`,
-        [uuid(), hostId, row.name, projectName, composeYaml, env, row.repository_url, branch, commitSha]
+        [
+          uuid(),
+          hostId,
+          row.name,
+          projectName,
+          composeYaml,
+          env,
+          repositoryUrl,
+          branch,
+          row.compose_path,
+          sourceCommitSha
+        ]
       );
       const stack = mapStack(stackResult.rows[0]);
       await recordStackVersionInTransaction(client, {
@@ -821,35 +1161,90 @@ export async function deployGithubRepository(
         env: stack.env,
         source: "github",
         createdBy,
-        note: `GitHub deploy ${row.owner}/${row.repo}@${branch}`
+        note: customCompose
+          ? `GitHub custom Compose deploy ${row.owner}/${row.repo}@${sourceCommitSha}`
+          : `GitHub deploy ${row.owner}/${row.repo}@${sourceCommitSha}`
       });
       const job = await enqueueJobInTransaction(
         client,
-        { type: "compose.deploy", hostId, payload: { stackId: stack.id } },
+        {
+          type: "compose.deploy",
+          hostId,
+          payload: { stackId: stack.id, pullBeforeDeploy: false }
+        },
         createdBy
       );
       await client.query(
+        `INSERT INTO github_deployment_jobs (
+           operation_job_id, repository_id, stack_id, source_repository_url,
+           source_branch, source_compose_path, source_commit_sha,
+           compose_sha256, custom_compose
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [
+          job.id,
+          id,
+          stack.id,
+          repositoryUrl,
+          branch,
+          row.compose_path,
+          sourceCommitSha,
+          queuedComposeSha256,
+          customCompose
+        ]
+      );
+      await client.query(
         `UPDATE github_repositories
-         SET last_deployed_at = now(),
-             last_deployed_commit_sha = COALESCE($2, last_deployed_commit_sha),
-             latest_commit_sha = COALESCE($2, latest_commit_sha),
+         SET latest_commit_sha = COALESCE($2, latest_commit_sha),
              update_checked_at = CASE WHEN $2::text IS NULL THEN update_checked_at ELSE now() END,
              update_check_error = CASE WHEN $2::text IS NULL THEN update_check_error ELSE null END,
-             last_error = null,
              updated_at = now()
          WHERE id = $1`,
-        [id, commitSha]
+        [id, sourceCommitSha]
       );
+      try {
+        await onQueued?.(client, {
+          stack,
+          job,
+          branch,
+          mode: "api",
+          sourceCommitSha,
+          composeSha256: queuedComposeSha256,
+          customCompose
+        });
+      } catch (error) {
+        queuedCallbackError = error;
+        throw error;
+      }
       return { stack, job };
     });
     await notifyJobQueued(transactionResult.job.id);
     const { stack, job } = transactionResult;
-    return { stack, job, branch };
+    return {
+      stack,
+      job,
+      branch,
+      sourceCommitSha,
+      composeSha256: queuedComposeSha256,
+      customCompose
+    };
   } catch (error) {
-    await query("UPDATE github_repositories SET last_error = $2, updated_at = now() WHERE id = $1", [
-      id,
+    // A transactional route callback is used to persist the audit event next
+    // to the job and related domain changes. If that callback fails, the
+    // transaction has already rolled everything back; do not follow it with an
+    // unaudited `last_error` write that would make the 500 response misleading.
+    if (error === queuedCallbackError) throw error;
+    const message = String(sanitizeUrlDiagnosticText(
       error instanceof Error ? error.message : String(error)
-    ]);
+    ));
+    await withTransaction(async (client) => {
+      const repository = await lockGithubRepositoryForMutation(client, id);
+      if (!repository) return;
+      await client.query(
+        "UPDATE github_repositories SET last_error = $2, updated_at = now() WHERE id = $1",
+        [id, message]
+      );
+    }).catch(() => undefined);
     throw error;
   }
 }

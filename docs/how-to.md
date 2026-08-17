@@ -1,6 +1,6 @@
 # ComposeBastion How-To Guide
 
-Version covered: `v1.1.2`.
+Version covered: `v1.2.0`.
 
 This guide covers the day-to-day workflows that are easiest to forget when you
 only use them occasionally. For installation-first docs, start with
@@ -105,7 +105,8 @@ Then fully log out of SSH and back in, or reboot the host, before testing again.
 1. In GitHub, create a fine-grained personal access token for the repository.
 2. Give the token read-only `Contents` permission.
 3. In ComposeBastion, open `Deploy` -> `Tracked GitHub repositories`.
-4. Enter the repository URL, branch, Compose path, project name, default host, and optional `.env` content.
+4. Enter the credential-free HTTPS GitHub repository URL, branch, Compose path,
+   project name, default host, and optional `.env` content.
 5. Paste the token into `Fine-grained GitHub token for private repos, Contents: Read-only`.
 6. Click `Branches` to confirm ComposeBastion can read the private repo.
 7. Save the repo, then use preview/customize deploy for image-only Compose
@@ -115,6 +116,25 @@ Then fully log out of SSH and back in, or reboot the host, before testing again.
    directory on the tracked repo, then use `Clone/Build Deploy`.
 
 ComposeBastion encrypts the token with `APP_SECRET` before storing it. When editing a tracked repo, leave the token field blank to keep the saved token.
+
+Never place a token in a repository or host clone URL. Use the encrypted
+GitHub token field for GitHub API access and an SSH deploy key for host-side
+clones. Universal Git deployments use their separate encrypted HTTPS
+credential fields. Direct Compose URLs do not support credentials or signed
+query parameters; upload private Compose files instead.
+
+## Roll Back A Compose Version
+
+ComposeBastion can roll back version history for stacks whose Compose YAML and
+environment are stored in its managed stack directory. Open the stack's version
+history, compare the versions, and select the version to restore.
+
+Folder-backed stacks are deliberately excluded. Their Compose file may belong
+to a Git working tree, a user-managed folder, or a project discovered on the
+host, and ComposeBastion cannot prove that it exclusively owns those files.
+Restore the desired version in the source folder or Git repository, then
+redeploy it. The rollback API returns `409 CONFLICT` without changing stack
+history or queuing a deployment when a stack has a host-folder source path.
 
 ## Clean Up Images
 
@@ -206,7 +226,9 @@ health, and next actions.
 
 Open `Recovery Center` -> `Backup Storage` and create a target:
 
-- Use `Local` for manager-local recovery artifacts.
+- Use `Local` as a named alias for manager-local recovery artifacts under the
+  configured `COMPOSEBASTION_BACKUP_DIR`. Local targets do not select a custom
+  path and always keep their only local copy.
 - Use `S3` for S3-compatible object storage.
 - Use `SMB` for Windows shares, Samba shares, and NAS shares. ComposeBastion uses
   rclone's SMB backend from inside the app/worker image; it does not require a
@@ -224,10 +246,12 @@ and test it before using the target for important recovery points.
 
 ### Use `remote_only`
 
-Remote-only targets still stage artifacts locally during capture. After upload
-and verification succeed, ComposeBastion removes the local artifact cache for that
-recovery point. Readiness treats a remote-only point as usable when the remote
-artifact is present and the backup target still exists and is enabled.
+S3 and rclone/SMB remote-only targets still stage artifacts locally during
+capture. After upload and independent remote verification succeed,
+ComposeBastion removes the local artifact cache for that recovery point.
+Readiness treats a remote-only point as usable when the remote artifact is
+present and the backup target still exists and is enabled. Local targets always
+use the manager backup directory and cannot use `remote_only`.
 
 Use `remote_only` only after the target test passes and you have run at least
 one verify and restore drill against that target.

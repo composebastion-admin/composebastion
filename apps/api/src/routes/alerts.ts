@@ -3,7 +3,8 @@ import { idSchema } from "@composebastion/shared";
 import { z } from "zod";
 import { requireRole } from "../services/auth.js";
 import { createAlertRule, createAlertSilence, createChannel, deleteAlertRule, deleteAlertSilence, deleteChannel, listAlertChannelTestEvents, listAlertEvents, listAlertRules, listAlertSilences, listChannels, listRecentAlertChannelTestEvents, sendTestNotification } from "../services/alerts.js";
-import { writeAuditEvent } from "../services/audit.js";
+import { auditContextFromRequest, writeAuditEvent } from "../services/audit.js";
+import { withTransaction } from "../db/pool.js";
 import { authenticatedReadRateLimit, sensitiveMutationRateLimit } from "../services/rateLimits.js";
 
 const testHistoryQuerySchema = z.object({
@@ -14,19 +15,51 @@ export async function registerAlertRoutes(app: FastifyInstance) {
   const viewer = requireRole(["owner", "admin", "operator", "viewer"]);
   const operator = requireRole(["owner", "admin", "operator"]);
 
-  app.get("/api/alerts/channels", { preHandler: operator, config: { rateLimit: authenticatedReadRateLimit } }, async () => ({ channels: await listChannels() }));
+  app.get("/api/alerts/channels", { preHandler: operator, config: { rateLimit: authenticatedReadRateLimit } }, async (request) => {
+    await writeAuditEvent({
+      userId: request.user?.id,
+      action: "alert.channel.list_read",
+      targetKind: "notification_channel",
+      ...auditContextFromRequest(request)
+    });
+    return { channels: await listChannels() };
+  });
   app.post("/api/alerts/channels", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
-    const channel = await createChannel(request.body);
-    await writeAuditEvent({ userId: request.user?.id, action: "alert.channel.create", targetKind: "notification_channel", targetId: channel.id });
+    const channel = await createChannel(request.body, async (client, created) => {
+      await writeAuditEvent({
+        userId: request.user?.id,
+        action: "alert.channel.create",
+        targetKind: "notification_channel",
+        targetId: created.id,
+        ...auditContextFromRequest(request)
+      }, client);
+    });
     return { channel };
   });
   app.delete("/api/alerts/channels/:id", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
     const { id } = request.params as { id: string };
-    await deleteChannel(id);
+    await withTransaction(async (client) => {
+      await deleteChannel(id, client);
+      await writeAuditEvent({
+        userId: request.user?.id,
+        action: "alert.channel.delete",
+        targetKind: "notification_channel",
+        targetId: id,
+        ...auditContextFromRequest(request)
+      }, client);
+    });
     return { ok: true };
   });
   app.post("/api/alerts/channels/:id/test", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
     const id = idSchema.parse((request.params as { id: string }).id);
+    await writeAuditEvent({
+      userId: request.user?.id,
+      action: "alert.channel.test",
+      targetKind: "notification_channel",
+      targetId: id,
+      details: { phase: "intent" },
+      ...auditContextFromRequest(request)
+    });
     const event = await sendTestNotification(id, request.user?.id);
     return { ok: true, event };
   });
@@ -42,26 +75,62 @@ export async function registerAlertRoutes(app: FastifyInstance) {
 
   app.get("/api/alerts/rules", { preHandler: operator, config: { rateLimit: authenticatedReadRateLimit } }, async () => ({ rules: await listAlertRules() }));
   app.post("/api/alerts/rules", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
-    const rule = await createAlertRule(request.body);
-    await writeAuditEvent({ userId: request.user?.id, action: "alert.rule.create", targetKind: "alert_rule", targetId: rule.id });
+    const rule = await createAlertRule(request.body, async (client, created) => {
+      await writeAuditEvent({
+        userId: request.user?.id,
+        action: "alert.rule.create",
+        targetKind: "alert_rule",
+        targetId: created.id,
+        ...auditContextFromRequest(request)
+      }, client);
+    });
     return { rule };
   });
   app.delete("/api/alerts/rules/:id", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
     const { id } = request.params as { id: string };
-    await deleteAlertRule(id);
+    await withTransaction(async (client) => {
+      await deleteAlertRule(id, client);
+      await writeAuditEvent({
+        userId: request.user?.id,
+        action: "alert.rule.delete",
+        targetKind: "alert_rule",
+        targetId: id,
+        ...auditContextFromRequest(request)
+      }, client);
+    });
     return { ok: true };
   });
 
   app.get("/api/alerts/silences", { preHandler: viewer, config: { rateLimit: authenticatedReadRateLimit } }, async () => ({ silences: await listAlertSilences() }));
   app.post("/api/alerts/silences", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
-    const silence = await createAlertSilence(request.body, request.user?.id);
-    await writeAuditEvent({ userId: request.user?.id, hostId: silence.hostId, action: "alert.silence.create", targetKind: "alert_silence", targetId: silence.id });
+    const silence = await createAlertSilence(
+      request.body,
+      request.user?.id,
+      async (client, created) => {
+        await writeAuditEvent({
+          userId: request.user?.id,
+          hostId: created.hostId,
+          action: "alert.silence.create",
+          targetKind: "alert_silence",
+          targetId: created.id,
+          ...auditContextFromRequest(request)
+        }, client);
+      }
+    );
     return { silence };
   });
   app.delete("/api/alerts/silences/:id", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
     const id = idSchema.parse((request.params as { id: string }).id);
-    await deleteAlertSilence(id);
-    await writeAuditEvent({ userId: request.user?.id, action: "alert.silence.delete", targetKind: "alert_silence", targetId: id });
+    await withTransaction(async (client) => {
+      await deleteAlertSilence(id, client);
+      await writeAuditEvent({
+        userId: request.user?.id,
+        action: "alert.silence.delete",
+        targetKind: "alert_silence",
+        targetId: id,
+        ...auditContextFromRequest(request)
+      }, client);
+    });
     return { ok: true };
   });
 

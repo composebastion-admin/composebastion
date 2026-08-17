@@ -11,6 +11,7 @@ export type RegistryResolver = (hostname: string) => Promise<RegistryResolvedAdd
 export type RegistryRequestPolicy = {
   trustedOrigins?: string[];
   allowInsecureCredentials?: boolean;
+  allowPrivateResolvedAddresses?: boolean;
 };
 
 export type RegistryRequestOptions = {
@@ -84,7 +85,7 @@ export async function resolveRegistryRequestTarget(
       throw registryTransportError("Registry DNS returned an invalid address", "ENOTFOUND");
     }
   }
-  if (!isTrustedRegistryOrigin(url, policy)) {
+  if (!isTrustedRegistryOrigin(url, policy) && !policy.allowPrivateResolvedAddresses) {
     const blocked = addresses.find((entry) => isPrivateIp(entry.address));
     if (blocked) {
       throw registryTransportError(

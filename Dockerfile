@@ -14,12 +14,14 @@ ARG APP_VERSION=source
 FROM node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a AS deps
 WORKDIR /app
 RUN apk add --no-cache python3 make g++
+COPY scripts/bootstrap-npm.mjs scripts/bootstrap-npm.mjs
+RUN node scripts/bootstrap-npm.mjs
 COPY package.json package-lock.json ./
 COPY apps/api/package.json apps/api/package.json
 COPY apps/agent/package.json apps/agent/package.json
 COPY apps/web/package.json apps/web/package.json
 COPY packages/shared/package.json packages/shared/package.json
-RUN npm ci
+RUN npm ci --engine-strict --strict-allow-scripts --dangerously-allow-all-scripts=false --ignore-scripts=false
 
 FROM deps AS build
 WORKDIR /app
@@ -27,7 +29,17 @@ COPY . .
 RUN npm run build
 RUN npm prune --omit=dev
 
-FROM --platform=$BUILDPLATFORM golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS trivy-builder
+FROM node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a AS storage-helper-builder
+WORKDIR /src
+RUN apk add --no-cache build-base
+COPY scripts/prepare-backup-storage.c ./prepare-backup-storage.c
+RUN cc -std=c17 -O2 -Wall -Wextra -Werror prepare-backup-storage.c -o /tmp/composebastion-prepare-storage && \
+    strip /tmp/composebastion-prepare-storage
+
+FROM scratch AS storage-helper-artifacts
+COPY --from=storage-helper-builder /tmp/composebastion-prepare-storage /composebastion-prepare-storage
+
+FROM --platform=$BUILDPLATFORM golang:1.26.6-alpine@sha256:af8d6740070b8906d12eae1c3e3ea0957fb63f492051ea05e354c38ef9fe88df AS trivy-builder
 ENV GOTOOLCHAIN=local
 ARG TARGETOS
 ARG TARGETARCH
@@ -58,6 +70,7 @@ RUN set -eux; \
       go build -mod=readonly -buildvcs=false -trimpath \
         -ldflags="-s -w -extldflags '-static' -X github.com/aquasecurity/trivy/pkg/version/app.ver=${TRIVY_VERSION}" \
         -o /out/trivy ./cmd/trivy; \
+    go version -m /out/trivy | grep -F "go1.26.6"; \
     go version -m /out/trivy | grep -F "oras.land/oras-go/v2" | grep -F "${TRIVY_ORAS_VERSION}"; \
     go version -m /out/trivy | grep -F "github.com/go-git/go-git/v5" | grep -F "${TRIVY_GO_GIT_VERSION}"; \
     install -m 0644 /src/LICENSE /out/licenses/trivy-LICENSE.txt; \
@@ -75,7 +88,7 @@ RUN set -eux; \
     sha256sum trivy-LICENSE.txt trivy-NOTICE.txt oras-go-LICENSE.txt go-LICENSE.txt go-PATENTS.txt go-buildinfo/trivy.modules.tsv \
       | LC_ALL=C sort > go-buildinfo/trivy.artifacts.sha256
 
-FROM --platform=$BUILDPLATFORM golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS rclone-builder
+FROM --platform=$BUILDPLATFORM golang:1.26.6-alpine@sha256:af8d6740070b8906d12eae1c3e3ea0957fb63f492051ea05e354c38ef9fe88df AS rclone-builder
 ENV GOTOOLCHAIN=local
 ARG TARGETOS
 ARG TARGETARCH
@@ -103,7 +116,7 @@ RUN set -eux; \
         -o /out/rclone .; \
     chmod 0755 /out/rclone; \
     env -u RCLONE_VERSION /out/rclone version | grep -F "rclone v${RCLONE_VERSION}"; \
-    go version -m /out/rclone | grep -F "go1.26.5"; \
+    go version -m /out/rclone | grep -F "go1.26.6"; \
     install -m 0644 /src/COPYING /out/licenses/rclone-LICENSE.txt; \
     go version -m /out/rclone \
       | awk -F '\t' '$2 == "mod" || $2 == "dep" || $2 == "=>" { print $2 "\t" $3 "\t" $4 "\t" $5 }' \
@@ -113,6 +126,10 @@ RUN set -eux; \
     cd /out/licenses; \
     sha256sum rclone-LICENSE.txt go-buildinfo/rclone.modules.tsv \
       | LC_ALL=C sort > go-buildinfo/rclone.artifacts.sha256
+
+FROM scratch AS app-tools-artifacts
+COPY --from=trivy-builder /out /trivy
+COPY --from=rclone-builder /out /rclone
 
 FROM node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a AS runtime
 WORKDIR /app
@@ -140,8 +157,11 @@ RUN set -eux; \
 
 COPY --from=trivy-builder /out/trivy /usr/local/bin/trivy
 COPY --from=rclone-builder /out/rclone /usr/local/bin/rclone
+COPY --from=storage-helper-builder /tmp/composebastion-prepare-storage /usr/local/bin/composebastion-prepare-storage
 COPY --from=trivy-builder /out/licenses/ /licenses/third-party/
 COPY --from=rclone-builder /out/licenses/ /licenses/third-party/
+COPY LICENSES/go-modules/ /licenses/third-party/go-modules/
+COPY scripts/go-attribution.mjs /tmp/go-attribution.mjs
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/apps/api/package.json ./apps/api/package.json
@@ -149,12 +169,15 @@ COPY --from=build /app/apps/api/dist ./apps/api/dist
 COPY --from=build /app/apps/web/dist ./apps/web/dist
 COPY --from=build /app/packages/shared/package.json ./packages/shared/package.json
 COPY --from=build /app/packages/shared/dist ./packages/shared/dist
-COPY scripts/bridge-self-update.sh ./scripts/bridge-self-update.sh
+COPY --from=build /app/scripts/prepare-backup-storage.mjs ./scripts/prepare-backup-storage.mjs
+COPY --from=build /app/scripts/prepare-compose-upgrade.mjs ./scripts/prepare-compose-upgrade.mjs
+COPY --from=build /app/scripts/prepare-database-upgrade.mjs ./scripts/prepare-database-upgrade.mjs
 COPY --from=build /app/infra ./infra
 COPY LICENSE.md LICENSING_SUMMARY.md COMMERCIAL-LICENSE.md NOTICE.md THIRD-PARTY-NOTICES.md TRADEMARKS.md /licenses/
 COPY LICENSES /licenses/LICENSES
-RUN mkdir -p /data/backups /var/cache/composebastion/trivy && \
-    chown -R 1000:1000 /data/backups /var/cache/composebastion
+RUN mkdir -p /data/backups /var/cache/composebastion/trivy /var/lib/composebastion/upgrade-state && \
+    chmod 0700 /var/lib/composebastion/upgrade-state && \
+    chown -R 1000:1000 /data/backups /var/cache/composebastion /var/lib/composebastion
 RUN set -eux; \
     node -e "Promise.all([import('@composebastion/shared'), import('semver')])"; \
     trivy --version | grep -F "Version: ${TRIVY_VERSION}"; \
@@ -171,6 +194,12 @@ RUN set -eux; \
     test -s /licenses/third-party/go-buildinfo/rclone.artifacts.sha256; \
     cd /licenses/third-party; \
     sha256sum -c go-buildinfo/trivy.artifacts.sha256; \
-    sha256sum -c go-buildinfo/rclone.artifacts.sha256
+    sha256sum -c go-buildinfo/rclone.artifacts.sha256; \
+    node /tmp/go-attribution.mjs verify \
+      --manifest /licenses/third-party/go-modules/manifest.json \
+      --inventory trivy=/licenses/third-party/go-buildinfo/trivy.modules.tsv \
+      --inventory rclone=/licenses/third-party/go-buildinfo/rclone.modules.tsv; \
+    rm /tmp/go-attribution.mjs
+USER 1000:1000
 EXPOSE 8080
 CMD ["node", "apps/api/dist/server.js"]

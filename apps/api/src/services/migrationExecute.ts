@@ -1,4 +1,8 @@
-import type { MigrationStrategy, RecoveryPointDetail } from "@composebastion/shared";
+import {
+  sanitizeUrlDiagnosticText,
+  type MigrationStrategy,
+  type RecoveryPointDetail
+} from "@composebastion/shared";
 import type { RecoveryNetworkMode } from "@composebastion/shared";
 import { query } from "../db/pool.js";
 import { writeAuditEvent } from "./audit.js";
@@ -6,8 +10,16 @@ import { shQuote, withDockerEnv } from "./commands.js";
 import { isDemoHost } from "./demo.js";
 import { getHostForWorker } from "./hosts.js";
 import { mapMigrationRun } from "./mappers.js";
-import { runRecoveryCreate } from "./recoveryCapture.js";
-import { runRecoveryRestore, type RestoreResult } from "./recoveryRestore.js";
+import {
+  resolveRecoverySourceRestartObligation,
+  runRecoveryCreate
+} from "./recoveryCapture.js";
+import {
+  RecoveryRestoreCleanupRequiredError,
+  runRecoveryRestoreWithCleanup,
+  type RecoveryRestoreCleanup,
+  type RestoreResult
+} from "./recoveryRestore.js";
 import { resolveAppContext } from "./recoveryAppContext.js";
 import {
   recordRunningStates,
@@ -45,12 +57,61 @@ type ExecuteConfig = {
   onProgress?: (stepId: MigrationProgressStep, detail: string) => Promise<void> | void;
   inventoryPollAttempts?: number;
   inventoryPollDelayMs?: number;
+  operationJobId?: string;
 };
 
 type CaptureResult = {
   sourceLeftStopped?: boolean;
   stoppedContainerIds?: string[];
 };
+
+type MigrationReconciliationEvidence = {
+  migrationRunId: string;
+  recoveryPointId: string | null;
+  targetHostId: string;
+  targetVerified: boolean;
+  targetProjectName: string | null;
+  targetContainerCount: number;
+  targetContainerNames: string[];
+  targetVolumeCount: number;
+  targetVolumeNames: string[];
+  targetNetworkCount: number;
+  targetNetworkNames: string[];
+  targetBindMountCount: number;
+  targetBindMountPaths: string[];
+  sourceLeftStopped: boolean;
+  sourceStoppedContainerCount: number;
+  sourceStoppedContainerIds: string[];
+};
+
+export class MigrationCompletionReconciliationRequiredError extends Error {
+  readonly code = "MIGRATION_COMPLETION_RECONCILIATION_REQUIRED";
+
+  constructor(
+    readonly evidence: MigrationReconciliationEvidence,
+    cause: unknown
+  ) {
+    super(
+      "Migration completion state could not be confirmed. The verified target was retained and source state was left unchanged; " +
+      `manual reconciliation is required. Evidence: ${JSON.stringify(evidence)}`,
+      { cause }
+    );
+    this.name = "MigrationCompletionReconciliationRequiredError";
+  }
+}
+
+export class MigrationCompensationReconciliationRequiredError extends Error {
+  readonly code = "MIGRATION_COMPENSATION_RECONCILIATION_REQUIRED";
+
+  constructor(cause: unknown) {
+    super(
+      "Migration compensation could not continue because the stopped-source restart safeguard could not be " +
+      "durably confirmed. Automated mutation stopped; manual reconciliation is required.",
+      { cause }
+    );
+    this.name = "MigrationCompensationReconciliationRequiredError";
+  }
+}
 
 type MigrationProgressStep = "plan" | "capture" | "transfer" | "deploy" | "verify";
 
@@ -62,6 +123,168 @@ async function reportProgress(config: ExecuteConfig, stepId: MigrationProgressSt
 async function executionQuery(config: ExecuteConfig, text: string, values: unknown[]) {
   if (!config.executionFence) return query(text, values);
   return config.executionFence.withActiveLease((client) => client.query(text, values));
+}
+
+function uniqueContainerIds(...groups: Array<readonly string[] | undefined>) {
+  return [...new Set(groups.flatMap((group) => group ?? []).filter(Boolean))];
+}
+
+function boundedDiagnosticText(value: unknown, limit = 2_048) {
+  const sanitized = String(sanitizeUrlDiagnosticText(value));
+  return sanitized.length <= limit
+    ? sanitized
+    : `${sanitized.slice(0, Math.max(0, limit - 1))}…`;
+}
+
+function sanitizedUniqueValues(values: readonly string[]) {
+  return [...new Set(values.filter(Boolean))]
+    .map((value) => String(sanitizeUrlDiagnosticText(value)));
+}
+
+function buildMigrationReconciliationEvidence(input: {
+  migrationRunId: string;
+  recoveryPointId: string | null;
+  targetHostId: string;
+  targetVerified: boolean;
+  restore: RestoreResult;
+  sourceLeftStopped: boolean;
+  sourceStoppedContainerIds: string[];
+}): MigrationReconciliationEvidence {
+  const targetContainerNames = sanitizedUniqueValues(input.restore.restoredContainerNames);
+  const targetVolumeNames = sanitizedUniqueValues(Object.values(input.restore.volumeMap ?? {}));
+  const targetNetworkNames = sanitizedUniqueValues(Object.values(input.restore.networkMap ?? {}));
+  const targetBindMountPaths = sanitizedUniqueValues(Object.values(input.restore.bindMap ?? {}));
+  const sourceStoppedContainerIds = sanitizedUniqueValues(input.sourceStoppedContainerIds);
+  return {
+    migrationRunId: input.migrationRunId,
+    recoveryPointId: input.recoveryPointId,
+    targetHostId: input.targetHostId,
+    targetVerified: input.targetVerified,
+    targetProjectName: input.restore.projectName
+      ? String(sanitizeUrlDiagnosticText(input.restore.projectName))
+      : null,
+    targetContainerCount: targetContainerNames.length,
+    targetContainerNames,
+    targetVolumeCount: targetVolumeNames.length,
+    targetVolumeNames,
+    targetNetworkCount: targetNetworkNames.length,
+    targetNetworkNames,
+    targetBindMountCount: targetBindMountPaths.length,
+    targetBindMountPaths,
+    sourceLeftStopped: input.sourceLeftStopped,
+    sourceStoppedContainerCount: sourceStoppedContainerIds.length,
+    sourceStoppedContainerIds
+  };
+}
+
+function migrationReconciliationMarker(evidence: MigrationReconciliationEvidence) {
+  return `Automatic migration compensation remains armed. Reconciliation evidence: ${JSON.stringify(evidence)}`;
+}
+
+async function persistMigrationReconciliationEvidence(
+  config: ExecuteConfig,
+  migrationRunId: string,
+  evidence: MigrationReconciliationEvidence
+) {
+  const result = await executionQuery(
+    config,
+    `UPDATE migration_runs
+     SET error = $2
+     WHERE id = $1 AND status = 'running'
+     RETURNING id`,
+    [migrationRunId, migrationReconciliationMarker(evidence)]
+  );
+  if (result.rowCount === 0) {
+    throw new Error("Migration execution is no longer active while recording target compensation evidence");
+  }
+}
+
+async function readAuthoritativeMigrationStatus(migrationRunId: string) {
+  const result = await query<{ status: string }>(
+    "SELECT status FROM migration_runs WHERE id = $1",
+    [migrationRunId]
+  );
+  const status = result.rows[0]?.status;
+  if (
+    status === "queued"
+    || status === "running"
+    || status === "completed"
+    || status === "partial"
+    || status === "failed"
+  ) {
+    return status;
+  }
+  return null;
+}
+
+async function armMigrationSourceRestartObligation(input: {
+  recoveryPointId: string;
+  migrationRunId: string;
+  containerIds: string[];
+  state: "blocked_target_cleanup" | "pending";
+  requireTargetCleanupBlocked?: boolean;
+  error?: unknown;
+}) {
+  const containerIds = uniqueContainerIds(input.containerIds);
+  if (!containerIds.length) return;
+  const now = new Date().toISOString();
+  const reconciliationError = input.error === undefined
+    ? null
+    : boundedDiagnosticText(input.error instanceof Error ? input.error.message : String(input.error));
+  // Compensation is deliberately durable outside the operation-job fence.
+  // A failed operation can coincide with lease expiry. The blocked state keeps
+  // the stopped source from being restarted while target cleanup is incomplete;
+  // only a subsequent durable transition to pending permits source rollback.
+  const result = await query(
+    `UPDATE recovery_points
+     SET metadata = (
+       metadata
+       - 'sourceRestartResolvedAt'
+       - 'sourceRestartResolution'
+       - 'sourceRestartReconciliationToken'
+       - 'sourceRestartReconciliationStartedAt'
+       - 'sourceRestartReconciliationFailedAt'
+       - 'sourceRestartTargetCleanupBlockedAt'
+       - 'sourceRestartTargetCleanupCompletedAt'
+     ) || $3::jsonb
+     WHERE id = $1
+       AND migration_run_id = $2
+       ${input.state === "blocked_target_cleanup"
+         ? "AND metadata->>'sourceRestartReconciliationState' IS DISTINCT FROM 'running'"
+         : ""}
+       ${input.requireTargetCleanupBlocked
+         ? `AND metadata->>'sourceRestartPending' = 'true'
+            AND metadata->>'sourceRestartReconciliationState' = 'blocked_target_cleanup'
+            AND metadata->>'sourceRestartTargetCleanupBlocked' = 'true'`
+         : ""}
+     RETURNING id`,
+    [
+      input.recoveryPointId,
+      input.migrationRunId,
+      JSON.stringify({
+        sourceRestartPending: true,
+        sourceRestartContainerIds: containerIds,
+        sourceRestartRequestedAt: now,
+        sourceRestartRearmedAt: now,
+        sourceLeftStopped: true,
+        sourceStoppedIds: containerIds,
+        stoppedContainerIds: containerIds,
+        restartFailedIds: input.state === "pending" && reconciliationError ? containerIds : [],
+        sourceRestartReconciliationState: input.state,
+        sourceRestartReconciliationError: reconciliationError,
+        sourceRestartTargetCleanupBlocked: input.state === "blocked_target_cleanup",
+        sourceRestartTargetCleanupError: input.state === "blocked_target_cleanup"
+          ? reconciliationError
+          : null,
+        ...(input.state === "blocked_target_cleanup"
+          ? { sourceRestartTargetCleanupBlockedAt: now }
+          : { sourceRestartTargetCleanupCompletedAt: now })
+      })
+    ]
+  );
+  if (result.rowCount === 0) {
+    throw new Error("Migration recovery point is unavailable while arming source restart compensation");
+  }
 }
 
 function sleep(ms: number) {
@@ -401,30 +624,6 @@ async function confirmTargetInventoryVisible(targetHostId: string, restore: Rest
   };
 }
 
-async function cleanupStandaloneRestoreContainers(targetHostId: string, containerNames: string[]) {
-  const uniqueNames = Array.from(new Set(containerNames.filter(Boolean)));
-  if (!uniqueNames.length) return;
-
-  const host = await getHostForWorker(targetHostId);
-  if (isDemoHost(host.public)) return;
-
-  const failures: string[] = [];
-  for (const containerName of uniqueNames) {
-    const result = await runSshCommand(
-      host.ssh,
-      withDockerEnv(`docker rm --force ${shQuote(containerName)}`, host.public.dockerSocketPath),
-      { timeoutMs: 60_000 }
-    );
-    if (result.code !== 0) {
-      failures.push(`${containerName}: ${result.stderr || result.stdout || "remove failed"}`);
-    }
-  }
-
-  if (failures.length) {
-    throw new Error(`Failed to clean up restored standalone containers: ${failures.join("; ")}`);
-  }
-}
-
 async function rollbackSource(input: {
   migrationRunId: string;
   sourceHostId: string;
@@ -462,19 +661,42 @@ export async function runMigrationExecute(
   migrationRunId: string,
   config: ExecuteConfig = { strategy: "clone", stopSource: false, remapPorts: true, networkMode: "clone" }
 ) {
+  if (
+    config.operationJobId
+    && (
+      !config.executionFence
+      || config.executionFence.jobId !== config.operationJobId
+    )
+  ) {
+    throw new Error(
+      "A worker-bound migration requires an execution fence for the same operation job"
+    );
+  }
   const run = await getMigrationRun(migrationRunId);
   if (!run || run.sourceHostId !== sourceHostId) throw new Error("Migration run not found");
 
-  await executionQuery(
+  const started = await executionQuery(
     config,
-    "UPDATE migration_runs SET status = 'running', started_at = now(), error = null WHERE id = $1",
+    `UPDATE migration_runs
+     SET status = 'running', started_at = now(), error = null
+     WHERE id = $1 AND status = 'queued'
+     RETURNING id`,
     [migrationRunId]
   );
+  if (started.rowCount === 0) {
+    throw new Error(
+      "Migration execution is no longer queued or was already claimed"
+    );
+  }
 
   let sourceHadRunningContainers = false;
   let sourceWasStopped = false;
   let restartIds: string[] = [];
+  let captureConfirmedStoppedIds: string[] = [];
   let runningStates: ContainerRunningState[] = [];
+  let recoveryPointId = run.recoveryPointId;
+  let restoreCleanup: RecoveryRestoreCleanup | null = null;
+  let reconciliationEvidence: MigrationReconciliationEvidence | null = null;
 
   const assertExecutionPlanFresh = async (refreshSource = true) => {
     const currentPlan = await revalidateMigrationPlan(run, { refreshSource, refreshTarget: true });
@@ -494,6 +716,17 @@ export async function runMigrationExecute(
     return currentPlan;
   };
 
+  const applySuccessfulCapture = (capture: CaptureResult) => {
+    captureConfirmedStoppedIds = uniqueContainerIds(
+      captureConfirmedStoppedIds,
+      capture.stoppedContainerIds
+    );
+    restartIds = uniqueContainerIds(restartIds, captureConfirmedStoppedIds);
+    sourceWasStopped = sourceWasStopped
+      || Boolean(capture.sourceLeftStopped)
+      || captureConfirmedStoppedIds.length > 0;
+  };
+
   try {
     await reportProgress(config, "plan", "Refreshing both hosts and validating the reviewed migration plan");
     await assertExecutionPlanFresh();
@@ -504,7 +737,6 @@ export async function runMigrationExecute(
     sourceHadRunningContainers = wasAnyContainerRunning(runningStates);
     restartIds = containersToRestart(runningStates);
 
-    let recoveryPointId = run.recoveryPointId;
     const recoveryCenter = await import("./recoveryCenter.js");
 
     if (recoveryPointId && (config.strategy === "safe_move" || config.strategy === "warm_move")) {
@@ -527,9 +759,10 @@ export async function runMigrationExecute(
       const capture = await runRecoveryCreate(run.sourceHostId, recoveryPointId, {
         stopFirst: true,
         restartAfterStopFirst: false,
+        deferRestartObligationResolution: true,
         ...(config.executionFence ? { executionFence: config.executionFence } : {})
       }) as CaptureResult;
-      sourceWasStopped = Boolean(capture.sourceLeftStopped);
+      applySuccessfulCapture(capture);
     } else if (config.strategy === "warm_move" && !recoveryPointId) {
       await reportProgress(config, "capture", "Creating warm pre-copy recovery point while source keeps running");
       const prePoint = await recoveryCenter.createMigrationRecoveryPoint({
@@ -557,9 +790,10 @@ export async function runMigrationExecute(
       const capture = await runRecoveryCreate(run.sourceHostId, recoveryPointId, {
         stopFirst: true,
         restartAfterStopFirst: false,
+        deferRestartObligationResolution: true,
         ...(config.executionFence ? { executionFence: config.executionFence } : {})
       }) as CaptureResult;
-      sourceWasStopped = Boolean(capture.sourceLeftStopped);
+      applySuccessfulCapture(capture);
     } else if (config.strategy === "safe_move" && !recoveryPointId) {
       await reportProgress(config, "capture", "Creating stop-first recovery point for safe move");
       const finalPoint = await recoveryCenter.createMigrationRecoveryPoint({
@@ -575,9 +809,10 @@ export async function runMigrationExecute(
       const capture = await runRecoveryCreate(run.sourceHostId, recoveryPointId, {
         stopFirst: true,
         restartAfterStopFirst: false,
+        deferRestartObligationResolution: true,
         ...(config.executionFence ? { executionFence: config.executionFence } : {})
       }) as CaptureResult;
-      sourceWasStopped = Boolean(capture.sourceLeftStopped);
+      applySuccessfulCapture(capture);
     } else if (!recoveryPointId) {
       await reportProgress(config, "capture", "Creating online recovery point for clone migration");
       const created = await recoveryCenter.createMigrationRecoveryPoint({
@@ -618,9 +853,56 @@ export async function runMigrationExecute(
         networkMode: config.networkMode ?? "clone"
       }
     };
-    const restore = config.executionFence
-      ? await runRecoveryRestore(run.targetHostId, restoreInput, config.executionFence)
-      : await runRecoveryRestore(run.targetHostId, restoreInput);
+    const restoreExecutionContext = config.operationJobId
+      ? {
+          operationJobId: config.operationJobId,
+          migrationRunId,
+          beforeRemoteMutation: async () => {
+            if (
+              sourceWasStopped
+              && recoveryPointId
+              && restartIds.length
+            ) {
+              await armMigrationSourceRestartObligation({
+                recoveryPointId,
+                migrationRunId,
+                containerIds: restartIds,
+                state: "blocked_target_cleanup"
+              });
+            }
+          }
+        }
+      : undefined;
+    const completedRestore = restoreExecutionContext
+      ? await runRecoveryRestoreWithCleanup(
+          run.targetHostId,
+          restoreInput,
+          config.executionFence,
+          restoreExecutionContext
+        )
+      : config.executionFence
+        ? await runRecoveryRestoreWithCleanup(
+            run.targetHostId,
+            restoreInput,
+            config.executionFence
+          )
+        : await runRecoveryRestoreWithCleanup(
+            run.targetHostId,
+            restoreInput
+          );
+    const restore = completedRestore.restore;
+    restoreCleanup = completedRestore.cleanup;
+
+    reconciliationEvidence = buildMigrationReconciliationEvidence({
+      migrationRunId,
+      recoveryPointId,
+      targetHostId: run.targetHostId,
+      targetVerified: false,
+      restore,
+      sourceLeftStopped: config.strategy !== "clone" && sourceWasStopped,
+      sourceStoppedContainerIds: restartIds
+    });
+    await persistMigrationReconciliationEvidence(config, migrationRunId, reconciliationEvidence);
 
     validateMigrationDataRestore(point, restore);
     await reportProgress(
@@ -640,18 +922,7 @@ export async function runMigrationExecute(
       sourceHadRunningContainers
     });
     if (!verification.ok) {
-      let cleanupError: string | null = null;
-      if (!restore.composeRestored) {
-        try {
-          await cleanupStandaloneRestoreContainers(run.targetHostId, restore.restoredContainerNames);
-        } catch (error) {
-          cleanupError = error instanceof Error ? error.message : String(error);
-        }
-      }
-
-      throw new Error(
-        `${verification.error ?? "Target verification failed"}${cleanupError ? `; cleanup failed: ${cleanupError}` : ""}`
-      );
+      throw new Error(verification.error ?? "Target verification failed");
     }
 
     await reportProgress(config, "verify", "Target containers verified; syncing target inventory");
@@ -665,17 +936,18 @@ export async function runMigrationExecute(
 
     await reportProgress(config, "verify", "Target inventory confirmed and image status refreshed");
 
-    if (config.strategy === "safe_move" || config.strategy === "warm_move") {
-      // Source is intentionally left stopped after a successful move.
-    }
+    reconciliationEvidence = buildMigrationReconciliationEvidence({
+      migrationRunId,
+      recoveryPointId,
+      targetHostId: run.targetHostId,
+      targetVerified: true,
+      restore,
+      sourceLeftStopped: config.strategy !== "clone" && sourceWasStopped,
+      sourceStoppedContainerIds: restartIds
+    });
+    await persistMigrationReconciliationEvidence(config, migrationRunId, reconciliationEvidence);
 
-    await executionQuery(
-      config,
-      "UPDATE migration_runs SET status = 'completed', completed_at = now() WHERE id = $1",
-      [migrationRunId]
-    );
-
-    return {
+    const result = {
       migrationRunId,
       recoveryPointId,
       strategy: config.strategy,
@@ -683,35 +955,259 @@ export async function runMigrationExecute(
       inventory,
       sourceLeftStopped: config.strategy !== "clone" && sourceWasStopped
     };
+
+    if (config.operationJobId) {
+      // The durable restore attempt owns the verified target until completeJob
+      // atomically publishes the job, migration run, retained target, and
+      // stopped-source disposition. A crash in this handoff window therefore
+      // leaves every compensation safeguard armed for worker-loss recovery.
+      restoreCleanup = null;
+      return result;
+    }
+
+    if (config.strategy === "safe_move" || config.strategy === "warm_move") {
+      // Direct service executions have no operation-job publication boundary,
+      // so retain their existing terminal transition here.
+      if (sourceWasStopped && recoveryPointId) {
+        await resolveRecoverySourceRestartObligation(
+          recoveryPointId,
+          {
+            sourceLeftStopped: true,
+            containerIds: restartIds,
+            resolution: "intentionally_left_stopped"
+          },
+          config.executionFence
+        );
+      }
+    }
+
+    try {
+      const completed = await executionQuery(
+        config,
+        `UPDATE migration_runs
+         SET status = 'completed', error = null, completed_at = now()
+         WHERE id = $1 AND status = 'running'
+         RETURNING status`,
+        [migrationRunId]
+      );
+      if (completed.rowCount === 0) {
+        throw new Error("Migration completion write did not update the active migration run");
+      }
+    } catch (completionError) {
+      let authoritativeStatus: Awaited<ReturnType<typeof readAuthoritativeMigrationStatus>>;
+      try {
+        authoritativeStatus = await readAuthoritativeMigrationStatus(migrationRunId);
+      } catch (statusReadError) {
+        throw new MigrationCompletionReconciliationRequiredError(
+          reconciliationEvidence,
+          new AggregateError(
+            [completionError, statusReadError],
+            "Migration completion write and authoritative status read both failed"
+          )
+        );
+      }
+      if (authoritativeStatus === "completed") {
+        restoreCleanup = null;
+        return result;
+      }
+      if (authoritativeStatus === null) {
+        throw new MigrationCompletionReconciliationRequiredError(
+          reconciliationEvidence,
+          completionError
+        );
+      }
+      throw completionError;
+    }
+
+    restoreCleanup = null;
+    return result;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const captureStoppedIds = (error as { sourceStoppedIds?: string[] }).sourceStoppedIds ?? [];
-    if (captureStoppedIds.length) {
+    if (
+      error instanceof RecoveryRestoreCleanupRequiredError
+      && !restoreCleanup
+    ) {
+      restoreCleanup = error.cleanup;
+    }
+    if (error instanceof MigrationCompletionReconciliationRequiredError) {
+      // A failed status read means the completion write may have committed.
+      // Retain both sides exactly as verified and leave the durable evidence
+      // marker for an operator or a later reconciliation workflow.
+      if (restoreCleanup) {
+        await restoreCleanup.retainForReconciliation();
+        restoreCleanup = null;
+      }
+      throw error;
+    }
+    const message = boundedDiagnosticText(error instanceof Error ? error.message : String(error));
+    const errorStoppedIds = (error as { sourceStoppedIds?: string[] }).sourceStoppedIds ?? [];
+    captureConfirmedStoppedIds = uniqueContainerIds(captureConfirmedStoppedIds, errorStoppedIds);
+    restartIds = uniqueContainerIds(restartIds, captureConfirmedStoppedIds);
+    if (captureConfirmedStoppedIds.length) {
       sourceWasStopped = true;
     }
     let finalMessage = message;
-    if (sourceWasStopped) {
+    if (restoreCleanup && sourceWasStopped && (!recoveryPointId || !restartIds.length)) {
+      // Without a durable recovery-point obligation, target cleanup and source
+      // restart cannot be ordered safely. Retain both sides for an operator.
+      restoreCleanup = null;
+      throw new MigrationCompensationReconciliationRequiredError(
+        new AggregateError(
+          [error],
+          "Migration failed after target restore without a durable stopped-source restart identity"
+        )
+      );
+    }
+    if (restoreCleanup && sourceWasStopped && recoveryPointId && restartIds.length) {
+      try {
+        await armMigrationSourceRestartObligation({
+          recoveryPointId,
+          migrationRunId,
+          containerIds: restartIds,
+          state: "blocked_target_cleanup"
+        });
+      } catch (armingError) {
+        // Do not mutate either remote side unless the reconciliation worker is
+        // durably prevented from restarting the source during target cleanup.
+        restoreCleanup = null;
+        throw new MigrationCompensationReconciliationRequiredError(
+          new AggregateError(
+            [error, armingError],
+            "Migration failed and target-cleanup blocking could not be armed"
+          )
+        );
+      }
+    }
+    let targetCleanupSucceeded = false;
+    let targetCleanupFailed = false;
+    if (restoreCleanup) {
+      const cleanup = restoreCleanup;
+      restoreCleanup = null;
+      try {
+        await cleanup.cleanup();
+        targetCleanupSucceeded = true;
+      } catch (cleanupError) {
+        targetCleanupFailed = true;
+        finalMessage = `${finalMessage}; target cleanup failed: ${
+          boundedDiagnosticText(
+            cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
+          )
+        }`;
+        if (reconciliationEvidence) {
+          // Cleanup may have removed only part of the restored target. Retain
+          // the exact sanitized evidence marker that was durably armed before
+          // verification so an operator can identify every possible orphan.
+          finalMessage = `${finalMessage}; ${migrationReconciliationMarker(reconciliationEvidence)}`;
+        }
+        if (sourceWasStopped && recoveryPointId && restartIds.length) {
+          try {
+            await armMigrationSourceRestartObligation({
+              recoveryPointId,
+              migrationRunId,
+              containerIds: restartIds,
+              state: "blocked_target_cleanup",
+              error: cleanupError
+            });
+          } catch (blockingEvidenceError) {
+            // The first blocked-state write remains authoritative. Record that
+            // enriching it with the cleanup diagnostic failed, but never
+            // restart the source while target cleanup is incomplete.
+            finalMessage = `${finalMessage}; target cleanup blocker update failed: ${
+              boundedDiagnosticText(
+                blockingEvidenceError instanceof Error
+                  ? blockingEvidenceError.message
+                  : String(blockingEvidenceError)
+              )
+            }`;
+          }
+          finalMessage = `${finalMessage}; source remains stopped until target cleanup is reconciled manually`;
+        }
+      }
+    }
+    if (
+      targetCleanupSucceeded
+      && sourceWasStopped
+      && recoveryPointId
+      && restartIds.length
+    ) {
+      try {
+        // This is the only transition that makes the obligation eligible for
+        // automatic reconciliation, and it happens only after cleanup returns
+        // successfully and immediately before rollback.
+        await armMigrationSourceRestartObligation({
+          recoveryPointId,
+          migrationRunId,
+          containerIds: restartIds,
+          state: "pending",
+          requireTargetCleanupBlocked: true
+        });
+      } catch (armingError) {
+        throw new MigrationCompensationReconciliationRequiredError(
+          new AggregateError(
+            [error, armingError],
+            "Target cleanup completed but source restart compensation could not be re-armed"
+          )
+        );
+      }
+    }
+    if (sourceWasStopped && !targetCleanupFailed) {
       try {
         const rollback = await rollbackSource({
           migrationRunId,
           sourceHostId: run.sourceHostId,
-          containerIds: captureStoppedIds.length ? captureStoppedIds : restartIds,
+          containerIds: restartIds,
           strategy: config.strategy,
           sourceWasStopped,
           sourceHadRunningContainers,
-          stoppedContainerIdsConfirmed: captureStoppedIds.length > 0,
-          reason: message
+          stoppedContainerIdsConfirmed: captureConfirmedStoppedIds.length > 0,
+          reason: finalMessage
         });
         if (rollback.restarted && !finalMessage.includes("source restarted")) {
           finalMessage = `${finalMessage}; source restarted`;
         }
+        if (rollback.restarted && recoveryPointId) {
+          await resolveRecoverySourceRestartObligation(
+            recoveryPointId,
+            {
+              sourceLeftStopped: false,
+              containerIds: restartIds,
+              resolution: "restarted"
+            },
+            config.executionFence,
+            true
+          );
+        }
       } catch (rollbackError) {
+        if (recoveryPointId && restartIds.length) {
+          const failedIds = uniqueContainerIds(
+            (rollbackError as { restartFailedIds?: string[] }).restartFailedIds
+          );
+          try {
+            await armMigrationSourceRestartObligation({
+              recoveryPointId,
+              migrationRunId,
+              containerIds: failedIds.length ? failedIds : restartIds,
+              state: "pending",
+              error: rollbackError
+            });
+          } catch (obligationError) {
+            finalMessage = `${finalMessage}; source restart obligation update failed: ${
+              boundedDiagnosticText(
+                obligationError instanceof Error ? obligationError.message : String(obligationError)
+              )
+            }`;
+          }
+        }
+        finalMessage = `${finalMessage}; rollback failed: ${
+          boundedDiagnosticText(
+            rollbackError instanceof Error ? rollbackError.message : String(rollbackError)
+          )
+        }`;
         await executionQuery(
           config,
           "UPDATE migration_runs SET status = 'failed', error = $2, completed_at = now() WHERE id = $1",
-          [migrationRunId, `${message}; rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`]
+          [migrationRunId, finalMessage]
         );
-        throw rollbackError;
+        throw new Error(finalMessage, { cause: error });
       }
     }
     await executionQuery(
@@ -720,7 +1216,7 @@ export async function runMigrationExecute(
       [migrationRunId, finalMessage]
     );
     if (finalMessage !== message) {
-      throw new Error(finalMessage);
+      throw new Error(finalMessage, { cause: error });
     }
     throw error;
   }

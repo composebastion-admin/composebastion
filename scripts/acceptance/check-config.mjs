@@ -1,10 +1,42 @@
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
+import {
+  dockerBindPathRelativeChild,
+  isDockerBindPathStrictlyBeneath
+} from "./bind-paths.mjs";
 import { acceptanceScenarioManifest } from "./scenario-manifest.mjs";
+import { acceptanceUpgradeBridge } from "./upgrade-baselines.mjs";
 
 const candidateVersion = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")).version;
 const root = new URL("../..", import.meta.url);
+
+const bindFixtureRoot = "/tmp/composebastion-acceptance-bind/compose-workload";
+for (const candidate of [
+  `${bindFixtureRoot}/relative-data`,
+  `/private${bindFixtureRoot}/relative-data`,
+  `/host_mnt/private${bindFixtureRoot}/relative-data`
+]) {
+  if (!isDockerBindPathStrictlyBeneath(bindFixtureRoot, candidate)) {
+    throw new Error(`Acceptance bind containment rejected Docker path alias ${candidate}`);
+  }
+  if (dockerBindPathRelativeChild(bindFixtureRoot, candidate) !== "relative-data") {
+    throw new Error(`Acceptance bind suffix was not preserved for Docker path alias ${candidate}`);
+  }
+}
+for (const candidate of [
+  bindFixtureRoot,
+  `${bindFixtureRoot}-other/relative-data`,
+  `/host_mnt/private${bindFixtureRoot}/../escape`,
+  "relative-data"
+]) {
+  if (isDockerBindPathStrictlyBeneath(bindFixtureRoot, candidate)) {
+    throw new Error(`Acceptance bind containment allowed path outside the Compose working directory: ${candidate}`);
+  }
+  if (dockerBindPathRelativeChild(bindFixtureRoot, candidate) !== null) {
+    throw new Error(`Acceptance bind suffix escaped the Compose working directory: ${candidate}`);
+  }
+}
 
 function curatedHostEnvironment(source) {
   const curated = {};
@@ -21,6 +53,15 @@ function curatedHostEnvironment(source) {
 
 const hostEnvironment = curatedHostEnvironment(process.env);
 
+if (acceptanceUpgradeBridge.releaseTag !== `ghcr.io/composebastion-admin/composebastion-app:${acceptanceUpgradeBridge.version}`) {
+  throw new Error(`Acceptance bridge release tag must identify the published ${acceptanceUpgradeBridge.version} app image`);
+}
+if (!/^ghcr\.io\/composebastion-admin\/composebastion-app@sha256:[a-f0-9]{64}$/.test(
+  acceptanceUpgradeBridge.pinnedImage
+)) {
+  throw new Error("Acceptance bridge qualification image must be an immutable GHCR app digest");
+}
+
 function assertPinnedImages(file, { allowInterpolated = false } = {}) {
   const contents = readFileSync(new URL(`../../${file}`, import.meta.url), "utf8");
   const failures = [];
@@ -33,11 +74,25 @@ function assertPinnedImages(file, { allowInterpolated = false } = {}) {
 }
 
 assertPinnedImages("docker-compose.acceptance.yml", { allowInterpolated: true });
+assertPinnedImages("docker-compose.acceptance.upgrade.yml", { allowInterpolated: true });
 assertPinnedImages("docker-compose.acceptance.source.yml");
 assertPinnedImages("infra/dev/sshhost.Dockerfile");
 assertPinnedImages("scripts/acceptance/run.mjs");
 
+const upgradeFixtureSource = readFileSync(new URL("../../docker-compose.acceptance.upgrade.yml", import.meta.url), "utf8");
+for (const fragment of [
+  "sshhost:",
+  "/var/run/docker.sock:/var/run/docker.sock",
+  "\${ACCEPTANCE_RUNTIME_DIR:?Set ACCEPTANCE_RUNTIME_DIR}:\${ACCEPTANCE_RUNTIME_DIR:?Set ACCEPTANCE_RUNTIME_DIR}"
+]) {
+  if (!upgradeFixtureSource.includes(fragment)) {
+    throw new Error(`Upgrade acceptance SSH fixture is missing ${fragment}`);
+  }
+}
+
 const runnerSource = readFileSync(new URL("./run.mjs", import.meta.url), "utf8");
+const qualificationPolicySource = readFileSync(new URL("./qualification-policy.mjs", import.meta.url), "utf8");
+const acceptanceContractSource = `${runnerSource}\n${qualificationPolicySource}`;
 for (const legacyValue of [
   "composebastion-acceptance-fresh",
   "composebastion-acceptance-source",
@@ -70,6 +125,11 @@ for (const fragment of [
   '--allow-nonqualifying',
   '!releaseQualifying && !allowedDeveloperDiagnostic',
   'Developer --allow-nonqualifying opt-out requested',
+  'Disposable acceptance infrastructure was retained with --keep',
+  'ownedCandidateImageTags({ revision: candidateRevision, portBase })',
+  'inspectComposeServiceImage',
+  'performFinalCleanup()',
+  'cleanupEvidenceFailures(report.cleanup)',
   'volumeMarkerSeededAfterDeploy: true',
   'exactVolumeMarkerRestored: true',
   '[acceptance] ${item.name}',
@@ -79,16 +139,49 @@ for (const fragment of [
   'operatorSavedPrivateRegistry: true',
   'agentRegistryLoginPersistence: true',
   'runLiveBrowserSuite()',
+  'run("npm", ["run", "smoke:web:live:qualification"]',
+  'COMPOSEBASTION_LIVE_JSON_REPORT',
+  'rawSecretBearingArtifactsExcluded: true',
+  'liveBrowserEvidencePath',
   'hardenedContainersScenario',
+  'includeDemoData: true',
+  'demoDataSeeded: true',
+  'host.tags.includes("demo")',
   'restoredDataVerified: true',
   'preservedQueuedJob: true',
+  'gitCapture(["show", `v${baseline.version}:docker-compose.image.yml`])',
+  'inspectBridgeUpgradeImage()',
+  'api("/api/self-update/start"',
+  'waitForSelfUpdateOutcome',
+  'forcedFailureMarker',
+  'immutableBridgeRollback: true',
+  'dependencyContainerIdsPreserved: true',
+  'pre12ComposeInitializerServicesAbsent: true',
+  'credentialRollbackVerified:',
+  'rollbackDependenciesBypassed: true',
   'repoDigest',
   'real-nas',
-  'real-cloud',
-  'go-module-legal-review',
-  'release-governance'
+  'real-cloud'
 ]) {
-  if (!runnerSource.includes(fragment)) throw new Error(`Acceptance runner is missing release evidence invariant: ${fragment}`);
+  if (!acceptanceContractSource.includes(fragment)) throw new Error(`Acceptance runner is missing release evidence invariant: ${fragment}`);
+}
+for (const line of runnerSource.split(/\r?\n/)) {
+  if (line.includes("down") && line.includes(".catch(() => undefined)")) {
+    throw new Error(`Acceptance runner swallows a Compose cleanup failure: ${line.trim()}`);
+  }
+  if (line.includes("cleanupManagedDockerState().catch")
+      || line.includes('prepareBackupOwnership("cleanup").catch')) {
+    throw new Error(`Acceptance runner swallows a disposable cleanup failure: ${line.trim()}`);
+  }
+}
+for (const fragment of [
+  'api(`/api/hosts/${host.id}/files/write`',
+  'type: "compose.deployPath"'
+]) {
+  if (!runnerSource.includes(fragment)) throw new Error(`Acceptance disposable deployment is missing supported API flow: ${fragment}`);
+}
+if (runnerSource.includes('type: "compose.writeDeployPath"')) {
+  throw new Error("Acceptance runner must not use the internal compose.writeDeployPath action through the public host-action endpoint");
 }
 if (runnerSource.includes("...process.env")) throw new Error("Acceptance runner must not spread the ambient process environment");
 const disposableYamlSource = /function disposableComposeYaml\(\) \{([\s\S]*?)\n\}\n\nasync function deployDisposableStack/.exec(runnerSource)?.[1];
@@ -102,7 +195,36 @@ for (const fragment of [
 ]) {
   if (!runnerSource.includes(fragment)) throw new Error(`Acceptance volume marker flow is missing ${fragment}`);
 }
-const expectedScenarioIds = ["candidate-images", "fresh-image-install", "source-production-install", "hardened-overlays", "public-upgrade"];
+for (const fragment of [
+  "const bindChild = dockerBindPathRelativeChild(acceptanceBindDir, bindSourcePath)",
+  'assert(bindChild === "external"',
+  "const bindHostPath = path.posix.join(acceptanceBindDir, bindChild)",
+  "const relativeBindHostPath = path.posix.join(acceptanceComposeDir, relativeBindChild)",
+  "mkdir -p '${bindHostPath}' '${relativeBindHostPath}'",
+  "test ! -e '${relativeBindSourcePath}/proof.txt'",
+  "docker exec \"$workload_id\" cat /allowed/proof.txt",
+  "docker exec \"$workload_id\" cat /relative-allowed/proof.txt",
+  "bindHostPath,",
+  "relativeBindHostPath,"
+]) {
+  if (!runnerSource.includes(fragment)) throw new Error(`Acceptance relative-bind marker flow is missing ${fragment}`);
+}
+for (const unsafeFragment of [
+  'mkdir -p "$bind_source" "$relative_bind_source"',
+  '"$relative_bind_source/proof.txt"'
+]) {
+  if (runnerSource.includes(unsafeFragment)) {
+    throw new Error(`Acceptance relative-bind marker must not be seeded through a daemon-only path: ${unsafeFragment}`);
+  }
+}
+const expectedScenarioIds = [
+  "candidate-images",
+  "fresh-image-install",
+  "source-production-install",
+  "hardened-overlays",
+  "current-stable-upgrade",
+  "legacy-upgrade"
+];
 if (JSON.stringify(acceptanceScenarioManifest.map((entry) => entry.id)) !== JSON.stringify(expectedScenarioIds)) {
   throw new Error("Acceptance scenario manifest IDs changed without updating the release contract");
 }
@@ -138,6 +260,9 @@ const webPackageJson = JSON.parse(readFileSync(new URL("../../apps/web/package.j
 if (webPackageJson.scripts?.["smoke:live"] !== "playwright test --config playwright.live.config.ts") {
   throw new Error("web package is missing the separate real-stack Playwright configuration");
 }
+if (webPackageJson.scripts?.["smoke:live:qualification"] !== "playwright test --config playwright.live.qualification.config.ts") {
+  throw new Error("web package is missing the six-project real-stack qualification configuration");
+}
 const liveBrowserSource = readFileSync(new URL("../../apps/web/e2e-live/application.live.spec.ts", import.meta.url), "utf8");
 for (const fragment of ["checks:", "database:", "redis:", "worker:", "/api/jobs/status", "About ComposeBastion"]) {
   if (!liveBrowserSource.includes(fragment)) throw new Error(`Live browser suite is missing ${fragment}`);
@@ -146,6 +271,10 @@ const ciSource = readFileSync(new URL("../../.github/workflows/ci.yml", import.m
 if (!ciSource.includes("run: npm run acceptance:assert-report")) {
   throw new Error("Required CI does not explicitly assert the generated acceptance report");
 }
+if (!ciSource.includes("run: npm run smoke:web:qualification")
+    || !ciSource.includes("run: npx playwright install --with-deps chromium firefox webkit")) {
+  throw new Error("Required CI does not install and run the qualification browser matrix");
+}
 if (ciSource.includes("--allow-nonqualifying")) {
   throw new Error("Required CI must not use the developer-only nonqualifying acceptance opt-out");
 }
@@ -153,7 +282,9 @@ const reportAssertionSource = readFileSync(new URL("./assert-report.mjs", import
 for (const fragment of [
   'report.status !== "passed"',
   'automatedAcceptanceQualifying !== true',
-  'manifestComplete !== true'
+  'manifestComplete !== true',
+  '["skipBuild", "skipUpgrade", "allowNonqualifying", "keep"]',
+  'cleanupEvidenceFailures(report.cleanup)'
 ]) {
   if (!reportAssertionSource.includes(fragment)) throw new Error(`Acceptance report assertion is missing ${fragment}`);
 }
@@ -183,12 +314,16 @@ const env = {
   REGISTRY_PASSWORD: secret(),
   ACCEPTANCE_REGISTRY_AUTH_FILE: "/tmp/composebastion-acceptance-registry.htpasswd",
   ACCEPTANCE_BIND_DIR: "/tmp/composebastion-acceptance-config-bind",
+  ACCEPTANCE_RUNTIME_DIR: "/tmp/composebastion-acceptance-runtime",
   ACCEPTANCE_MAILPIT_PORT: "18025",
   ACCEPTANCE_MINIO_PORT: "19000",
   ACCEPTANCE_REGISTRY_PORT: "18050",
   ACCEPTANCE_AGENT_PORT: "18090",
   ACCEPTANCE_HARDENED_AGENT_PORT: "18590",
   ACCEPTANCE_SOURCE_CONTEXT: "/tmp/composebastion-acceptance-git-context",
+  ACCEPTANCE_CANDIDATE_VERSION: candidateVersion,
+  ACCEPTANCE_CANDIDATE_REVISION: "0123456789abcdef0123456789abcdef01234567",
+  ACCEPTANCE_CANDIDATE_BUILD_DATE: "2026-01-01T00:00:00Z",
   COMPOSEBASTION_HTTP_BIND_ADDRESS: "127.0.0.1",
   COMPOSEBASTION_HTTP_PORT: "18080",
   ACCEPTANCE_SOURCE_HTTP_PORT: "18180",
@@ -298,6 +433,11 @@ function assertManagerHardening(label, rendered) {
     if (!backup) throw new Error(`${label} ${serviceName} lost writable backup storage`);
     if (cache?.type !== "volume") throw new Error(`${label} ${serviceName} Trivy cache is not a volume`);
   }
+  const storageInit = rendered.services?.["storage-init"];
+  if (String(storageInit?.environment?.COMPOSEBASTION_UID ?? "") !== env.COMPOSEBASTION_UID
+      || String(storageInit?.environment?.COMPOSEBASTION_GID ?? "") !== env.COMPOSEBASTION_GID) {
+    throw new Error(`${label} storage-init identity does not match app and worker`);
+  }
 }
 
 function assertAgentHardening(label, rendered) {
@@ -343,6 +483,31 @@ for (const serviceName of ["app", "worker"]) {
   if (service?.depends_on?.redis?.condition !== "service_started" || service?.depends_on?.redis?.required !== false) {
     throw new Error(`${serviceName} does not retain optional production Redis startup semantics`);
   }
+  if (service?.depends_on?.["storage-init"]?.condition !== "service_completed_successfully") {
+    throw new Error(`${serviceName} does not wait for backup ownership migration`);
+  }
+  if (service?.depends_on?.["database-init"]?.condition !== "service_completed_successfully") {
+    throw new Error(`${serviceName} does not wait for legacy database reconciliation`);
+  }
+}
+const storageInit = acceptance.services?.["storage-init"];
+const storageInitMount = (storageInit?.volumes ?? []).find((volume) => volume.target === "/data/backups");
+if (storageInit?.user !== "0:0"
+    || storageInitMount?.source !== env.COMPOSEBASTION_BACKUP_DIR
+    || String(storageInit?.environment?.COMPOSEBASTION_UID ?? "") !== "1000"
+    || String(storageInit?.environment?.COMPOSEBASTION_GID ?? "") !== "1000"
+    || storageInit?.read_only !== true
+    || !(storageInit?.cap_drop ?? []).includes("ALL")
+    || !(storageInit?.security_opt ?? []).includes("no-new-privileges:true")) {
+  throw new Error("storage-init does not safely prepare the production backup bind mount");
+}
+const databaseInit = acceptance.services?.["database-init"];
+if (databaseInit?.user !== "1000:1000"
+    || databaseInit?.depends_on?.postgres?.condition !== "service_healthy"
+    || databaseInit?.read_only !== true
+    || !(databaseInit?.cap_drop ?? []).includes("ALL")
+    || !(databaseInit?.security_opt ?? []).includes("no-new-privileges:true")) {
+  throw new Error("database-init does not safely reconcile managed legacy credentials");
 }
 const sshBind = (acceptance.services?.sshhost?.volumes ?? []).find((volume) => volume.target === env.ACCEPTANCE_BIND_DIR);
 if (sshBind?.source !== env.ACCEPTANCE_BIND_DIR) throw new Error("Acceptance bind fixture was not mounted at its isolated path");
@@ -352,7 +517,7 @@ const source = validateRenderedCompose("Source-production acceptance", [
   "docker-compose.acceptance.source.yml"
 ]);
 assertLoopbackPort(source, "app", 18180);
-for (const serviceName of ["app", "worker"]) {
+for (const serviceName of ["storage-init", "database-init", "app", "worker"]) {
   if (source.services?.[serviceName]?.build?.context !== env.ACCEPTANCE_SOURCE_CONTEXT) {
     throw new Error(`${serviceName} source build does not use the exact Git context override`);
   }

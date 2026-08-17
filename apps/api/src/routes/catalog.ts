@@ -17,42 +17,59 @@ export async function registerCatalogRoutes(app: FastifyInstance) {
   ));
 
   app.post("/api/catalog/templates", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
-    const template = await saveCustomCatalogTemplate(request.body, request.user?.id);
-    await writeAuditEvent({
-      userId: request.user?.id,
-      action: "catalog.template_save",
-      targetKind: "catalog_template",
-      targetId: template.id,
-      details: { name: template.name, category: template.category },
-      ...auditContextFromRequest(request)
-    });
+    const template = await saveCustomCatalogTemplate(
+      request.body,
+      request.user?.id,
+      async (client, saved) => {
+        await writeAuditEvent({
+          userId: request.user?.id,
+          action: "catalog.template_save",
+          targetKind: "catalog_template",
+          targetId: saved.id,
+          details: { name: saved.name, category: saved.category },
+          ...auditContextFromRequest(request)
+        }, client);
+      }
+    );
     return { template };
   });
 
   app.delete("/api/catalog/templates/:templateId", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
     const { templateId } = request.params as { templateId: string };
-    const result = await deleteCustomCatalogTemplate(decodeURIComponent(templateId));
-    await writeAuditEvent({
-      userId: request.user?.id,
-      action: "catalog.template_delete",
-      targetKind: "catalog_template",
-      targetId: result.templateId,
-      ...auditContextFromRequest(request)
-    });
+    const result = await deleteCustomCatalogTemplate(
+      decodeURIComponent(templateId),
+      async (client, deleted) => {
+        await writeAuditEvent({
+          userId: request.user?.id,
+          action: "catalog.template_delete",
+          targetKind: "catalog_template",
+          targetId: deleted.templateId,
+          ...auditContextFromRequest(request)
+        }, client);
+      }
+    );
     return result;
   });
 
   app.post("/api/catalog/deploy", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
-    const result = await deployCatalogTemplate(request.body, request.user?.id);
-    await writeAuditEvent({
-      userId: request.user?.id,
-      hostId: result.stack.hostId,
-      action: "catalog.deploy",
-      targetKind: "compose_stack",
-      targetId: result.stack.id,
-      details: { templateId: result.templateId, projectName: result.stack.projectName },
-      ...auditContextFromRequest(request)
-    });
+    const result = await deployCatalogTemplate(
+      request.body,
+      request.user?.id,
+      async (client, queued) => {
+        await writeAuditEvent({
+          userId: request.user?.id,
+          hostId: queued.stack.hostId,
+          action: "catalog.deploy",
+          targetKind: "compose_stack",
+          targetId: queued.stack.id,
+          details: {
+            templateId: queued.templateId,
+            projectName: queued.stack.projectName
+          },
+          ...auditContextFromRequest(request)
+        }, client);
+      }
+    );
     return result;
   });
 }

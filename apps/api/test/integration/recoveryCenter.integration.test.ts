@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../../src/server.js";
 import { runMigrations } from "../../src/db/migrate.js";
 import { pool } from "../../src/db/pool.js";
+import { cancelQueuedJob } from "../../src/services/jobs.js";
 
 const integrationEnabled = process.env.COMPOSEBASTION_INTEGRATION === "1";
 const strongPassword = "Very-Secure-Pass1";
@@ -13,18 +14,26 @@ describe.skipIf(!integrationEnabled)("recovery center API integration", () => {
   let sessionCookie: string;
   let hostId: string;
 
+  async function cleanupFixtures() {
+    await pool.query("DELETE FROM recovery_restore_attempts");
+    await pool.query("DELETE FROM operation_jobs");
+    await pool.query("DELETE FROM recovery_artifacts");
+    await pool.query("DELETE FROM recovery_schedules");
+    await pool.query("DELETE FROM migration_runs");
+    await pool.query("DELETE FROM recovery_points");
+    await pool.query("DELETE FROM remote_artifact_orphans");
+    await pool.query("DELETE FROM backup_targets");
+    await pool.query("DELETE FROM compose_stacks");
+    await pool.query("DELETE FROM docker_hosts");
+    await pool.query("DELETE FROM sessions");
+    await pool.query("DELETE FROM admin_users");
+  }
+
   beforeAll(async () => {
     await runMigrations();
     app = await buildServer();
     await app.ready();
-    await pool.query("DELETE FROM recovery_artifacts");
-    await pool.query("DELETE FROM recovery_points");
-    await pool.query("DELETE FROM recovery_schedules");
-    await pool.query("DELETE FROM migration_runs");
-    await pool.query("DELETE FROM backup_targets");
-    await pool.query("DELETE FROM sessions");
-    await pool.query("DELETE FROM admin_users");
-    await pool.query("DELETE FROM docker_hosts");
+    await cleanupFixtures();
 
     const setup = await app.inject({
       method: "POST",
@@ -51,7 +60,12 @@ describe.skipIf(!integrationEnabled)("recovery center API integration", () => {
     hostId = host.json().host.id as string;
   });
 
+  beforeEach(async () => {
+    await pool.query("DELETE FROM operation_jobs");
+  });
+
   afterAll(async () => {
+    await cleanupFixtures();
     await app.close();
   });
 
@@ -148,6 +162,9 @@ describe.skipIf(!integrationEnabled)("recovery center API integration", () => {
     expect(execute.statusCode).toBe(200);
     expect(execute.json().run.planRunId).toBe(plan.json().run.id);
     expect(execute.json().job.type).toBe("migration.execute");
+    await expect(
+      cancelQueuedJob(execute.json().job.id as string)
+    ).resolves.toMatchObject({ canceled: true });
 
     const reused = await app.inject({
       method: "POST",
@@ -222,6 +239,9 @@ describe.skipIf(!integrationEnabled)("recovery center API integration", () => {
       });
       expect(execute.statusCode).toBe(200);
       expect(execute.json().run.recoveryPointId).toBe(recoveryPointId);
+      await expect(
+        cancelQueuedJob(execute.json().job.id as string)
+      ).resolves.toMatchObject({ canceled: true });
     }
 
     const links = await pool.query(

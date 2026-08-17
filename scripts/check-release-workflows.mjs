@@ -24,6 +24,35 @@ function loadWorkflow(file) {
 }
 
 const workflows = Object.fromEntries(workflowFiles.map((file) => [file, loadWorkflow(file)]));
+
+function requireBranches(file, eventName, expectedBranches) {
+  const branches = workflows[file]?.on?.[eventName]?.branches ?? [];
+  if (JSON.stringify([...branches].sort()) !== JSON.stringify([...expectedBranches].sort())) {
+    fail(
+      `${file}: ${eventName} branches must be exactly ${expectedBranches.join(", ")}, got ${JSON.stringify(branches)}`
+    );
+  }
+}
+
+requireBranches(
+  ".github/workflows/ci.yml",
+  "push",
+  ["main", "beta", "dev"]
+);
+for (const file of [
+  ".github/workflows/codeql.yml",
+  ".github/workflows/container-scan.yml",
+  ".github/workflows/publish-images.yml"
+]) {
+  requireBranches(file, "push", ["main", "beta", "dev"]);
+  requireBranches(file, "pull_request", ["main", "beta", "dev"]);
+}
+requireBranches(
+  ".github/workflows/dependency-review.yml",
+  "pull_request",
+  ["main", "beta", "dev"]
+);
+
 for (const [file, workflow] of Object.entries(workflows)) {
   const pullRequest = workflow?.on?.pull_request;
   if (pullRequest && typeof pullRequest === "object" && "paths" in pullRequest) {
@@ -95,11 +124,183 @@ function requireNode24Setup(file, jobName, job) {
   }
 }
 
+function requireContainerConfigStep(file, jobName, job) {
+  const steps = (job?.steps ?? []).filter(
+    (step) => step.name === "Enforce container configuration policy"
+  );
+  if (steps.length !== 1
+      || String(steps[0]?.run ?? "").trim() !== "npm run check:container-config") {
+    fail(`${file}:${jobName}: must run the exact digest-pinned container configuration gate once`);
+  }
+}
+
+for (const [file, workflow] of Object.entries(workflows)) {
+  for (const [jobName, job] of Object.entries(workflow?.jobs ?? {})) {
+    const steps = job?.steps ?? [];
+    for (const step of steps) {
+      const command = String(step.run ?? "").trim();
+      if (!command.startsWith("npm ci")) continue;
+      if (
+        !command.includes("--engine-strict")
+        || !command.includes("--dangerously-allow-all-scripts=false")
+      ) {
+        fail(`${file}:${jobName}: every npm ci must reject engine drift and the dangerous allow-all override`);
+      }
+      if (command.includes("--ignore-scripts=false")) {
+        if (!command.includes("--strict-allow-scripts")) {
+          fail(`${file}:${jobName}: script-enabled npm ci must enforce the reviewed allowScripts policy`);
+        }
+      } else if (!/(?:^|\s)--ignore-scripts(?:\s|$)/.test(command)) {
+        fail(`${file}:${jobName}: npm ci must explicitly enable reviewed scripts or disable every script`);
+      }
+    }
+    const npmIndexes = steps
+      .map((step, index) => ({ step, index }))
+      .filter(({ step }) =>
+        /(^|[\s;&|])npm(?:\s|$)/m.test(String(step.run ?? ""))
+      )
+      .map(({ index }) => index);
+    if (!npmIndexes.length) continue;
+    const setupIndex = steps.indexOf(actionStep(job, "actions/setup-node"));
+    const bootstrapIndexes = steps
+      .map((step, index) => ({ step, index }))
+      .filter(({ step }) =>
+        String(step.run ?? "").trim() === "node scripts/bootstrap-npm.mjs"
+      )
+      .map(({ index }) => index);
+    requireNode24Setup(file, jobName, job);
+    if (
+      setupIndex < 0
+      || bootstrapIndexes.length !== 1
+      || bootstrapIndexes[0] <= setupIndex
+      || bootstrapIndexes[0] >= npmIndexes[0]
+    ) {
+      fail(`${file}:${jobName}: integrity-pinned npm bootstrap must run exactly once after setup-node and before every npm command`);
+    }
+  }
+}
+
 const ciFile = ".github/workflows/ci.yml";
 const ciJobs = workflows[ciFile]?.jobs ?? {};
+const quality = ciJobs.quality;
+const productionBuild = ciJobs["production-build"];
 const liveAcceptance = ciJobs["live-acceptance"];
 const ciGate = ciJobs["ci-gate"];
+const containerPolicyTests = (quality?.steps ?? []).filter(
+  (step) => String(step.run ?? "").trim() === "npm run test:container-config-policy"
+);
+if (containerPolicyTests.length !== 1) {
+  fail(`${ciFile}:quality: must run the fail-closed container configuration policy tests once`);
+}
+const releaseImagePolicyTests = (quality?.steps ?? []).filter(
+  (step) => String(step.run ?? "").trim() === "npm run test:release-image-policy"
+);
+if (releaseImagePolicyTests.length !== 1) {
+  fail(`${ciFile}:quality: must run the OCI whiteout/replacement policy tests once`);
+}
+const releaseAliasPolicyTests = (quality?.steps ?? []).filter(
+  (step) => String(step.run ?? "").trim() === "npm run test:release-alias-policy"
+);
+if (releaseAliasPolicyTests.length !== 1) {
+  fail(`${ciFile}:quality: must run the public alias transaction behavioral tests once`);
+}
+const qualitySteps = quality?.steps ?? [];
+const npmInstallIndex = qualitySteps.findIndex(
+  (step) => String(step.run ?? "").trim().startsWith("npm ci ")
+);
+const npmPolicyIndexes = qualitySteps
+  .map((step, index) => ({ step, index }))
+  .filter(({ step }) =>
+    String(step.run ?? "").trim() === "npm run check:npm-install-policy"
+  )
+  .map(({ index }) => index);
+if (
+  npmInstallIndex < 0
+  || npmPolicyIndexes.length !== 1
+  || npmPolicyIndexes[0] <= npmInstallIndex
+) {
+  fail(`${ciFile}:quality: strict dependency install-script policy must run exactly once after npm ci`);
+}
+const secretSteps = quality?.steps ?? [];
+const secretCheckout = actionStep(quality, "actions/checkout");
+const secretRun = secretSteps.find((step) => step.name === "Scan history and exercise the fail-closed detector");
+const secretUpload = actionStep(quality, "actions/upload-artifact");
+if (secretCheckout?.with?.["fetch-depth"] !== 0) {
+  fail(`${ciFile}:quality: the required quality context needs complete history for Gitleaks`);
+}
+if (String(secretRun?.run ?? "").trim() !== "bash scripts/check-gitleaks.sh") {
+  fail(`${ciFile}:quality: must run the reviewed fail-closed Gitleaks wrapper`);
+}
+if (secretUpload?.with?.name !== "gitleaks-history"
+    || secretUpload?.with?.path !== "test-results/gitleaks/gitleaks-git.json"
+    || String(secretUpload?.if ?? "") !== "always()") {
+  fail(`${ciFile}:quality: must retain the redacted full-history report even after findings`);
+}
+const gitleaksSource = readFileSync("scripts/check-gitleaks.sh", "utf8");
+for (const invariant of [
+  "ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f",
+  "--gitleaks-ignore-path .gitleaksignore",
+  "--config .github/gitleaks.toml",
+  "--ignore-gitleaks-allow",
+  "--report-format json",
+  "--redact=100",
+  '"--log-opts=HEAD -m"',
+  'expected_config_sha256="3970cce55841814bcad57f166c4cb69f23722d46d76b8dd3a3a8c8763ee41ffb"',
+  "expected_history=(",
+  "git rev-parse --is-shallow-repository",
+  "GIT_NO_REPLACE_OBJECTS=1 git rev-list --count HEAD",
+  "--env GIT_NO_REPLACE_OBJECTS=1",
+  "git rev-parse --git-common-dir",
+  "scanned_commit_count",
+  '[[ "${scanned_commit_count}" != "${expected_commit_count}" ]]',
+  'type == "array" and length == 0',
+  'Unreviewed target-local configuration that detects nothing',
+  "'gitleaks:allow'",
+  "config_bypass_status",
+  "inline_bypass_status",
+  "target-local-config bypass test",
+  "inline-suppression bypass test",
+  "expected finding exit 1"
+]) {
+  if (!gitleaksSource.includes(invariant)) {
+    fail(`scripts/check-gitleaks.sh: missing fail-closed invariant ${invariant}`);
+  }
+}
+const reviewedFingerprints = readFileSync(".gitleaksignore", "utf8")
+  .trim()
+  .split(/\r?\n/);
+const expectedFingerprints = [
+  "74185cb37ffafc5e5e625a0a1395252cd84b086d:apps/agent/src/config.ts:generic-api-key:10",
+  "65e75888b9846983ffc03693c32b1fb14de31947:apps/api/test/migrationLint.test.ts:generic-api-key:7",
+  "0dff59101d14c860f582ff788b49743632bfb921:apps/api/test/migrationLint.test.ts:generic-api-key:7"
+];
+if (JSON.stringify(reviewedFingerprints) !== JSON.stringify(expectedFingerprints)) {
+  fail(".gitleaksignore: only the three reviewed historical false-positive fingerprints are allowed");
+}
+const expectedGitleaksConfig = String.raw`title = "ComposeBastion reviewed Gitleaks policy"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Exact public placeholders that exercise runtime rejection and migration ordering"
+targetRules = ["generic-api-key"]
+regexTarget = "line"
+regexes = [
+  '''^\s*"compose-contract-agent-token-0123456789abcdef",\s*$''',
+  '''^\s*"003_ssh_password_auth\.sql",\s*$''',
+]
+`;
+if (readFileSync(".github/gitleaks.toml", "utf8") !== expectedGitleaksConfig) {
+  fail(".github/gitleaks.toml: reviewed default-extending policy or exact placeholder allowlists changed");
+}
+requireNode24Setup(ciFile, "production-build", productionBuild);
+requireContainerConfigStep(ciFile, "production-build", productionBuild);
 requireNode24Setup(ciFile, "live-acceptance", liveAcceptance);
+const liveAcceptanceCheckout = actionStep(liveAcceptance, "actions/checkout");
+if (liveAcceptanceCheckout?.with?.["fetch-depth"] !== 0) {
+  fail(`${ciFile}:live-acceptance: historical public upgrade qualification requires complete Git history and tags`);
+}
 const installBrowser = (liveAcceptance?.steps ?? []).find((step) => String(step.run ?? "").includes("playwright install --with-deps chromium"));
 if (!installBrowser) fail(`${ciFile}:live-acceptance: live Playwright requires an explicit Chromium installation`);
 if (!(liveAcceptance?.steps ?? []).some((step) => String(step.run ?? "").trim() === "npm run acceptance:local")
@@ -107,7 +308,7 @@ if (!(liveAcceptance?.steps ?? []).some((step) => String(step.run ?? "").trim() 
   fail(`${ciFile}:live-acceptance: full release acceptance and its qualifying-report assertion are both required`);
 }
 const ciGateNeeds = Array.isArray(ciGate?.needs) ? ciGate.needs : [ciGate?.needs].filter(Boolean);
-for (const dependency of ["browser-smoke", "live-acceptance"]) {
+for (const dependency of ["browser-smoke", "production-build", "live-acceptance"]) {
   if (!ciGateNeeds.includes(dependency)) fail(`${ciFile}:ci-gate: aggregate must require ${dependency}`);
 }
 
@@ -147,7 +348,26 @@ function requireTrivy(file, jobName, job) {
 const publishFile = ".github/workflows/publish-images.yml";
 const publish = workflows[publishFile];
 const publishJobs = publish?.jobs ?? {};
+const publicationBranches = [...(publish?.on?.push?.branches ?? [])].sort();
+if (JSON.stringify(publicationBranches) !== JSON.stringify(["beta", "dev", "main"])) {
+  fail(`${publishFile}: release-image verification must run on main, beta, and dev`);
+}
 requireNode24Setup(publishFile, "metadata", publishJobs.metadata);
+requireContainerConfigStep(publishFile, "metadata", publishJobs.metadata);
+const metadataSteps = publishJobs.metadata?.steps ?? [];
+const releaseMetadataStep = metadataSteps.find((step) => step.id === "release");
+const stableTagStep = metadataSteps.find((step) => step.id === "stable-tag");
+if (!String(stableTagStep?.run ?? "").includes('echo "stable=true" >> "${GITHUB_OUTPUT}"')) {
+  fail(`${publishFile}:metadata: stable tag validation must expose a successful stable-tag output`);
+}
+if (!String(releaseMetadataStep?.run ?? "").includes("refs/heads/main")
+    || !String(releaseMetadataStep?.run ?? "").includes("cannot publish prerelease version")) {
+  fail(`${publishFile}:metadata: the main image alias must reject prerelease package versions`);
+}
+if (!String(releaseMetadataStep?.run ?? "").includes("refs/heads/beta")
+    || !String(releaseMetadataStep?.run ?? "").includes("requires an explicit prerelease version")) {
+  fail(`${publishFile}:metadata: the beta image alias must require a prerelease package version`);
+}
 const buildScan = publishJobs["build-scan"];
 requireNode24Setup(publishFile, "build-scan", buildScan);
 requireExactMatrix(publishFile, "build-scan", buildScan);
@@ -175,6 +395,7 @@ if (releaseScanStep?.with?.["scan-type"] !== "image" || releaseScanStep?.with?.i
 const buildIndex = buildSteps.indexOf(buildStep);
 const scanIndex = buildSteps.indexOf(releaseScanStep);
 const verificationIndex = buildSteps.findIndex((step) => step.name === "Verify archive, extract the exact OCI layout, and record digests");
+const sbomIndex = buildSteps.findIndex((step) => step.name === "Generate an SPDX SBOM from the exact passing OCI layout");
 const verificationRun = buildSteps[verificationIndex]?.run ?? "";
 for (const invariant of [
   'archive="/tmp/release-${{ matrix.component }}-${{ matrix.arch }}.tar"',
@@ -195,7 +416,10 @@ for (const invariant of [
   '[[ "${config_digest}" =~ ^sha256:[a-f0-9]{64}$ ]]',
   "mapfile -t layer_digests",
   'test "${#layer_digests[@]}" -gt 0',
-  '[[ "${layer_digest}" =~ ^sha256:[a-f0-9]{64}$ ]]'
+  '[[ "${layer_digest}" =~ ^sha256:[a-f0-9]{64}$ ]]',
+  '.config.Labels["org.opencontainers.image.title"]',
+  '.config.Labels["org.opencontainers.image.source"]',
+  '.config.Labels["org.opencontainers.image.licenses"]'
 ]) {
   if (!verificationRun.includes(invariant)) {
     fail(`${publishFile}:build-scan: archive blob-integrity verification is missing ${invariant}`);
@@ -204,9 +428,36 @@ for (const invariant of [
 if ((verificationRun.match(/sha256sum/g) ?? []).length < 4) {
   fail(`${publishFile}:build-scan: archive, manifest, config, and every layer must be independently SHA-256 verified`);
 }
-const uploadIndex = buildSteps.indexOf(actionStep(buildScan, "actions/upload-artifact"));
-if (buildIndex < 0 || verificationIndex <= buildIndex || scanIndex <= verificationIndex || uploadIndex <= scanIndex) {
-  fail(`${publishFile}:build-scan: build, verify/extract, scan, and upload must remain strictly ordered`);
+const sbomRun = String(buildSteps[sbomIndex]?.run ?? "");
+if (sbomRun.includes('--volume "/tmp:/out"')) {
+  fail(`${publishFile}:build-scan: the SBOM generator must not receive writable access to release archives or metadata`);
+}
+for (const invariant of [
+  "ghcr.io/anchore/syft:v1.50.0@sha256:1288ea4c8b38767b4e620c1e312c8cb26b6e887a99b4f07ab6cd19fc6f225026",
+  'scan "oci-dir:/image"',
+  'sbom_output_root="$(mktemp -d)"',
+  '--volume "${layout}:/image:ro"',
+  '--volume "${sbom_output_root}:/out"',
+  'spdx-json=/out/${sbom_name}',
+  'test ! -L "${generated_sbom}"',
+  'install -m 0644 "${generated_sbom}" "${sbom}"',
+  '(.name | type == "string" and length > 0)',
+  '(.documentNamespace | type == "string" and test("^https://"))',
+  '(.packages | type == "array" and length > 0)',
+  'sbomSha256:$sbomSha256'
+]) {
+  if (!(sbomRun.includes(invariant) || String(publish?.env?.SYFT_IMAGE ?? "").includes(invariant))) {
+    fail(`${publishFile}:build-scan: exact-layout SBOM generation is missing ${invariant}`);
+  }
+}
+const buildUpload = actionStep(buildScan, "actions/upload-artifact");
+const uploadIndex = buildSteps.indexOf(buildUpload);
+if (!String(buildUpload?.with?.path ?? "").includes("release-${{ matrix.component }}-${{ matrix.arch }}.spdx.json")) {
+  fail(`${publishFile}:build-scan: passing archive evidence must include its exact-layout SPDX SBOM`);
+}
+if (buildIndex < 0 || verificationIndex <= buildIndex || scanIndex <= verificationIndex
+    || sbomIndex <= scanIndex || uploadIndex <= sbomIndex) {
+  fail(`${publishFile}:build-scan: build, verify/extract, scan, SBOM, and upload must remain strictly ordered`);
 }
 
 const tagRescan = publishJobs["rescan-tag-images"];
@@ -228,11 +479,41 @@ for (const invariant of [
   }
 }
 const tagScanIndex = tagRescanSteps.indexOf(actionStep(tagRescan, "aquasecurity/trivy-action"));
+const tagLabelStep = tagRescanSteps.find(
+  (step) => step.name === "Verify immutable image labels"
+);
+const tagLabelRun = String(tagLabelStep?.run ?? "");
+for (const invariant of [
+  "org.opencontainers.image.title",
+  "org.opencontainers.image.source",
+  "org.opencontainers.image.licenses",
+  'docker cp "${container_id}:/licenses/."',
+  "cmp LICENSES/go-modules/manifest.json",
+  "THIRD-PARTY-NOTICES.md",
+  "go-buildinfo/trivy.artifacts.sha256",
+  "go-buildinfo/agent.artifacts.sha256"
+]) {
+  if (!tagLabelRun.includes(invariant)) {
+    fail(
+      `${publishFile}:rescan-tag-images: immutable image label/legal verification is missing ${invariant}`
+    );
+  }
+}
 const tagRecordIndex = tagRescanSteps.findIndex((step) => step.name === "Record the exact passing index and platform digests");
+const tagAttestationIndex = tagRescanSteps.findIndex((step) => step.name === "Verify the published platform SBOM attestation");
 const tagUploadStep = actionStep(tagRescan, "actions/upload-artifact");
 const tagUploadIndex = tagRescanSteps.indexOf(tagUploadStep);
-if (tagScanIndex < 0 || tagRecordIndex <= tagScanIndex || tagUploadIndex <= tagRecordIndex) {
-  fail(`${publishFile}:rescan-tag-images: persist and upload digest evidence only after the exact platform scan passes`);
+if (tagScanIndex < 0 || tagAttestationIndex <= tagScanIndex
+    || tagRecordIndex <= tagAttestationIndex || tagUploadIndex <= tagRecordIndex) {
+  fail(`${publishFile}:rescan-tag-images: verify scan and SBOM attestation before persisting digest evidence`);
+}
+const tagAttestationRun = String(tagRescanSteps[tagAttestationIndex]?.run ?? "");
+if (!tagAttestationRun.includes('gh attestation verify "oci://${IMAGE_REFERENCE}"')
+    || !tagAttestationRun.includes("--predicate-type https://spdx.dev/Document/v2.3")
+    || !tagAttestationRun.includes("--signer-workflow")
+    || !tagAttestationRun.includes('--source-digest "${GITHUB_SHA}"')
+    || tagRescan?.permissions?.attestations !== "read") {
+  fail(`${publishFile}:rescan-tag-images: stable promotion must verify each platform SPDX attestation with signer/source constraints`);
 }
 const tagRecordRun = tagRescanSteps[tagRecordIndex]?.run ?? "";
 for (const invariant of ["indexDigest:$indexDigest", "platformDigest:$platformDigest", 'tag-rescan-${{ matrix.component }}-${{ matrix.arch }}.json']) {
@@ -249,43 +530,222 @@ if (!String(releaseGate?.if ?? "").includes("always()")) fail(`${publishFile}: r
 for (const dependency of ["metadata", "build-scan", "rescan-tag-images"]) {
   if (!(releaseGate?.needs ?? []).includes(dependency)) fail(`${publishFile}: release aggregate gate must require ${dependency}`);
 }
-for (const [jobName, dependency] of [["publish-main", "release-image-gate"], ["promote-tag", "release-image-gate"]]) {
+for (const [jobName, dependency] of [["publish-branch", "release-image-gate"], ["promote-tag", "release-image-gate"]]) {
   if (!(publishJobs[jobName]?.needs ?? []).includes(dependency)) fail(`${publishFile}:${jobName}: must depend on ${dependency}`);
+}
+if (!(publishJobs["promote-tag"]?.needs ?? []).includes("rescan-tag-images")) {
+  fail(`${publishFile}:promote-tag: must directly depend on the successful tag rescans it promotes`);
 }
 
 if (!String(publish?.concurrency?.group ?? "").includes("publish-images-publication")) {
-  fail(`${publishFile}: main and tag registry mutations must share one concurrency group`);
+  fail(`${publishFile}: branch and tag registry mutations must share one concurrency group`);
 }
-const copyRun = (publishJobs["publish-main"]?.steps ?? []).find((step) => step.name === "Copy the scanned platform manifests")?.run ?? "";
-if (!copyRun.includes('platform_tag="run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${arch}"')) {
-  fail(`${publishFile}:publish-main: platform images must use immutable run-scoped tags`);
+const publishBranch = publishJobs["publish-branch"];
+const publishBranchCondition = String(publishBranch?.if ?? "");
+if (!publishBranchCondition.includes("always()")) {
+  fail(`${publishFile}:publish-branch: skipped tag-only dependencies must not suppress qualified branch publication`);
 }
-const assembleRun = (publishJobs["publish-main"]?.steps ?? []).find((step) => step.name === "Assemble and verify both immutable indexes")?.run ?? "";
+for (const successGate of [
+  "needs.metadata.result == 'success'",
+  "needs.build-scan.result == 'success'",
+  "needs.release-image-gate.result == 'success'"
+]) {
+  if (!publishBranchCondition.includes(successGate)) {
+    fail(`${publishFile}:publish-branch: condition must require ${successGate}`);
+  }
+}
+for (const branchRef of ["refs/heads/main", "refs/heads/beta"]) {
+  if (!publishBranchCondition.includes(branchRef)) {
+    fail(`${publishFile}:publish-branch: condition must explicitly allow ${branchRef}`);
+  }
+}
+const copyRun = (publishBranch?.steps ?? []).find((step) => step.name === "Copy the scanned platform manifests")?.run ?? "";
+if (!copyRun.includes('platform_tag="sha-${GITHUB_SHA}-${arch}"')) {
+  fail(`${publishFile}:publish-branch: platform images must use deterministic full-commit tags`);
+}
+if (copyRun.includes("skopeo inspect")) {
+  fail(`${publishFile}:publish-branch: raw skopeo failures must not be treated as confirmed tag absence`);
+}
+for (const invariant of [
+  'sbom="/tmp/release-images/release-${component}-${arch}.spdx.json"',
+  "expected_sbom_sha=",
+  'test "$(sha256sum "${sbom}"',
+  "skopeo copy",
+  "--preserve-digests",
+  "scripts/inspect-registry-reference.sh",
+  'case "${inspection_status}" in',
+  "3)"
+]) {
+  if (!copyRun.includes(invariant)) {
+    fail(`${publishFile}:publish-branch: archive/SBOM digest-bound copy is missing ${invariant}`);
+  }
+}
+const registryInspector = readFileSync("scripts/inspect-registry-reference.sh", "utf8");
+for (const invariant of [
+  'grep -Fqx "ERROR: ${reference}: not found"',
+  "(manifest|name)[ _-]?unknown",
+  "exit 3",
+  "exit 2",
+  "Registry inspection failed without a confirmed not-found response"
+]) {
+  if (!registryInspector.includes(invariant)) {
+    fail(`scripts/inspect-registry-reference.sh: missing tri-state fail-closed invariant ${invariant}`);
+  }
+}
+const aliasReconciler = readFileSync("scripts/reconcile-image-alias-pair.sh", "utf8");
+for (const invariant of [
+  "scripts/inspect-registry-reference.sh",
+  "failed without confirming that the alias is absent; no mutation was attempted",
+  "finalInspection",
+  "inspection-error"
+]) {
+  if (!aliasReconciler.includes(invariant)) {
+    fail(`scripts/reconcile-image-alias-pair.sh: missing fail-closed registry inspection invariant ${invariant}`);
+  }
+}
+const aliasReconcilerTests = readFileSync("scripts/reconcile-image-alias-pair.test.sh", "utf8");
+for (const invariant of [
+  "transient-inspection-failure",
+  "transient registry inspection mutated an alias",
+  "confirmed skopeo not-found",
+  "transient skopeo failure",
+  'if [[ "$#" -ne 9',
+  '[[ "$5" = "${GITHUB_REPOSITORY}" ]]',
+  '[[ "$7" = "${expected_signer}" ]]',
+  '[[ "$9" = "${expected_revision}" ]]',
+  "final-evidence-inspection-failure",
+  'status == "final-verification-failed"',
+  "final evidence inspection failure attempted unexpected follow-up mutation"
+]) {
+  if (!aliasReconcilerTests.includes(invariant)) {
+    fail(`scripts/reconcile-image-alias-pair.test.sh: missing registry fault-injection invariant ${invariant}`);
+  }
+}
+const publishBranchSteps = publishBranch?.steps ?? [];
+const copyIndex = publishBranchSteps.findIndex((step) => step.name === "Copy the scanned platform manifests");
+const legalIndex = publishBranchSteps.findIndex((step) => step.name === "Verify every published platform label and legal root filesystem");
+const legalRun = String(publishBranchSteps[legalIndex]?.run ?? "");
+if (!legalRun.includes("scripts/verify-published-image.sh")
+    || !legalRun.includes('"${image}@${digest}"')) {
+  fail(`${publishFile}:publish-branch: every copied platform digest must pass final-rootfs legal verification`);
+}
+const publishedVerifier = readFileSync("scripts/verify-published-image.sh", "utf8");
+for (const invariant of [
+  "org.opencontainers.image.title",
+  "org.opencontainers.image.source",
+  "org.opencontainers.image.licenses",
+  'docker cp "${container_id}:/licenses/."',
+  "cmp LICENSES/go-modules/manifest.json",
+  "THIRD-PARTY-NOTICES.md",
+  "sha256sum -c",
+  "go-buildinfo/trivy.artifacts.sha256",
+  "go-buildinfo/agent.artifacts.sha256"
+]) {
+  if (!publishedVerifier.includes(invariant)) {
+    fail(`scripts/verify-published-image.sh: published legal verification is missing ${invariant}`);
+  }
+}
+const assembleRun = (publishBranch?.steps ?? []).find((step) => step.name === "Assemble and verify both immutable indexes")?.run ?? "";
 if (!assembleRun.includes('index="${image}:sha-${GITHUB_SHA}"')) {
-  fail(`${publishFile}:publish-main: multi-architecture indexes must use the protected commit SHA tag`);
+  fail(`${publishFile}:publish-branch: multi-architecture indexes must use the protected commit SHA tag`);
 }
 for (const arch of ["amd64", "arm64"]) {
-  if (!assembleRun.includes(`\${image}:run-\${GITHUB_RUN_ID}-\${GITHUB_RUN_ATTEMPT}-${arch}`)) {
-    fail(`${publishFile}:publish-main: ${arch} index source must be the current run-scoped tag`);
+  if (assembleRun.includes(`\${image}:sha-\${GITHUB_SHA}-${arch}`)) {
+    fail(`${publishFile}:publish-branch: immutable index creation must not resolve a mutable ${arch} platform tag`);
+  }
+}
+for (const digestSource of ['"${image}@${amd64_digest}"', '"${image}@${arm64_digest}"']) {
+  if (!assembleRun.includes(digestSource)) {
+    fail(`${publishFile}:publish-branch: immutable index must use verified digest source ${digestSource}`);
   }
 }
 for (const invariant of [
-  'index_digest="$(jq -er',
+  'index_digest="$(bash scripts/inspect-registry-reference.sh buildx "${index}")"',
+  'case "${inspection_status}" in',
+  "3)",
   'docker buildx imagetools inspect --raw "${image}@${index_digest}"',
-  'echo "${component}_digest=${index_digest}"'
+  'echo "${component}_digest=${index_digest}"',
+  'echo "${component}_amd64_digest=${amd64_digest}"',
+  'echo "${component}_arm64_digest=${arm64_digest}"'
 ]) {
-  if (!assembleRun.includes(invariant)) fail(`${publishFile}:publish-main: verified index binding is missing ${invariant}`);
+  if (!assembleRun.includes(invariant)) fail(`${publishFile}:publish-branch: verified index binding is missing ${invariant}`);
 }
-const mainAliasStep = (publishJobs["publish-main"]?.steps ?? []).find((step) => step.name === "Apply main aliases after both immutable indexes exist");
-const mainAliasRun = mainAliasStep?.run ?? "";
-if (mainAliasRun.includes(":latest")) fail(`${publishFile}:publish-main: an untagged main commit must not move latest`);
-if (!mainAliasRun.includes('"${image}@${digest}"')
-    || mainAliasRun.includes('"${image}:sha-${GITHUB_SHA}"')
-    || mainAliasStep?.env?.APP_INDEX_DIGEST !== "${{ steps.indexes.outputs.app_digest }}"
-    || mainAliasStep?.env?.AGENT_INDEX_DIGEST !== "${{ steps.indexes.outputs.agent_digest }}") {
-  fail(`${publishFile}:publish-main: main aliases must use the just-verified digest-qualified index sources`);
+const assembleIndex = publishBranchSteps.findIndex((step) => step.name === "Assemble and verify both immutable indexes");
+const attestationSteps = publishBranchSteps.filter((step) =>
+  typeof step.uses === "string" && step.uses.startsWith("actions/attest@")
+);
+const attestationTuples = attestationSteps.map((step) => [
+  step.with?.["subject-name"] ?? "",
+  step.with?.["subject-digest"] ?? "",
+  step.with?.["subject-version"] ?? "",
+  step.with?.["sbom-path"] ?? "",
+  String(step.with?.["push-to-registry"] ?? "")
+].join("|")).sort();
+const expectedAttestationTuples = [
+  "${{ env.APP_IMAGE }}|${{ steps.indexes.outputs.app_digest }}|${{ needs.metadata.outputs.version }}||true",
+  "${{ env.AGENT_IMAGE }}|${{ steps.indexes.outputs.agent_digest }}|${{ needs.metadata.outputs.version }}||true",
+  "${{ env.APP_IMAGE }}|${{ steps.indexes.outputs.app_amd64_digest }}||/tmp/release-images/release-app-amd64.spdx.json|true",
+  "${{ env.APP_IMAGE }}|${{ steps.indexes.outputs.app_arm64_digest }}||/tmp/release-images/release-app-arm64.spdx.json|true",
+  "${{ env.AGENT_IMAGE }}|${{ steps.indexes.outputs.agent_amd64_digest }}||/tmp/release-images/release-agent-amd64.spdx.json|true",
+  "${{ env.AGENT_IMAGE }}|${{ steps.indexes.outputs.agent_arm64_digest }}||/tmp/release-images/release-agent-arm64.spdx.json|true"
+].sort();
+if (JSON.stringify(attestationTuples) !== JSON.stringify(expectedAttestationTuples)) {
+  fail(`${publishFile}:publish-branch: both indexes need provenance and all four platform digests need registry SBOM attestations`);
+}
+for (const step of attestationSteps) {
+  if (publishBranchSteps.indexOf(step) <= assembleIndex) {
+    fail(`${publishFile}:publish-branch: attest only after both immutable indexes are verified`);
+  }
+}
+for (const permission of ["id-token", "attestations", "artifact-metadata", "packages"]) {
+  if (publishBranch?.permissions?.[permission] !== "write") {
+    fail(`${publishFile}:publish-branch: ${permission}: write is required for registry attestations`);
+  }
+}
+const branchAliasStep = (publishBranch?.steps ?? []).find((step) => step.name === "Reconcile branch alias to the attested image pair");
+const branchAliasRun = branchAliasStep?.run ?? "";
+if (branchAliasRun.includes(":latest")) fail(`${publishFile}:publish-branch: an untagged branch commit must not move latest`);
+if (!branchAliasRun.includes("scripts/reconcile-image-alias-pair.sh")
+    || !branchAliasRun.includes("/tmp/branch-alias-reconciliation.json")
+    || !branchAliasRun.includes('mode="branch"')
+    || !branchAliasRun.includes('mode="beta"')
+    || !branchAliasRun.includes('aliases=("${GITHUB_REF_NAME}")')
+    || !branchAliasRun.includes('aliases+=("${VERSION}")')
+    || !branchAliasRun.includes('"${aliases[@]}"')
+    || branchAliasStep?.env?.LEGACY_ALIAS_BOOTSTRAP_POLICY !== ".github/legacy-alias-bootstrap.json"
+    || branchAliasStep?.env?.APP_INDEX_DIGEST !== "${{ steps.indexes.outputs.app_digest }}"
+    || branchAliasStep?.env?.AGENT_INDEX_DIGEST !== "${{ steps.indexes.outputs.agent_digest }}"
+    || branchAliasStep?.env?.VERSION !== "${{ needs.metadata.outputs.version }}") {
+  fail(`${publishFile}:publish-branch: main/beta must use paired branch/prerelease attestation reconciliation`);
+}
+const branchReconciliationUpload = publishBranchSteps.find(
+  (step) => step.name === "Upload paired branch-alias reconciliation evidence"
+);
+if (String(branchReconciliationUpload?.if ?? "") !== "always()"
+    || branchReconciliationUpload?.with?.path !== "/tmp/branch-alias-reconciliation.json"
+    || branchReconciliationUpload?.with?.["if-no-files-found"] !== "error") {
+  fail(`${publishFile}:publish-branch: paired alias evidence must upload even after rollback/failure`);
+}
+const branchAliasIndex = publishBranchSteps.indexOf(branchAliasStep);
+const finalAttestationIndex = Math.max(...attestationSteps.map((step) => publishBranchSteps.indexOf(step)));
+if (copyIndex < 0 || legalIndex <= copyIndex || assembleIndex <= legalIndex
+    || finalAttestationIndex <= assembleIndex || branchAliasIndex <= finalAttestationIndex) {
+  fail(`${publishFile}:publish-branch: copy, legal verification, index assembly, attestations, and alias reconciliation must remain ordered`);
 }
 const promoteTag = publishJobs["promote-tag"];
+const promoteTagCondition = String(promoteTag?.if ?? "");
+if (!promoteTagCondition.includes("always()")) {
+  fail(`${publishFile}:promote-tag: skipped branch-only dependencies must not suppress qualified stable promotion`);
+}
+for (const successGate of [
+  "needs.metadata.result == 'success'",
+  "needs.rescan-tag-images.result == 'success'",
+  "needs.release-image-gate.result == 'success'"
+]) {
+  if (!promoteTagCondition.includes(successGate)) {
+    fail(`${publishFile}:promote-tag: condition must require ${successGate}`);
+  }
+}
 const promoteDownload = actionStep(promoteTag, "actions/download-artifact");
 if (promoteDownload?.with?.pattern !== "tag-rescan-*"
     || promoteDownload?.with?.["merge-multiple"] !== true
@@ -297,6 +757,9 @@ for (const invariant of [
   'test "${#records[@]}" = 4',
   '"${image}:sha-${GITHUB_SHA}"',
   'test "${current}" = "${expected}"',
+  'gh attestation verify "oci://${image}@${expected}"',
+  "--signer-workflow",
+  '--source-digest "${GITHUB_SHA}"',
   'echo "${component}_digest=${expected}"'
 ]) {
   if (!promotionVerification.includes(invariant)) {
@@ -306,19 +769,35 @@ for (const invariant of [
 if (!promotionVerification.includes("indexDigest") || !promotionVerification.includes("platformDigest")) {
   fail(`${publishFile}:promote-tag: all four records must validate both index and platform digests`);
 }
-const stableAliasStep = (promoteTag?.steps ?? []).find((step) => step.name === "Apply stable aliases after all scans pass");
+const stableAliasStep = (promoteTag?.steps ?? []).find((step) => step.name === "Reconcile stable aliases to the attested image pair");
 const stableAliasRun = stableAliasStep?.run ?? "";
-if (!stableAliasRun.includes('"${image}:latest"')) fail(`${publishFile}:promote-tag: verified stable tags must move latest`);
-if (!stableAliasRun.includes('source="${image}@${digest}"')
-    || stableAliasRun.includes('source="${image}:sha-${GITHUB_SHA}"')
+if (!stableAliasRun.includes("scripts/reconcile-image-alias-pair.sh")
+    || !stableAliasRun.includes("/tmp/stable-alias-reconciliation.json")
+    || !stableAliasRun.includes("stable")
+    || !stableAliasRun.includes('"${VERSION}"')
+    || !stableAliasRun.includes('"v${VERSION}"')
+    || !stableAliasRun.includes('"${minor}"')
+    || !stableAliasRun.includes("latest")
+    || stableAliasStep?.env?.LEGACY_ALIAS_BOOTSTRAP_POLICY !== ".github/legacy-alias-bootstrap.json"
     || stableAliasStep?.env?.APP_INDEX_DIGEST !== "${{ steps.images.outputs.app_digest }}"
     || stableAliasStep?.env?.AGENT_INDEX_DIGEST !== "${{ steps.images.outputs.agent_digest }}") {
-  fail(`${publishFile}:promote-tag: every stable alias must use the revalidated digest-qualified index source`);
+  fail(`${publishFile}:promote-tag: stable aliases must use the paired attestation/rollback reconciler`);
+}
+const stableReconciliationUpload = (promoteTag?.steps ?? []).find(
+  (step) => step.name === "Upload paired stable-alias reconciliation evidence"
+);
+if (String(stableReconciliationUpload?.if ?? "") !== "always()"
+    || stableReconciliationUpload?.with?.path !== "/tmp/stable-alias-reconciliation.json"
+    || stableReconciliationUpload?.with?.["if-no-files-found"] !== "error") {
+  fail(`${publishFile}:promote-tag: paired stable-alias evidence must upload after every outcome`);
 }
 
 const scanFile = ".github/workflows/container-scan.yml";
 const scan = workflows[scanFile];
+const containerConfig = scan?.jobs?.["container-config"];
 const imageScan = scan?.jobs?.["image-scan"];
+requireNode24Setup(scanFile, "container-config", containerConfig);
+requireContainerConfigStep(scanFile, "container-config", containerConfig);
 requireNode24Setup(scanFile, "image-scan", imageScan);
 requireExactMatrix(scanFile, "image-scan", imageScan);
 requireTrivy(scanFile, "image-scan", imageScan);
@@ -326,6 +805,19 @@ requireExactGitBuildContext(scanFile, "image-scan", imageScan, actionStep(imageS
 const containerGate = scan?.jobs?.["container-scan-gate"];
 if (containerGate?.name !== "Container scan gate") fail(`${scanFile}: aggregate check name changed`);
 if (!String(containerGate?.if ?? "").includes("always()")) fail(`${scanFile}: aggregate gate must run after scan failure or cancellation`);
+const containerGateNeeds = Array.isArray(containerGate?.needs)
+  ? containerGate.needs
+  : [containerGate?.needs].filter(Boolean);
+for (const dependency of ["container-config", "image-scan"]) {
+  if (!containerGateNeeds.includes(dependency)) {
+    fail(`${scanFile}:container-scan-gate: aggregate must require ${dependency}`);
+  }
+}
+const containerGateRun = String(containerGate?.steps?.[0]?.run ?? "");
+if (!containerGateRun.includes('test "${CONTAINER_CONFIG_RESULT}" = success')
+    || containerGate?.steps?.[0]?.env?.CONTAINER_CONFIG_RESULT !== "${{ needs.container-config.result }}") {
+  fail(`${scanFile}:container-scan-gate: aggregate must fail when container configuration policy fails`);
+}
 
 const trivyIgnoreSource = readFileSync(".trivyignore.yaml", "utf8");
 const trivyIgnore = parse(trivyIgnoreSource);
@@ -344,19 +836,189 @@ for (const cve of allowedPolicyCves) {
     fail(`.trivyignore.yaml: ${cve} must be scoped to the exact Compose target, Docker module PURL, and reachability statement`);
   }
 }
+const rootPackage = JSON.parse(readFileSync("package.json", "utf8"));
+if (rootPackage?.scripts?.["check:gitleaks"] !== "bash scripts/check-gitleaks.sh") {
+  fail("package.json: the reviewed Gitleaks gate must remain directly runnable");
+}
+const releaseProcess = readFileSync(".github/RELEASE_PROCESS.md", "utf8");
+for (const command of [
+  "node scripts/bootstrap-npm.mjs",
+  "npm ci --engine-strict --strict-allow-scripts --dangerously-allow-all-scripts=false --ignore-scripts=false",
+  "npm run check:npm-version",
+  "npm run check:npm-install-policy",
+  "npm run check:gitleaks",
+  "npm run check:go-attribution",
+  "npm run test:go-attribution-policy",
+  "npm run test:container-config-policy",
+  "npm run test:release-image-policy",
+  "npm run test:release-alias-policy",
+  "npm run test:acceptance-policy",
+  "npm run check:container-config",
+  "npm run acceptance:assert-report",
+  "npm run release:verify-images"
+]) {
+  if (!releaseProcess.includes(command)) {
+    fail(`.github/RELEASE_PROCESS.md: local release verification is missing CI-parity command ${command}`);
+  }
+}
+if (rootPackage?.scripts?.["check:container-config"] !== "node scripts/check-container-config.mjs"
+    || rootPackage?.scripts?.["test:container-config-policy"] !== "node --test scripts/container-config-policy.test.mjs"
+    || rootPackage?.scripts?.["test:release-image-policy"] !== "node --test scripts/oci-rootfs.test.mjs"
+    || rootPackage?.scripts?.["test:release-alias-policy"] !== "bash scripts/reconcile-image-alias-pair.test.sh") {
+  fail("package.json: container configuration live gate and policy tests must remain directly runnable");
+}
+const containerConfigSource = readFileSync("scripts/check-container-config.mjs", "utf8");
+for (const invariant of [
+  "aquasec/trivy:0.72.0@sha256:cffe3f5161a47a6823fbd23d985795b3ed72a4c806da4c4df16266c02accdd6f",
+  'const useDocker = !cliOptions.has("--local")',
+  '"--ignorefile", "/dev/null"',
+  "actualVersion !== expectedTrivyVersion",
+  "evaluateContainerConfigReport(target, report)"
+]) {
+  if (!containerConfigSource.includes(invariant)) {
+    fail(`scripts/check-container-config.mjs: missing fail-closed invariant ${invariant}`);
+  }
+}
+const containerPolicySource = readFileSync("scripts/container-config-policy.mjs", "utf8");
+for (const invariant of [
+  'export const expectedTrivyVersion = "0.72.0"',
+  '"Dockerfile.agent:DS-0002"',
+  '"infra/dev/sshhost.Dockerfile:DS-0002"',
+  "userChecks.length !== 1",
+  "admitted.length !== 1",
+  "report?.ArtifactName !== target"
+]) {
+  if (!containerPolicySource.includes(invariant)) {
+    fail(`scripts/container-config-policy.mjs: missing fail-closed invariant ${invariant}`);
+  }
+}
 const releaseImageVerifier = readFileSync("scripts/verify-release-images.mjs", "utf8");
 if (!releaseImageVerifier.includes('"--ignorefile", "/workspace/.trivyignore.yaml"') || releaseImageVerifier.includes("--ignore-policy")) {
   fail("scripts/verify-release-images.mjs: local release scans must use the path- and PURL-scoped YAML ignore file");
+}
+if (releaseImageVerifier.includes('`${reportDirectory}:/reports`')) {
+  fail("scripts/verify-release-images.mjs: the scanner must not receive writable access to archives or verification metadata");
+}
+for (const invariant of [
+  "mkdtempSync(",
+  '`${scanOutputDirectory}:/scan-output`',
+  '`${repositoryRoot}:/workspace:ro`',
+  "copyFileSync(generatedScanPath, scanPath)",
+  "rmSync(scanOutputDirectory, { recursive: true, force: true })",
+  "rmSync(trivyCacheDirectory, { recursive: true, force: true })",
+  "finalArchiveDigest === image.archiveDigest"
+]) {
+  if (!releaseImageVerifier.includes(invariant)) {
+    fail(`scripts/verify-release-images.mjs: isolated scanner output/archive revalidation is missing ${invariant}`);
+  }
 }
 for (const invariant of ["materializeGitBuildContext", "assertSafeTestResultsPath", "GIT_NO_REPLACE_OBJECTS", "buildContextDirectory", "sourceContext.contextDigest", "digestGitBuildContext"]) {
   if (!releaseImageVerifier.includes(invariant)) {
     fail(`scripts/verify-release-images.mjs: exact Git build-context verification is missing ${invariant}`);
   }
 }
+for (const invariant of [
+  "org.opencontainers.image.title",
+  "org.opencontainers.image.source",
+  "org.opencontainers.image.licenses",
+  "verifyLegalArtifacts",
+  "LICENSES/go-modules/manifest.json",
+  "third-party/go-modules/manifest.json",
+  "go-buildinfo/trivy.artifacts.sha256",
+  "go-buildinfo/agent.artifacts.sha256"
+]) {
+  if (!releaseImageVerifier.includes(invariant)) {
+    fail(
+      `scripts/verify-release-images.mjs: exact image label/legal verification is missing ${invariant}`
+    );
+  }
+}
+const cleanupIndex = releaseImageVerifier.indexOf("rmSync(reportDirectory, { recursive: true, force: true });");
+const argumentValidationIndex = releaseImageVerifier.indexOf("if (process.argv.length > 2)");
+if (cleanupIndex < 0 || argumentValidationIndex < 0 || cleanupIndex > argumentValidationIndex) {
+  fail("scripts/verify-release-images.mjs: stale passing evidence must be removed before CLI argument validation");
+}
+const ociRootfsPolicy = readFileSync("scripts/oci-rootfs.mjs", "utf8");
+const ociRootfsTests = readFileSync("scripts/oci-rootfs.test.mjs", "utf8");
+for (const invariant of [
+  'entries.has(".wh..wh..opq")',
+  "addLayerEntry",
+  "duplicate normalized member",
+  "const entry = entries.get(normalizedTarget)",
+  "layerHidesTarget(entries, normalizedTarget)",
+  'value.startsWith("/")',
+  'segments.includes("..")'
+]) {
+  if (!ociRootfsPolicy.includes(invariant)) {
+    fail(`scripts/oci-rootfs.mjs: whiteout-aware final-rootfs policy is missing ${invariant}`);
+  }
+}
+for (const fixture of [
+  "preserves POSIX backslashes instead of treating them as separators",
+  "rejects absolute and parent-traversing layer entries",
+  "rejects duplicate normalized layer members",
+  "detects a direct whiteout",
+  "detects an ancestor whiteout",
+  "detects ancestor and root opaque whiteouts",
+  "a same-layer replacement wins over whiteout markers"
+]) {
+  if (!ociRootfsTests.includes(fixture)) {
+    fail(`scripts/oci-rootfs.test.mjs: missing regression fixture ${fixture}`);
+  }
+}
+if (ociRootfsPolicy.includes('.replaceAll("\\\\", "/")')
+    || releaseImageVerifier.includes('.replaceAll("\\\\", "/")')) {
+  fail("OCI/Linux archive paths must preserve literal backslashes rather than aliasing them to POSIX separators");
+}
+for (const invariant of [
+  "--source-digest",
+  "--signer-workflow",
+  "verify_attested_pair",
+  "rollback_changed_aliases",
+  "prior_app[index]",
+  "prior_agent[index]",
+  'rollback_status="partial-blocked"',
+  'rollback_status="verified-with-retained-new-pair"',
+  'status="failed-retained-new-pair"',
+  'status="final-verification-pending"',
+  'status="final-verification-failed"',
+  "finalInspectionComplete",
+  "finalTargetPairVerified",
+  'kind="new-moving"',
+  "branch|beta|stable",
+  "reconcile_range 1 1",
+  "allow_legacy_pair",
+  "LEGACY_ALIAS_BOOTSTRAP_POLICY",
+  "reconcile_range 0 1",
+  "reconcile_range 2 2",
+  "reconcile_range 3 3",
+  "crossRepositoryAtomicity: false"
+]) {
+  if (!aliasReconciler.includes(invariant)) {
+    fail(`scripts/reconcile-image-alias-pair.sh: paired alias transaction is missing ${invariant}`);
+  }
+}
+const legacyAliasBootstrap = JSON.parse(readFileSync(".github/legacy-alias-bootstrap.json", "utf8"));
+const expectedLegacyAliasBootstrap = [
+  "refs/heads/main:main:5b90ea7b6d34c701692f8c3e0ee45cd693f1d123:sha256:af14de9e6a73173dfb0f06a1ac95ba3abbaf2fb2183c3433ac6e8e242ff4c374:sha256:897b7e17585f4dcd6018a8a61ffc5a2645325ea17fbd385c12db1a300f3a7e79",
+  "refs/tags/v1.2.0:latest:3f679ee96ffcdf3bd88470b8dd91eed052f4e173:sha256:7132e9301647d2b2a38eb9c4e9f1c046af2a61ad662d75a8faa3b2d31fae2e76:sha256:4559fd6c6ec343ff23cd7e0126d741defed10f5c08d6cc3c09c7a1ebed62acf8"
+];
+const actualLegacyAliasBootstrap = (legacyAliasBootstrap?.entries ?? [])
+  .map((entry) => `${entry.targetRef}:${entry.alias}:${entry.revision}:${entry.appDigest}:${entry.agentDigest}`);
+if (legacyAliasBootstrap?.schemaVersion !== 1
+    || JSON.stringify(actualLegacyAliasBootstrap) !== JSON.stringify(expectedLegacyAliasBootstrap)
+    || legacyAliasBootstrap.entries.some((entry) =>
+      entry.status !== "pending"
+      || entry.expiresOn !== "2026-09-30"
+      || entry.appImage !== "ghcr.io/composebastion-admin/composebastion-app"
+      || entry.agentImage !== "ghcr.io/composebastion-admin/composebastion-agent"
+    )) {
+  fail(".github/legacy-alias-bootstrap.json: one-time migration must remain limited to the two observed unattested stable alias pairs");
+}
 const appDockerfile = readFileSync("Dockerfile", "utf8");
 const agentDockerfile = readFileSync("Dockerfile.agent", "utf8");
 const nodeBase = "node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a";
-const goBuilder = "golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2";
+const goBuilder = "golang:1.26.6-alpine@sha256:af8d6740070b8906d12eae1c3e3ea0957fb63f492051ea05e354c38ef9fe88df";
 
 function requirePinnedExternalImages(file, dockerfile) {
   const stageAliases = new Set(
@@ -379,10 +1041,12 @@ if (!/^ARG TRIVY_SOURCE_COMMIT=8a32853686209a428179bb3a1688802b25691564$/m.test(
   fail("Dockerfile: embedded Trivy source must be pinned to the reviewed v0.72.0 commit and archive checksum");
 }
 if (!/^ARG TRIVY_ORAS_VERSION=v2\.6\.2$/m.test(appDockerfile)
+    || !/^ARG TRIVY_GO_GIT_VERSION=v5\.19\.2$/m.test(appDockerfile)
     || !appDockerfile.includes('go get "oras.land/oras-go/v2@${TRIVY_ORAS_VERSION}"')
+    || !appDockerfile.includes('go get "github.com/go-git/go-git/v5@${TRIVY_GO_GIT_VERSION}"')
     || !appDockerfile.includes("go test oras.land/oras-go/v2/content/file -run '^Test_extractTarDirectory_HardLink$'")
     || !appDockerfile.includes(goBuilder)) {
-  fail("Dockerfile: embedded Trivy must retain the reviewed ORAS and patched Go toolchain rebuild");
+  fail("Dockerfile: embedded Trivy must retain the reviewed ORAS, go-git, and patched Go toolchain rebuild");
 }
 for (const [invariant, message] of [
   [nodeBase, "pinned multi-architecture Node base"],
@@ -391,6 +1055,7 @@ for (const [invariant, message] of [
   ['echo "${TRIVY_SOURCE_SHA256}  /tmp/trivy-source.tar.gz" | sha256sum -c -', "Trivy source checksum verification"],
   ["go build -mod=readonly -buildvcs=false -trimpath", "read-only deterministic Trivy module build"],
   ['go version -m /out/trivy | grep -F "oras.land/oras-go/v2"', "embedded ORAS version verification"],
+  ['go version -m /out/trivy | grep -F "github.com/go-git/go-git/v5"', "embedded go-git version verification"],
   ["ARG RCLONE_VERSION=1.74.4", "reviewed rclone version"],
   ["ARG RCLONE_SOURCE_COMMIT=5bc93a2a7ab0ebd0a11352bc4968eabeffb18027", "reviewed rclone source commit"],
   ["ARG RCLONE_SOURCE_SHA256=1d604c49673ddbb8829563c6768d3d69cd0a8ddc4a0beec3b42a9dae3ea34a63", "rclone source checksum"],
@@ -401,6 +1066,9 @@ for (const [invariant, message] of [
   ['echo "${RCLONE_LICENSE_SHA256}  /src/COPYING" | sha256sum -c -', "rclone license verification"],
   ['go get "google.golang.org/grpc@v${GO_GRPC_VERSION}"', "patched manager-tool gRPC dependency"],
   ['go get "golang.org/x/text@v${GO_TEXT_VERSION}"', "patched manager-tool text dependency"],
+  ["go build -mod=readonly -buildvcs=false -trimpath", "read-only deterministic manager-tool builds"],
+  ["go version -m /out/trivy | grep -F \"go1.26.6\"", "Trivy Go version verification"],
+  ["go version -m /out/rclone | grep -F \"go1.26.6\"", "rclone Go version verification"],
   ["COPY --from=trivy-builder /out/licenses/ /licenses/third-party/", "Trivy/ORAS/Go licenses"],
   ["COPY --from=rclone-builder /out/licenses/ /licenses/third-party/", "rclone license and linked-module evidence"],
   ["node -e \"Promise.all([import('@composebastion/shared'), import('semver')])\"", "runtime workspace dependency resolution check"],
@@ -408,6 +1076,8 @@ for (const [invariant, message] of [
   ["go-buildinfo/rclone.modules.tsv", "rclone linked-module inventory"],
   ["go-buildinfo/trivy.artifacts.sha256", "Trivy legal-artifact checksums"],
   ["go-buildinfo/rclone.artifacts.sha256", "rclone legal-artifact checksums"],
+  ["COPY LICENSES/go-modules/ /licenses/third-party/go-modules/", "checked-in Go attribution bundle"],
+  ["node /tmp/go-attribution.mjs verify", "linked Go attribution verification"],
   ['trivy --version | grep -F "Version: ${TRIVY_VERSION}"', "runtime Trivy version check"],
   ['rclone version | grep -F "rclone v${RCLONE_VERSION}"', "runtime rclone version check"]
 ]) {
@@ -443,12 +1113,15 @@ for (const [invariant, message] of [
   ["go build -mod=readonly -buildvcs=false -trimpath", "read-only deterministic Compose build"],
   ["go list -mod=readonly -tags \"e2e\" -deps ./cmd | LC_ALL=C sort -u", "e2e-tagged Compose dependency reachability evidence"],
   ['test "$(grep \'^github.com/docker/docker/\' /out/evidence/docker-compose-go-dependencies.txt)" = "github.com/docker/docker/pkg/namesgenerator"', "Docker daemon package exclusion"],
-  ["go version -m /out/docker | grep -F \"go1.26.5\"", "Docker CLI Go version verification"],
-  ["go version -m /out/docker-compose | grep -F \"go1.26.5\"", "Compose Go version verification"],
+  ["go version -m /out/docker | grep -F \"go1.26.6\"", "Docker CLI Go version verification"],
+  ["go version -m /out/docker-compose | grep -F \"go1.26.6\"", "Compose Go version verification"],
   ["go-buildinfo/docker-cli.modules.tsv", "Docker CLI linked-module inventory"],
   ["go-buildinfo/docker-compose.modules.tsv", "Compose linked-module inventory"],
   ["go-buildinfo/agent.artifacts.sha256", "agent tool legal-artifact checksums"],
   ["COPY --from=docker-tools-builder /out/licenses/ /licenses/third-party/", "Docker/Compose/Go licenses"],
+  ["node -e \"import('@composebastion/shared')\"", "agent runtime workspace dependency resolution check"],
+  ["COPY LICENSES/go-modules/ /licenses/third-party/go-modules/", "checked-in Go attribution bundle"],
+  ["node /tmp/go-attribution.mjs verify", "linked Go attribution verification"],
   ['docker --version | grep -F "Docker version ${DOCKER_CLI_VERSION},"', "runtime Docker CLI version check"],
   ['test "$(docker compose version --short)" = "${COMPOSE_VERSION}"', "runtime Compose version check"]
 ]) {
@@ -460,8 +1133,12 @@ const notices = readFileSync("THIRD-PARTY-NOTICES.md", "utf8");
 for (const component of ["Trivy", "ORAS Go v2", "rclone", "Docker CLI", "Docker Compose", "Go standard library"]) {
   if (!notices.includes(`| ${component} |`)) fail(`THIRD-PARTY-NOTICES.md: missing bundled runtime tool ${component}`);
 }
-if (!notices.includes("Legal review status: pending") || !notices.includes("/licenses/third-party/go-buildinfo/")) {
-  fail("THIRD-PARTY-NOTICES.md: linked Go module evidence and pending manual legal-review status must be explicit");
+if (!notices.includes("checked-in Go attribution manifest, required upstream texts, and checksums")) {
+  fail("THIRD-PARTY-NOTICES.md: automated Go attribution release evidence must be explicit");
+}
+if (!notices.includes("/licenses/third-party/go-buildinfo/")
+    || !notices.includes("/licenses/third-party/go-modules/")) {
+  fail("THIRD-PARTY-NOTICES.md: linked Go module inventory and attribution bundle must be explicit");
 }
 
 if (failures.length > 0) {

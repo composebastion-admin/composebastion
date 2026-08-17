@@ -1,6 +1,17 @@
 import { v4 as uuid } from "uuid";
+import { createHash } from "node:crypto";
 import path from "node:path";
-import type { DockerActionRequest, ImageCleanupCandidate, ImageCleanupTarget, ResourceKind } from "@composebastion/shared";
+import { parse as parseYaml } from "yaml";
+import {
+  isDockerStatsLifecycleTombstone,
+  isDockerStatsRecord,
+  type DockerActionRequest,
+  type DockerStatsRecord,
+  type ImageCleanupCandidate,
+  type ImageCleanupTarget,
+  type ResourceKind,
+  sanitizeUrlDiagnosticText
+} from "@composebastion/shared";
 import type { PoolClient } from "pg";
 import { query, withTransaction } from "../db/pool.js";
 import { buildComposeCommand, buildDockerActionCommand, dockerCommandFailureMessage, inventoryCommands, shQuote, withDockerEnv } from "./commands.js";
@@ -28,19 +39,120 @@ import { normalizeRemotePath, parentRemotePath, statHostPath, writeHostTextFile 
 import { getHostForWorker, markHostChecking, markHostOffline, markHostOnline } from "./hosts.js";
 import { mapResource } from "./mappers.js";
 import { runSshCommand, streamSshCommandLines } from "./ssh.js";
-import { recordStackVersion } from "./stackVersions.js";
 import { readHostTextFileFromWorker, stackRemoteDirectory, writeHostStackFiles } from "./remoteFiles.js";
 import { checkImageUpdatesForHost, findRegistryAuthForReference } from "./imageUpdates.js";
 import { extractImagesFromCompose } from "./composeImages.js";
 import { safeErrorMessage, safeLogValue } from "./operationLogs.js";
 import type { JobExecutionFence } from "./jobs.js";
+import {
+  isRemoteMutationOutcomeUnknown,
+  withRemoteMutationContext
+} from "./remoteMutationProof.js";
+import {
+  gitComposeCheckoutCleanGuardCommands,
+  inspectGitComposeSourceIntegrity,
+  type GitComposeSourceIntegrity
+} from "./gitComposeIntegrity.js";
+import {
+  deploymentEnvironmentBinding,
+  parseDeploymentEnvironment,
+  redactErrorSensitiveValues
+} from "./deploymentEnvironment.js";
+import { decryptSecret } from "./crypto.js";
+import {
+  linkGithubCloneDeploymentStack,
+  loadGithubCloneDeploymentBindingForExecution,
+  type GithubCloneDeploymentExecutionInput
+} from "./githubCloneDeploymentBinding.js";
+import {
+  createAndPersistComposeStackDeploymentIntent,
+  finalizeComposeStackDeploymentIntent
+} from "./composeStackDeploymentIntent.js";
+import { finalizeDeploymentExecutionInTransaction } from "./deploymentExecutionFinalization.js";
 
 function isJobLeaseLost(error: unknown) {
   return error instanceof Error && "code" in error && (error as Error & { code?: unknown }).code === "JOB_LEASE_LOST";
 }
 
+export class DockerRemoteOutcomeUnknownError extends Error {
+  readonly code = "DOCKER_REMOTE_OUTCOME_UNKNOWN";
+
+  constructor(readonly phase: string, readonly operationId?: string) {
+    super(
+      `REMOTE_OUTCOME_UNKNOWN: Remote mutation '${phase}'${operationId ? ` (${operationId})` : ""} lost its authoritative completion response. `
+      + "Wait for bounded quiescence and target reconciliation before retrying this resource."
+    );
+    this.name = "DockerRemoteOutcomeUnknownError";
+  }
+}
+
+type DockerExecutionConstraints = {
+  expectedComposeSha256?: string;
+  expectedGitRevision?: string;
+  expectedGitBranch?: string | null;
+  expectedEnvironmentSha256?: string;
+  environmentOverride?: string;
+  persistedEnvironment?: string;
+  githubCloneOperationJobId?: string;
+  deploymentSourceId?: string | null;
+  deploymentAnalysisId?: string;
+};
+
+function isAmbiguousRemoteTransportError(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const code = "code" in error ? String((error as { code?: unknown }).code ?? "") : "";
+  if ([
+    "AGENT_REQUEST_TIMEOUT",
+    "ABORT_ERR",
+    "ECONNRESET",
+    "ECONNABORTED",
+    "EPIPE",
+    "ETIMEDOUT",
+    "ENOTCONN",
+    "ERR_STREAM_PREMATURE_CLOSE"
+  ].includes(code)) {
+    return true;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return /timed out|closed without an exit status|socket hang up|connection (?:reset|closed|lost)|stream.*(?:closed|destroyed)/i.test(message);
+}
+
 async function executionCheckpoint(fence?: JobExecutionFence) {
   await fence?.assertActive();
+}
+
+async function runFencedRemoteMutation<T>(
+  executionFence: JobExecutionFence | undefined,
+  phase: string,
+  callback: () => Promise<T>
+) {
+  await executionCheckpoint(executionFence);
+  return withRemoteMutationContext(executionFence, phase, async () => {
+    try {
+      const result = await callback();
+      await executionCheckpoint(executionFence);
+      return result;
+    } catch (error) {
+      if (
+        isJobLeaseLost(error)
+        || error instanceof DockerRemoteOutcomeUnknownError
+      ) {
+        throw error;
+      }
+      if (isRemoteMutationOutcomeUnknown(error)) {
+        throw new DockerRemoteOutcomeUnknownError(
+          phase,
+          error && typeof error === "object" && "operationId" in error
+            ? String(error.operationId)
+            : undefined
+        );
+      }
+      if (isAmbiguousRemoteTransportError(error)) {
+        throw new DockerRemoteOutcomeUnknownError(phase);
+      }
+      throw error;
+    }
+  });
 }
 
 async function withExecutionLease<T>(
@@ -65,6 +177,45 @@ function parseJsonLines(stdout: string) {
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+function normalizeDockerStatsRows(value: unknown, message = "Docker returned malformed container stats") {
+  if (!Array.isArray(value)) throw new Error(message);
+  const rows: DockerStatsRecord[] = [];
+  for (const row of value) {
+    if (isDockerStatsLifecycleTombstone(row)) continue;
+    if (!isDockerStatsRecord(row)) throw new Error(message);
+    rows.push(row);
+  }
+  return rows;
+}
+
+function parseDockerStatsStreamLine(line: string) {
+  const normalized = line
+    .replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, "")
+    .trim();
+  if (!normalized) return null;
+  const parsed: unknown = JSON.parse(normalized);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Docker stats row must be a JSON object");
+  }
+  const stats = parsed as Record<string, unknown>;
+  // Docker 29 emits this terminal identity row when a container disappears
+  // during a continuous stats stream. It is lifecycle bookkeeping, not stats.
+  if (isDockerStatsLifecycleTombstone(stats)) return null;
+  if (!isDockerStatsRecord(stats)) {
+    throw new Error("Docker stats row must include a container identity");
+  }
+  return stats;
+}
+
+function parseDockerStatsSnapshot(stdout: string) {
+  const rows: DockerStatsRecord[] = [];
+  for (const line of stdout.split(/\r?\n/)) {
+    const stats = parseDockerStatsStreamLine(line);
+    if (stats) rows.push(stats);
+  }
+  return rows;
 }
 
 function normalizeImageReference(value: string) {
@@ -211,17 +362,143 @@ async function runComposeInWorkingDir(
   host: Awaited<ReturnType<typeof getHostForWorker>>,
   workingDir: string,
   composeCommand: string,
-  timeoutMs: number
+  timeoutMs: number,
+  input?: string | Buffer,
+  executionGuard?: string
 ) {
   const command = `cd ${shQuote(workingDir)} && ${composeCommand}`;
   if (host.connectionMode === "agent") {
+    if (input !== undefined) {
+      throw new Error("An in-memory Compose environment override requires an SSH host.");
+    }
     return runDocker(hostId, command, timeoutMs);
   }
-  const result = await runSshCommand(host.ssh, `cd ${shQuote(workingDir)} && ${withDockerEnv(composeCommand, host.public.dockerSocketPath)}`, { timeoutMs });
+  const remoteComposeCommand = input === undefined
+    ? withDockerEnv(composeCommand, host.public.dockerSocketPath)
+    : (() => {
+        const prefix = "docker compose";
+        if (!composeCommand.startsWith(`${prefix} `)) {
+          throw new Error("The isolated Compose command has an unexpected executable prefix.");
+        }
+        const safePath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin";
+        return [
+          "env -i",
+          `PATH=${shQuote(safePath)}`,
+          "docker",
+          "--host",
+          shQuote(`unix://${host.public.dockerSocketPath}`),
+          "--config",
+          "\"$HOME/.docker\"",
+          `compose${composeCommand.slice(prefix.length)}`
+        ].join(" ");
+      })();
+  const inputGuard = input === undefined
+    ? []
+    : [
+        'test -n "${COMPOSEBASTION_REMOTE_INPUT:-}"',
+        'test ! -L "$COMPOSEBASTION_REMOTE_INPUT"',
+        'test -f "$COMPOSEBASTION_REMOTE_INPUT"',
+        'test "$(stat -c %u -- "$COMPOSEBASTION_REMOTE_INPUT")" = "$(id -u)"',
+        'test "$(stat -c %a -- "$COMPOSEBASTION_REMOTE_INPUT")" = 600'
+      ];
+  const guardedCommand = [
+    ...inputGuard,
+    ...(executionGuard ? [executionGuard] : []),
+    remoteComposeCommand
+  ].join(" && ");
+  const result = await runSshCommand(
+    host.ssh,
+    `cd ${shQuote(workingDir)} && ${guardedCommand}`,
+    { timeoutMs, input }
+  );
   if (result.code !== 0) {
     throw new Error(dockerCommandFailureMessage(`${result.stderr}${result.stdout}`, `Compose command failed with exit code ${result.code}`));
   }
   return result;
+}
+
+function gitComposeExecutionGuard(
+  workingDir: string,
+  composePath: string,
+  constraints: DockerExecutionConstraints,
+  sourceIntegrity: GitComposeSourceIntegrity | null
+) {
+  if (!constraints.expectedGitRevision) return undefined;
+  if (!constraints.expectedComposeSha256) {
+    throw new Error(
+      "A revision-bound Git deployment is missing its Compose digest."
+    );
+  }
+  const relativeComposePath = path.posix.relative(workingDir, composePath);
+  if (
+    !relativeComposePath
+    || relativeComposePath === ".."
+    || relativeComposePath.startsWith("../")
+    || path.posix.isAbsolute(relativeComposePath)
+  ) {
+    throw new Error(
+      "A revision-bound Git deployment must use a Compose file inside its checkout."
+    );
+  }
+  const generatedCompose = relativeComposePath === "composebastion.generated.yaml";
+  const validation = [
+    'checkout_real=$(pwd -P)',
+    'test -n "$checkout_real"',
+    `test "$(git rev-parse --verify HEAD^{commit})" = ${shQuote(constraints.expectedGitRevision)}`,
+    ...(sourceIntegrity?.referencedFiles ?? []).flatMap((relativePath) => {
+      const absolutePath = path.posix.join(workingDir, relativePath);
+      const tracked = generatedCompose && relativePath === relativeComposePath
+        ? []
+        : [`git --literal-pathspecs ls-files --error-unmatch -- ${shQuote(relativePath)} >/dev/null`];
+      return [
+        `test ! -L ${shQuote(absolutePath)}`,
+        `test -f ${shQuote(absolutePath)}`,
+        `resolved_path=$(realpath ${shQuote(absolutePath)})`,
+        'case "$resolved_path" in "$checkout_real"|"$checkout_real"/*) : ;; *) false ;; esac',
+        ...tracked
+      ];
+    }),
+    ...(sourceIntegrity?.buildContexts ?? []).flatMap((relativePath) => {
+      const absolutePath = relativePath === "."
+        ? workingDir
+        : path.posix.join(workingDir, relativePath);
+      return [
+        `test ! -L ${shQuote(absolutePath)}`,
+        `test -d ${shQuote(absolutePath)}`,
+        `resolved_path=$(realpath ${shQuote(absolutePath)})`,
+        'case "$resolved_path" in "$checkout_real"|"$checkout_real"/*) : ;; *) false ;; esac'
+      ];
+    }),
+    ...gitComposeCheckoutCleanGuardCommands(
+      workingDir,
+      sourceIntegrity ?? {
+        composePath: relativeComposePath,
+        referencedFiles: [relativeComposePath],
+        buildContexts: [],
+        runtimePaths: []
+      },
+      generatedCompose ? relativeComposePath : undefined
+    ),
+    `test "$(sha256sum -- ${shQuote(composePath)} | awk '{print $1}')" = ${shQuote(constraints.expectedComposeSha256)}`
+  ].join(" && ");
+  return [
+    `if ! ( ${validation} )`,
+    "then echo 'The Git deployment checkout changed after analysis. Analyze the repository again.' >&2",
+    "exit 74",
+    "fi"
+  ].join("; ");
+}
+
+function composeRequiresBuild(composeYaml: string) {
+  const parsed = parseYaml(composeYaml, { merge: true }) as {
+    services?: Record<string, { build?: unknown } | null>;
+  } | null;
+  return Boolean(
+    parsed?.services
+    && Object.values(parsed.services).some((service) =>
+      service && service.build !== undefined && service.build !== null
+    )
+  );
 }
 
 export async function checkDockerHost(hostId: string, executionFence?: JobExecutionFence) {
@@ -470,8 +747,14 @@ export async function listImageCleanupCandidates(hostId: string): Promise<ImageC
   });
 }
 
-async function cleanupUnusedImages(hostId: string, targets: ImageCleanupTarget[]) {
+async function cleanupUnusedImages(
+  hostId: string,
+  targets: ImageCleanupTarget[],
+  executionFence?: JobExecutionFence
+) {
+  await executionCheckpoint(executionFence);
   const candidates = await listImageCleanupCandidates(hostId);
+  await executionCheckpoint(executionFence);
   const byImageId = new Map(candidates.map((candidate) => [candidate.imageId, candidate]));
   const byReference = new Map(candidates.map((candidate) => [candidate.reference, candidate]));
   const selected = targets.map((target) => byImageId.get(target.imageId) ?? (target.reference ? byReference.get(target.reference) : undefined));
@@ -489,21 +772,56 @@ async function cleanupUnusedImages(hostId: string, targets: ImageCleanupTarget[]
   for (const candidate of selected.filter((item): item is ImageCleanupCandidate => Boolean(item))) {
     const dangling = isDanglingImageReference(candidate.repository, candidate.tag, candidate.reference);
     const removeTarget = dangling ? candidate.imageId : candidate.reference;
-    await runDocker(hostId, `docker image rm ${shQuote(removeTarget)}`, 5 * 60_000);
+    await runFencedRemoteMutation(
+      executionFence,
+      "image.cleanup.remove",
+      () => runDocker(hostId, `docker image rm ${shQuote(removeTarget)}`, 5 * 60_000)
+    );
     removed.push({ imageId: candidate.imageId, reference: candidate.reference });
   }
-  await syncDockerInventory(hostId);
+  await syncDockerInventory(hostId, executionFence);
   return { removed, count: removed.length };
 }
 
-export async function executeDockerAction(action: DockerActionRequest, executionFence?: JobExecutionFence) {
+export async function executeDockerAction(
+  action: DockerActionRequest,
+  executionFence?: JobExecutionFence,
+  constraints: DockerExecutionConstraints = {}
+) {
   const host = await getHostForWorker(action.hostId);
   if (action.type === "host.check") return checkDockerHost(action.hostId, executionFence);
   if (action.type === "host.sync") return syncDockerInventory(action.hostId, executionFence);
-  if (isDemoHost(host.public)) return executeDemoDockerAction(action);
-  if (action.type === "host.mkdir") return createRemoteDirectory(action.hostId, action.payload.path);
-  if (action.type === "git.clone") return cloneGitRepository(action.hostId, action.payload.repositoryUrl, action.payload.directory, action.payload.branch, action.payload.shallow);
-  if (action.type === "git.pull") return pullGitRepository(action.hostId, action.payload.directory, action.payload.branch);
+  if (isDemoHost(host.public)) {
+    await executionCheckpoint(executionFence);
+    const result = await executeDemoDockerAction(action);
+    await executionCheckpoint(executionFence);
+    return result;
+  }
+  if (action.type === "host.mkdir") {
+    return createRemoteDirectory(
+      action.hostId,
+      action.payload.path,
+      executionFence
+    );
+  }
+  if (action.type === "git.clone") {
+    return cloneGitRepository(
+      action.hostId,
+      action.payload.repositoryUrl,
+      action.payload.directory,
+      action.payload.branch,
+      action.payload.shallow,
+      executionFence
+    );
+  }
+  if (action.type === "git.pull") {
+    return pullGitRepository(
+      action.hostId,
+      action.payload.directory,
+      action.payload.branch,
+      executionFence
+    );
+  }
   if (action.type === "git.testRemote") return testGitRemoteAccess(action.hostId, action.payload.repositoryUrl, action.payload.branch);
   if (action.type === "git.cloneDeploy") {
     return cloneAndDeployRepository(
@@ -513,10 +831,31 @@ export async function executeDockerAction(action: DockerActionRequest, execution
       action.payload.projectName,
       action.payload.composePath,
       action.payload.branch,
-      action.payload.repositoryId
+      action.payload.repositoryId,
+      action.payload.sourceCommitSha,
+      action.payload.composeSha256,
+      executionFence
     );
   }
-  if (action.type === "compose.deployPath") return deployComposeFromHostPath(action.hostId, action.payload.projectName, action.payload.workingDir, action.payload.composePath);
+  if (action.type === "compose.deployPath") {
+    if (action.payload.gitPullBeforeDeploy) {
+      await pullGitRepository(
+        action.hostId,
+        action.payload.workingDir,
+        action.payload.branch,
+        executionFence
+      );
+    }
+    return deployComposeFromHostPath(
+      action.hostId,
+      action.payload.projectName,
+      action.payload.workingDir,
+      action.payload.composePath,
+      {},
+      executionFence,
+      constraints
+    );
+  }
   if (action.type === "compose.writeDeployPath") {
     return writeAndDeployComposeFromHostPath(
       action.hostId,
@@ -526,35 +865,78 @@ export async function executeDockerAction(action: DockerActionRequest, execution
       action.payload.composeYaml,
       action.payload.env,
       action.payload.overwrite,
-      action.payload.pullBeforeDeploy
+      action.payload.pullBeforeDeploy,
+      executionFence
     );
   }
 
   if (action.type === "compose.deploy" || action.type === "compose.stop" || action.type === "compose.remove") {
-    return executeComposeAction(action);
+    return executeComposeAction(action, executionFence);
   }
 
-  if (action.type === "container.clone") return cloneContainer(action.hostId, action.payload.targetHostId, action.payload.containerId, action.payload.targetName, action.payload.start);
-  if (action.type === "container.update") return updateContainerToLatest(action.hostId, action.payload.containerId, action.payload.targetImage);
-  if (action.type === "image.cleanup") return cleanupUnusedImages(action.hostId, action.payload.targets);
-  if (action.type === "registry.login") return loginRegistry(action.hostId, action.payload.registryId);
+  if (action.type === "container.clone") {
+    return cloneContainer(
+      action.hostId,
+      action.payload.targetHostId,
+      action.payload.containerId,
+      action.payload.targetName,
+      action.payload.start,
+      executionFence
+    );
+  }
+  if (action.type === "container.update") {
+    return updateContainerToLatest(
+      action.hostId,
+      action.payload.containerId,
+      action.payload.targetImage,
+      executionFence
+    );
+  }
+  if (action.type === "image.cleanup") {
+    return cleanupUnusedImages(
+      action.hostId,
+      action.payload.targets,
+      executionFence
+    );
+  }
+  if (action.type === "registry.login") {
+    return loginRegistry(
+      action.hostId,
+      action.payload.registryId,
+      executionFence
+    );
+  }
 
   if (action.type === "volume.backup" || action.type === "volume.restore" || action.type === "volume.clone") {
     throw new Error(`${action.type} is handled by the backup service.`);
   }
 
   if (action.type === "image.pull") {
-    await loginRegistryForImageIfAvailable(action.hostId, action.payload.image);
+    await loginRegistryForImageIfAvailable(
+      action.hostId,
+      action.payload.image,
+      executionFence
+    );
   }
   if (action.type === "container.run") {
-    await loginRegistryForImageIfAvailable(action.hostId, action.payload.image);
+    await loginRegistryForImageIfAvailable(
+      action.hostId,
+      action.payload.image,
+      executionFence
+    );
   }
 
   const command = buildDockerActionCommand(action);
-  const result = await runDocker(action.hostId, command, 5 * 60_000);
+  const result = await runFencedRemoteMutation(
+    executionFence,
+    action.type,
+    () => runDocker(action.hostId, command, 5 * 60_000)
+  );
   await syncDockerInventory(action.hostId, executionFence);
   if (action.type === "image.pull") {
+    await executionCheckpoint(executionFence);
     await checkImageUpdatesForHost(action.hostId).catch(() => undefined);
+    await executionCheckpoint(executionFence);
   }
   return { stdout: result.stdout, stderr: result.stderr };
 }
@@ -576,12 +958,14 @@ export async function getContainerStats(hostId: string, containerId: string) {
 
 export async function getContainerUsage(hostId: string) {
   const host = await getHostForWorker(hostId);
-  if (isDemoHost(host.public)) return getDemoContainerUsage(hostId);
+  if (isDemoHost(host.public)) {
+    return normalizeDockerStatsRows(await getDemoContainerUsage(hostId));
+  }
   if (host.public.lastStatus === "offline") return [];
   if (host.connectionMode === "agent") {
     if (!host.agent) throw new Error("Agent host is missing agent connection details");
     try {
-      return await getAgentContainerUsage(host.agent);
+      return normalizeDockerStatsRows(await getAgentContainerUsage(host.agent), "Agent returned malformed container usage data");
     } catch (error) {
       // Agents older than 1.0.7 do not expose the read-only usage endpoint. Keep
       // one low-frequency snapshot fallback during rolling upgrades.
@@ -589,24 +973,37 @@ export async function getContainerUsage(hostId: string) {
     }
   }
   const result = await runDocker(hostId, "docker stats --no-stream --format '{{json .}}'", 60_000);
-  return parseJsonLines(result.stdout);
+  return parseDockerStatsSnapshot(result.stdout);
 }
 
 export async function streamContainerUsage(hostId: string, onStats: (stats: Record<string, unknown>) => void, onError: (error: Error) => void) {
   const host = await getHostForWorker(hostId);
+  const forwardStats = (stats: unknown) => {
+    if (isDockerStatsLifecycleTombstone(stats)) return;
+    if (!isDockerStatsRecord(stats)) {
+      onError(new Error("Docker stats row must include a container identity"));
+      return;
+    }
+    onStats(stats);
+  };
   if (isDemoHost(host.public)) {
-    return streamDemoContainerUsage(hostId, onStats);
+    return streamDemoContainerUsage(hostId, forwardStats);
   }
   if (host.connectionMode === "agent") {
     if (!host.agent) throw new Error("Agent host is missing agent connection details");
-    return streamAgentContainerUsage(host.agent, onStats, onError);
+    return streamAgentContainerUsage(
+      host.agent,
+      forwardStats,
+      onError
+    );
   }
   return streamSshCommandLines(
     host.ssh,
     withDockerEnv("docker stats --format '{{json .}}'", host.public.dockerSocketPath),
     (line) => {
       try {
-        onStats(JSON.parse(line) as Record<string, unknown>);
+        const stats = parseDockerStatsStreamLine(line);
+        if (stats) onStats(stats);
       } catch (error) {
         onError(error instanceof Error ? error : new Error(String(error)));
       }
@@ -862,43 +1259,105 @@ type RegistryLoginCredentials = {
   password: string | null;
 };
 
-async function loginRegistryCredentials(hostId: string, registry: RegistryLoginCredentials) {
+async function loginRegistryCredentials(
+  hostId: string,
+  registry: RegistryLoginCredentials,
+  executionFence?: JobExecutionFence
+) {
   if (!registry.username || !registry.password) throw new Error("Registry username and password are required for login");
-  const result = await runDocker(
-    hostId,
-    `printf %s ${shQuote(registry.password)} | docker login ${shQuote(registry.url)} --username ${shQuote(registry.username)} --password-stdin`,
-    120_000
+  const host = await getHostForWorker(hostId);
+  const loginCommand = `docker login ${shQuote(registry.url)} --username ${shQuote(registry.username)} --password-stdin`;
+  const result = await runFencedRemoteMutation(
+    executionFence,
+    "registry.login",
+    async () => {
+      if (host.connectionMode === "agent") {
+        // Compatible agents parse this exact legacy pipe into execFile stdin;
+        // the password never becomes a Docker process argument.
+        return runDocker(
+          hostId,
+          `printf %s ${shQuote(registry.password!)} | ${loginCommand}`,
+          120_000
+        );
+      }
+      const sshResult = await runSshCommand(
+        host.ssh,
+        withDockerEnv(loginCommand, host.public.dockerSocketPath),
+        {
+          input: registry.password!,
+          timeoutMs: 120_000
+        }
+      );
+      if (sshResult.code !== 0) {
+        throw new Error(dockerCommandFailureMessage(
+          `${sshResult.stderr}${sshResult.stdout}`,
+          `Docker login failed with exit code ${sshResult.code}`
+        ));
+      }
+      return sshResult;
+    }
   );
   return { stdout: result.stdout, stderr: result.stderr };
 }
 
-async function loginRegistry(hostId: string, registryId: string) {
-  return loginRegistryCredentials(hostId, await getRegistryForWorker(registryId));
+async function loginRegistry(
+  hostId: string,
+  registryId: string,
+  executionFence?: JobExecutionFence
+) {
+  await executionCheckpoint(executionFence);
+  const registry = await getRegistryForWorker(registryId);
+  await executionCheckpoint(executionFence);
+  return loginRegistryCredentials(hostId, registry, executionFence);
 }
 
-async function loginRegistryForImageIfAvailable(hostId: string, image: string) {
+async function loginRegistryForImageIfAvailable(
+  hostId: string,
+  image: string,
+  executionFence?: JobExecutionFence
+) {
+  await executionCheckpoint(executionFence);
   const registry = await findRegistryAuthForReference(image);
+  await executionCheckpoint(executionFence);
   if (!registry?.username || !registry.password) return false;
-  await loginRegistryCredentials(hostId, registry);
+  await loginRegistryCredentials(hostId, registry, executionFence);
   return true;
 }
 
-async function loginRegistriesForComposeImages(hostId: string, composeYaml: string) {
-  const images = extractImagesFromCompose(composeYaml);
+async function loginRegistriesForComposeImages(
+  hostId: string,
+  composeYaml: string,
+  environment: string,
+  executionFence?: JobExecutionFence
+) {
+  const images = extractImagesFromCompose(composeYaml, environment);
   for (const image of images) {
-    await loginRegistryForImageIfAvailable(hostId, image);
+    await loginRegistryForImageIfAvailable(hostId, image, executionFence);
   }
 }
 
-async function cloneContainer(sourceHostId: string, targetHostId: string, containerId: string, targetName?: string, start = false) {
+async function cloneContainer(
+  sourceHostId: string,
+  targetHostId: string,
+  containerId: string,
+  targetName?: string,
+  start = false,
+  executionFence?: JobExecutionFence
+) {
+  await executionCheckpoint(executionFence);
   const inspect = await runDocker(sourceHostId, `docker inspect ${shQuote(containerId)}`, 60_000);
+  await executionCheckpoint(executionFence);
   const [source] = JSON.parse(inspect.stdout) as any[];
   if (!source) throw new Error("Source container not found");
   const image = String(source.Config?.Image ?? "");
   if (!image) throw new Error("Source container has no image");
 
-  await loginRegistryForImageIfAvailable(targetHostId, image);
-  await runDocker(targetHostId, `docker pull ${shQuote(image)}`, 10 * 60_000);
+  await loginRegistryForImageIfAvailable(targetHostId, image, executionFence);
+  await runFencedRemoteMutation(
+    executionFence,
+    "container.clone.pull",
+    () => runDocker(targetHostId, `docker pull ${shQuote(image)}`, 10 * 60_000)
+  );
   const args = [start ? "docker run -d" : "docker create"];
   args.push("--name", shQuote(targetName || `${String(source.Name ?? "container").replace(/^\//, "")}-clone`));
   for (const env of source.Config?.Env ?? []) args.push("--env", shQuote(String(env)));
@@ -917,8 +1376,12 @@ async function cloneContainer(sourceHostId: string, targetHostId: string, contai
     }
   }
   args.push(shQuote(image));
-  const result = await runDocker(targetHostId, args.join(" "), 5 * 60_000);
-  await syncDockerInventory(targetHostId);
+  const result = await runFencedRemoteMutation(
+    executionFence,
+    "container.clone.create",
+    () => runDocker(targetHostId, args.join(" "), 5 * 60_000)
+  );
+  await syncDockerInventory(targetHostId, executionFence);
   return { stdout: result.stdout, stderr: result.stderr, image };
 }
 
@@ -999,11 +1462,20 @@ function delay(ms: number) {
 
 // Engines release host port forwards asynchronously after a container stops, so
 // an immediate restart of the same binding can transiently fail.
-async function startContainerWithRetry(hostId: string, name: string, attempts = 4) {
+async function startContainerWithRetry(
+  hostId: string,
+  name: string,
+  attempts = 4,
+  executionFence?: JobExecutionFence
+) {
   let lastError: unknown;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
-      return await runDocker(hostId, `docker start ${shQuote(name)}`, 5 * 60_000);
+      return await runFencedRemoteMutation(
+        executionFence,
+        "container.update.start",
+        () => runDocker(hostId, `docker start ${shQuote(name)}`, 5 * 60_000)
+      );
     } catch (error) {
       lastError = error;
       if (!isTransientPortError(error) || attempt === attempts - 1) throw error;
@@ -1013,8 +1485,15 @@ async function startContainerWithRetry(hostId: string, name: string, attempts = 
   throw lastError;
 }
 
-async function updateContainerToLatest(hostId: string, containerId: string, targetImage?: string) {
+async function updateContainerToLatest(
+  hostId: string,
+  containerId: string,
+  targetImage?: string,
+  executionFence?: JobExecutionFence
+) {
+  await executionCheckpoint(executionFence);
   const inspect = await runDocker(hostId, `docker inspect ${shQuote(containerId)}`, 60_000);
+  await executionCheckpoint(executionFence);
   const [source] = JSON.parse(inspect.stdout) as any[];
   if (!source) throw new Error("Container not found");
 
@@ -1026,48 +1505,139 @@ async function updateContainerToLatest(hostId: string, containerId: string, targ
   const previousName = `${name}-previous-${Date.now()}`;
   let renamed = false;
 
-  await loginRegistryForImageIfAvailable(hostId, image);
-  await runDocker(hostId, `docker pull ${shQuote(image)}`, 10 * 60_000);
+  await loginRegistryForImageIfAvailable(hostId, image, executionFence);
+  await runFencedRemoteMutation(
+    executionFence,
+    "container.update.pull",
+    () => runDocker(hostId, `docker pull ${shQuote(image)}`, 10 * 60_000)
+  );
 
   try {
-    if (wasRunning) await runDocker(hostId, `docker stop ${shQuote(containerId)}`, 5 * 60_000);
-    await runDocker(hostId, `docker rename ${shQuote(containerId)} ${shQuote(previousName)}`, 60_000);
+    if (wasRunning) {
+      await runFencedRemoteMutation(
+        executionFence,
+        "container.update.stop",
+        () => runDocker(hostId, `docker stop ${shQuote(containerId)}`, 5 * 60_000)
+      );
+    }
+    await runFencedRemoteMutation(
+      executionFence,
+      "container.update.rename_previous",
+      () => runDocker(hostId, `docker rename ${shQuote(containerId)} ${shQuote(previousName)}`, 60_000)
+    );
     renamed = true;
 
     // Create the replacement and only start it once configuration succeeded. The
     // old container is kept (stopped, renamed) until the new one is running so a
     // failure at any point can still roll back to the previous state.
     const run = buildRunFromInspect(source, name, false, image);
-    const created = await runDocker(hostId, run.command, 5 * 60_000);
+    const created = await runFencedRemoteMutation(
+      executionFence,
+      "container.update.create",
+      () => runDocker(hostId, run.command, 5 * 60_000)
+    );
     for (const network of run.extraNetworks) {
-      await runDocker(hostId, `docker network connect ${shQuote(network)} ${shQuote(name)}`, 60_000);
+      await runFencedRemoteMutation(
+        executionFence,
+        "container.update.network_connect",
+        () => runDocker(hostId, `docker network connect ${shQuote(network)} ${shQuote(name)}`, 60_000)
+      );
     }
-    if (wasRunning) await startContainerWithRetry(hostId, name);
-    await runDocker(hostId, `docker rm ${shQuote(previousName)}`, 120_000);
-    await syncDockerInventory(hostId);
+    if (wasRunning) {
+      await startContainerWithRetry(
+        hostId,
+        name,
+        4,
+        executionFence
+      );
+    }
+    await runFencedRemoteMutation(
+      executionFence,
+      "container.update.remove_previous",
+      () => runDocker(hostId, `docker rm ${shQuote(previousName)}`, 120_000)
+    );
+    await syncDockerInventory(hostId, executionFence);
+    await executionCheckpoint(executionFence);
     await checkImageUpdatesForHost(hostId).catch(() => undefined);
+    await executionCheckpoint(executionFence);
     return { stdout: created.stdout, stderr: created.stderr, image, previousName };
   } catch (error) {
-    await runDocker(hostId, `docker rm --force ${shQuote(name)}`, 60_000).catch(() => undefined);
-    if (renamed) {
-      await runDocker(hostId, `docker rename ${shQuote(previousName)} ${shQuote(name)}`, 60_000).catch(() => undefined);
-      if (wasRunning) await startContainerWithRetry(hostId, name).catch(() => undefined);
+    if (
+      isJobLeaseLost(error)
+      || error instanceof DockerRemoteOutcomeUnknownError
+    ) {
+      throw error;
     }
-    await syncDockerInventory(hostId).catch(() => undefined);
+    let compensationFailed = false;
+    await runFencedRemoteMutation(
+      executionFence,
+      "container.update.compensate_remove_replacement",
+      () => runDocker(hostId, `docker rm --force ${shQuote(name)}`, 60_000)
+    ).catch((compensationError) => {
+      if (!/no such container/i.test(safeErrorMessage(compensationError))) {
+        compensationFailed = true;
+      }
+    });
+    if (renamed) {
+      await runFencedRemoteMutation(
+        executionFence,
+        "container.update.compensate_restore_name",
+        () => runDocker(hostId, `docker rename ${shQuote(previousName)} ${shQuote(name)}`, 60_000)
+      ).catch(() => {
+        compensationFailed = true;
+      });
+      if (wasRunning) {
+        await startContainerWithRetry(
+          hostId,
+          name,
+          4,
+          executionFence
+        ).catch(() => {
+          compensationFailed = true;
+        });
+      }
+    }
+    await syncDockerInventory(hostId, executionFence).catch(() => {
+      compensationFailed = true;
+    });
+    if (compensationFailed) {
+      throw new DockerRemoteOutcomeUnknownError(
+        "container.update.compensation"
+      );
+    }
     throw error;
   }
 }
 
-async function createRemoteDirectory(hostId: string, directory: string) {
+async function createRemoteDirectory(
+  hostId: string,
+  directory: string,
+  executionFence?: JobExecutionFence
+) {
   const host = await getHostForWorker(hostId);
   if (host.connectionMode !== "ssh") throw new Error("Folder creation currently requires SSH host mode.");
   const normalized = normalizeRemotePath(directory);
-  const result = await runSshCommand(host.ssh, `mkdir -p ${shQuote(normalized)}`, { timeoutMs: 30_000 });
+  const result = await runFencedRemoteMutation(
+    executionFence,
+    "host.mkdir",
+    () => runSshCommand(
+      host.ssh,
+      `mkdir -p ${shQuote(normalized)}`,
+      { timeoutMs: 30_000 }
+    )
+  );
   if (result.code !== 0) throw new Error(result.stderr || result.stdout || "Failed to create directory");
   return { path: normalized };
 }
 
-async function cloneGitRepository(hostId: string, repositoryUrl: string, directory: string, branch?: string, shallow = true) {
+async function cloneGitRepository(
+  hostId: string,
+  repositoryUrl: string,
+  directory: string,
+  branch?: string,
+  shallow = true,
+  executionFence?: JobExecutionFence
+) {
   const host = await getHostForWorker(hostId);
   if (host.connectionMode !== "ssh") throw new Error("Repository clone currently requires SSH host mode.");
   const target = normalizeRemotePath(directory);
@@ -1077,7 +1647,15 @@ async function cloneGitRepository(hostId: string, repositoryUrl: string, directo
   if (branch) args.push("--branch", shQuote(branch));
   args.push(shQuote(repositoryUrl), shQuote(target));
   const command = `mkdir -p ${shQuote(parent)} && test ! -e ${shQuote(target)} && ${args.join(" ")}`;
-  const result = await runSshCommand(host.ssh, command, { timeoutMs: 10 * 60_000 });
+  const result = await runFencedRemoteMutation(
+    executionFence,
+    "git.clone",
+    () => runSshCommand(
+      host.ssh,
+      command,
+      { timeoutMs: 10 * 60_000 }
+    )
+  );
   if (result.code !== 0) {
     throw new Error(result.stderr || result.stdout || "Failed to clone repository. Check the URL, branch, host SSH keys, and whether the target folder already exists.");
   }
@@ -1115,10 +1693,19 @@ async function readHostGitMetadata(hostId: string, directory: string, branchOver
   };
 }
 
-async function refreshStackSourceMetadata(hostId: string, stackId: string, workingDir: string, branch?: string | null) {
+async function refreshStackSourceMetadata(
+  hostId: string,
+  stackId: string,
+  workingDir: string,
+  branch?: string | null,
+  executionFence?: JobExecutionFence
+) {
+  await executionCheckpoint(executionFence);
   const metadata = await readHostGitMetadata(hostId, workingDir, branch ?? undefined, false).catch(() => null);
+  await executionCheckpoint(executionFence);
   if (!metadata) return;
-  await query(
+  await executionQuery(
+    executionFence,
     `UPDATE compose_stacks
      SET source_repository_url = COALESCE($3, source_repository_url),
          source_branch = COALESCE($4, source_branch),
@@ -1139,6 +1726,60 @@ async function refreshStackSourceMetadata(hostId: string, stackId: string, worki
   );
 }
 
+async function checkoutTrackedCloneRevision(
+  hostId: string,
+  target: string,
+  binding: GithubCloneDeploymentExecutionInput,
+  executionFence: JobExecutionFence
+) {
+  const host = await getHostForWorker(hostId);
+  if (host.connectionMode !== "ssh") {
+    throw new Error("Tracked clone checkout requires SSH host mode.");
+  }
+  const checkoutGuard = gitComposeCheckoutCleanGuardCommands(
+    target,
+    binding.sourceIntegrity
+  );
+  const script = [
+    "set -e",
+    `test ! -L ${shQuote(target)}`,
+    `cd ${shQuote(target)}`,
+    "git rev-parse --is-inside-work-tree >/dev/null 2>&1",
+    ...checkoutGuard,
+    "git fetch --quiet --tags origin",
+    [
+      `if ! git cat-file -e ${shQuote(`${binding.sourceCommitSha}^{commit}`)} 2>/dev/null`,
+      `then git fetch --quiet --depth=1 origin ${shQuote(binding.sourceCommitSha)} || true`,
+      "fi"
+    ].join("; "),
+    [
+      `if ! git cat-file -e ${shQuote(`${binding.sourceCommitSha}^{commit}`)} 2>/dev/null`,
+      `then git fetch --quiet origin ${shQuote(binding.sourceBranch)} || true`,
+      "fi"
+    ].join("; "),
+    `git cat-file -e ${shQuote(`${binding.sourceCommitSha}^{commit}`)}`,
+    `git checkout --quiet --detach ${shQuote(binding.sourceCommitSha)}`,
+    `test "$(git rev-parse --verify HEAD^{commit})" = ${shQuote(binding.sourceCommitSha)}`,
+    ...checkoutGuard
+  ].join("\n");
+  const checkedOut = await runFencedRemoteMutation(
+    executionFence,
+    "git.cloneDeploy.checkout",
+    () => runSshCommand(
+      host.ssh,
+      `sh -c ${shQuote(script)}`,
+      { timeoutMs: 10 * 60_000 }
+    )
+  );
+  if (checkedOut.code !== 0) {
+    throw new Error(
+      checkedOut.stderr
+      || checkedOut.stdout
+      || "The tracked clone could not be pinned to its queued Git revision."
+    );
+  }
+}
+
 async function cloneAndDeployRepository(
   hostId: string,
   repositoryUrl: string,
@@ -1146,64 +1787,173 @@ async function cloneAndDeployRepository(
   projectName: string,
   composePath: string,
   branch?: string,
-  repositoryId?: string
+  repositoryId?: string,
+  sourceCommitSha?: string,
+  composeSha256?: string,
+  executionFence?: JobExecutionFence
 ) {
+  await executionCheckpoint(executionFence);
   const host = await getHostForWorker(hostId);
   if (host.connectionMode !== "ssh") throw new Error("Clone and deploy currently requires SSH host mode.");
-  const target = normalizeRemotePath(directory);
+  let trackedBinding: GithubCloneDeploymentExecutionInput | null = null;
+  if (repositoryId) {
+    if (!executionFence?.jobId) {
+      throw new Error(
+        "A tracked clone deployment requires a durable job execution fence."
+      );
+    }
+    trackedBinding = await executionFence.withActiveLease((client) =>
+      loadGithubCloneDeploymentBindingForExecution(
+        client,
+        executionFence.jobId!,
+        {
+          repositoryId,
+          hostId,
+          repositoryUrl,
+          directory,
+          branch,
+          composePath,
+          projectName,
+          sourceCommitSha,
+          composeSha256
+        }
+      )
+    );
+  }
+  const cloneRepositoryUrl =
+    trackedBinding?.cloneRepositoryUrl ?? repositoryUrl;
+  const target = trackedBinding?.workingDir ?? normalizeRemotePath(directory);
+  const selectedBranch = trackedBinding?.sourceBranch ?? branch;
+  const selectedComposePath =
+    trackedBinding?.sourceComposePath ?? composePath;
+  const selectedProjectName = trackedBinding?.projectName ?? projectName;
 
   try {
-    await testGitRemoteAccess(hostId, repositoryUrl, branch);
+    await executionCheckpoint(executionFence);
+    await testGitRemoteAccess(
+      hostId,
+      cloneRepositoryUrl,
+      trackedBinding ? undefined : selectedBranch
+    );
+    await executionCheckpoint(executionFence);
     const existing = await runSshCommand(host.ssh, `test -d ${shQuote(`${target}/.git`)} && echo yes || echo no`, { timeoutMs: 30_000 });
+    await executionCheckpoint(executionFence);
     if (existing.stdout.trim() === "yes") {
-      const remoteResult = await runSshCommand(
-        host.ssh,
-        `cd ${shQuote(target)} && (git remote get-url origin >/dev/null 2>&1 && git remote set-url origin ${shQuote(repositoryUrl)} || git remote add origin ${shQuote(repositoryUrl)})`,
-        { timeoutMs: 30_000 }
-      );
+      await executionCheckpoint(executionFence);
+      const remoteResult = await runFencedRemoteMutation(
+          executionFence,
+          "git.cloneDeploy.configure_origin",
+          () => runSshCommand(
+            host.ssh,
+          `cd ${shQuote(target)} && (git remote get-url origin >/dev/null 2>&1 && git remote set-url origin ${shQuote(cloneRepositoryUrl)} || git remote add origin ${shQuote(cloneRepositoryUrl)})`,
+            { timeoutMs: 30_000 }
+          )
+        );
       if (remoteResult.code !== 0) {
         throw new Error(remoteResult.stderr || remoteResult.stdout || "Failed to update repository origin before pulling.");
       }
-      await pullGitRepository(hostId, target, branch);
+      await executionCheckpoint(executionFence);
+      if (trackedBinding && executionFence) {
+        await checkoutTrackedCloneRevision(
+          hostId,
+          target,
+          trackedBinding,
+          executionFence
+        );
+      } else {
+        await pullGitRepository(
+          hostId,
+          target,
+          selectedBranch,
+          executionFence
+        );
+      }
+      await executionCheckpoint(executionFence);
     } else {
-      await cloneGitRepository(hostId, repositoryUrl, target, branch, false);
+      await executionCheckpoint(executionFence);
+      await cloneGitRepository(
+        hostId,
+        cloneRepositoryUrl,
+        target,
+        trackedBinding ? undefined : selectedBranch,
+        false,
+        executionFence
+      );
+      await executionCheckpoint(executionFence);
+      if (trackedBinding && executionFence) {
+        await checkoutTrackedCloneRevision(
+          hostId,
+          target,
+          trackedBinding,
+          executionFence
+        );
+        await executionCheckpoint(executionFence);
+      }
     }
 
-    const deployed = await deployComposeFromHostPath(hostId, projectName, target, composePath);
-    const metadata = await readHostGitMetadata(hostId, target, branch, false).catch(() => null);
-    if (repositoryId) {
-      await query(
-        `UPDATE github_repositories
-         SET last_deployed_at = now(),
-             last_deployed_commit_sha = COALESCE($2, last_deployed_commit_sha),
-             latest_commit_sha = COALESCE($3, $2, latest_commit_sha),
-             update_checked_at = CASE WHEN COALESCE($3, $2)::text IS NULL THEN update_checked_at ELSE now() END,
-             update_check_error = null,
-             last_error = null,
-             updated_at = now()
-         WHERE id = $1`,
-        [repositoryId, metadata?.currentCommit ?? null, metadata?.latestCommit ?? null]
-      );
-    }
+    await executionCheckpoint(executionFence);
+    const deployed = await deployComposeFromHostPath(
+      hostId,
+      selectedProjectName,
+      target,
+      selectedComposePath,
+      {},
+      executionFence,
+      trackedBinding
+        ? {
+          expectedComposeSha256: trackedBinding.composeSha256,
+          expectedGitRevision: trackedBinding.sourceCommitSha,
+          expectedGitBranch: trackedBinding.sourceBranch,
+          expectedEnvironmentSha256: trackedBinding.environmentBinding,
+          environmentOverride: trackedBinding.environment,
+          persistedEnvironment: trackedBinding.environment,
+          githubCloneOperationJobId: executionFence?.jobId
+        }
+        : {}
+    );
+    await executionCheckpoint(executionFence);
+    const metadata = await readHostGitMetadata(
+      hostId,
+      target,
+      selectedBranch,
+      false
+    ).catch(() => null);
+    await executionCheckpoint(executionFence);
     return {
       ...deployed,
-      repositoryUrl,
-      branch: metadata?.branch ?? branch ?? null,
-      currentCommitSha: metadata?.currentCommit ?? null,
-      latestCommitSha: metadata?.latestCommit ?? null
+      repositoryUrl: cloneRepositoryUrl,
+      branch: trackedBinding?.sourceBranch
+        ?? metadata?.branch
+        ?? selectedBranch
+        ?? null,
+      currentCommitSha: trackedBinding?.sourceCommitSha
+        ?? metadata?.currentCommit
+        ?? null,
+      latestCommitSha: metadata?.latestCommit
+        ?? trackedBinding?.sourceCommitSha
+        ?? null,
+      sourceCommitSha: trackedBinding?.sourceCommitSha ?? null,
+      composeSha256: trackedBinding?.composeSha256 ?? null
     };
   } catch (error) {
-    if (repositoryId) {
-      await query("UPDATE github_repositories SET last_error = $2, updated_at = now() WHERE id = $1", [
-        repositoryId,
-        error instanceof Error ? error.message : String(error)
-      ]).catch(() => undefined);
+    if (repositoryId && !isJobLeaseLost(error)) {
+      const message = String(sanitizeUrlDiagnosticText(safeErrorMessage(error)));
+      await executionQuery(
+        executionFence,
+        "UPDATE github_repositories SET last_error = $2, updated_at = now() WHERE id = $1",
+        [repositoryId, message]
+      ).catch(() => undefined);
     }
     throw error;
   }
 }
 
-async function pullGitRepository(hostId: string, directory: string, branchOverride?: string) {
+async function pullGitRepository(
+  hostId: string,
+  directory: string,
+  branchOverride?: string,
+  executionFence?: JobExecutionFence
+) {
   const host = await getHostForWorker(hostId);
   if (host.connectionMode !== "ssh") throw new Error("Repository pull currently requires SSH host mode.");
   const target = normalizeRemotePath(directory);
@@ -1215,11 +1965,26 @@ async function pullGitRepository(hostId: string, directory: string, branchOverri
     "git fetch --quiet --tags origin",
     'if git rev-parse --verify --quiet "origin/$branch" >/dev/null; then if git show-ref --verify --quiet "refs/heads/$branch"; then git checkout "$branch"; else git checkout -b "$branch" "origin/$branch"; fi && git pull --ff-only origin "$branch"; elif git rev-parse --verify --quiet "refs/tags/$branch" >/dev/null; then git checkout --detach "refs/tags/$branch"; else echo "Git ref not found: $branch" >&2; exit 1; fi'
   ].join(" && ");
-  const result = await runSshCommand(host.ssh, command, { timeoutMs: 10 * 60_000 });
+  const result = await runFencedRemoteMutation(
+    executionFence,
+    "git.pull",
+    () => runSshCommand(
+      host.ssh,
+      command,
+      { timeoutMs: 10 * 60_000 }
+    )
+  );
   if (result.code !== 0) {
     throw new Error(result.stderr || result.stdout || "Failed to pull repository. Resolve local changes or branch divergence on the host.");
   }
-  const metadata = await readHostGitMetadata(hostId, target, branchOverride, false).catch(() => null);
+  await executionCheckpoint(executionFence);
+  const metadata = await readHostGitMetadata(
+    hostId,
+    target,
+    branchOverride,
+    false
+  ).catch(() => null);
+  await executionCheckpoint(executionFence);
   return { path: target, stdout: result.stdout, stderr: result.stderr, ...metadata };
 }
 
@@ -1253,25 +2018,44 @@ async function writeAndDeployComposeFromHostPath(
   composeYaml: string,
   env: string | undefined,
   overwrite: boolean,
-  pullBeforeDeploy: boolean
+  pullBeforeDeploy: boolean,
+  executionFence?: JobExecutionFence
 ) {
+  await executionCheckpoint(executionFence);
   const cwd = normalizeRemotePath(workingDir);
   const file = composePath.startsWith("/") ? normalizeRemotePath(composePath) : normalizeRemotePath(path.posix.join(cwd, composePath));
   const envPath = path.posix.join(cwd, ".env");
   if (!overwrite) {
     const composeStat = await statHostPath(hostId, file);
+    await executionCheckpoint(executionFence);
     if (composeStat.exists) throw new Error(`${file} already exists. Confirm overwrite before replacing it.`);
     if (env !== undefined) {
       const envStat = await statHostPath(hostId, envPath);
+      await executionCheckpoint(executionFence);
       if (envStat.exists) throw new Error(`${envPath} already exists. Confirm overwrite before replacing it.`);
     }
   }
 
-  await writeHostTextFile(hostId, file, composeYaml);
+  await runFencedRemoteMutation(
+    executionFence,
+    "compose.writeDeployPath.write_compose",
+    () => writeHostTextFile(hostId, file, composeYaml)
+  );
   if (env !== undefined) {
-    await writeHostTextFile(hostId, envPath, env);
+    await runFencedRemoteMutation(
+      executionFence,
+      "compose.writeDeployPath.write_env",
+      () => writeHostTextFile(hostId, envPath, env)
+    );
   }
-  return deployComposeFromHostPath(hostId, projectName, cwd, file, { pullBeforeDeploy });
+  return deployComposeFromHostPath(
+    hostId,
+    projectName,
+    cwd,
+    file,
+    { pullBeforeDeploy },
+    executionFence
+  );
 }
 
 async function deployComposeFromHostPath(
@@ -1279,97 +2063,247 @@ async function deployComposeFromHostPath(
   projectName: string,
   workingDir: string,
   composePath: string,
-  options: { pullBeforeDeploy?: boolean } = {}
+  options: { pullBeforeDeploy?: boolean } = {},
+  executionFence?: JobExecutionFence,
+  constraints: DockerExecutionConstraints = {}
 ) {
+  await executionCheckpoint(executionFence);
   const host = await getHostForWorker(hostId);
   const cwd = normalizeRemotePath(workingDir);
   const file = composePath.startsWith("/") ? normalizeRemotePath(composePath) : normalizeRemotePath(path.posix.join(cwd, composePath));
   const composeYaml = await readHostTextFileFromWorker(hostId, file);
-  let env = "";
-  try {
-    env = await readHostTextFileFromWorker(hostId, path.posix.join(cwd, ".env"));
-  } catch {
-    env = "";
+  await executionCheckpoint(executionFence);
+  if (constraints.expectedComposeSha256) {
+    const actualComposeSha256 = createHash("sha256")
+      .update(composeYaml, "utf8")
+      .digest("hex");
+    if (actualComposeSha256 !== constraints.expectedComposeSha256) {
+      throw new Error(
+        "The host Compose file changed after analysis. Analyze the repository again."
+      );
+    }
   }
+  const hasEnvironmentOverride = constraints.environmentOverride !== undefined;
+  if (hasEnvironmentOverride) {
+    if (!constraints.expectedEnvironmentSha256) {
+      throw new Error("The deployment environment override is missing its durable digest.");
+    }
+    const actualEnvironmentSha256 = deploymentEnvironmentBinding(
+      constraints.environmentOverride ?? ""
+    );
+    if (actualEnvironmentSha256 !== constraints.expectedEnvironmentSha256) {
+      throw new Error(
+        "The deployment environment changed after it was queued. Analyze the source again."
+      );
+    }
+    if (host.connectionMode !== "ssh") {
+      throw new Error("An in-memory Compose environment override requires an SSH host.");
+    }
+    if (!executionFence) {
+      throw new Error(
+        "The deployment environment override requires a durable job execution fence."
+      );
+    }
+  }
+  let env = constraints.persistedEnvironment ?? "";
+  if (!hasEnvironmentOverride) {
+    try {
+      env = await readHostTextFileFromWorker(hostId, path.posix.join(cwd, ".env"));
+    } catch {
+      env = "";
+    }
+  }
+  await executionCheckpoint(executionFence);
   const gitMetadata = host.connectionMode === "ssh"
-    ? await readHostGitMetadata(hostId, cwd, undefined, false).catch(() => null)
+    ? await readHostGitMetadata(
+        hostId,
+        cwd,
+        constraints.expectedGitBranch ?? undefined,
+        false
+      ).catch(() => null)
     : null;
+  await executionCheckpoint(executionFence);
+  if (
+    constraints.expectedGitRevision
+    && gitMetadata?.currentCommit !== constraints.expectedGitRevision
+  ) {
+    throw new Error(
+      "The host Git checkout changed after analysis. Analyze the repository again."
+    );
+  }
   const sourceType = gitMetadata?.repositoryUrl ? "git" : "host_files";
-
-  const stackName = projectName.replace(/-/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
-  const stackResult = await query(
-    `INSERT INTO compose_stacks (
-       id, host_id, name, project_name, compose_yaml, env, status,
-       source_type, source_repository_url, source_branch, source_working_dir, source_compose_path,
-       source_current_commit_sha, source_latest_commit_sha, source_checked_at, source_check_error
-     )
-     VALUES ($1, $2, $3, $4, $5, $6, 'created', $7, $8, $9, $10, $11, $12, $13, CASE WHEN $12::text IS NULL THEN null ELSE now() END, null)
-     ON CONFLICT (host_id, project_name)
-     DO UPDATE SET
-       compose_yaml = EXCLUDED.compose_yaml,
-       env = EXCLUDED.env,
-       source_type = EXCLUDED.source_type,
-       source_repository_url = EXCLUDED.source_repository_url,
-       source_branch = EXCLUDED.source_branch,
-       source_working_dir = EXCLUDED.source_working_dir,
-       source_compose_path = EXCLUDED.source_compose_path,
-       source_current_commit_sha = EXCLUDED.source_current_commit_sha,
-       source_latest_commit_sha = COALESCE(EXCLUDED.source_latest_commit_sha, compose_stacks.source_latest_commit_sha),
-       source_checked_at = EXCLUDED.source_checked_at,
-       source_check_error = null,
-       updated_at = now()
-     RETURNING *`,
-    [
-      uuid(),
-      hostId,
-      stackName,
-      projectName,
-      composeYaml,
-      env,
-      sourceType,
-      gitMetadata?.repositoryUrl || null,
-      gitMetadata?.branch || null,
-      cwd,
-      file,
-      gitMetadata?.currentCommit || null,
-      gitMetadata?.latestCommit || null
-    ]
+  const relativeComposePath = path.posix.relative(cwd, file);
+  const sourceIntegrity = constraints.expectedGitRevision
+    ? inspectGitComposeSourceIntegrity(composeYaml, relativeComposePath)
+    : null;
+  const buildBeforeUp = composeRequiresBuild(composeYaml);
+  const executionGuard = gitComposeExecutionGuard(
+    cwd,
+    file,
+    constraints,
+    sourceIntegrity
   );
-  const stack = stackResult.rows[0];
-  if (!stack) throw new Error("Failed to persist compose stack from host folder");
-
-  await recordStackVersion({
-    stackId: stack.id,
+  const boundSourceEnvironment = constraints.expectedGitRevision
+    ? constraints.environmentOverride ?? ""
+    : null;
+  const intentJobId = executionFence?.jobId ?? uuid();
+  const intentAttemptCount = executionFence?.attemptCount ?? 1;
+  const stackName = projectName.replace(/-/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+  const stackIntent = await createAndPersistComposeStackDeploymentIntent({
+    jobId: intentJobId,
+    attemptCount: intentAttemptCount,
+    hostId,
+    projectName,
+    name: stackName,
     composeYaml,
     env,
-    source: "host_files",
-    note: `Deploy from ${file}`
-  });
+    source: {
+      type: sourceType,
+      repositoryUrl: gitMetadata?.repositoryUrl || null,
+      branch: gitMetadata?.branch || null,
+      workingDir: cwd,
+      composePath: file,
+      currentCommitSha: gitMetadata?.currentCommit || null,
+      latestCommitSha:
+        gitMetadata?.latestCommit || gitMetadata?.currentCommit || null,
+      environment: boundSourceEnvironment,
+      deploymentSourceId: constraints.deploymentSourceId ?? null
+    },
+    version: {
+      source: "host_files",
+      note: `Deploy from ${file}`,
+      createdBy: null
+    },
+    githubCloneOperationJobId:
+      constraints.githubCloneOperationJobId ?? null
+  }, executionFence);
 
-  await loginRegistriesForComposeImages(hostId, composeYaml);
+  await executionCheckpoint(executionFence);
+  await loginRegistriesForComposeImages(
+    hostId,
+    composeYaml,
+    hasEnvironmentOverride ? constraints.environmentOverride ?? "" : env,
+    executionFence
+  );
   if (options.pullBeforeDeploy) {
-    await runComposeInWorkingDir(hostId, host, cwd, buildComposeCommand(projectName, file, "pull"), 10 * 60_000);
+    await runFencedRemoteMutation(
+      executionFence,
+      "compose.deployPath.pull",
+      () => runComposeInWorkingDir(
+        hostId,
+        host,
+        cwd,
+        buildComposeCommand(
+          projectName,
+          file,
+          "pull",
+          false,
+          hasEnvironmentOverride
+            ? { environmentVariable: "COMPOSEBASTION_REMOTE_INPUT" }
+            : undefined
+        ),
+        10 * 60_000,
+        constraints.environmentOverride,
+        executionGuard
+      )
+    );
   }
-  const result = await runComposeInWorkingDir(hostId, host, cwd, buildComposeCommand(projectName, file, "up"), 10 * 60_000);
+  const result = await runFencedRemoteMutation(
+    executionFence,
+    "compose.deployPath.up",
+    () => runComposeInWorkingDir(
+      hostId,
+      host,
+      cwd,
+      buildComposeCommand(
+        projectName,
+        file,
+        "up",
+        false,
+        hasEnvironmentOverride
+          ? { environmentVariable: "COMPOSEBASTION_REMOTE_INPUT" }
+          : undefined,
+        buildBeforeUp
+      ),
+      10 * 60_000,
+      constraints.environmentOverride,
+      executionGuard
+    )
+  );
 
-  await query("UPDATE compose_stacks SET status = 'deployed', updated_at = now() WHERE id = $1", [stack.id]);
-  if (gitMetadata?.repositoryUrl) {
-    await refreshStackSourceMetadata(hostId, stack.id, cwd, gitMetadata.branch ?? null);
+  // Materialize the encrypted intent only after the exact fenced Compose-up
+  // primitive completed. If the lease is lost here, reconciliation can replay
+  // this same transaction from the terminal proof without duplicating versions.
+  try {
+    const finalizedStack = await withExecutionLease(
+      executionFence,
+      async (client) => {
+        const finalized = await finalizeComposeStackDeploymentIntent(
+          client,
+          stackIntent
+        );
+        if (constraints.githubCloneOperationJobId) {
+          await linkGithubCloneDeploymentStack(
+            client,
+            constraints.githubCloneOperationJobId,
+            finalized.stackId
+          );
+        }
+        const deploymentFinalization = constraints.deploymentAnalysisId
+          ? await finalizeDeploymentExecutionInTransaction(
+              client,
+              constraints.deploymentAnalysisId,
+              finalized.stackId
+            )
+          : null;
+        return { ...finalized, deploymentFinalization };
+      }
+    );
+    const stackId = finalizedStack.stackId;
+    // Keep a fenced intent until completeJob atomically replaces the running
+    // job result. If the lease is lost after this commit, reconciliation still
+    // has authenticated replay material. Unfenced calls never persisted it.
+    if (gitMetadata?.repositoryUrl) {
+      await refreshStackSourceMetadata(
+        hostId,
+        stackId,
+        cwd,
+        gitMetadata.branch ?? null,
+        executionFence
+      );
+    }
+    await syncDockerInventory(hostId, executionFence);
+    await executionCheckpoint(executionFence);
+    await checkImageUpdatesForHost(hostId).catch(() => undefined);
+    await executionCheckpoint(executionFence);
+    return {
+      stackId,
+      workingDir: cwd,
+      composePath: file,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      deploymentFinalization: finalizedStack.deploymentFinalization
+    };
+  } catch (error) {
+    if (error instanceof DockerRemoteOutcomeUnknownError) throw error;
+    throw new DockerRemoteOutcomeUnknownError("compose.deployPath.up");
   }
-  await syncDockerInventory(hostId);
-  await checkImageUpdatesForHost(hostId).catch(() => undefined);
-  return { stackId: stack.id, workingDir: cwd, composePath: file, stdout: result.stdout, stderr: result.stderr };
 }
 
-async function executeComposeAction(action: Extract<DockerActionRequest, { type: "compose.deploy" | "compose.stop" | "compose.remove" }>) {
-  const stackResult = await query<any>("SELECT * FROM compose_stacks WHERE id = $1 AND host_id = $2", [
-    action.payload.stackId,
-    action.hostId
-  ]);
+async function executeComposeAction(
+  action: Extract<DockerActionRequest, { type: "compose.deploy" | "compose.stop" | "compose.remove" }>,
+  executionFence?: JobExecutionFence
+) {
+  await executionCheckpoint(executionFence);
+  const stackResult = await query<any>(
+    "SELECT * FROM compose_stacks WHERE id = $1 AND host_id = $2",
+    [action.payload.stackId, action.hostId]
+  );
   const stack = stackResult.rows[0];
   if (!stack) throw new Error("Compose stack not found");
 
   const host = await getHostForWorker(action.hostId);
+  await executionCheckpoint(executionFence);
 
   // Stacks that live in a real folder on the host (git clones, folder deploys,
   // discovered external projects) must run compose from that folder so relative
@@ -1377,42 +2311,172 @@ async function executeComposeAction(action: Extract<DockerActionRequest, { type:
   // the UI or from the GitHub API have no folder and use a managed copy instead.
   let cwd: string;
   let composeFile: string;
+  let sourceEnvironment: string | undefined;
+  let sourceExecutionGuard: string | undefined;
   if (stack.source_working_dir && stack.source_compose_path) {
     cwd = normalizeRemotePath(String(stack.source_working_dir));
     composeFile = String(stack.source_compose_path).startsWith("/")
       ? normalizeRemotePath(String(stack.source_compose_path))
       : normalizeRemotePath(path.posix.join(cwd, String(stack.source_compose_path)));
+    if (stack.source_type === "git") {
+      if (!executionFence) {
+        throw new Error(
+          "A source-backed Git Compose lifecycle action requires a durable job execution fence."
+        );
+      }
+      const binding = String(stack.source_environment_binding ?? "").toLowerCase();
+      if (!/^[0-9a-f]{64}$/.test(binding)) {
+        throw new Error(
+          "The Git-backed Compose stack has no durable environment binding. Deploy it again from My Library."
+        );
+      }
+      sourceEnvironment = stack.source_environment_encrypted
+        ? decryptSecret(String(stack.source_environment_encrypted))
+        : "";
+      if (deploymentEnvironmentBinding(sourceEnvironment) !== binding) {
+        throw new Error(
+          "The Git-backed Compose stack environment no longer matches its durable binding. Deploy it again from My Library."
+        );
+      }
+      const revision = String(stack.source_current_commit_sha ?? "").toLowerCase();
+      if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(revision)) {
+        throw new Error(
+          "The Git-backed Compose stack is missing its pinned source revision. Deploy it again from My Library."
+        );
+      }
+      const integrity = inspectGitComposeSourceIntegrity(
+        String(stack.compose_yaml),
+        path.posix.relative(cwd, composeFile)
+      );
+      sourceExecutionGuard = gitComposeExecutionGuard(
+        cwd,
+        composeFile,
+        {
+          expectedGitRevision: revision,
+          expectedComposeSha256: createHash("sha256")
+            .update(String(stack.compose_yaml), "utf8")
+            .digest("hex")
+        },
+        integrity
+      );
+    }
   } else {
     cwd = stackRemoteDirectory(stack.id);
-    const written = await writeHostStackFiles(action.hostId, cwd, stack.compose_yaml, stack.env ?? "");
+    const written = await runFencedRemoteMutation(
+      executionFence,
+      "compose.stack.write_files",
+      () => writeHostStackFiles(
+        action.hostId,
+        cwd,
+        stack.compose_yaml,
+        stack.env ?? ""
+      )
+    );
     composeFile = written.composePath;
   }
 
   const composeAction = action.type === "compose.deploy" ? "up" : action.type === "compose.stop" ? "stop" : "down";
-  const command = buildComposeCommand(stack.project_name, composeFile, composeAction, action.type === "compose.remove" ? action.payload.removeVolumes : false);
+  const command = buildComposeCommand(
+    stack.project_name,
+    composeFile,
+    composeAction,
+    action.type === "compose.remove" ? action.payload.removeVolumes : false,
+    sourceEnvironment !== undefined
+      ? { environmentVariable: "COMPOSEBASTION_REMOTE_INPUT" }
+      : undefined,
+    action.type === "compose.deploy" && composeRequiresBuild(stack.compose_yaml)
+  );
+  const sensitiveFailureValues = sourceEnvironment === undefined
+    ? []
+    : [...parseDeploymentEnvironment(sourceEnvironment).values()].filter(Boolean);
 
   let result: { stdout: string; stderr: string };
   try {
     if (action.type === "compose.deploy") {
-      await loginRegistriesForComposeImages(action.hostId, stack.compose_yaml);
+      await executionCheckpoint(executionFence);
+      await loginRegistriesForComposeImages(
+        action.hostId,
+        stack.compose_yaml,
+        sourceEnvironment ?? stack.env ?? "",
+        executionFence
+      );
+      if (action.payload.pullBeforeDeploy) {
+        await runFencedRemoteMutation(
+          executionFence,
+          "compose.deploy.pull",
+          () => runComposeInWorkingDir(
+            action.hostId,
+            host,
+            cwd,
+            buildComposeCommand(
+              stack.project_name,
+              composeFile,
+              "pull",
+              false,
+              sourceEnvironment !== undefined
+                ? { environmentVariable: "COMPOSEBASTION_REMOTE_INPUT" }
+                : undefined
+            ),
+            10 * 60_000,
+            sourceEnvironment,
+            sourceExecutionGuard
+          )
+        );
+      }
     }
-    result = await runComposeInWorkingDir(action.hostId, host, cwd, command, 10 * 60_000);
+    result = await runFencedRemoteMutation(
+      executionFence,
+      action.type,
+      () => runComposeInWorkingDir(
+        action.hostId,
+        host,
+        cwd,
+        command,
+        10 * 60_000,
+        sourceEnvironment,
+        sourceExecutionGuard
+      )
+    );
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    await query("UPDATE compose_stacks SET last_deploy_error = $2, updated_at = now() WHERE id = $1", [stack.id, message]);
-    throw error;
+    if (isJobLeaseLost(error)) throw error;
+    const redactedError = redactErrorSensitiveValues(
+      error,
+      sensitiveFailureValues
+    );
+    redactedError.message = String(
+      sanitizeUrlDiagnosticText(safeErrorMessage(redactedError))
+    );
+    const message = redactedError.message;
+    await executionQuery(
+      executionFence,
+      "UPDATE compose_stacks SET last_deploy_error = $2, updated_at = now() WHERE id = $1",
+      [stack.id, message]
+    );
+    throw redactedError;
   }
 
-  await query("UPDATE compose_stacks SET status = $2, last_deploy_error = null, updated_at = now() WHERE id = $1", [
-    stack.id,
-    action.type === "compose.deploy" ? "deployed" : action.type === "compose.stop" ? "stopped" : "removed"
-  ]);
+  await executionQuery(
+    executionFence,
+    "UPDATE compose_stacks SET status = $2, last_deploy_error = null, updated_at = now() WHERE id = $1",
+    [
+      stack.id,
+      action.type === "compose.deploy" ? "deployed" : action.type === "compose.stop" ? "stopped" : "removed"
+    ]
+  );
   if (action.type === "compose.deploy" && stack.source_working_dir) {
-    await refreshStackSourceMetadata(action.hostId, stack.id, cwd, stack.source_branch ?? null);
+    await refreshStackSourceMetadata(
+      action.hostId,
+      stack.id,
+      cwd,
+      stack.source_branch ?? null,
+      executionFence
+    );
   }
-  await syncDockerInventory(action.hostId);
+  await syncDockerInventory(action.hostId, executionFence);
+  await executionCheckpoint(executionFence);
   if (action.type === "compose.deploy") {
     await checkImageUpdatesForHost(action.hostId).catch(() => undefined);
+    await executionCheckpoint(executionFence);
   }
   return { stdout: result.stdout, stderr: result.stderr };
 }

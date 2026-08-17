@@ -123,6 +123,10 @@ describe("recovery helpers", () => {
       legacyVolumeBackupId: null,
       artifactCount: 3,
       completedArtifactCount: 3,
+      remoteArtifactCount: 2,
+      remoteUploadFailureCount: 1,
+      localRetainedArtifactCount: 3,
+      localRemovedArtifactCount: 0,
       totalBytes: 1024,
       error: null,
       metadata: {},
@@ -135,7 +139,47 @@ describe("recovery helpers", () => {
       lastSuccessfulDrillAt: null
     };
     expect(recoveryAppLabel(point)).toBe("Demo App");
-    expect(recoveryLocalState(point)).toBe("partial");
+    expect(recoveryLocalState(point)).toBe("complete");
     expect(recoveryRemoteState(point)).toBe("partial");
+
+    const completedWithoutRemoteEvidence = {
+      ...point,
+      status: "completed" as const,
+      remoteArtifactCount: 0,
+      remoteUploadFailureCount: 0,
+      metadata: {}
+    };
+    expect(recoveryRemoteState(completedWithoutRemoteEvidence)).toBe("pending");
+
+    const verifiedRemote = {
+      ...completedWithoutRemoteEvidence,
+      remoteArtifactCount: 3
+    };
+    expect(recoveryRemoteState(verifiedRemote)).toBe("synced");
+
+    const restartFailureAfterVerifiedUpload = {
+      ...verifiedRemote,
+      status: "partial" as const,
+      error: "Recovery artifacts were captured, but one or more source containers could not be restarted."
+    };
+    expect(recoveryRemoteState(restartFailureAfterVerifiedUpload)).toBe("synced");
+
+    const remoteUploadFailure = {
+      ...restartFailureAfterVerifiedUpload,
+      remoteUploadFailureCount: 1
+    };
+    expect(recoveryRemoteState(remoteUploadFailure)).toBe("partial");
+
+    const remoteOnly = {
+      ...verifiedRemote,
+      localRetainedArtifactCount: 0,
+      localRemovedArtifactCount: 3
+    };
+    expect(recoveryLocalState(remoteOnly)).toBe("removed");
+
+    expect(recoveryRemoteState({
+      ...completedWithoutRemoteEvidence,
+      metadata: { remoteUploadNotApplicable: true }
+    })).toBe("none");
   });
 });

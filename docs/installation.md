@@ -11,6 +11,8 @@ server deployment.
 - OpenSSL for generating secrets.
 - Network access from the manager to each Docker host you plan to manage.
 - Git only when building from source.
+- Node.js 24 and npm 11.19 or newer within npm 11 when running source or
+  release checks outside the provided Docker build.
 
 The published images support `linux/amd64` and `linux/arm64`, which covers most
 Proxmox Docker VMs, Synology/QNAP-style NAS devices with native Docker support,
@@ -29,11 +31,13 @@ the base images all support the device.
 
 ## Current Published Release
 
-The most recent published stable release is `v1.1.6`.
+The most recent published stable release is `v1.2.0`.
 
 - App image: `ghcr.io/composebastion-admin/composebastion-app`
 - Agent image: `ghcr.io/composebastion-admin/composebastion-agent`
-- Exact release tags: `1.1.6` and `v1.1.6`
+- Exact release tags: `1.2.0` and `v1.2.0`
+- The `beta` tag remains a prerelease channel for both app and agent; the
+  [archived 1.2 beta notes](beta-release.md) describe the promotion candidate.
 - Moving `main` alias, stable-only `latest`, and full-commit `sha-*` indexes
 
 Use `main` only when you intentionally test protected-branch candidates.
@@ -81,6 +85,25 @@ Leave `DATABASE_URL` blank for a new Compose-managed database. A non-empty value
 is an advanced/external-database or existing-install compatibility override and
 takes precedence for `app` and `worker`.
 
+The app and worker images run as numeric UID/GID `1000:1000`. The one-shot
+`storage-init` service runs before both services and safely brings an existing
+backup tree to that identity. Pre-creating the bind-mounted directory remains
+recommended so its host-side location and mode are explicit:
+
+```bash
+sudo install -d -m 0750 -o 1000 -g 1000 /srv/composebastion/backups
+```
+
+If the directory or historical recovery files are root-owned, `storage-init`
+repairs them automatically without deleting or rewriting backup contents. It
+fails closed with an actionable log if the mount cannot be prepared, such as a
+root-squashed remote filesystem.
+
+The companion `database-init` one-shot preserves real explicit/external URLs.
+For only the exact repository-managed legacy URL, it verifies
+`POSTGRES_PASSWORD` and rotates the old managed role credential when required
+before the app and worker start.
+
 Start the stack:
 
 ```bash
@@ -91,8 +114,13 @@ docker compose -f docker-compose.image.yml up -d
 Open `http://<manager-ip>:8080`, create the first owner account, then add a
 Docker host. The `SECURE_COOKIES=false` setting is only for this trusted
 direct-HTTP evaluation path; do not expose it to an untrusted network, and set
-it back to `true` when HTTPS is configured. For production change control, pin
-`COMPOSEBASTION_VERSION` to a release tag such as `1.1.6` instead of `latest`.
+it back to `true` when HTTPS is configured. For production change control,
+resolve one reviewed release record to its full commit and pin
+`COMPOSEBASTION_VERSION` to the corresponding
+`sha-<40-character-sha>` index instead of `latest` or a moving version alias.
+For a deployment that also runs the agent, pin both images to that same
+revision. App and agent moving aliases live in separate GHCR repositories and
+cannot change atomically.
 
 ## Source Build Install
 
@@ -162,9 +190,7 @@ docker compose down
 Create a persistent backup directory on the manager host:
 
 ```bash
-sudo mkdir -p /srv/composebastion/backups
-sudo chown -R root:root /srv/composebastion
-sudo chmod 750 /srv/composebastion /srv/composebastion/backups
+sudo install -d -m 0750 -o 1000 -g 1000 /srv/composebastion/backups
 ```
 
 Set production environment values in `.env`:
@@ -192,9 +218,11 @@ docker compose -f docker-compose.image.yml pull
 docker compose -f docker-compose.image.yml up -d
 ```
 
-To enable the optional non-root/read-only manager overlay, first prepare backup
-directory ownership and follow the [container hardening guide](container-hardening.md).
-The overlay is intentionally not a default in `1.1`.
+The manager image is non-root by default. To add a read-only root filesystem,
+dropped capabilities, and the other optional controls, follow the
+[container hardening guide](container-hardening.md). Prepare bind-mount
+ownership before changing the overlay's `COMPOSEBASTION_UID` or
+`COMPOSEBASTION_GID`.
 
 If you are building from source instead, validate and start with:
 
@@ -245,27 +273,44 @@ Image installs can be updated in-app from Admin -> Operations ->
 ComposeBastion self-update. Configure the manager host as the SSH-mode host
 that runs ComposeBastion, set the Compose directory and file, choose `latest`
 or a pinned release tag, then start the update handoff. The app writes
-job-specific protected script, log, outcome, environment-backup, and immutable
-rollback artifacts in the Compose directory, then starts the script detached
-from the worker. The browser may disconnect briefly while containers restart.
+`.composebastion-self-update.sh` and `.composebastion-self-update.log` in the
+Compose directory, starts the script detached from the worker, pulls the app and
+worker images, and restarts those services. The browser may disconnect briefly
+while the new app container starts.
 
-Installations on 1.0.6, 1.1.2, 1.1.3, 1.1.4, or 1.1.5 must target 1.1.6 first. After the bridge is
-healthy, use its updater to target 1.2. Direct pre-1.2-to-1.2 updates are not
-release-qualified, and `latest` remains on 1.1.6 during the bridge rollout.
+The supported pre-1.2 route is `1.0.6/1.1.2/1.1.3/1.1.4/1.1.5 -> 1.1.6 -> 1.2`. Select the
+`1.1.6` bridge first and verify it is healthy; only then target 1.2. The bridge
+keeps the existing Compose file, performs compatibility work through the pulled
+candidate, and starts app/worker with dependency recreation disabled. Direct
+pre-1.2-to-1.2 updates are not release-qualified. Manual updates require the
+matching target-release Compose file and `scripts/upgrade-image.sh`.
+
+Following `latest` is a homelab convenience, not the production-qualified
+paired update path. Until self-update consumes a durable signed app/agent
+release-pair manifest, production updates must resolve one reviewed release
+revision and pin every participating image to its `sha-<40-character-sha>`
+index before pulling.
 
 Use the manual commands below when the manager host is not managed over SSH,
 when running a source checkout, or when you want to inspect each step yourself.
 
-For homelab/NAS installs following `latest`:
+For an existing image install, save the reviewed target files under distinct
+names and run the target release's wrapper:
 
 ```bash
 cd ~/composebastion
-docker compose -f docker-compose.image.yml pull
-docker compose -f docker-compose.image.yml up -d
+chmod 755 upgrade-image.target.sh
+./upgrade-image.target.sh --version 1.2.0 \
+  --compose docker-compose.image.yml docker-compose.image.target.yml
 ```
 
-For pinned production installs, edit `COMPOSEBASTION_VERSION` in `.env`, then
-run:
+Repeat `--compose CURRENT TARGET` for each overlay. The wrapper promotes the
+target definitions only after candidate verification and performs
+credential-first immutable rollback on failure. Keep its recovery directory if
+the outcome says rollback is incomplete.
+
+For a fresh install, or an update known not to involve a legacy transition, the
+ordinary Compose startup remains:
 
 ```bash
 cd ~/composebastion
@@ -278,8 +323,14 @@ docker compose -f docker-compose.image.yml up -d
 ```bash
 cd ~/composebastion
 git pull --ff-only
-docker compose up -d --build app worker
+npm ci
+npm run upgrade:source
 ```
+
+The wrapper preserves the running app/worker image IDs, runs the same 1.2
+compatibility preparation as image updates, verifies the built candidate, and
+uses an immutable `--no-deps` rollback overlay on failure. It leaves the Git
+checkout unchanged and reports the exact source-revision rollback command.
 
 Before updating a production deployment, export a config backup from
 Admin -> Settings and confirm recent recovery points are usable.

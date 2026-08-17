@@ -18,6 +18,7 @@ import {
   buildContainerManifest,
   buildNetworkManifest,
   composeWorkingDirHostFolder,
+  isDockerDesktopOperatingSystem,
   isHostPathInside
 } from "./recoveryManifest.js";
 
@@ -404,6 +405,15 @@ async function inspectNetworkManifests(hostId: string, inventoryRows: InventoryR
   return manifests;
 }
 
+async function dockerDesktopBindAliasesAvailable(hostId: string) {
+  try {
+    const result = await runDocker(hostId, "docker info --format '{{.OperatingSystem}}'", 30_000);
+    return isDockerDesktopOperatingSystem(result.stdout);
+  } catch {
+    return false;
+  }
+}
+
 export async function analyzeMigrationPlan(
   input: MigrationPlanRequest,
   context: ResolvedAppContext,
@@ -484,8 +494,18 @@ export async function analyzeMigrationPlan(
     manifests.flatMap((container) => container.bindMounts.map((bind) => bind.source))
   ));
   const composeFolder = composeWorkingDirHostFolder(context.workingDir);
+  const hasPotentialDesktopAlias = bindMountSources.some((source) =>
+    source.startsWith("/host_mnt/") || source.startsWith("/private/")
+  );
+  const dockerDesktopAliases = composeFolder && hasPotentialDesktopAlias
+    ? await dockerDesktopBindAliasesAvailable(input.sourceHostId)
+    : false;
   const managedBindMountSources = composeFolder
-    ? bindMountSources.filter((source) => !isHostPathInside(composeFolder.source, source))
+    ? bindMountSources.filter((source) => !isHostPathInside(
+      composeFolder.source,
+      source,
+      { dockerDesktopAliases }
+    ))
     : bindMountSources;
   const hostFolderSources = new Set(managedBindMountSources);
   if (composeFolder) hostFolderSources.add(composeFolder.source);

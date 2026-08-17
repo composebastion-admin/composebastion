@@ -1,8 +1,6 @@
 import type { RecoveryPointDetail } from "@composebastion/shared";
 import { query } from "../db/pool.js";
-import { mapRecoveryArtifact, mapRecoveryPoint } from "./mappers.js";
-import { deleteRecoveryPointRemoteArtifacts } from "./recoveryArtifactDelete.js";
-import { deleteRecoveryPointLocalFiles } from "./recoveryStorage.js";
+import { deleteRecoveryPoint } from "./recoveryPointDelete.js";
 
 function retentionMetadata(point: RecoveryPointDetail) {
   const scheduleId = point.metadata.scheduleId;
@@ -10,19 +8,6 @@ function retentionMetadata(point: RecoveryPointDetail) {
   if (typeof scheduleId !== "string" || !scheduleId) return null;
   if (!Number.isInteger(retentionCount) || retentionCount < 1) return null;
   return { scheduleId, retentionCount };
-}
-
-async function loadRecoveryPointForDelete(id: string): Promise<RecoveryPointDetail | null> {
-  const pointResult = await query("SELECT * FROM recovery_points WHERE id = $1", [id]);
-  if (!pointResult.rows[0]) return null;
-  const artifactResult = await query(
-    "SELECT * FROM recovery_artifacts WHERE recovery_point_id = $1 ORDER BY created_at ASC",
-    [id]
-  );
-  return {
-    ...mapRecoveryPoint(pointResult.rows[0]),
-    artifacts: artifactResult.rows.map(mapRecoveryArtifact)
-  };
 }
 
 export async function enforceScheduledRecoveryRetention(point: RecoveryPointDetail) {
@@ -44,12 +29,7 @@ export async function enforceScheduledRecoveryRetention(point: RecoveryPointDeta
   const failures: string[] = [];
   for (const row of result.rows) {
     try {
-      const stalePoint = await loadRecoveryPointForDelete(row.id);
-      if (!stalePoint) continue;
-      await deleteRecoveryPointRemoteArtifacts(stalePoint);
-      await deleteRecoveryPointLocalFiles(row.id);
-      await query("DELETE FROM recovery_points WHERE id = $1", [row.id]);
-      deletedIds.push(row.id);
+      if (await deleteRecoveryPoint(row.id)) deletedIds.push(row.id);
     } catch (error) {
       failures.push(`${row.id}: ${error instanceof Error ? error.message : String(error)}`);
     }

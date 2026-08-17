@@ -1,0 +1,13 @@
+title = "ComposeBastion reviewed Gitleaks policy"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Exact public placeholders that exercise runtime rejection and migration ordering"
+targetRules = ["generic-api-key"]
+regexTarget = "line"
+regexes = [
+  '''^\s*"compose-contract-agent-token-0123456789abcdef",\s*$''',
+  '''^\s*"003_ssh_password_auth\.sql",\s*$''',
+]

@@ -113,11 +113,57 @@ const job = {
   payload: { migrationRunId: executeRunId }
 };
 
+function recoveryPointRow(
+  id: string,
+  appIdentity = sourceAppIdentity,
+  metadata: Record<string, unknown> = {}
+) {
+  return {
+    id,
+    host_id: sourceHostId,
+    name: "Reusable migration point",
+    app_identity: appIdentity,
+    trigger_kind: "pre_migration",
+    status: "completed",
+    backup_target_id: null,
+    legacy_volume_backup_id: null,
+    profile_id: null,
+    migration_run_id: null,
+    artifact_count: 0,
+    completed_artifact_count: 0,
+    total_bytes: 0,
+    error: null,
+    metadata,
+    created_at: new Date("2026-07-10T10:00:00.000Z"),
+    started_at: new Date("2026-07-10T10:00:00.000Z"),
+    completed_at: new Date("2026-07-10T10:00:00.000Z")
+  };
+}
+
 describe("migration plan execution binding", () => {
+  let existingExecution: boolean;
+  let suppliedPoint: ReturnType<typeof recoveryPointRow> | null;
+
   beforeEach(() => {
     vi.clearAllMocks();
+    existingExecution = false;
+    suppliedPoint = null;
     withTransaction.mockImplementation(async (fn: (client: { query: typeof clientQuery }) => Promise<unknown>) => fn({ query: clientQuery }));
-    query.mockResolvedValue({ rows: [planRow] });
+    query.mockImplementation(async (sql: string) => {
+      if (sql.includes("SELECT * FROM migration_runs")) {
+        return { rows: [planRow] };
+      }
+      if (sql.includes("INSERT INTO migration_runs")) {
+        return { rows: [planRow] };
+      }
+      if (sql.includes("SELECT * FROM recovery_points")) {
+        return { rows: suppliedPoint ? [suppliedPoint] : [] };
+      }
+      if (sql.includes("FROM recovery_artifacts")) {
+        return { rows: [] };
+      }
+      return { rows: [] };
+    });
     refreshMigrationInventories.mockResolvedValue(undefined);
     resolveAppContext.mockResolvedValue({
       label: "Demo",
@@ -133,10 +179,54 @@ describe("migration plan execution binding", () => {
     analyzeMigrationPlan.mockResolvedValue(plan);
     revalidateMigrationPlan.mockResolvedValue(plan);
     recoveryAppIdentitiesEqual.mockReturnValue(true);
-    clientQuery
-      .mockResolvedValueOnce({ rows: [{ id: planRunId }] })
-      .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [executeRow] });
+    clientQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes("pg_advisory_xact_lock")) {
+        return { rows: [] };
+      }
+      if (sql.includes("FROM operation_jobs")) {
+        return { rows: [] };
+      }
+      if (sql.includes("FROM recovery_restore_attempts")) {
+        return { rows: [] };
+      }
+      if (
+        sql.includes("FROM recovery_points")
+        && sql.includes("sourceRestartPending")
+      ) {
+        return { rows: [] };
+      }
+      if (
+        sql.includes("SELECT id FROM migration_runs")
+        && sql.includes("mode = 'plan'")
+      ) {
+        return { rows: [{ id: planRunId }] };
+      }
+      if (sql.includes("WHERE plan_run_id = $1")) {
+        return {
+          rows: existingExecution
+            ? [{ id: executeRunId }]
+            : []
+        };
+      }
+      if (
+        sql.includes("SELECT host_id, app_identity")
+        && sql.includes("FROM recovery_points")
+      ) {
+        return { rows: suppliedPoint ? [suppliedPoint] : [] };
+      }
+      if (sql.includes("INSERT INTO migration_runs")) {
+        return {
+          rows: [{
+            ...executeRow,
+            recovery_point_id: suppliedPoint?.id ?? null
+          }]
+        };
+      }
+      if (sql.includes("UPDATE operation_jobs")) {
+        return { rows: [{ id: job.id }], rowCount: 1 };
+      }
+      return { rows: [] };
+    });
     enqueueJobInTransaction.mockResolvedValue(job);
     notifyJobQueued.mockResolvedValue(undefined);
   });
@@ -164,10 +254,7 @@ describe("migration plan execution binding", () => {
   });
 
   it("rejects a second execution of the same reviewed plan", async () => {
-    clientQuery.mockReset();
-    clientQuery
-      .mockResolvedValueOnce({ rows: [{ id: planRunId }] })
-      .mockResolvedValueOnce({ rows: [{ id: executeRunId }] });
+    existingExecution = true;
 
     const { startMigrationExecute } = await import("../src/services/recoveryCenter.js");
     await expect(startMigrationExecute({ planRunId })).rejects.toMatchObject({
@@ -199,18 +286,10 @@ describe("migration plan execution binding", () => {
 
   it("rejects a legacy recovery point that belongs to a different source application", async () => {
     recoveryAppIdentitiesEqual.mockReturnValue(false);
-    clientQuery.mockReset();
-    clientQuery
-      .mockResolvedValueOnce({ rows: [{ id: planRunId }] })
-      .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({
-        rows: [{
-          host_id: sourceHostId,
-          app_identity: { kind: "compose", projectName: "different-app" },
-          status: "completed",
-          migration_run_id: null
-        }]
-      });
+    suppliedPoint = recoveryPointRow(
+      "00000000-0000-4000-8000-000000000099",
+      { kind: "compose", projectName: "different-app" }
+    );
 
     const { startMigrationExecute } = await import("../src/services/recoveryCenter.js");
     await expect(startMigrationExecute({
@@ -229,21 +308,36 @@ describe("migration plan execution binding", () => {
     expect(notifyJobQueued).not.toHaveBeenCalled();
   });
 
+  it("rejects a legacy recovery point after deletion has claimed it", async () => {
+    suppliedPoint = recoveryPointRow(
+      "00000000-0000-4000-8000-000000000097",
+      sourceAppIdentity,
+      {
+        deletionClaimToken: "delete-claim",
+        deletionClaimedAt: "2026-07-30T10:00:00.000Z"
+      }
+    );
+
+    const { startMigrationExecute } = await import("../src/services/recoveryCenter.js");
+    await expect(startMigrationExecute({
+      sourceHostId,
+      targetHostId,
+      sourceAppIdentity,
+      recoveryPointId: "00000000-0000-4000-8000-000000000097",
+      strategy: "clone",
+      options: { stopSource: false, remapPorts: true, networkMode: "clone" }
+    })).rejects.toMatchObject({
+      code: "MIGRATION_PLAN_STALE",
+      statusCode: 409
+    });
+
+    expect(enqueueJobInTransaction).not.toHaveBeenCalled();
+    expect(notifyJobQueued).not.toHaveBeenCalled();
+  });
+
   it("binds a reusable legacy recovery point through the execution row without claiming child ownership", async () => {
     const legacyPointId = "00000000-0000-4000-8000-000000000098";
-    clientQuery.mockReset();
-    clientQuery
-      .mockResolvedValueOnce({ rows: [{ id: planRunId }] })
-      .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({
-        rows: [{
-          host_id: sourceHostId,
-          app_identity: sourceAppIdentity,
-          status: "completed",
-          migration_run_id: null
-        }]
-      })
-      .mockResolvedValueOnce({ rows: [{ ...executeRow, recovery_point_id: legacyPointId }] });
+    suppliedPoint = recoveryPointRow(legacyPointId);
 
     const { startMigrationExecute } = await import("../src/services/recoveryCenter.js");
     const result = await startMigrationExecute({

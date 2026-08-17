@@ -16,6 +16,12 @@ export function withDockerEnv(command: string, socketPath?: string) {
 
 export function dockerCommandFailureMessage(output: string, fallback: string) {
   const message = output.trim();
+  if (/server gave HTTP response to HTTPS client/i.test(message)) {
+    const registry = /https:\/\/([^/"'\s]+)\/v2\//i.exec(message)?.[1];
+    return registry
+      ? `Docker does not trust HTTP registry '${registry}'. Configure it as an insecure registry on this host, then retry the deployment.`
+      : "Docker tried HTTPS for a registry that only serves HTTP. Configure that registry as insecure on this host, then retry the deployment.";
+  }
   if (/(\bdocker:\s+command not found\b|\bdocker:\s+not found\b|\bcommand not found:\s+docker\b)/i.test(message)) {
     return "Docker CLI was not found on the remote host. Install Docker, or make sure the docker command is available to non-interactive SSH sessions.";
   }
@@ -104,10 +110,28 @@ export function buildDockerActionCommand(action: DockerActionRequest) {
   }
 }
 
-export function buildComposeCommand(projectName: string, remoteComposePath: string, action: "up" | "stop" | "down" | "pull", removeVolumes = false) {
-  const base = `docker compose -p ${shQuote(projectName)} -f ${shQuote(remoteComposePath)}`;
+export function buildComposeCommand(
+  projectName: string,
+  remoteComposePath: string,
+  action: "up" | "stop" | "down" | "pull",
+  removeVolumes = false,
+  environmentFile?:
+    | { path: string }
+    | { environmentVariable: "COMPOSEBASTION_REMOTE_INPUT" },
+  buildBeforeUp = false
+) {
+  const envFile = environmentFile
+    ? ` --env-file ${
+        "path" in environmentFile
+          ? shQuote(environmentFile.path)
+          : `"$${environmentFile.environmentVariable}"`
+      }`
+    : "";
+  const base = `docker compose${envFile} -p ${shQuote(projectName)} -f ${shQuote(remoteComposePath)}`;
   if (action === "pull") return `${base} pull`;
-  if (action === "up") return `${base} up -d --remove-orphans --force-recreate`;
+  if (action === "up") {
+    return `${base} up -d${buildBeforeUp ? " --build" : ""} --remove-orphans --force-recreate`;
+  }
   if (action === "stop") return `${base} stop`;
   return `${base} down --remove-orphans${removeVolumes ? " --volumes" : ""}`;
 }

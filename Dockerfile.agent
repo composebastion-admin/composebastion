@@ -10,18 +10,23 @@ ARG GO_TEXT_VERSION=0.39.0
 
 FROM node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a AS deps
 WORKDIR /app
+COPY scripts/bootstrap-npm.mjs scripts/bootstrap-npm.mjs
+RUN node scripts/bootstrap-npm.mjs
 COPY package.json package-lock.json ./
 COPY apps/agent/package.json apps/agent/package.json
-RUN npm ci --workspace @composebastion/agent --include-workspace-root=false --ignore-scripts
+COPY packages/shared/package.json packages/shared/package.json
+RUN npm ci --workspace @composebastion/agent --include-workspace-root=false --engine-strict --dangerously-allow-all-scripts=false --ignore-scripts
 
 FROM deps AS build
 WORKDIR /app
 COPY apps/agent apps/agent
+COPY packages/shared packages/shared
 COPY tsconfig.base.json tsconfig.base.json
+RUN npm run build --workspace @composebastion/shared
 RUN npm run build --workspace @composebastion/agent
 RUN npm prune --omit=dev
 
-FROM --platform=$BUILDPLATFORM golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS docker-tools-builder
+FROM --platform=$BUILDPLATFORM golang:1.26.6-alpine@sha256:af8d6740070b8906d12eae1c3e3ea0957fb63f492051ea05e354c38ef9fe88df AS docker-tools-builder
 ENV GOTOOLCHAIN=local
 ARG TARGETOS
 ARG TARGETARCH
@@ -60,8 +65,8 @@ RUN set -eux; \
         -ldflags="-s -w -X github.com/docker/compose/v5/internal.Version=v${COMPOSE_VERSION}" \
         -o /out/docker-compose ./cmd; \
     chmod 0755 /out/docker /out/docker-compose; \
-    go version -m /out/docker | grep -F "go1.26.5"; \
-    go version -m /out/docker-compose | grep -F "go1.26.5"; \
+    go version -m /out/docker | grep -F "go1.26.6"; \
+    go version -m /out/docker-compose | grep -F "go1.26.6"; \
     install -m 0644 /go/src/github.com/docker/cli/LICENSE /out/licenses/docker-cli-LICENSE.txt; \
     install -m 0644 /go/src/github.com/docker/cli/NOTICE /out/licenses/docker-cli-NOTICE.txt; \
     install -m 0644 /src/compose/LICENSE /out/licenses/docker-compose-LICENSE.txt; \
@@ -97,6 +102,9 @@ RUN set -eux; \
     sha256sum docker-cli-LICENSE.txt docker-cli-NOTICE.txt docker-compose-LICENSE.txt docker-compose-NOTICE.txt go-LICENSE.txt go-PATENTS.txt go-buildinfo/docker-cli.modules.tsv go-buildinfo/docker-compose.modules.tsv \
       | LC_ALL=C sort > go-buildinfo/agent.artifacts.sha256
 
+FROM scratch AS docker-tools-artifacts
+COPY --from=docker-tools-builder /out /
+
 FROM node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a AS runtime
 WORKDIR /app
 ARG APP_VERSION
@@ -124,13 +132,18 @@ COPY --from=docker-tools-builder /out/docker /usr/local/bin/docker
 COPY --from=docker-tools-builder /out/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose
 COPY --from=docker-tools-builder /out/licenses/ /licenses/third-party/
 COPY --from=docker-tools-builder /out/evidence/ /usr/share/composebastion/release-evidence/
+COPY LICENSES/go-modules/ /licenses/third-party/go-modules/
+COPY scripts/go-attribution.mjs /tmp/go-attribution.mjs
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/apps/agent/package.json ./apps/agent/package.json
 COPY --from=build /app/apps/agent/dist ./apps/agent/dist
+COPY --from=build /app/packages/shared/package.json ./packages/shared/package.json
+COPY --from=build /app/packages/shared/dist ./packages/shared/dist
 COPY LICENSE.md LICENSING_SUMMARY.md COMMERCIAL-LICENSE.md NOTICE.md THIRD-PARTY-NOTICES.md TRADEMARKS.md /licenses/
 COPY LICENSES /licenses/LICENSES
 RUN mkdir -p /tmp/composebastion
 RUN set -eux; \
+    node -e "import('@composebastion/shared')"; \
     docker --version | grep -F "Docker version ${DOCKER_CLI_VERSION},"; \
     test "$(docker compose version --short)" = "${COMPOSE_VERSION}"; \
     test -s /licenses/third-party/docker-cli-LICENSE.txt; \
@@ -144,6 +157,14 @@ RUN set -eux; \
     test -s /licenses/third-party/go-buildinfo/agent.artifacts.sha256; \
     cd /licenses/third-party; \
     sha256sum -c go-buildinfo/agent.artifacts.sha256; \
-    test "$(grep '^github.com/docker/docker/' /usr/share/composebastion/release-evidence/docker-compose-go-dependencies.txt)" = "github.com/docker/docker/pkg/namesgenerator"
+    test "$(grep '^github.com/docker/docker/' /usr/share/composebastion/release-evidence/docker-compose-go-dependencies.txt)" = "github.com/docker/docker/pkg/namesgenerator"; \
+    node /tmp/go-attribution.mjs verify \
+      --manifest /licenses/third-party/go-modules/manifest.json \
+      --inventory docker-cli=/licenses/third-party/go-buildinfo/docker-cli.modules.tsv \
+      --inventory docker-compose=/licenses/third-party/go-buildinfo/docker-compose.modules.tsv; \
+    rm /tmp/go-attribution.mjs
+# Intentional trust boundary: the default agent mounts a root-owned Docker
+# socket. Docker API access is host-root-equivalent regardless of this UID.
+USER root
 EXPOSE 8090
 CMD ["node", "apps/agent/dist/server.js"]

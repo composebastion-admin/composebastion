@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { captureFocusReturn, scheduleFocusRestoration, type FocusReturnContext } from "../lib/focusRestoration.js";
 
 type ConfirmOptions = {
   title: string;
@@ -12,6 +13,7 @@ type ConfirmOptions = {
 
 type ConfirmState = ConfirmOptions & {
   resolve: (confirmed: boolean) => void;
+  focusReturn: FocusReturnContext;
 };
 
 type ConfirmContextValue = {
@@ -27,11 +29,20 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
   const confirmButtonRef = useRef<HTMLButtonElement | null>(null);
   const cancelButtonRef = useRef<HTMLButtonElement | null>(null);
   const verificationInputRef = useRef<HTMLInputElement | null>(null);
-  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const lastPointerTriggerRef = useRef<{ element: HTMLElement; timestamp: number } | null>(null);
 
   const confirm = useCallback((options: ConfirmOptions) => new Promise<boolean>((resolve) => {
+    const recentPointerTrigger = lastPointerTriggerRef.current;
+    const activeElement = document.activeElement instanceof HTMLElement && document.activeElement !== document.body
+      ? document.activeElement
+      : null;
+    const returnFocus = recentPointerTrigger
+      && Date.now() - recentPointerTrigger.timestamp < 2_000
+      && document.contains(recentPointerTrigger.element)
+      ? recentPointerTrigger.element
+      : activeElement;
     setVerificationValue("");
-    setState({ ...options, resolve });
+    setState({ ...options, resolve, focusReturn: captureFocusReturn(returnFocus) });
   }), []);
 
   const close = useCallback((confirmed: boolean) => {
@@ -40,9 +51,28 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
   }, [state]);
 
   useEffect(() => {
+    function rememberPointerTrigger(event: PointerEvent) {
+      const target = event.target instanceof Element
+        ? event.target.closest<HTMLElement>("button, [href], input, textarea, select, [tabindex]:not([tabindex='-1'])")
+        : null;
+      if (target) lastPointerTriggerRef.current = { element: target, timestamp: Date.now() };
+    }
+    function rememberKeyboardInteraction() {
+      lastPointerTriggerRef.current = null;
+    }
+    document.addEventListener("pointerdown", rememberPointerTrigger, true);
+    document.addEventListener("keydown", rememberKeyboardInteraction, true);
+    return () => {
+      document.removeEventListener("pointerdown", rememberPointerTrigger, true);
+      document.removeEventListener("keydown", rememberKeyboardInteraction, true);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!state) return;
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
+        event.preventDefault();
         close(false);
         return;
       }
@@ -57,18 +87,16 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
         dialog.focus();
         return;
       }
-      const first = focusable[0]!;
-      const last = focusable[focusable.length - 1]!;
-      if (!dialog.contains(document.activeElement)) {
-        event.preventDefault();
-        first.focus();
-      } else if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
+      const activeIndex = document.activeElement instanceof HTMLElement
+        ? focusable.indexOf(document.activeElement)
+        : -1;
+      const nextIndex = activeIndex < 0
+        ? event.shiftKey ? focusable.length - 1 : 0
+        : event.shiftKey
+          ? (activeIndex - 1 + focusable.length) % focusable.length
+          : (activeIndex + 1) % focusable.length;
+      event.preventDefault();
+      focusable[nextIndex]!.focus();
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
@@ -76,16 +104,13 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!state) return;
-    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     window.requestAnimationFrame(() => {
       if (state.verificationText) verificationInputRef.current?.focus();
       else if (state.tone === "danger") cancelButtonRef.current?.focus();
       else confirmButtonRef.current?.focus();
     });
     return () => {
-      const previous = previousFocusRef.current;
-      previousFocusRef.current = null;
-      if (previous && document.contains(previous)) previous.focus();
+      scheduleFocusRestoration(state.focusReturn);
     };
   }, [state]);
 

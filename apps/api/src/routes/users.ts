@@ -1,23 +1,51 @@
 import type { FastifyInstance } from "fastify";
 import { createUser, deleteUser, listUsers, updateUser } from "../services/users.js";
 import { clearSessionCookie, requireRole } from "../services/auth.js";
-import { writeAuditEvent } from "../services/audit.js";
+import { auditContextFromRequest, writeAuditEvent } from "../services/audit.js";
 import { authenticatedReadRateLimit, sensitiveMutationRateLimit } from "../services/rateLimits.js";
 
 export async function registerUserRoutes(app: FastifyInstance) {
   const ownerOrAdmin = requireRole(["owner", "admin"]);
 
-  app.get("/api/users", { preHandler: ownerOrAdmin, config: { rateLimit: authenticatedReadRateLimit } }, async () => ({ users: await listUsers() }));
+  app.get("/api/users", { preHandler: ownerOrAdmin, config: { rateLimit: authenticatedReadRateLimit } }, async (request) => {
+    await writeAuditEvent({
+      userId: request.user?.id,
+      action: "user.list_read",
+      targetKind: "user",
+      ...auditContextFromRequest(request)
+    });
+    return { users: await listUsers() };
+  });
 
   app.post("/api/users", { preHandler: ownerOrAdmin, config: { rateLimit: sensitiveMutationRateLimit } }, async (request) => {
-    const user = await createUser(request.body);
-    await writeAuditEvent({ userId: request.user?.id, action: "user.create", targetKind: "user", targetId: user.id });
+    const user = await createUser(request.body, async (client, created) => {
+      await writeAuditEvent({
+        userId: request.user?.id,
+        action: "user.create",
+        targetKind: "user",
+        targetId: created.id,
+        ...auditContextFromRequest(request)
+      }, client);
+    });
     return { user };
   });
 
   app.put("/api/users/:id", { preHandler: ownerOrAdmin, config: { rateLimit: sensitiveMutationRateLimit } }, async (request, reply) => {
     const { id } = request.params as { id: string };
-    const user = await updateUser(id, request.body, request.user?.id);
+    const user = await updateUser(
+      id,
+      request.body,
+      request.user?.id,
+      async (client) => {
+        await writeAuditEvent({
+          userId: request.user?.id,
+          action: "user.update",
+          targetKind: "user",
+          targetId: id,
+          ...auditContextFromRequest(request)
+        }, client);
+      }
+    );
     if (!user) {
       reply.code(404);
       return { error: "User not found" };
@@ -25,19 +53,29 @@ export async function registerUserRoutes(app: FastifyInstance) {
     if (id === request.user?.id && typeof request.body === "object" && request.body !== null && "password" in request.body) {
       clearSessionCookie(reply);
     }
-    await writeAuditEvent({ userId: request.user?.id, action: "user.update", targetKind: "user", targetId: id });
     return { user };
   });
 
   app.delete("/api/users/:id", { preHandler: ownerOrAdmin, config: { rateLimit: sensitiveMutationRateLimit } }, async (request, reply) => {
     const { id } = request.params as { id: string };
     try {
-      const deleted = await deleteUser(id, request.user?.id);
+      const deleted = await deleteUser(
+        id,
+        request.user?.id,
+        async (client) => {
+          await writeAuditEvent({
+            userId: request.user?.id,
+            action: "user.delete",
+            targetKind: "user",
+            targetId: id,
+            ...auditContextFromRequest(request)
+          }, client);
+        }
+      );
       if (!deleted) {
         reply.code(404);
         return { error: "User not found" };
       }
-      await writeAuditEvent({ userId: request.user?.id, action: "user.delete", targetKind: "user", targetId: id });
       return { ok: true };
     } catch (error) {
       const statusCode = Number((error as { statusCode?: number }).statusCode ?? 500);

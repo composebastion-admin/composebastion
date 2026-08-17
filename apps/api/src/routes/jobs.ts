@@ -5,6 +5,12 @@ import { requireRole } from "../services/auth.js";
 import { sendApiError } from "../services/apiError.js";
 import { auditContextFromRequest, writeAuditEvent } from "../services/audit.js";
 import { authenticatedReadRateLimit, sensitiveMutationRateLimit } from "../services/rateLimits.js";
+import { redactJobSensitiveFields, sanitizeOperationJobForRead } from "../services/mappers.js";
+
+const nonIdempotentWorkerLossTypes = new Set([
+  "host.configureRegistryTrust",
+  "deploy.execute"
+]);
 
 export async function registerJobRoutes(app: FastifyInstance) {
   const viewer = requireRole(["owner", "admin", "operator", "viewer"]);
@@ -12,7 +18,11 @@ export async function registerJobRoutes(app: FastifyInstance) {
 
   app.get("/api/jobs", { preHandler: viewer, config: { rateLimit: authenticatedReadRateLimit } }, async (request) => {
     const page = await listJobs(request.query);
-    return { jobs: page.items, ...page };
+    const sanitized = page.items.map(sanitizeOperationJobForRead);
+    const items = request.user?.role === "viewer"
+      ? sanitized.map(redactJobSensitiveFields)
+      : sanitized;
+    return { jobs: items, ...page, items };
   });
 
   app.get("/api/jobs/status", { preHandler: viewer, config: { rateLimit: authenticatedReadRateLimit } }, async () => ({
@@ -25,47 +35,63 @@ export async function registerJobRoutes(app: FastifyInstance) {
     if (!job) {
       return sendApiError(reply, 404, "NOT_FOUND", "Job not found");
     }
-    return { job };
+    return {
+      job: request.user?.role === "viewer"
+        ? redactJobSensitiveFields(sanitizeOperationJobForRead(job))
+        : sanitizeOperationJobForRead(job)
+    };
   });
 
   app.post("/api/jobs/:id/cancel", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request, reply) => {
     const id = idSchema.parse((request.params as { id: string }).id);
-    const result = await cancelQueuedJob(id);
+    const result = await cancelQueuedJob(id, async (client, canceled) => {
+      await writeAuditEvent({
+        userId: request.user?.id,
+        hostId: canceled.job.hostId,
+        action: "job.cancel",
+        targetKind: "operation_job",
+        targetId: canceled.job.id,
+        details: { type: canceled.job.type },
+        ...auditContextFromRequest(request)
+      }, client);
+    });
     if (!result.job) return sendApiError(reply, 404, "NOT_FOUND", "Job not found");
     if (!result.canceled) return sendApiError(reply, 409, "CONFLICT", "Only queued jobs can be canceled");
-    await writeAuditEvent({
-      userId: request.user?.id,
-      hostId: result.job.hostId,
-      action: "job.cancel",
-      targetKind: "operation_job",
-      targetId: result.job.id,
-      details: { type: result.job.type },
-      ...auditContextFromRequest(request)
-    });
-    return { job: result.job };
+    return { job: sanitizeOperationJobForRead(result.job) };
   });
 
   app.post("/api/jobs/:id/retry", { preHandler: operator, config: { rateLimit: sensitiveMutationRateLimit } }, async (request, reply) => {
     const id = idSchema.parse((request.params as { id: string }).id);
-    const result = await retryJob(id, request.user?.id);
+    const result = await retryJob(id, request.user?.id, async (client, retried) => {
+      await writeAuditEvent({
+        userId: request.user?.id,
+        hostId: retried.original.hostId,
+        action: "job.retry",
+        targetKind: "operation_job",
+        targetId: retried.original.id,
+        details: {
+          retriedJobId: retried.retried.id,
+          type: retried.original.type
+        },
+        ...auditContextFromRequest(request)
+      }, client);
+    });
     if (!result.original) return sendApiError(reply, 404, "NOT_FOUND", "Job not found");
     if (!result.retried) {
+      const ambiguousWorkerLoss = nonIdempotentWorkerLossTypes.has(result.original.type)
+        && result.original.error?.startsWith("WORKER_LOST");
       return sendApiError(
         reply,
         409,
         "CONFLICT",
-        "Only failed or canceled idempotent verification/sync jobs below the three-attempt limit can be retried"
+        ambiguousWorkerLoss
+          ? "The worker lease expired during a non-idempotent operation. Reconcile the deployment or registry state before starting a new operation; automatic replay is disabled."
+          : "This job is not eligible for retry because its status, operation type, host assignment, or attempt limit does not permit replay."
       );
     }
-    await writeAuditEvent({
-      userId: request.user?.id,
-      hostId: result.original.hostId,
-      action: "job.retry",
-      targetKind: "operation_job",
-      targetId: result.original.id,
-      details: { retriedJobId: result.retried.id, type: result.original.type },
-      ...auditContextFromRequest(request)
-    });
-    return { job: result.retried, original: result.original };
+    return {
+      job: sanitizeOperationJobForRead(result.retried),
+      original: sanitizeOperationJobForRead(result.original)
+    };
   });
 }

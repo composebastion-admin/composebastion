@@ -31,6 +31,9 @@ This runbook is the minimum production checklist for a ComposeBastion deployment
   the manager host should be an SSH-mode host, the Compose directory should
   match the deployed stack, and the Compose file should be the image install
   file used by production.
+- For a 1.0.6, 1.1.2, 1.1.3, 1.1.4, or 1.1.5 manager, schedule two distinct jobs: first target 1.1.6
+  and verify readiness, then target 1.2 from the bridge. Do not approve a direct
+  pre-1.2-to-1.2 handoff.
 
 ## Recovery Acceptance Drill
 
@@ -66,9 +69,13 @@ claims for a release.
 3. Confirm migrations are clean with `npm run lint:migrations` in the source tree.
 4. Read the changelog for new migrations, role changes, and agent compatibility notes.
 5. Upgrade a non-critical deployment first when possible.
-6. For in-app self-updates, keep a shell open to the manager host and tail
-   `.composebastion-self-update.log` from the Compose directory until app and
-   worker restart successfully.
+6. For in-app self-updates, copy the update job ID from Admin -> Jobs, keep a
+   shell open to the manager host, and tail
+   `.composebastion-self-update-<jobId>.log` from the Compose directory. Treat
+   `.composebastion-self-update-<jobId>.outcome` as the authoritative terminal
+   result (`status`, `stage`, and `rollback`). Preserve the matching
+   `.env.backup` and `.rollback.yml` artifacts until the job has reconciled and
+   both app and worker are healthy; they are the job-specific rollback evidence.
 
 ## Incident Notes
 
@@ -83,6 +90,19 @@ claims for a release.
 - For job failures, copy the job correlation ID from Admin -> Jobs or Admin ->
   Operations. Match it to worker log `jobId`, API log `jobId`, the job row ID,
   and related audit `targetId` entries.
+- Manual retry is limited to the supported verification/sync operations plus
+  deployment analysis, deployment execution, and registry-trust work below the
+  attempt limit. If a worker lease expires during deployment execution or a
+  registry-trust mutation, ComposeBastion returns a reconciliation warning
+  instead of replaying the non-idempotent operation. Inspect Docker, deployment,
+  and registry state first, then start a new dedicated operation if needed.
+- Registry-trust candidates under
+  `/tmp/composebastion-daemon-<jobId>-<attempt>.json` are temporary and must be
+  removed before reconciliation releases the target. The matching
+  `/etc/docker/daemon.json.composebastion-<jobId>-<attempt>.bak` file is
+  deliberately retained as root-owned rollback evidence after a successful
+  change. Remove that backup only after Docker readiness and registry behavior
+  have been independently verified and the rollback window has closed.
 - API logs use the route as `action` and include `hostId`/`jobId` when those
   route params are available. Worker logs use the Docker action type as `action`.
 - If a host is offline, run a host check from the UI, then verify SSH or agent
@@ -115,4 +135,5 @@ claims for a release.
   but live logs and host `/proc` stats require the newer agent endpoints.
 - V1 expects app and agent images from the same release for live logs, queued
   Docker work, and host `/proc` stats.
-- The current app and agent tags are `1.1.2` and `v1.1.2`.
+- The current stable app and agent tags are `1.2.0` and `v1.2.0`.
+  Pre-1.2 installs must verify the explicit 1.1.6 bridge before that transition.

@@ -3,7 +3,16 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const target = path.join(root, "THIRD-PARTY-NOTICES.md");
+function optionalArgument(flag) {
+  const indexes = process.argv.flatMap((item, index) => item === flag ? [index] : []);
+  if (indexes.length > 1) throw new Error(`${flag} may be provided at most once`);
+  if (indexes.length === 0) return null;
+  const result = process.argv[indexes[0] + 1];
+  if (!result || result.startsWith("--")) throw new Error(`${flag} requires a value`);
+  return result;
+}
+
+const target = path.resolve(root, optionalArgument("--target") ?? "THIRD-PARTY-NOTICES.md");
 const lock = JSON.parse(await readFile(path.join(root, "package-lock.json"), "utf8"));
 const packageJson = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
 const check = process.argv.includes("--check");
@@ -14,7 +23,7 @@ const bundledRuntimeTools = [
   ["rclone", "1.74.4 (5bc93a2a7ab0ebd0a11352bc4968eabeffb18027)", "MIT", "app"],
   ["Docker CLI", "29.6.1 (8900f1d330cb39e93e16d780a26bff1d7e07ba03)", "Apache-2.0", "agent"],
   ["Docker Compose", "5.3.1 (f32009d4a2c687dd405398cc7975d12dccaf8dff)", "Apache-2.0", "agent"],
-  ["Go standard library", "1.26.5", "BSD-3-Clause", "app and agent tool binaries"]
+  ["Go standard library", "1.26.6", "BSD-3-Clause", "app and agent tool binaries"]
 ];
 
 // These packages publish an MIT LICENSE file but omit the package.json license
@@ -67,12 +76,13 @@ These non-npm tools are distributed in the app or agent image. Their applicable
 upstream license and notice files are copied into \`/licenses/third-party/\` in
 the corresponding image.
 
-Each image also records deterministic linked Go module inventories and SHA-256
-evidence for the shipped upstream license/notice artifacts under
-\`/licenses/third-party/go-buildinfo/\`. These inventories make the exact static
-dependency set reviewable, but they are not a complete transitive attribution
-bundle. **Legal review status: pending.** A manual review of the linked module
-inventories and any additional attribution obligations remains a release gate.
+Each image records deterministic linked Go module inventories under
+\`/licenses/third-party/go-buildinfo/\` and carries the checked-in manifest,
+upstream license/notice texts, SPDX classification candidates, and SHA-256
+checksums under \`/licenses/third-party/go-modules/\`. Image builds fail if the
+linked inventory differs from that bundle or a required text is missing.
+The checked-in Go attribution manifest, required upstream texts, and checksums
+are the release evidence for these linked dependencies.
 
 | Component | Reviewed version/source | License | Image |
 |-----------|-------------------------|---------|-------|

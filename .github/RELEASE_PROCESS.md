@@ -9,13 +9,27 @@ deployment, and runtime Docker images.
 - `main`, `beta`, and `dev` are the only persistent branches.
 - Normal changes use a short-lived `codex/*` branch and a pull request into
   `dev`. The branch must be deleted when the pull request is merged or closed.
-- Promote releases with direct `dev` to `beta` and `beta` to `main` pull
-  requests. Do not create a separate promotion branch.
+- Promote prereleases with a direct `dev` to `beta` pull request. Normally,
+  promote an unchanged stable candidate with a direct `beta` to `main` pull
+  request.
+- Stable promotion is the exception when `beta` contains a prerelease version
+  and its exact prerelease image alias is already immutable. Cut one short-lived
+  `codex/release-X.Y.Z` branch from the exact qualified `origin/beta` commit,
+  apply only the stable version bump and other release-only reconciliation on
+  that branch, and open it directly into `main`. Never push a stable version to
+  `beta`, and never republish an immutable prerelease alias from a different
+  commit. Delete the promotion branch after the pull request is merged or
+  closed.
 - A compatibility or security maintenance release for the current stable line
   may use a short-lived pull request directly into `main`.
 - Never force-push or directly push changes to a persistent branch. Historical
   version tags and GitHub releases are immutable artifacts, not branches, and
   are never removed by branch cleanup.
+- `beta` receives push CI, CodeQL, container scans, and isolated app/agent image
+  publication. Promote to `main` only after beta verification passes.
+- Pull requests targeting `dev` receive CodeQL, dependency review, container
+  scanning, and non-publishing image-build checks. Push publication remains
+  restricted to `main` and `beta`; a `dev` push must never publish images.
 - Automated dependency pull requests are disabled to prevent persistent bot
   branches. Keep vulnerability alerts, CodeQL, secret scanning, and
   `npm audit --audit-level=high` enabled; review dependency alerts weekly and
@@ -25,26 +39,55 @@ deployment, and runtime Docker images.
 
 Run the same gates CI expects before release:
 
+- `node scripts/bootstrap-npm.mjs` followed by the exact locked `npm ci`
+- `npm run check:npm-version`
+- `npm run check:npm-install-policy`
 - `npm run typecheck`
 - `npm run lint:migrations`
 - `npm run openapi:check`
 - `npm run check:release-version`
+- `npm run check:public-hygiene`
+- `npm run check:gitleaks`
+- `npm run check:go-attribution`
+- `npm run test:go-attribution-policy`
+- `npm run test:container-config-policy`
+- `npm run test:release-image-policy`
+- `npm run test:release-alias-policy`
+- `npm run test:acceptance-policy`
+- `npm run test:upgrade-preparation`
+- `npm run test:source-upgrade`
+- `npm run test:image-upgrade`
+- `shellcheck scripts/upgrade-image.sh`
 - `npm run notices:check`
 - `npm run check:actions-pinned`
 - `npm run check:release-workflows`
 - `npm run check:compose-env`
 - `npm run check:docker-context`
+- `npm run check:container-config`
 - `npm run acceptance:config`
+- `npm run acceptance:assert-report` after the live acceptance run
 - `npm test`
-- `npm run smoke:web`
+- `npm run smoke:web:qualification`
 - `npm audit --audit-level=high`
 - the serial PostgreSQL integration/concurrency suite, ephemeral SSH integration,
   and full live-stack acceptance
+- both exact public upgrade baselines: `1.1.2` intermediate
+  upgrade/rollback/re-upgrade on retained volumes, and the `1.0.6` legacy
+  long-hop upgrade/credential-rollback/re-upgrade through the immutable
+  `1.1.6` compatibility bridge with the exact pre-1.2 Compose definition
 - `npm run release:verify-images` from the final clean candidate commit
 - Docker compose config validation and runtime image builds when Docker or
   deployment files changed
 - CodeQL, dependency review, container/image scanning, secret scanning, and
   image publishing checks when configured
+
+Automated Go-module attribution verification remains mandatory for every image:
+the linked inventories, upstream texts, SPDX classification candidates, and
+checksums must match the checked-in bundle. No separate manual approval is
+required for `main` or stable-tag publication. Real NAS/cloud evidence is
+collected against a published candidate and is mandatory before making a
+production-qualified claim. It does not block `main` promotion or a stable tag
+whose stated scope is homelab publication.
 
 ## Version Bumps
 
@@ -75,19 +118,33 @@ Run the same gates CI expects before release:
 - Scan both images for high/critical vulnerabilities.
 - Publish container images for every public release and every merge to `main`
   through `.github/workflows/publish-images.yml`.
-- Main image publishes must include `main` and a full-commit
-  `sha-<40-character-sha>` index. Only a verified stable tag may move `latest`.
-  Immutable version tags such as `${VERSION}` and `v${VERSION}` must only be published
-  from `v*` git tags.
+- Every push to `beta` publishes both scanned multi-architecture images to the
+  moving `beta` alias, an exact prerelease version alias such as
+  `X.Y.Z-beta.N`, and immutable full-commit tags. The prerelease alias is
+  immutable: publishing a different digest requires a new prerelease version.
+  Beta publication must never move `main`, `latest`, or stable/minor aliases.
+- Main image publishes must include `main`, deterministic per-platform
+  `sha-<40-character-sha>-amd64` and `sha-<40-character-sha>-arm64` tags, and a
+  multi-platform `sha-<40-character-sha>` index. Only a verified stable tag may
+  move `latest`.
+  Stable immutable aliases such as `${VERSION}` and `v${VERSION}` must only be
+  published from `v*` git tags; exact prerelease aliases are published from
+  `beta` and may never be moved.
 - The workflow builds each app/agent architecture once as an OCI archive,
   scans that exact archive, and requires all four scans before copying any
-  archive to GHCR. Stable tags promote the protected commit's existing SHA
-  indexes and never rebuild them.
+  archive to GHCR. It generates an SPDX JSON SBOM from each exact passing OCI
+  layout, verifies the copied final root filesystem and legal bundle, then
+  attaches signed SBOM attestations to all four platform digests and signed
+  build provenance to both verified indexes before moving a branch alias.
+  Stable tags verify those attestations, promote the protected commit's
+  existing SHA indexes, and never rebuild them.
 - `npm run release:verify-images` applies the same invariant locally. It requires
   a clean checkout; builds app and agent for `linux/amd64` and `linux/arm64`
   exactly once; verifies the archive, manifest, config, platform, and release
-  labels; extracts each verified archive to a fresh OCI layout; and scans that
-  exact content with the immutable Trivy 0.72.0 image.
+  labels; proves the exact candidate legal documents, linked-Go attribution
+  manifest, and component third-party artifacts inside each image; extracts
+  each verified archive to a fresh OCI layout; and scans that exact content
+  with the immutable Trivy 0.72.0 image.
   Its ignored JSON, Markdown, OCI, and scan reports are written below
   `test-results/release-images/`.
 - Multi-arch image publishing targets `linux/amd64` and `linux/arm64` so NAS
@@ -95,6 +152,38 @@ Run the same gates CI expects before release:
   building from source.
 - After publishing, verify the GitHub Actions run and the registry/package page
   instead of assuming the push succeeded.
+- Treat an alias-reconciliation failure as a public-state incident: compare app
+  and agent alias digests with the recorded index pair before retrying or
+  announcing the release.
+- Before moving an existing app/agent alias pair, the workflow captures both
+  prior digests, verifies attested pairs from one source revision, and records
+  the pair. If reconciliation fails, it attempts to restore and verify every
+  alias with a genuine prior digest. A `verified` rollback is required;
+  `rollback-failed` is a public-state incident that blocks retry and
+  announcement. GHCR cannot safely delete only one newly created tag when its
+  manifest is shared. A one-sided new alias is left at the exact new digest,
+  marked `partial-blocked`, and stops later alias phases. A fully reconciled new
+  exact/minor pair is retained if a later alias fails, with
+  `failed-retained-new-pair` evidence, while the workflow attempts to restore
+  every older alias. Every completed workflow attempt uploads paired
+  reconciliation evidence; runner loss or cancellation may prevent upload and
+  therefore also blocks announcement.
+- The first attestation-aware migration has an explicit, expiring allowlist in
+  `.github/legacy-alias-bootstrap.json` for the exact observed unattested
+  `beta`, `main`, and `latest` digest pairs. A legacy pair is admitted only when
+  its alias, ref, two digests, shared revision labels, canonical repositories,
+  pending status, and expiry all match exactly; evidence records
+  `legacy-unattested` because this label/digest allowlist is not cryptographic
+  provenance. Duplicate or approximate matches fail closed. Remove or retire
+  each entry after its one-time channel migration.
+- GHCR cannot atomically update tags across the app and agent repositories, so
+  even a successful run has a brief mismatch window. Moving aliases are
+  discovery hints, not a paired deployment identity. Production consumers must
+  resolve one reviewed release record and use both `sha-<40-character-sha>`
+  indexes. Automated self-update must not independently follow `latest` until
+  it consumes a single durable, signed release-pair manifest. That manifest is
+  not yet published, so moving-alias self-update is outside the
+  production-qualified release path.
 - After the first GHCR publish, confirm package visibility is public enough for
   unauthenticated `docker pull` installs.
 
@@ -116,10 +205,11 @@ Run the same gates CI expects before release:
   aligned before publishing images.
 - Confirm app and agent runtime images contain those legal artifacts under
   `/licenses`.
-- Review each image's deterministic linked Go module inventories and artifact
-  checksums under `/licenses/third-party/go-buildinfo/`. Direct upstream tool
-  and Go license/notice texts are shipped, but transitive Go module attribution
-  review is pending and remains a manual release blocker.
+- Review each image's deterministic linked Go-module inventory against the
+  checked-in manifest and verify the runtime texts and checksums under
+  `/licenses/third-party/go-modules/`. Every consuming binary, source URL, SPDX
+  expression, version/replacement, required license/notice file, and checksum
+  must be covered by the automated attribution verification.
 - Keep `support@composebastion.com` as the private contact path for commercial
   licensing and written permission.
 
@@ -128,8 +218,9 @@ Run the same gates CI expects before release:
 - Treat V1 as feature-complete, documented, and release-gated.
 - `/api/v1` is the V1 compatibility boundary. Breaking changes require a new
   major version or documented compatibility plan.
-- Protect `main`, require release-gating checks before promotion, and enable or
-  verify Dependabot alerts and secret scanning before final V1.
+- Keep the sole-maintainer `main-release-gate` and `release-tags` rulesets active,
+  require release-gating checks before promotion, and verify private
+  vulnerability reporting, immutable releases, Dependabot, and secret scanning.
 - Use `docs/v1-readiness.md` as the release verification checklist.
 
 ## Release Verification
@@ -140,16 +231,31 @@ Run these before tagging a public release:
 RELEASE_APP_SECRET="$(openssl rand -hex 32)"
 RELEASE_AGENT_TOKEN="$(openssl rand -hex 32)"
 RELEASE_POSTGRES_PASSWORD="$(openssl rand -hex 32)"
+node scripts/bootstrap-npm.mjs
+npm ci --engine-strict --strict-allow-scripts --dangerously-allow-all-scripts=false --ignore-scripts=false
+npm run check:npm-version
+npm run check:npm-install-policy
 npm run typecheck
 npm run lint:migrations
 npm run check:postgres-upgrade
-npm run openapi:check --workspace @composebastion/api
+npm run openapi:check
 npm run check:release-version
+npm run check:public-hygiene
+npm run check:gitleaks
+npm run check:go-attribution
+npm run test:go-attribution-policy
+npm run test:container-config-policy
+npm run test:release-image-policy
+npm run test:release-alias-policy
+npm run test:acceptance-policy
+npm run test:upgrade-preparation
+npm run test:source-upgrade
 npm run notices:check
 npm run check:actions-pinned
 npm run check:release-workflows
 npm run check:compose-env
 npm run check:docker-context
+npm run check:container-config
 npm run acceptance:config
 npm test
 COMPOSEBASTION_INTEGRATION=1 \
@@ -157,11 +263,13 @@ COMPOSEBASTION_INTEGRATION=1 \
   REDIS_URL="${RELEASE_TEST_REDIS_URL:?point this at disposable Redis}" \
   APP_SECRET="${RELEASE_APP_SECRET}" \
   NODE_ENV=test \
-  npm run test --workspace @composebastion/api -- --no-file-parallelism
-npm run smoke:web
+npm run test --workspace @composebastion/api -- --no-file-parallelism
+npx playwright install chromium firefox webkit
+npm run smoke:web:qualification
 npm run coverage
 npm audit --audit-level=high
 npm run acceptance:local
+npm run acceptance:assert-report
 POSTGRES_PASSWORD="${RELEASE_POSTGRES_PASSWORD}" \
   APP_SECRET="${RELEASE_APP_SECRET}" \
   docker compose config
@@ -181,6 +289,7 @@ POSTGRES_PASSWORD="${RELEASE_POSTGRES_PASSWORD}" \
 AGENT_TOKEN="${RELEASE_AGENT_TOKEN}" \
   COMPOSEBASTION_AGENT_BIND_ADDRESS=127.0.0.1 \
   docker compose -f agent-compose.image.example.yml -f agent-compose.hardened.yml config
+test -z "$(git status --porcelain=v1 --untracked-files=all)"
 npm run release:verify-images
 ```
 
@@ -191,9 +300,11 @@ Set `RELEASE_TEST_DATABASE_URL` and `RELEASE_TEST_REDIS_URL` to isolated,
 disposable services using the same pinned images as the `Postgres integration
 tests` CI job. The explicit API command runs the PostgreSQL concurrency suite
 serially. The local acceptance runner separately supplies pinned Postgres,
-Redis, and SSH fixtures and exercises the live API and worker. On the v1.1
-candidate, also run `npm run smoke:web:live` against that live stack; keep the
-mocked `npm run smoke:web` suite as a separate fast gate.
+Redis, and SSH fixtures and exercises the live API and worker. It invokes
+`npm run smoke:web:live:qualification` against that live stack and requires
+Chromium, Firefox, and WebKit at desktop and mobile widths. The mocked
+`npm run smoke:web` suite remains a fast developer check, but it is not a
+release-qualification gate.
 
 The qualifying acceptance run must also start and finish on the same clean
 candidate commit. Its report records the full HEAD/tree identity and commit
@@ -208,13 +319,19 @@ The image verifier must be the last local gate after the candidate commit is
 created because it deliberately rejects a dirty checkout or a HEAD change. A
 passing report proves all four images were built from an exact Git-derived
 context and that their local OCI archives match their recorded archive,
-manifest, and config digests and the exact candidate version, full commit SHA,
-and commit timestamp. It does not replace the post-publication comparison of
-remote platform/index digests with the scanned digests.
+manifest, and config digests; exact title/source/vendor/license/version labels;
+full commit SHA and commit timestamp; and verified runtime legal-artifact
+digests. It does not replace the post-publication comparison of remote
+platform/index digests with the scanned digests.
+
+The attribution command above is required for every release candidate. It
+validates the checked-in module inventory, SPDX expressions, required upstream
+texts, and checksums without a separate manual approval state.
 
 The pinned MinIO and Samba fixtures prove reproducible protocol behavior only.
 A real NAS and a real cloud/S3 target must still be tested and recorded manually
-before production approval.
+before production approval. Those external tests are production evidence, not a
+blocker for a release whose stated scope is homelab publication.
 
 After publishing, verify unauthenticated pulls:
 
@@ -226,6 +343,11 @@ docker pull "ghcr.io/composebastion-admin/composebastion-app:v${VERSION}"
 docker pull "ghcr.io/composebastion-admin/composebastion-agent:v${VERSION}"
 ```
 
+For a beta branch publication, verify `:beta`, the exact prerelease
+`:${VERSION}` alias, the immutable `sha-${REVISION}` indexes, and both
+`sha-${REVISION}-{amd64,arm64}` platform tags. Do not expect `v${VERSION}`,
+minor, `main`, or `latest` to move.
+
 ## Post-Push Verification
 
 - Check GitHub Actions for CI, CodeQL, dependency review, container scans, and
@@ -234,6 +356,12 @@ docker pull "ghcr.io/composebastion-admin/composebastion-agent:v${VERSION}"
   lag until the target branch is rescanned.
 - For every `v${VERSION}` release, verify CI, CodeQL, Container Scan, Publish Images,
   and code-scanning alerts after the scan refresh.
+- Verify digest-qualified app and agent index provenance with
+  `gh attestation verify oci://IMAGE@DIGEST --repo
+  composebastion-admin/composebastion`. Verify each platform SPDX attestation
+  separately with the same command plus
+  `--predicate-type https://spdx.dev/Document/v2.3`; also constrain the signer
+  workflow and source commit as the publication workflow does.
 - Distinguish Dependabot or bot PRs opened after a release push from actual
   release failures.
 - Close linked issues only after the fix is released or merged to the intended

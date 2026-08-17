@@ -24,9 +24,9 @@ export function NetworksPanel({ host, hosts, networks, onAction }: { host: Docke
           type="button"
           onClick={() => void (async () => {
             if (await confirm({ title: "Prune networks", tone: "danger", confirmLabel: "Prune", message: "Remove unused networks on this host?" })) {
-              void onAction("network.prune", {}, host.id);
+              await onAction("network.prune", {}, host.id);
             }
-          })()}
+          })().catch(() => undefined)}
         >
           <Trash2 size={18} />Prune Unused
         </button>
@@ -36,7 +36,7 @@ export function NetworksPanel({ host, hosts, networks, onAction }: { host: Docke
           className="stack"
           onSubmit={(event) => {
             event.preventDefault();
-            void onAction("network.create", { name, driver, subnet: subnet || undefined, labels: {} }, host.id);
+            void onAction("network.create", { name, driver, subnet: subnet || undefined, labels: {} }, host.id).catch(() => undefined);
           }}
         >
           <input placeholder="Network name" value={name} onChange={(event) => setName(event.target.value)} required />
@@ -75,7 +75,7 @@ export function NetworksPanel({ host, hosts, networks, onAction }: { host: Docke
                   confirmLabel: "Remove network",
                   message: `Remove Docker network ${network.name}? Containers still using it may fail to reconnect.`
                 })) await onAction("network.remove", { networkId: network.externalId }, network.hostId);
-              })()}><Trash2 size={16} /></button>
+              })().catch(() => undefined)}><Trash2 size={16} /></button>
             </ButtonRow>] : [])
           ];
           return showHostColumn ? [hostName(hosts, network.hostId), ...cells] : cells;

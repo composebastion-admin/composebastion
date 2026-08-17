@@ -3,7 +3,16 @@
 The local acceptance harness layers pinned Postgres, Redis, Mailpit, MinIO,
 Samba, registry, agent, and SSH Docker-host fixtures over the shipped
 `docker-compose.image.yml`, so the fresh-image and public-upgrade scenarios use
-the real production image Compose wiring. It creates runtime-only credentials,
+the real production image Compose wiring. Upgrade qualification has two
+required baselines: public `1.1.2` and legacy public `1.0.6`. Each uses its
+real API updater to reach the published 1.1.6 bridge, then uses the bridge's
+API/SSH updater for a forced 1.2 rollback and successful retry on retained
+volumes. Qualifying runs always use the published immutable bridge digest
+committed in `scripts/acceptance/upgrade-baselines.mjs`. The
+`COMPOSEBASTION_ACCEPTANCE_BRIDGE_IMAGE` override is accepted only together with
+`--allow-nonqualifying` for an explicitly diagnostic developer run; a tag or an
+alternate digest can never produce a qualifying report. The harness creates
+runtime-only credentials,
 builds the candidate from the current checkout, and
 writes redacted JSON and Markdown results under the ignored
 `test-results/acceptance/` directory. Every report records the full HEAD SHA,
@@ -13,9 +22,37 @@ identity; a HEAD or worktree change during the run is also nonqualifying.
 Run the complete suite with:
 
 ```bash
-npx playwright install chromium
+npx playwright install chromium firefox webkit
 npm run acceptance:local
 ```
+
+On Linux CI hosts, add Playwright's `--with-deps` flag to install required
+system packages. The normal mocked browser gate remains Chromium desktop and is
+a fast, nonqualifying developer check:
+
+```bash
+npm run smoke:web
+```
+
+For a beta qualification pass, install all three engines and run the expanded
+matrix:
+
+```bash
+npx playwright install chromium firefox webkit
+npm run smoke:web:qualification
+```
+
+That command runs the complete mocked ledger in Chromium at desktop and
+390-pixel responsive widths. Tests tagged `@critical` cover representative
+setup, login, navigation, RBAC, Docker lifecycle, deployment, backup/restore,
+alerts, and administration workflows in Firefox and WebKit at both widths.
+`npm run smoke:web:live:qualification` applies the same browser/width matrix to
+the existing read-only live login, readiness, and administration smoke. The
+qualification-only live config selects only tests explicitly tagged
+`@live-matrix-safe`, so adding a destructive live spec cannot silently multiply
+it across browsers. This smoke does not replace or claim the destructive live
+feature ledger performed by the acceptance harness and
+production-qualification run.
 
 Run the release-qualification pass from a clean committed tree. Candidate app
 and agent builds receive that commit's full SHA and timestamp, and the harness
@@ -28,14 +65,16 @@ The developer-only `--allow-nonqualifying` option permits a successful
 diagnostic `passed_nonqualifying` run to exit zero, but the option itself marks
 the report nonqualifying. Required CI never uses that option and separately
 runs `npm run acceptance:assert-report` to require `status=passed`, a complete
-manifest, and `automatedAcceptanceQualifying=true`.
+manifest, `automatedAcceptanceQualifying=true`, `environment.keep=false`, and
+an empty verified disposable-cleanup attestation.
 
 Use `--keep` to retain failed containers and their runtime-only SSH/registry
-credentials for inspection. `--skip-build` reuses local images only after their
+credentials for inspection. Retention always marks the report nonqualifying,
+even when `--allow-nonqualifying` is also used. `--skip-build` reuses local images only after their
 OCI title/version/revision/created labels are verified, but marks the report
 `passed_nonqualifying`; a reused build is never accepted as automated release
-evidence. `--skip-upgrade` is available when the public `1.0.6` image is
-unreachable and has the same non-qualifying result. Validate both fixture
+evidence. `--skip-upgrade` is available when either required public `1.1.2` or
+`1.0.6` image is unreachable and has the same non-qualifying result. Validate both fixture
 definitions and their immutable third-party image pins with
 `npm run acceptance:config`.
 
@@ -54,14 +93,17 @@ values that may contain credentials are registered for output redaction.
 `64535`, keeping the highest reserved port within the TCP/UDP range. The harness reserves offsets `+25`
 (Mailpit), `+50` (registry), `+80` (fresh manager), `+90` (agent), `+180`
 (source-production manager), `+380` (upgrade manager), `+550` (hardened
-registry), `+580` (hardened manager), `+590` (hardened agent), and `+1000`
+registry), `+580` (hardened manager), `+590` (hardened agent), `+680` (legacy
+upgrade manager), and `+1000`
 (MinIO).
 Compose project names, the bind fixture, and runtime secrets also include this
 base, so retained runs can coexist when they use different bases. Override
 `ACCEPTANCE_WORKLOAD_SUBNET` with an unused RFC1918 `/24` if the deterministic
 default conflicts with a local Docker network.
 
-The suite covers first-run setup, sessions, a real Chromium login and
+The suite covers first-run setup without demo data in the production-image
+installation and with a verified demo workspace in the independent
+source-production installation, plus sessions, a real Chromium login and
 Operations/About check against the live API, PostgreSQL, Redis, and worker,
 readiness, runtime/About/legal artifacts, SMTP test and worker-alert delivery,
 authenticated agent health and
@@ -70,9 +112,15 @@ durable enqueue while readiness remains healthy, Redis diagnostics and worker
 subscription recovery, safe-job lease recovery after a killed worker, a disposable
 Compose workload, S3 and SMB target checks, remote-only capture metadata and
 local-cache eviction, clone restore with volume/bind/database/network behavior
-verification and cleanup, public-image upgrade state preservation (including a
-queued API job, encrypted registry credentials, and the resolved public image
-digest), and a fresh production source build with login, configuration-write,
+verification and cleanup, public `1.1.2` and legacy `1.0.6` old-updater hops
+to 1.1.6, forced bridge-to-1.2 credential-first rollback, and successful
+API/SSH re-upgrade on retained volumes. It proves unchanged PostgreSQL/Redis
+identities, immutable bridge image restoration, and long-hop state preservation
+(including a queued API job, encrypted registry credentials, and
+the exact resolved public image digests), all ten release-candidate migrations
+`029` through `038` (including
+the GitHub API and clone-deployment revision/environment bindings), and a fresh
+production source build with login, configuration-write,
 and shared backup-write checks using pinned fixtures. A separate hardening
 scenario layers the shipped image Compose file with the opt-in manager and agent
 overlays, verifies UID/GID, read-only roots, dropped capabilities,
@@ -85,6 +133,19 @@ context materialized from the exact recorded Git commit, rather than the live
 checkout. The report records the commit/tree and context digest and rejects the
 run if that context changes before acceptance completes; ignored local files
 therefore cannot enter a qualifying image.
+Candidate tags include the full commit and isolated port base. Every manager,
+worker, and agent container is checked against the captured immutable image ID
+after creation and after relevant restarts; the public upgrade starts from its
+resolved repository digest. A qualifying run then removes exact owned Compose
+projects, nested workloads, named volumes, networks, project-built images,
+candidate tags, bind data, backup data, and runtime input files. It post-checks
+all of those scopes plus MinIO and SMB fixture storage and fails closed when
+cleanup cannot be proven.
+The six-project live browser smoke writes a redacted JSON summary and digest
+beside the acceptance report. Its raw Playwright directory is disposable:
+failure traces can contain login/session material and are deliberately excluded
+from a client evidence bundle. Sanitized per-feature screenshots and traces are
+collected by the separate production-qualification UI ledger.
 The disposable workload starts with an empty named volume; only after deploy
 does the runner write a unique marker, and the clone must return that exact
 marker. This prevents container startup from manufacturing false restore
@@ -94,11 +155,11 @@ socket, the runner explicitly bridges restored bind data from the fixture
 container filesystem into the daemon-host bind path before runtime validation;
 real SSH hosts naturally share those filesystems.
 It does not contact a real NAS or cloud account; those remain separately
-recorded manual production-readiness gates. The report also records the pending
-linked-Go-module attribution review and release governance as deferred. The
-legal inventory review, adding/verifying the second trusted CODEOWNER, and
-activating protected release rules are manual or approval-bound work and are
-not implied by a passing automated acceptance result.
+recorded production-approval evidence and do not block homelab publication.
+The report also records the pending linked-Go-module attribution review and
+release governance as deferred. Qualified legal inventory approval and remote
+repository-control verification are approval-bound work and are not implied by
+a passing automated acceptance result.
 
 Fixture secrets are never written to tracked files or reports. Without
 `--keep`, generated keys, registry credentials, and bind data are removed.

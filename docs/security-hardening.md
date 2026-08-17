@@ -42,9 +42,10 @@ Use this checklist before exposing ComposeBastion outside a trusted private netw
 - Review active sessions regularly and revoke unfamiliar devices.
 - Keep viewer accounts read-only; do not expose host files, archives, terminal, or
   full container env to viewers.
-- Evaluate the [opt-in container hardening overlays](container-hardening.md).
-  Prepare backup and Trivy-cache ownership before enabling manager non-root
-  mode, and retain the documented Docker-socket trust boundary for the agent.
+- The manager is non-root by default. Evaluate the remaining
+  [container hardening overlays](container-hardening.md), prepare backup and
+  Trivy-cache ownership for the configured UID/GID, and retain the documented
+  Docker-socket trust boundary for the agent.
 
 ## Regression Checks
 
@@ -57,12 +58,17 @@ Use this checklist before exposing ComposeBastion outside a trusted private netw
 - `npm audit --audit-level=high`
 - `npm run check:actions-pinned`
 - `npm run check:release-version`
+- `npm run check:public-hygiene`
 - `npm run check:compose-env`
+- `npm run check:docker-context`
+- `npm run check:container-config`
 - `npm run acceptance:config`
 
 For a local release candidate, also run the full live acceptance suite and
 scan the app and agent for both supported architectures. Do not tag it until
-the deferred governance and manual production-readiness gates are complete.
+repository controls, security clearance, and automated Go-attribution
+verification are verified. Real NAS and cloud/S3 evidence is required for
+production approval, not for a homelab publication claim.
 
 ## Emergency Owner Recovery
 

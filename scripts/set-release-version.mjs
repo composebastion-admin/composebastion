@@ -18,6 +18,15 @@ updateJson("package.json", (value) => { value.version = nextVersion; });
 for (const workspace of workspacePaths) {
   updateJson(`${workspace}/package.json`, (value) => { value.version = nextVersion; });
 }
+updateJson("release-metadata.json", (value) => {
+  value.version = nextVersion;
+  if (nextVersion.includes("-")) {
+    value.channel = nextVersion.split("-", 2)[1]?.split(".", 1)[0] ?? "prerelease";
+  } else {
+    value.channel = "stable";
+    value.stableVersion = nextVersion;
+  }
+});
 updateJson("package-lock.json", (value) => {
   value.version = nextVersion;
   for (const workspace of ["", ...workspacePaths]) value.packages[workspace].version = nextVersion;

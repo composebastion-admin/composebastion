@@ -7,18 +7,19 @@ import path from "node:path";
 // and the workflow reference in the same reviewed change.
 const reviewedReferences = new Map([
   ["actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0", "v7.0.0"],
+  ["actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d", "v4.2.1"],
   ["actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294", "v5.0.0"],
   ["actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", "v8.0.1"],
   ["actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e", "v6.4.0"],
   ["actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", "v7.0.1"],
   ["aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25", "v0.36.0"],
   ["docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a", "v7.3.0"],
-  ["docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7", "v4.5.1"],
+  ["docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0", "v4.4.0"],
   ["docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302", "v6.2.0"],
   ["docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c", "v4.2.0"],
   ["docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8", "v4.2.0"],
-  ["github/codeql-action/analyze@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81", "v4.37.3"],
-  ["github/codeql-action/init@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81", "v4.37.3"]
+  ["github/codeql-action/analyze@99df26d4f13ea111d4ec1a7dddef6063f76b97e9", "v4.37.0"],
+  ["github/codeql-action/init@99df26d4f13ea111d4ec1a7dddef6063f76b97e9", "v4.37.0"]
 ]);
 
 function filesBelow(directory) {

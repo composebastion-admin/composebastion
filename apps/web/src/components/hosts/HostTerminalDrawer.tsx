@@ -14,7 +14,6 @@ export function HostTerminalDrawer({ host, onClose }: { host: DockerHost; onClos
   const frameRef = useRef<HTMLDivElement | null>(null);
   const drawerRef = useRef<HTMLDivElement | null>(null);
   const cancelRef = useRef<HTMLButtonElement | null>(null);
-  const previousFocusRef = useRef<HTMLElement | null>(null);
   const termRef = useRef<XTerm | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
@@ -30,12 +29,7 @@ export function HostTerminalDrawer({ host, onClose }: { host: DockerHost; onClos
   useEffect(() => () => cleanup(), [cleanup]);
 
   useEffect(() => {
-    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     window.requestAnimationFrame(() => cancelRef.current?.focus());
-    return () => {
-      const previous = previousFocusRef.current;
-      if (previous && document.contains(previous)) previous.focus();
-    };
   }, []);
 
   useEffect(() => {

@@ -1,5 +1,52 @@
 import { describe, expect, it } from "vitest";
-import { appGithubVersionSelectSchema, appGithubVersionsSchema, appRenameInputSchema, appSourceLinkInputSchema, backupCreateSchema, backupListQuerySchema, backupRestoreSchema, backupScheduleCreateSchema, catalogTemplates, configExportSchema, customCatalogTemplateInputSchema, dockerActionSchema, dockerAppSchema, externalCatalogQuerySchema, githubRepositoryBranchesRequestSchema, githubRepositoryCreateSchema, githubRepositoryDeploySchema, hostPathBackupRestoreSchema, loginRequestSchema, networkDriverExplanations, selfUpdateConfigSchema, setupRequestSchema, validatePasswordStrength, volumeCloneSchema } from "./index.js";
+import {
+  appGithubVersionSelectSchema,
+  appGithubVersionsSchema,
+  appRenameInputSchema,
+  appSourceLinkInputSchema,
+  backupCreateSchema,
+  backupListQuerySchema,
+  backupRestoreSchema,
+  backupScheduleCreateSchema,
+  canonicalizeGithubRepositoryUrl,
+  canonicalizeGitRepositoryUrl,
+  canonicalizePlaintextHttpSourceUrl,
+  catalogTemplates,
+  configExportSchema,
+  customCatalogTemplateInputSchema,
+  deploymentAnalysisCreateSchema,
+  deploymentAnalysisDeploySchema,
+  deploymentAnalysisSchema,
+  deploymentSourceCreateSchema,
+  deploymentSourceSchema,
+  deploymentSourceUpdateSchema,
+  directHostActionTypeSchema,
+  dockerActionSchema,
+  dockerAppSchema,
+  dockerHostUpdateSchema,
+  externalCatalogQuerySchema,
+  gitRepositoryUrlSchema,
+  githubRepositoryUrlIssue,
+  githubRepositoryBranchesRequestSchema,
+  githubRepositoryCreateSchema,
+  githubRepositoryDeploySchema,
+  githubRepositoryUpdateSchema,
+  hostPathBackupRestoreSchema,
+  loginRequestSchema,
+  networkDriverExplanations,
+  registryTrustSchema,
+  sanitizeDeploymentSourceLocator,
+  sanitizeGitRepositoryUrl,
+  sanitizeGitRepositoryUrlFields,
+  sanitizeGithubRepositoryUrl,
+  sanitizePlaintextHttpSourceUrl,
+  sanitizeUrlDiagnosticText,
+  selfUpdateConfigSchema,
+  setupRequestSchema,
+  userUpdateSchema,
+  validatePasswordStrength,
+  volumeCloneSchema
+} from "./index.js";
 
 const sampleHostId = "00000000-0000-4000-8000-000000000001";
 
@@ -13,6 +60,14 @@ describe("shared schemas", () => {
     expect(setupRequestSchema.parse({ username: "admin", email: "admin@example.com", password: strongPassword, includeDemoData: true }).includeDemoData).toBe(true);
     expect(() => setupRequestSchema.parse({ password: strongPassword })).toThrow();
     expect(loginRequestSchema.parse({ identifier: "admin", password: "secret" }).identifier).toBe("admin");
+  });
+
+  it("enforces the same password policy for account password updates", () => {
+    expect(() => userUpdateSchema.parse({ password: "aaaaaaaaaaaa" }))
+      .toThrow("Include an uppercase letter");
+    expect(userUpdateSchema.parse({ password: strongPassword }).password)
+      .toBe(strongPassword);
+    expect(userUpdateSchema.parse({ role: "viewer" })).toEqual({ role: "viewer" });
   });
 
   it("applies Docker action defaults", () => {
@@ -46,6 +101,218 @@ describe("shared schemas", () => {
     });
     expect(cloneDeploy.payload.composePath).toBe("docker-compose.yml");
     expect(cloneDeploy.payload.repositoryId).toBe("00000000-0000-4000-8000-000000000002");
+  });
+
+  it("publishes the direct host-action contract separately from orchestrated jobs", () => {
+    expect(directHostActionTypeSchema.parse("container.restart")).toBe("container.restart");
+    for (const dedicatedType of [
+      "deploy.execute",
+      "host.configureRegistryTrust",
+      "migration.execute",
+      "recovery.restore",
+      "system.self_update"
+    ]) {
+      expect(directHostActionTypeSchema.safeParse(dedicatedType).success).toBe(false);
+    }
+  });
+
+  it("accepts safe Git transports and rejects credential-bearing repository URLs", () => {
+    for (const repositoryUrl of [
+      "https://git.example.test/team/app.git",
+      "http://git.internal:3000/team/app.git",
+      "ssh://git@git.example.test/team/app.git",
+      "git://git.example.test/team/app.git",
+      "git@git-host-alias:team/app.git"
+    ]) {
+      expect(gitRepositoryUrlSchema.parse(repositoryUrl)).toBe(repositoryUrl);
+    }
+
+    const unsafeUrls = [
+      "https://git-user:git-secret@git.example.test/team/app.git",
+      "https://git.example.test/team/app.git?token=git-secret",
+      "https://git.example.test/team/app.git#git-secret",
+      "https://git.example.test/team/app.git?",
+      "https://git.example.test/team/app.git#",
+      "ssh://git:git-secret@git.example.test/team/app.git",
+      "file:///srv/private-repository"
+    ];
+    for (const type of ["git.clone", "git.testRemote"] as const) {
+      for (const repositoryUrl of unsafeUrls) {
+        expect(() => dockerActionSchema.parse({
+          type,
+          hostId: sampleHostId,
+          payload: {
+            repositoryUrl,
+            ...(type === "git.clone" ? { directory: "/srv/app" } : {})
+          }
+        })).toThrow();
+      }
+    }
+
+    expect(() => appSourceLinkInputSchema.parse({
+      sourceType: "git",
+      repositoryUrl: "https://git-user:git-secret@git.example.test/team/app.git?token=git-secret",
+      workingDir: "/srv/app",
+      composePath: "compose.yaml"
+    })).toThrow("Repository URL must not contain credentials");
+
+    expect(sanitizeGitRepositoryUrl(
+      "https://git-user:git-secret@git.example.test/team/app.git?token=git-secret#private"
+    )).toBe("https://git.example.test/team/app.git");
+    expect(sanitizeGitRepositoryUrlFields({
+      payload: {
+        repositoryUrl: "https://git-user:git-secret@git.example.test/team/app.git?token=git-secret",
+        hostCloneUrl: "ssh://git:git-secret@git.example.test/team/app.git#private",
+        sourceInput: "https://git.example.test/team/app.git?token=git-secret"
+      },
+      error: "Clone failed for https://git-user:git-secret@git.example.test/team/app.git?token=git-secret"
+    })).toEqual({
+      payload: {
+        repositoryUrl: "https://git.example.test/team/app.git",
+        hostCloneUrl: "ssh://git@git.example.test/team/app.git",
+        sourceInput: "https://git.example.test/team/app.git"
+      },
+      error: "Clone failed for https://git.example.test/team/app.git"
+    });
+  });
+
+  it("canonicalizes and sanitizes persisted source URL variants", () => {
+    expect(canonicalizeGitRepositoryUrl(" git@Git.Example.Test:Team/App.git/ "))
+      .toBe("git@git.example.test:Team/App.git");
+    expect(canonicalizeGitRepositoryUrl("SSH://git@Git.Example.Test/Team/App.git/"))
+      .toBe("ssh://git@git.example.test/Team/App.git");
+    expect(() => canonicalizeGitRepositoryUrl("file:///srv/app")).toThrow();
+
+    expect(githubRepositoryUrlIssue("")).toContain("Use a GitHub repository URL");
+    expect(githubRepositoryUrlIssue("not a URL")).toContain("Use a GitHub repository URL");
+    expect(githubRepositoryUrlIssue("http://github.com/owner/app")).toContain("Use a GitHub repository URL");
+    expect(githubRepositoryUrlIssue("https://github.com/owner/app/extra")).toContain("Use a GitHub repository URL");
+    expect(githubRepositoryUrlIssue("https://github.com/owner/app?token=secret"))
+      .toContain("must not contain credentials");
+    expect(githubRepositoryUrlIssue("https://github.com/owner/app")).toBeNull();
+    expect(canonicalizeGithubRepositoryUrl(" https://www.github.com/Owner/App.git/ "))
+      .toBe("https://github.com/owner/app");
+    expect(() => canonicalizeGithubRepositoryUrl("https://gitlab.com/owner/app")).toThrow();
+
+    expect(canonicalizePlaintextHttpSourceUrl(" HTTPS://Compose.Example.Test/compose.yaml "))
+      .toBe("https://compose.example.test/compose.yaml");
+    for (const value of [
+      "",
+      "not a URL",
+      "ftp://compose.example.test/compose.yaml",
+      "https://compose.example.test/compose.yaml?token=secret"
+    ]) {
+      expect(() => canonicalizePlaintextHttpSourceUrl(value)).toThrow();
+    }
+
+    expect(sanitizeGitRepositoryUrl(null)).toBeNull();
+    expect(sanitizeGitRepositoryUrl("git@Git.Example.Test:Team/App.git"))
+      .toBe("git@git.example.test:Team/App.git");
+    expect(sanitizeGitRepositoryUrl("git://user:secret@git.example.test/team/app.git?token=secret"))
+      .toBe("git://git.example.test/team/app.git");
+    expect(sanitizeGithubRepositoryUrl("https://github.com/Owner/App.git"))
+      .toBe("https://github.com/owner/app");
+    expect(sanitizeGithubRepositoryUrl(
+      "https://user:secret@github.com/owner/app?token=secret",
+      { owner: "Owner", repo: "App.git" }
+    )).toBe("https://github.com/owner/app");
+    expect(sanitizeGithubRepositoryUrl("unsafe", { owner: "bad/owner", repo: "app" }))
+      .toBeNull();
+
+    expect(sanitizePlaintextHttpSourceUrl(42)).toBeNull();
+    expect(sanitizePlaintextHttpSourceUrl("not a URL")).toBeNull();
+    expect(sanitizePlaintextHttpSourceUrl("file:///tmp/compose.yaml")).toBeNull();
+    expect(sanitizePlaintextHttpSourceUrl(
+      "https://user:secret@compose.example.test/compose.yaml?token=secret#fragment"
+    )).toBe("https://compose.example.test/compose.yaml");
+    expect(sanitizeDeploymentSourceLocator(null, "git")).toBeNull();
+    expect(sanitizeDeploymentSourceLocator(
+      "https://user:secret@git.example.test/team/app.git?token=secret",
+      "git"
+    )).toBe("https://git.example.test/team/app.git");
+    expect(sanitizeDeploymentSourceLocator(
+      "https://user:secret@compose.example.test/compose.yaml?token=secret",
+      "compose_url"
+    )).toBe("https://compose.example.test/compose.yaml");
+    expect(sanitizeDeploymentSourceLocator("nginx:latest", "image")).toBe("nginx:latest");
+
+    expect(sanitizeUrlDiagnosticText(42)).toBe(42);
+    expect(sanitizeUrlDiagnosticText(
+      "Failed (https://user:secret@git.example.test/team/app.git?token=secret)."
+    )).toBe("Failed (https://git.example.test/team/app.git).");
+    expect(sanitizeUrlDiagnosticText("Failed https://?token=secret"))
+      .toBe("Failed [redacted-url]");
+    expect(sanitizeGitRepositoryUrlFields([
+      { source_locator: "https://user:secret@compose.example.test/compose.yaml?token=secret" },
+      "unchanged"
+    ])).toEqual([
+      { source_locator: "https://compose.example.test/compose.yaml" },
+      "unchanged"
+    ]);
+
+    const urlCanary = "url-diagnostic-secret";
+    const diagnosticCanary = "useful-non-url-diagnostic";
+    const schemaless = sanitizeGitRepositoryUrlFields({
+      stdout: `stdout ${diagnosticCanary}: https://git-user:${urlCanary}@git.example.test/team/app.git?token=${urlCanary}`,
+      stderr: `stderr ${diagnosticCanary}: ssh://git:${urlCanary}@git.example.test/team/app.git#${urlCanary}`,
+      diagnostics: {
+        attempts: [
+          `first ${diagnosticCanary}: https://git.example.test/team/app.git?token=${urlCanary}`,
+          {
+            message: `second ${diagnosticCanary}: git://git-user:${urlCanary}@git.example.test/team/app.git`
+          }
+        ],
+        prefixed: `prefix_${diagnosticCanary}_https://git-user:${urlCanary}@git.example.test/team/app.git?token=${urlCanary}`
+      },
+      repository_url: `https://git-user:${urlCanary}@git.example.test/team/app.git?token=${urlCanary}`,
+      sourceLocator: `https://git-user:${urlCanary}@compose.example.test/compose.yaml?token=${urlCanary}`,
+      source_input: `source ${diagnosticCanary}: https://git-user:${urlCanary}@git.example.test/team/app.git?token=${urlCanary}`
+    });
+    expect(schemaless).toEqual({
+      stdout: `stdout ${diagnosticCanary}: https://git.example.test/team/app.git`,
+      stderr: `stderr ${diagnosticCanary}: ssh://git@git.example.test/team/app.git`,
+      diagnostics: {
+        attempts: [
+          `first ${diagnosticCanary}: https://git.example.test/team/app.git`,
+          {
+            message: `second ${diagnosticCanary}: git://git.example.test/team/app.git`
+          }
+        ],
+        prefixed: `prefix_${diagnosticCanary}_https://git.example.test/team/app.git`
+      },
+      repository_url: "https://git.example.test/team/app.git",
+      sourceLocator: "https://compose.example.test/compose.yaml",
+      source_input: `source ${diagnosticCanary}: https://git.example.test/team/app.git`
+    });
+    expect(JSON.stringify(schemaless)).not.toContain(urlCanary);
+    expect(JSON.stringify(schemaless).match(new RegExp(diagnosticCanary, "g"))).toHaveLength(6);
+  });
+
+  it("represents explicit Docker host secret clearing without ambiguous replacements", () => {
+    expect(dockerHostUpdateSchema.parse({
+      clearSshKeyPassphrase: true,
+      agentUrl: null
+    })).toMatchObject({
+      clearSshKeyPassphrase: true,
+      agentUrl: null
+    });
+    expect(() => dockerHostUpdateSchema.parse({
+      sshPassword: "replacement",
+      clearSshPassword: true
+    })).toThrow("Cannot replace and clear sshPassword in the same update");
+    expect(() => dockerHostUpdateSchema.parse({
+      agentUrl: "file:///tmp/agent.sock"
+    })).toThrow("Agent URL must use http or https");
+    for (const agentUrl of [
+      "https://agent-user:agent-secret@agent.example.test",
+      "https://agent.example.test?token=agent-secret",
+      "https://agent.example.test#agent-secret",
+      "https://agent.example.test?",
+      "https://agent.example.test#"
+    ]) {
+      expect(() => dockerHostUpdateSchema.parse({ agentUrl }))
+        .toThrow("Agent URL must not contain embedded credentials");
+    }
   });
 
   it("validates self-update configuration", () => {
@@ -85,6 +352,19 @@ describe("shared schemas", () => {
       payload: { projectName: "sampleapp", workingDir: "/home/user/app", composePath: "docker-compose.yml" }
     });
     expect(folderDeploy.payload.projectName).toBe("sampleapp");
+    const gitFolderDeploy = dockerActionSchema.parse({
+      type: "compose.deployPath",
+      hostId: "00000000-0000-4000-8000-000000000001",
+      payload: {
+        projectName: "sampleapp",
+        workingDir: "/home/user/app",
+        composePath: "docker-compose.yml",
+        gitPullBeforeDeploy: true,
+        branch: "main"
+      }
+    });
+    expect(gitFolderDeploy.payload.gitPullBeforeDeploy).toBe(true);
+    expect(gitFolderDeploy.payload.branch).toBe("main");
     const writeDeploy = dockerActionSchema.parse({
       type: "compose.writeDeployPath",
       hostId: "00000000-0000-4000-8000-000000000001",
@@ -137,6 +417,212 @@ describe("shared schemas", () => {
       hostCloneUrl: "git@github.com:composebastion-admin/composebastion.git",
       hostCloneDirectory: "/srv/apps/composebastion"
     }).mode).toBe("host_clone");
+
+    for (const repositoryUrl of [
+      "https://git-user:git-secret@github.com/example/app",
+      "https://github.com/example/app?token=git-secret",
+      "https://github.com/example/app#git-secret",
+      "http://github.com/example/app",
+      "https://gitlab.com/example/app"
+    ]) {
+      expect(githubRepositoryCreateSchema.safeParse({
+        name: "Unsafe",
+        repositoryUrl
+      }).success).toBe(false);
+      expect(githubRepositoryUpdateSchema.safeParse({ repositoryUrl }).success).toBe(false);
+      expect(githubRepositoryBranchesRequestSchema.safeParse({ repositoryUrl }).success).toBe(false);
+    }
+
+    for (const hostCloneUrl of [
+      "https://git-user:git-secret@github.com/example/app.git",
+      "ssh://git:git-secret@github.com/example/app.git",
+      "git@github.com:example/app.git#private"
+    ]) {
+      expect(githubRepositoryCreateSchema.safeParse({
+        name: "Unsafe clone",
+        repositoryUrl: "https://github.com/example/app",
+        hostCloneUrl
+      }).success).toBe(false);
+      expect(githubRepositoryDeploySchema.safeParse({ hostCloneUrl }).success).toBe(false);
+    }
+  });
+
+  it("validates universal deployment requests and protected defaults", () => {
+    const analysis = deploymentAnalysisCreateSchema.parse({
+      hostId: sampleHostId,
+      source: " https://github.com/example/app.git ",
+      composePath: "deploy/compose.yaml",
+      credentialUsername: "deploy-user",
+      credentialSecret: "token"
+    });
+    expect(analysis.source).toBe("https://github.com/example/app.git");
+    expect(analysis.composePath).toBe("deploy/compose.yaml");
+
+    for (const source of [
+      "https://git-user:git-secret@git.example.test/team/app.git",
+      "https://git.example.test/team/app.git?token=git-secret",
+      "ssh://git:git-secret@git.example.test/team/app.git"
+    ]) {
+      expect(deploymentAnalysisCreateSchema.safeParse({
+        hostId: sampleHostId,
+        sourceType: "git",
+        source
+      }).success).toBe(false);
+      expect(deploymentSourceCreateSchema.safeParse({
+        sourceType: "git",
+        name: "Unsafe",
+        sourceLocator: source,
+        projectName: "unsafe"
+      }).success).toBe(false);
+    }
+
+    for (const source of [
+      "https://compose-user:compose-secret@example.test/compose.yaml",
+      "https://example.test/compose.yaml?token=compose-secret",
+      "https://example.test/compose.yaml#compose-secret"
+    ]) {
+      expect(deploymentAnalysisCreateSchema.safeParse({
+        hostId: sampleHostId,
+        sourceType: "compose_url",
+        source
+      }).success).toBe(false);
+    }
+    expect(deploymentSourceCreateSchema.safeParse({
+      sourceType: "compose_url",
+      name: "Private Compose",
+      sourceLocator: "https://example.test/compose.yaml",
+      projectName: "private-compose",
+      credentialUsername: "user",
+      credentialSecret: "secret"
+    }).success).toBe(false);
+
+    for (const composePath of ["/etc/compose.yaml", "../compose.yaml", "deploy/../../compose.yaml"]) {
+      expect(() => deploymentAnalysisCreateSchema.parse({
+        hostId: sampleHostId,
+        source: "nginx:alpine",
+        composePath
+      })).toThrow("Compose path must stay inside the deployment directory");
+    }
+
+    expect(() => deploymentAnalysisCreateSchema.parse({
+      hostId: sampleHostId,
+      source: "https://github.com/example/private.git",
+      credentialUsername: "deploy-user"
+    })).toThrow("Enter both the HTTPS username and token/password");
+    expect(() => deploymentAnalysisCreateSchema.parse({
+      hostId: sampleHostId,
+      source: "https://github.com/example/private.git",
+      credentialSecret: "token"
+    })).toThrow("Enter both the HTTPS username and token/password");
+
+    const source = deploymentSourceCreateSchema.parse({
+      sourceType: "git",
+      name: " Example App ",
+      sourceLocator: "https://github.com/example/app.git",
+      projectName: "example-app",
+      workingDir: "/srv/example-app",
+      credentialUsername: "deploy-user",
+      credentialSecret: "token"
+    });
+    expect(source.name).toBe("Example App");
+    expect(() => deploymentSourceCreateSchema.parse({
+      ...source,
+      credentialSecret: undefined
+    })).toThrow("Enter both the HTTPS username and token/password");
+
+    expect(deploymentSourceUpdateSchema.parse({
+      safeEnvironment: {
+        APP_MODE: "production",
+        PUBLIC_URL: "https://app.example.com"
+      }
+    }).safeEnvironment).toMatchObject({ APP_MODE: "production" });
+    expect(() => deploymentSourceUpdateSchema.parse({
+      safeEnvironment: Object.fromEntries(
+        Array.from({ length: 257 }, (_, index) => [`KEY_${index}`, "value"])
+      )
+    })).toThrow("Too many environment defaults");
+    expect(() => deploymentSourceUpdateSchema.parse({
+      safeEnvironment: { APP_MODE: "production\nSECRET=exposed" }
+    })).toThrow("Environment defaults must be single-line values");
+
+    expect(deploymentAnalysisDeploySchema.parse({
+      displayName: " Example App ",
+      projectName: "example-app",
+      workingDir: "/srv/example-app"
+    }).displayName).toBe("Example App");
+  });
+
+  it("parses universal deployment source, analysis, and registry summaries", () => {
+    const now = new Date(0).toISOString();
+    expect(deploymentSourceSchema.parse({
+      id: sampleHostId,
+      sourceType: "image",
+      name: "nginx",
+      sourceLocator: "nginx:alpine",
+      branch: null,
+      composePath: null,
+      workingDir: null,
+      projectName: "nginx",
+      defaultHostId: sampleHostId,
+      hasCredential: false,
+      metadata: {},
+      lastDeployedAt: null,
+      createdAt: now,
+      updatedAt: now
+    })).toMatchObject({
+      targetHostIds: [],
+      safeEnvironment: {}
+    });
+
+    const parsedAnalysis = deploymentAnalysisSchema.parse({
+      id: sampleHostId,
+      hostId: sampleHostId,
+      sourceId: null,
+      sourceType: "image",
+      sourceInput: "nginx:alpine",
+      sourceLocator: "nginx:alpine",
+      status: "ready",
+      displayName: "nginx",
+      projectName: "nginx",
+      branch: null,
+      composePath: "compose.yaml",
+      workingDir: "/srv/nginx",
+      composeYaml: "services:\n  nginx:\n    image: nginx:alpine\n",
+      env: "",
+      summary: {
+        services: [{ name: "nginx" }]
+      },
+      variables: [{ key: "APP_MODE" }],
+      warnings: [],
+      blockers: [],
+      registryIssues: [],
+      error: null,
+      expiresAt: now,
+      createdAt: now,
+      updatedAt: now,
+      deployedAt: null
+    });
+    expect(parsedAnalysis.summary.services[0]).toMatchObject({
+      image: null,
+      build: null,
+      ports: [],
+      volumes: []
+    });
+    expect(parsedAnalysis.variables[0]).toMatchObject({
+      value: "",
+      defaultValue: null,
+      required: false,
+      secret: false,
+      source: "compose"
+    });
+    expect(registryTrustSchema.parse({
+      registry: "registry.internal:5000",
+      insecure: true,
+      trusted: false,
+      canApply: true,
+      requiresRestart: true,
+      message: "Docker does not trust this HTTP registry"
+    }).requiresRestart).toBe(true);
   });
 
   it("rejects path-like volume names that would become host bind mounts", () => {
@@ -302,7 +788,7 @@ describe("shared schemas", () => {
       composePath: "docker-compose.yml"
     });
     expect(link.sourceType).toBe("git");
-    expect(appRenameInputSchema.parse({ name: " Rackpad " }).name).toBe("Rackpad");
+    expect(appRenameInputSchema.parse({ name: " Example App " }).name).toBe("Example App");
     expect(() => appRenameInputSchema.parse({ name: "" })).toThrow();
     expect(() => appSourceLinkInputSchema.parse({ sourceType: "git", workingDir: "/srv/app" })).toThrow();
   });

@@ -24,6 +24,7 @@ import { registerImageIntelligenceRoutes } from "./routes/imageIntelligence.js";
 import { registerConfigRoutes } from "./routes/config.js";
 import { registerContainerRoutes } from "./routes/containers.js";
 import { registerDemoRoutes } from "./routes/demo.js";
+import { registerDeploymentRoutes } from "./routes/deployments.js";
 import { registerFavoriteRoutes } from "./routes/favorites.js";
 import { registerFileRoutes } from "./routes/files.js";
 import { registerGithubRoutes } from "./routes/github.js";
@@ -71,7 +72,17 @@ export async function buildServer() {
     const safeMessage = env.NODE_ENV === "production" && statusCode >= 500
       ? "Internal server error"
       : error instanceof Error ? error.message : "Internal server error";
-    const code = statusCode === 409 ? "CONFLICT" : statusCode === 403 ? "FORBIDDEN" : statusCode === 401 ? "AUTH_REQUIRED" : statusCode >= 500 ? "INTERNAL_ERROR" : "VALIDATION_FAILED";
+    const code = statusCode === 429
+      ? "RATE_LIMITED"
+      : statusCode === 409
+        ? "CONFLICT"
+        : statusCode === 403
+          ? "FORBIDDEN"
+          : statusCode === 401
+            ? "AUTH_REQUIRED"
+            : statusCode >= 500
+              ? "INTERNAL_ERROR"
+              : "VALIDATION_FAILED";
     reply.code(statusCode).send({ error: safeMessage, code, requestId: request.id });
   });
 
@@ -158,7 +169,24 @@ export async function buildServer() {
     }
 
     const ok = Object.values(checks).filter((check) => check.required).every((check) => check.ok);
-    if (!ok) reply.code(503);
+    const workerCheck = checks.worker as {
+      ok: boolean;
+      required: boolean;
+      state?: string;
+      activeWorkers?: number;
+    };
+    // Historical Compose healthchecks probe /api/health/ready and only inspect
+    // HTTP success. While a self-update handoff is pending the worker is
+    // intentionally draining, so keep body.ok false but return HTTP 200 when
+    // the database is healthy and at least one worker heartbeat is still live.
+    const pendingHandoffDrain = Boolean(
+      checks.database?.ok
+      && workerCheck
+      && !workerCheck.ok
+      && workerCheck.state === "draining"
+      && Number(workerCheck.activeWorkers) > 0
+    );
+    if (!ok && !pendingHandoffDrain) reply.code(503);
     return { ok, checks };
   });
   app.get("/api/health/redis", { config: { rateLimit: healthCheckRateLimit } }, async (_request, reply) => {
@@ -199,6 +227,7 @@ export async function buildServer() {
   await registerAppRoutes(app);
   await registerContainerRoutes(app);
   await registerDemoRoutes(app);
+  await registerDeploymentRoutes(app);
   await registerComposeRoutes(app);
   await registerCatalogRoutes(app);
   await registerImageIntelligenceRoutes(app);

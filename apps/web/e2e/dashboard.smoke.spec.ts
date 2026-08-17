@@ -108,6 +108,23 @@ const networkResource = {
   updatedAt: new Date(0).toISOString()
 };
 
+const imageResource = {
+  id: "24242424-2424-4424-8424-242424242424",
+  hostId: host.id,
+  kind: "image",
+  externalId: "sha256:nginx",
+  name: "nginx:latest",
+  data: {
+    ID: "sha256:nginx",
+    Repository: "nginx",
+    Tag: "latest",
+    Digest: "sha256:nginx",
+    CreatedSince: "2 days ago",
+    Size: "80MB"
+  },
+  updatedAt: new Date(0).toISOString()
+};
+
 const composeStack = {
   id: "15151515-1515-4515-8515-151515151515",
   hostId: host.id,
@@ -120,6 +137,102 @@ const composeStack = {
   tlsDesired: false,
   updatePolicyEnabled: false,
   sourceType: "ui",
+  createdAt: new Date(0).toISOString(),
+  updatedAt: new Date(0).toISOString()
+};
+
+const composeVersion = {
+  id: "25252525-2525-4525-8525-252525252525",
+  stackId: composeStack.id,
+  versionNumber: 1,
+  composeYaml: "services:\n  web:\n    image: nginx:1.26\n",
+  env: "",
+  source: "ui",
+  note: "Known good",
+  createdBy: user.id,
+  createdAt: new Date(0).toISOString()
+};
+
+const backup = {
+  id: "26262626-2626-4626-8626-262626262626",
+  hostId: host.id,
+  kind: "volume",
+  volumeName: volumeResource.name,
+  sourcePath: null,
+  archivePath: "/var/lib/composebastion/backups/web-data.tar.gz",
+  sizeBytes: 1024,
+  checksum: "a".repeat(64),
+  status: "completed",
+  error: null,
+  encryption: "none",
+  backupTargetId: null,
+  remoteObjectKey: null,
+  remoteStatus: null,
+  remoteError: null,
+  localCacheStatus: "present",
+  verifiedAt: new Date(0).toISOString(),
+  verificationStatus: "verified",
+  lastDrillAt: new Date(0).toISOString(),
+  lastDrillStatus: "completed",
+  lastDrillError: null,
+  createdBy: user.id,
+  createdAt: new Date(0).toISOString(),
+  completedAt: new Date(0).toISOString()
+};
+
+const deploymentAnalysis = {
+  id: "19191919-1919-4919-8919-191919191919",
+  hostId: host.id,
+  sourceId: null,
+  sourceType: "git",
+  sourceInput: "http://10.0.21.40:3000/kobuslabs/linuxclitogui",
+  sourceLocator: "http://10.0.21.40:3000/kobuslabs/linuxclitogui",
+  status: "ready",
+  displayName: "linuxclitogui",
+  projectName: "linuxclitogui",
+  branch: "main",
+  composePath: "docker-compose.yml",
+  workingDir: "/srv/composebastion/deployments/linuxclitogui",
+  composeYaml: "services:\n  app:\n    image: 10.0.21.40:3000/kobuslabs/linuxclitogui:latest\n    ports:\n      - 8080:8080\n",
+  env: "",
+  summary: {
+    services: [{
+      name: "app",
+      image: "10.0.21.40:3000/kobuslabs/linuxclitogui:latest",
+      build: null,
+      ports: ["8080:8080"],
+      volumes: []
+    }],
+    composeCandidates: ["docker-compose.yml"],
+    dockerfileGenerated: false,
+    trackedEnvFile: false
+  },
+  variables: [],
+  warnings: [],
+  blockers: [],
+  registryIssues: [],
+  error: null,
+  expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
+  createdAt: new Date(0).toISOString(),
+  updatedAt: new Date(0).toISOString(),
+  deployedAt: null
+};
+
+const deploymentSource = {
+  id: "20202020-2020-4020-8020-202020202020",
+  sourceType: "git",
+  name: "linuxclitogui",
+  sourceLocator: "http://10.0.21.40:3000/kobuslabs/linuxclitogui",
+  branch: "main",
+  composePath: "docker-compose.yml",
+  workingDir: "/srv/composebastion/deployments/linuxclitogui",
+  projectName: "linuxclitogui",
+  defaultHostId: host.id,
+  targetHostIds: [host.id],
+  safeEnvironment: {},
+  hasCredential: false,
+  metadata: {},
+  lastDeployedAt: new Date(0).toISOString(),
   createdAt: new Date(0).toISOString(),
   updatedAt: new Date(0).toISOString()
 };
@@ -142,6 +255,68 @@ const registry = {
   insecure: false,
   createdAt: new Date(0).toISOString(),
   updatedAt: new Date(0).toISOString()
+};
+
+const s3RecoveryTarget = {
+  id: "27272727-2727-4727-8727-272727272727",
+  name: "Client object storage",
+  type: "s3",
+  kind: "s3",
+  enabled: true,
+  config: {},
+  endpoint: "https://s3.example.test",
+  region: "eu-west-1",
+  bucket: "composebastion",
+  prefix: "client-a",
+  forcePathStyle: true,
+  basePath: null,
+  provider: null,
+  rcloneProvider: null,
+  remotePath: null,
+  remoteName: null,
+  localCachePolicy: "keep",
+  healthStatus: "healthy",
+  healthCheckedAt: new Date(0).toISOString(),
+  healthError: null,
+  hasCredentials: true,
+  hasSecretAccessKey: true,
+  hasGenericConfig: false,
+  hasGenericCredentials: false,
+  accessKeyId: "ACCESS-KEY",
+  createdAt: new Date(0).toISOString(),
+  updatedAt: new Date(0).toISOString()
+};
+
+const smbRecoveryTarget = {
+  ...s3RecoveryTarget,
+  id: "28282828-2828-4828-8828-282828282828",
+  name: "Client SMB",
+  type: "rclone",
+  kind: "rclone",
+  endpoint: null,
+  region: null,
+  bucket: null,
+  prefix: null,
+  forcePathStyle: false,
+  provider: "smb",
+  rcloneProvider: "smb",
+  remotePath: "backups/client-a",
+  remoteName: "composebastion",
+  localCachePolicy: "remote_only",
+  hasSecretAccessKey: false,
+  hasGenericCredentials: true,
+  accessKeyId: null,
+  config: {
+    provider: "smb",
+    smb: {
+      server: "nas.internal",
+      share: "backups",
+      subPath: "client-a",
+      domain: "WORKGROUP",
+      username: "backup",
+      port: 445
+    }
+  }
 };
 
 const migrationPlanRun = {
@@ -252,9 +427,26 @@ const recoveryReadiness = {
   }]
 };
 
+const recoveryProfile = {
+  id: "29292929-2929-4929-8929-292929292929",
+  hostId: host.id,
+  appIdentity: recoveryReadiness.appIdentity,
+  name: "Web recovery",
+  includePaths: ["/srv/web"],
+  excludePatterns: ["*.tmp"],
+  restorePaths: { "/srv/web": "/srv/web-restored" },
+  preCaptureCommand: null,
+  postCaptureCommand: null,
+  captureMode: "hot",
+  createdAt: new Date(0).toISOString(),
+  updatedAt: new Date(0).toISOString()
+};
+
 type MockApiOptions = {
   needsSetup?: boolean;
+  requiresLogin?: boolean;
   hosts?: unknown[];
+  hostsReady?: Promise<void>;
   role?: "owner" | "admin" | "operator" | "viewer";
   failChannelTest?: boolean;
   appOverride?: Record<string, unknown>;
@@ -263,32 +455,116 @@ type MockApiOptions = {
   githubRepositories?: unknown[];
   resources?: unknown[];
   composeStacks?: unknown[];
+  deploymentSources?: unknown[];
+  deploymentAnalysis?: Record<string, unknown>;
   users?: unknown[];
   registries?: unknown[];
+  jobs?: unknown[];
   selfUpdateAvailable?: boolean;
   migrationPlanRun?: unknown;
+  cancelJobReady?: Promise<void>;
+  containerUpdateReady?: Promise<void>;
+  failContainerUpdate?: boolean;
+  failUpdatePreview?: boolean;
+  usageSnapshot?: Record<string, unknown>[];
+  usageSnapshotFallbackReady?: Promise<void>;
+  usageStreamStats?: Record<string, unknown>;
+  sessions?: unknown[];
+  auditEvents?: unknown[];
+  auditTotal?: number;
+  recoveryTargets?: unknown[];
+  recoverySchedules?: unknown[];
+  backups?: unknown[];
+  composeVersions?: unknown[];
+  channelCreateReady?: Promise<void>;
+  recoveryAnalysis?: Record<string, unknown>;
+  favoriteImages?: unknown[];
+  catalogTemplates?: unknown[];
+  failures?: Record<string, { status?: number; error: string }>;
 };
 
 const unhandledApiRequests: string[] = [];
+const unexpectedPageErrors: string[] = [];
+const unexpectedConsoleErrors: string[] = [];
 
-test.beforeEach(() => {
+test.beforeEach(({ page }) => {
   unhandledApiRequests.length = 0;
+  unexpectedPageErrors.length = 0;
+  unexpectedConsoleErrors.length = 0;
+  page.on("pageerror", (error) => unexpectedPageErrors.push(error.message));
+  page.on("console", (message) => {
+    if (message.type() === "error" && !message.text().startsWith("Failed to load resource: the server responded with a status of")) {
+      unexpectedConsoleErrors.push(message.text());
+    }
+  });
 });
 
-test.afterEach(() => {
+test.afterEach(async ({ page }) => {
+  // Let fire-and-forget dashboard refreshes reach the explicit route mocks
+  // before the page closes, especially in WebKit where navigation settles
+  // before every secondary request has been scheduled.
+  await page.waitForTimeout(100);
   expect(unhandledApiRequests, "all mocked API requests must have an explicit method-aware handler").toEqual([]);
+  expect(unexpectedPageErrors, "the page must not emit uncaught exceptions or unhandled rejections").toEqual([]);
+  expect(unexpectedConsoleErrors, "the browser console must not emit errors").toEqual([]);
 });
 
 function allowedMockMethods(path: string): ReadonlySet<string> {
   const rules: Array<[RegExp, readonly string[]]> = [
     [/^\/api\/auth\/(?:setup|login)$/, ["POST"]],
+    [/^\/api\/auth\/(?:logout|logout-all)$/, ["POST"]],
+    [/^\/api\/auth\/sessions\/[^/]+$/, ["DELETE"]],
     [/^\/api\/apps\/[^/]+\/(?:name|version)$/, ["PUT"]],
+    [/^\/api\/alerts\/(?:channels|rules|silences)$/, ["GET", "POST"]],
+    [/^\/api\/alerts\/channels\/test-history$/, ["GET"]],
+    [/^\/api\/alerts\/(?:channels|rules|silences)\/[^/]+$/, ["DELETE"]],
     [/^\/api\/alerts\/channels\/[^/]+\/test$/, ["POST"]],
+    [/^\/api\/config\/(?:export|import)$/, ["POST"]],
+    [/^\/api\/compose\/[^/]+$/, ["PUT", "DELETE"]],
+    [/^\/api\/compose\/[^/]+\/(?:deploy|stop|remove|rollback)$/, ["POST"]],
+    [/^\/api\/hosts$/, ["GET", "POST"]],
     [/^\/api\/github\/repos\/[^/]+\/(?:deploy|test-host-access)$/, ["POST"]],
+    [/^\/api\/deploy\/analyses$/, ["POST"]],
+    [/^\/api\/deploy\/analyses\/[^/]+\/deploy$/, ["POST"]],
+    [/^\/api\/hosts\/metrics$/, ["GET"]],
+    [/^\/api\/hosts\/[^/]+\/compose$/, ["GET", "POST"]],
+    [/^\/api\/hosts\/[^/]+$/, ["PUT", "DELETE"]],
     [/^\/api\/hosts\/[^/]+\/actions$/, ["POST"]],
+    [/^\/api\/hosts\/[^/]+\/registries\/[^/]+\/login$/, ["POST"]],
+    [/^\/api\/backups$/, ["GET", "POST"]],
+    [/^\/api\/backups\/health$/, ["GET"]],
+    [/^\/api\/backups\/[^/]+$/, ["DELETE"]],
+    [/^\/api\/backups\/[^/]+\/(?:restore|restore-host-path|verify|drill)$/, ["POST"]],
+    [/^\/api\/backup-schedules$/, ["GET", "POST"]],
+    [/^\/api\/backup-schedules\/[^/]+$/, ["DELETE"]],
+    [/^\/api\/catalog\/templates$/, ["GET", "POST"]],
+    [/^\/api\/catalog\/templates\/[^/]+$/, ["DELETE"]],
+    [/^\/api\/catalog\/deploy$/, ["POST"]],
+    [/^\/api\/favorite-images$/, ["GET", "POST"]],
+    [/^\/api\/favorite-images\/[^/]+$/, ["DELETE"]],
+    [/^\/api\/image-scans$/, ["GET", "POST"]],
     [/^\/api\/jobs\/[^/]+\/(?:cancel|retry)$/, ["POST"]],
+    [/^\/api\/migrations\/(?:volume-clone|container-clone)$/, ["POST"]],
+    [/^\/api\/recovery\/analyze$/, ["POST"]],
+    [/^\/api\/recovery\/readiness\/analyze$/, ["POST"]],
+    [/^\/api\/recovery\/points$/, ["GET", "POST"]],
     [/^\/api\/recovery\/points\/[^/]+\/drill$/, ["POST"]],
-    [/^\/api\/recovery\/migrations\/plan$/, ["POST"]]
+    [/^\/api\/recovery\/points\/[^/]+\/verify$/, ["POST"]],
+    [/^\/api\/recovery\/restore$/, ["POST"]],
+    [/^\/api\/recovery\/profiles$/, ["PUT"]],
+    [/^\/api\/recovery\/profiles\/[^/]+$/, ["GET", "DELETE"]],
+    [/^\/api\/recovery\/migrations\/plan$/, ["POST"]],
+    [/^\/api\/recovery\/schedules$/, ["GET", "POST"]],
+    [/^\/api\/recovery\/schedules\/[^/]+$/, ["DELETE"]],
+    [/^\/api\/recovery\/targets$/, ["GET", "POST"]],
+    [/^\/api\/recovery\/targets\/[^/]+$/, ["GET", "PATCH", "DELETE"]],
+    [/^\/api\/recovery\/targets\/[^/]+\/test$/, ["POST"]],
+    [/^\/api\/registries$/, ["GET", "POST"]],
+    [/^\/api\/registries\/[^/]+$/, ["DELETE"]],
+    [/^\/api\/self-update\/config$/, ["PUT"]],
+    [/^\/api\/self-update\/(?:check|start)$/, ["POST"]],
+    [/^\/api\/users$/, ["GET", "POST"]],
+    [/^\/api\/users\/[^/]+$/, ["PUT", "DELETE"]]
   ];
   const matched = rules.find(([pattern]) => pattern.test(path));
   return new Set(matched?.[1] ?? ["GET"]);
@@ -296,6 +572,7 @@ function allowedMockMethods(path: string): ReadonlySet<string> {
 
 async function mockApi(page: Page, options: MockApiOptions = {}) {
   const requests: string[] = [];
+  const requestBodies: Record<string, unknown[]> = {};
   const currentUser = { ...user, role: options.role ?? user.role };
   const hostList = options.hosts ?? [host];
   let appData = { ...app, ...(options.appOverride ?? {}) } as typeof app & Record<string, any>;
@@ -308,6 +585,10 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
   };
   let channelTestFailed = false;
   let selectedGitRef = appData.branch;
+  let deploymentFinished = false;
+  let authenticated = !options.needsSetup && !options.requiresLogin;
+  let usageSnapshotRequests = 0;
+  const analyzedDeployment = options.deploymentAnalysis ?? deploymentAnalysis;
 
   await page.route("**/api/**", async (route) => {
     const request = route.request();
@@ -315,6 +596,13 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
     const path = url.pathname;
     const requestKey = `${request.method()} ${path}`;
     requests.push(requestKey);
+    if (request.method() !== "GET" && request.postData()) {
+      try {
+        (requestBodies[requestKey] ??= []).push(request.postDataJSON());
+      } catch {
+        (requestBodies[requestKey] ??= []).push(request.postData());
+      }
+    }
     const json = (body: unknown, status = 200) => route.fulfill({
       status,
       contentType: "application/json",
@@ -325,24 +613,53 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
       unhandledApiRequests.push(requestKey);
       return json({ error: `Unhandled mocked API request: ${requestKey}` }, 501);
     }
+    const forcedFailure = options.failures?.[requestKey];
+    if (forcedFailure) {
+      return json({ error: forcedFailure.error }, forcedFailure.status ?? 500);
+    }
 
     if (path === "/api/auth/setup-state") return json({ needsSetup: Boolean(options.needsSetup) });
-    if (path === "/api/auth/me") return options.needsSetup ? json({ error: "Authentication required" }, 401) : json({ user: currentUser });
-    if (path === "/api/auth/setup" || path === "/api/auth/login") return json({ user: currentUser });
-    if (path === "/api/hosts") return json({ hosts: hostList });
+    if (path === "/api/auth/me") return authenticated ? json({ user: currentUser }) : json({ error: "Authentication required" }, 401);
+    if (path === "/api/auth/setup" || path === "/api/auth/login") {
+      authenticated = true;
+      return json({ user: currentUser });
+    }
+    if (path === "/api/hosts" && request.method() === "POST") {
+      return json({
+        host,
+        job: { id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", type: "host.check", status: "queued" }
+      });
+    }
+    if (path === "/api/hosts") {
+      if (options.hostsReady) await options.hostsReady;
+      return json({ hosts: hostList });
+    }
     if (path === `/api/hosts/${host.id}/resources`) return json({ resources: options.resources ?? [currentContainerResource] });
     if (path === `/api/hosts/${fileHost.id}/resources`) return json({ resources: [] });
-    if (path === `/api/hosts/${host.id}/containers/usage`) return json({ usage: [{ ID: "web", CPUPerc: "1.2%", MemPerc: "3.4%", MemUsage: "20MiB / 512MiB" }] });
+    if (path === `/api/hosts/${host.id}/containers/usage`) {
+      usageSnapshotRequests += 1;
+      if (usageSnapshotRequests > 1) await options.usageSnapshotFallbackReady;
+      return json({
+        usage: options.usageSnapshot ?? [{ ID: "web", CPUPerc: "1.2%", MemPerc: "3.4%", MemUsage: "20MiB / 512MiB" }]
+      });
+    }
     if (path === `/api/hosts/${fileHost.id}/containers/usage`) return json({ usage: [] });
     if (path === `/api/hosts/${host.id}/containers/usage-stream`) return route.fulfill({
       status: 200,
       contentType: "text/event-stream",
-      body: `data: ${JSON.stringify({ usage: [{ ID: "web", CPUPerc: "1.2%", MemPerc: "3.4%", MemUsage: "20MiB / 512MiB" }] })}\n\n`
+      body: `data: ${JSON.stringify({
+        stats: options.usageStreamStats ?? {
+          ID: "web",
+          CPUPerc: "1.2%",
+          MemPerc: "3.4%",
+          MemUsage: "20MiB / 512MiB"
+        }
+      })}\n\n`
     });
     if (path === `/api/hosts/${fileHost.id}/containers/usage-stream`) return route.fulfill({
       status: 200,
       contentType: "text/event-stream",
-      body: `data: ${JSON.stringify({ usage: [] })}\n\n`
+      body: ": ping\n\n"
     });
     const metricsMatch = /^\/api\/hosts\/([^/]+)\/metrics$/.exec(path);
     const metricsStreamMatch = /^\/api\/hosts\/([^/]+)\/metrics-stream$/.exec(path);
@@ -400,8 +717,16 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
       ports: [{ containerPort: "80", protocol: "tcp", hostIp: "0.0.0.0", hostPort: "8080" }],
       labels: { "com.composebastion.app": "web" }
     } });
+    if (path === `/api/hosts/${host.id}/compose` && request.method() === "POST") return json({ stack: composeStack });
     if (path === `/api/hosts/${host.id}/compose`) return json({ stacks: options.composeStacks ?? [] });
     if (path === `/api/hosts/${fileHost.id}/compose`) return json({ stacks: [] });
+    if (path === `/api/compose/${composeStack.id}/versions`) return json({ versions: options.composeVersions ?? [] });
+    if (path === `/api/compose/${composeStack.id}/versions/diff`) return json({
+      fromVersionNumber: 1,
+      toVersionNumber: 2,
+      composeChanges: [{ type: "+", line: 3, text: "image: nginx:latest" }],
+      envChanged: false
+    });
     if (path === "/api/hosts/metrics") return json([{
         hostId: host.id,
         name: host.name,
@@ -428,10 +753,23 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
           uptimeSeconds: 123456
         }
       }]);
-    if (path === "/api/backups") return json({ backups: [] });
+    if (path === "/api/backups" && request.method() === "POST") return json({
+      job: { id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", type: "volume.backup", status: "queued" }
+    });
+    if (path === "/api/backups") {
+      const backupRows = options.backups ?? [];
+      return json({
+        backups: backupRows,
+        total: backupRows.length,
+        limit: Number(url.searchParams.get("limit") ?? 40),
+        offset: Number(url.searchParams.get("offset") ?? 0),
+        hasMore: false
+      });
+    }
+    if (path === "/api/backup-schedules" && request.method() === "POST") return json({ ok: true });
     if (path === "/api/backup-schedules") return json({ schedules: [] });
-    if (path === "/api/jobs") return json({
-      jobs: [{
+    if (path === "/api/jobs") {
+      const defaultJobs = [{
         id: "33333333-3333-4333-8333-333333333333",
         correlationId: "33333333-3333-4333-8333-333333333333",
         type: "host.sync",
@@ -461,11 +799,15 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
         updatedAt: new Date(0).toISOString(),
         startedAt: null,
         completedAt: null
-      }],
-      total: 2,
+      }];
+      const jobRows = options.jobs ?? defaultJobs;
+      return json({
+      jobs: jobRows,
+      total: jobRows.length,
       limit: Number(url.searchParams.get("limit") ?? 40),
       offset: 0
     });
+    }
     if (path === "/api/jobs/status") return json({ worker: {
       queued: 0,
       running: 0,
@@ -475,6 +817,10 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
       lastHeartbeatAt: new Date(0).toISOString(),
       state: "active"
     } });
+    if (path === "/api/jobs/34343434-3434-4434-8434-343434343434/cancel" && request.method() === "POST") {
+      await options.cancelJobReady;
+      return json({ ok: true });
+    }
     if (path === "/api/jobs/dddddddd-dddd-4ddd-8ddd-dddddddddddd") return json({
       job: {
         id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
@@ -531,10 +877,40 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
       updateAvailable: Boolean(options.selfUpdateAvailable),
       lastJob: null
     });
+    if (path === "/api/self-update/config" && request.method() === "PUT") return json({ config: request.postDataJSON() });
+    if (path === "/api/self-update/check" && request.method() === "POST") return json({
+      latest: { version: "1.0.7", checkedAt: new Date().toISOString(), error: null }
+    });
+    if (path === "/api/self-update/start" && request.method() === "POST") return json({
+      job: { id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", type: "system.self_update", status: "queued" }
+    });
+    if (path === "/api/users" && request.method() === "POST") return json({ user: managedUser });
     if (path === "/api/users") return json({ users: options.users ?? [currentUser] });
+    if (/^\/api\/users\/[^/]+$/.test(path)) return json({ ok: true, user: managedUser });
+    if (path === "/api/registries" && request.method() === "POST") return json({ registry });
     if (path === "/api/registries") return json({ registries: options.registries ?? [] });
-    if (path === "/api/favorite-images") return json({ images: [] });
-    if (path === "/api/catalog/templates") return json({ templates: [] });
+    if (/^\/api\/registries\/[^/]+$/.test(path)) return json({ ok: true });
+    if (path === "/api/config/export") return json({
+      backup: {
+        format: "composebastion-config",
+        version: 1,
+        encrypted: true,
+        payload: "redacted-fixture"
+      }
+    });
+    if (path === "/api/config/import") return json({
+      imported: { hosts: 1, registries: 1, repositories: 1, stacks: 1 }
+    });
+    if (path === "/api/favorite-images" && request.method() === "POST") return json({
+      image: { id: "30303030-3030-4030-8030-303030303030", image: "nginx:latest", name: "nginx", notes: "" }
+    });
+    if (path === "/api/favorite-images") return json({ images: options.favoriteImages ?? [] });
+    if (/^\/api\/favorite-images\/[^/]+$/.test(path)) return json({ ok: true });
+    if (path === "/api/catalog/templates" && request.method() === "POST") {
+      return json({ template: { ...(request.postDataJSON() as Record<string, unknown>), source: "custom" } });
+    }
+    if (path === "/api/catalog/templates") return json({ templates: options.catalogTemplates ?? [] });
+    if (/^\/api\/catalog\/templates\/[^/]+$/.test(path) && request.method() === "DELETE") return json({ ok: true });
     if (path === "/api/catalog/external") return json({
       source: "awesome-selfhosted",
       sourceLabel: "Awesome-Selfhosted",
@@ -573,6 +949,37 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
       }]
     });
     if (path === "/api/github/repos") return json({ repositories: options.githubRepositories ?? [] });
+    if (path === "/api/deployment-sources") {
+      return json({ sources: deploymentFinished ? [deploymentSource] : (options.deploymentSources ?? []) });
+    }
+    if (path === "/api/deploy/analyses" && request.method() === "POST") {
+      return json({
+        analysis: analyzedDeployment,
+        job: {
+          id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+          type: "deploy.analyze",
+          status: "queued"
+        }
+      });
+    }
+    if (path === `/api/deploy/analyses/${analyzedDeployment.id}`) {
+      return json({
+        analysis: deploymentFinished
+          ? { ...analyzedDeployment, status: "deployed", sourceId: deploymentSource.id, deployedAt: new Date(0).toISOString() }
+          : analyzedDeployment
+      });
+    }
+    if (path === `/api/deploy/analyses/${analyzedDeployment.id}/deploy` && request.method() === "POST") {
+      deploymentFinished = true;
+      return json({
+        analysis: { ...analyzedDeployment, status: "deployed", sourceId: deploymentSource.id, deployedAt: new Date(0).toISOString() },
+        job: {
+          id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+          type: "deploy.execute",
+          status: "queued"
+        }
+      });
+    }
     if (path === "/api/apps") return json({ apps: [{ ...appData, branch: selectedGitRef }] });
     if (path === `/api/apps/${appData.id}/name` && request.method() === "PUT") {
       appData = { ...appData, name: (request.postDataJSON() as { name?: string }).name ?? appData.name };
@@ -627,7 +1034,10 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
       selectedGitRef = (request.postDataJSON() as { ref?: string }).ref ?? selectedGitRef;
       return json({ app: { ...appData, branch: selectedGitRef } });
     }
-    if (path === "/api/auth/sessions") return json({ sessions: [{
+    if (path === `/api/compose/${composeStack.id}` && request.method() === "PUT") {
+      return json({ stack: { ...composeStack, ...(request.postDataJSON() as Record<string, unknown>) } });
+    }
+    if (path === "/api/auth/sessions") return json({ sessions: options.sessions ?? [{
       id: "abababab-abab-4bab-8bab-abababababab",
       ipAddress: "127.0.0.1",
       userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -636,6 +1046,12 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
       expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
       current: true
     }] });
+    if (/^\/api\/auth\/sessions\/[^/]+$/.test(path)) return json({ ok: true });
+    if (path === "/api/auth/logout-all") return json({ ok: true });
+    if (path === "/api/alerts/channels" && request.method() === "POST") {
+      await options.channelCreateReady;
+      return json({ ok: true });
+    }
     if (path === "/api/alerts/channels") return json({ channels: [{
       id: "77777777-7777-4777-8777-777777777777",
       name: "Ops email",
@@ -726,6 +1142,9 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
         }
       });
     }
+    if (/^\/api\/alerts\/(?:channels|rules|silences)\/[^/]+$/.test(path) && request.method() === "DELETE") {
+      return json({ ok: true });
+    }
     if (path === "/api/image-updates") return json({ updates: [{
       id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
       hostId: host.id,
@@ -747,6 +1166,7 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
       error: null,
       guidance: "Scanner ready."
     } });
+    if (path === "/api/image-scans" && request.method() === "POST") return json({ ok: true });
     if (path === "/api/image-scans") return json({ scans: [] });
     if (path === `/api/hosts/${host.id}/image-cleanup`) return json({ candidates: [{
       imageId: "sha256:unused",
@@ -768,7 +1188,11 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
       reason: "held by stopped container demoapp-old"
     }] });
     if (path === "/api/image-tags") return json({ image: url.searchParams.get("image"), tags: options.imageTags ?? ["latest", "main", "beta", "dev", "v0.9.7", "v0.9.6"] });
-    if (path === "/api/image-updates/preview") return json({ preview: {
+    if (path === "/api/image-updates/preview") {
+      if (options.failUpdatePreview) {
+        return json({ error: "Update preview failed intentionally" }, 500);
+      }
+      return json({ preview: {
       hostId: host.id,
       imageReference: "nginx:latest",
       status: "update_available",
@@ -780,12 +1204,37 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
       affectedContainers: [{ id: "web", name: "web" }],
       affectedStacks: [{ id: appData.stackId, name: "Web" }],
       severityCounts: { critical: 0, high: 1, medium: 0, low: 0 }
-    } });
+      } });
+    }
+    if (path === `/api/hosts/${host.id}/actions` && request.method() === "POST") {
+      const payload = request.postDataJSON() as { type?: string } | null;
+      if (payload?.type === "container.update") {
+        await options.containerUpdateReady;
+        if (options.failContainerUpdate) return json({ error: "Container update failed intentionally" }, 500);
+        return json({ ok: true, job: { id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", status: "queued" } });
+      }
+      return json({ ok: true, job: { id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", status: "queued" } });
+    }
+    if (path === "/api/recovery/analyze") return json({
+      analysis: options.recoveryAnalysis ?? {
+        ...recoveryReadiness,
+        status: "ready",
+        recommendedCaptureMode: "hot",
+        warnings: [],
+        blockers: []
+      }
+    });
     if (path === "/api/recovery/readiness") return json({ readiness: [recoveryReadiness] });
     if (path === "/api/recovery/readiness/analyze") return json({ readiness: recoveryReadiness });
+    if (path === "/api/recovery/points" && request.method() === "POST") return json({ point: recoveryPoint });
     if (path === "/api/recovery/points") return json({ points: [recoveryPoint] });
-    if (path === "/api/recovery/targets") return json({ targets: [] });
-    if (path === "/api/recovery/schedules") return json({ schedules: [{
+    if (path === "/api/recovery/profiles" && request.method() === "PUT") return json({ profile: recoveryProfile });
+    if (/^\/api\/recovery\/profiles\/[^/]+$/.test(path)) return json({ ok: true });
+    if (path === "/api/recovery/targets" && request.method() === "POST") return json({ target: s3RecoveryTarget });
+    if (path === "/api/recovery/targets") return json({ targets: options.recoveryTargets ?? [] });
+    if (/^\/api\/recovery\/targets\/[^/]+\/test$/.test(path)) return json({ ok: true });
+    if (/^\/api\/recovery\/targets\/[^/]+$/.test(path)) return json({ ok: true });
+    if (path === "/api/recovery/schedules") return json({ schedules: options.recoverySchedules ?? [{
       id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
       hostId: host.id,
       name: "Nightly Web",
@@ -805,23 +1254,46 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
       lastDrillError: null,
       lastSuccessfulDrillAt: new Date(0).toISOString()
     }] });
+    if (/^\/api\/recovery\/schedules\/[^/]+$/.test(path)) return json({ ok: true });
     if (path === "/api/recovery/migrations") return json({ runs: [] });
     if (path === "/api/recovery/migrations/plan" && request.method() === "POST") {
       return json({ run: options.migrationPlanRun ?? migrationPlanRun });
     }
+    if (path === "/api/recovery/restore" && request.method() === "POST") {
+      return json({ job: { id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", type: "recovery.restore", status: "queued" } });
+    }
+    if (path === "/api/audit") return json({
+      events: options.auditEvents ?? [{
+        id: "f1f1f1f1-f1f1-41f1-81f1-f1f1f1f1f1f1",
+        userId: currentUser.id,
+        hostId: host.id,
+        action: "registry.login",
+        targetKind: "registry",
+        targetId: registry.id,
+        details: { username: "[redacted]", password: "[redacted]" },
+        createdAt: new Date(0).toISOString()
+      }],
+      total: options.auditTotal ?? 1,
+      limit: Number(url.searchParams.get("limit") ?? 50),
+      offset: Number(url.searchParams.get("offset") ?? 0)
+    });
+    if (/^\/api\/hosts\/[^/]+$/.test(path)) return json({ ok: true, host });
+    if (/^\/api\/compose\/[^/]+$/.test(path) && request.method() === "DELETE") return json({ ok: true });
+    if (/^\/api\/backups\/[^/]+$/.test(path) && request.method() === "DELETE") return json({ ok: true });
+    if (/^\/api\/backup-schedules\/[^/]+$/.test(path) && request.method() === "DELETE") return json({ ok: true });
     if (request.method() === "POST") return json({ ok: true, job: { id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", status: "queued" } });
     unhandledApiRequests.push(requestKey);
     return json({ error: `Unhandled mocked API request: ${requestKey}` }, 501);
   });
 
-  return { requests, unhandledApiRequests };
+  return { requests, requestBodies, unhandledApiRequests };
 }
 
 async function gotoApp(page: Page, path: string) {
   await page.goto(path, { waitUntil: "domcontentloaded" });
 }
 
-test("first-run setup reaches the dashboard", async ({ page }) => {
+test("first-run setup reaches the dashboard", { tag: ["@critical", "@setup"] }, async ({ page }) => {
   await mockApi(page, { needsSetup: true, hosts: [] });
   await gotoApp(page, "/");
   await expect(page.getByRole("heading", { name: "ComposeBastion" })).toBeVisible();
@@ -833,13 +1305,31 @@ test("first-run setup reaches the dashboard", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Host", exact: true })).toBeVisible();
 });
 
-test("keyboard focus and theme toggle are visible", async ({ page }) => {
+test("login reaches the dashboard through the signed-out screen", { tag: ["@critical", "@login"] }, async ({ page }) => {
+  const mock = await mockApi(page, { requiresLogin: true });
+  await gotoApp(page, "/");
+  await expect(page.getByRole("heading", { name: "ComposeBastion" })).toBeVisible();
+  await page.getByLabel("Username or email").fill("admin");
+  await page.getByLabel("Password").fill("long-enough-password");
+  await page.getByRole("button", { name: "Sign In" }).click();
+  await expect(page.getByRole("heading", { name: "All Docker hosts" })).toBeVisible();
+  await expect.poll(() => mock.requests).toContain("POST /api/auth/login");
+});
+
+test("keyboard focus and theme toggle are visible", { tag: ["@critical", "@navigation"] }, async ({ page }) => {
   await mockApi(page);
   await gotoApp(page, "/overview");
   await expect(page.getByRole("heading", { name: "prod-01" })).toBeVisible();
+  await expect(page.locator(".globalSearch")).toHaveCSS("display", "grid");
   await page.keyboard.press("/");
   await expect(page.getByRole("searchbox", { name: /Search hosts and resources/ })).toBeFocused();
+  const openSidebar = page.getByRole("button", { name: "Open sidebar" });
+  if ((page.viewportSize()?.width ?? 1_440) <= 980) {
+    await openSidebar.click();
+    await expect(page.getByRole("navigation", { name: "Main navigation" })).toBeVisible();
+  }
   await page.getByRole("link", { name: /Admin/ }).click();
+  await expect(page.getByRole("heading", { name: "Admin" })).toBeVisible();
   await page.getByRole("button", { name: "Appearance" }).click();
   await page.getByRole("button", { name: /dark mode/i }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
@@ -849,6 +1339,7 @@ test("reduced-motion mode keeps focus and contrast usable", async ({ page }) => 
   await page.emulateMedia({ reducedMotion: "reduce" });
   await mockApi(page);
   await gotoApp(page, "/overview");
+  await expect(page.locator(".globalSearch")).toHaveCSS("display", "grid");
   const search = page.getByRole("searchbox", { name: /Search hosts and resources/ });
   await search.focus();
   await expect(search).toBeFocused();
@@ -891,7 +1382,7 @@ test("reduced-motion mode keeps focus and contrast usable", async ({ page }) => 
   expect(contrastRatio).toBeGreaterThan(3);
 });
 
-test("operations panel exposes readiness, backup health, and failed jobs", async ({ page }) => {
+test("operations panel exposes readiness, backup health, and failed jobs", { tag: ["@critical", "@admin"] }, async ({ page }) => {
   await mockApi(page);
   await gotoApp(page, "/admin");
   await page.getByRole("button", { name: "Operations" }).click();
@@ -904,7 +1395,11 @@ test("operations panel exposes readiness, backup health, and failed jobs", async
 });
 
 test("job actions expose recovery context and confirm focus return", async ({ page }) => {
-  const mock = await mockApi(page);
+  let releaseCancel!: () => void;
+  const cancelReady = new Promise<void>((resolve) => {
+    releaseCancel = resolve;
+  });
+  const mock = await mockApi(page, { cancelJobReady: cancelReady });
   await gotoApp(page, "/admin");
   await page.getByRole("button", { name: "Jobs" }).click();
   await expect(page.getByText(/Confirm SSH or agent connectivity/)).toBeVisible();
@@ -921,6 +1416,15 @@ test("job actions expose recovery context and confirm focus return", async ({ pa
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
   await expect(cancelJobButton).toBeFocused();
+
+  await cancelJobButton.click();
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Confirm" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(cancelJobButton).toBeDisabled();
+  await expect(page.getByRole("heading", { name: "Operation jobs" })).toBeFocused();
+  releaseCancel();
+  await expect(cancelJobButton).toBeEnabled();
 });
 
 test("high-impact deletion flows require exact typed confirmation", async ({ page }) => {
@@ -948,15 +1452,15 @@ test("high-impact deletion flows require exact typed confirmation", async ({ pag
   await page.keyboard.press("Escape");
 
   await gotoApp(page, "/compose");
-  await page.getByTitle("Remove from Docker and delete named volumes").click();
-  dialog = page.getByRole("alertdialog", { name: "Remove compose stack and volumes" });
-  await expect(dialog.getByRole("button", { name: "Remove stack and volumes" })).toBeDisabled();
-  await dialog.getByRole("textbox").fill(composeStack.name);
-  await expect(dialog.getByRole("button", { name: "Remove stack and volumes" })).toBeEnabled();
+  await page.getByTitle("Advanced deployment settings").click();
+  await page.getByRole("button", { name: "Remove", exact: true }).click();
+  dialog = page.getByRole("alertdialog", { name: "Remove service from Docker" });
+  await expect(dialog.getByRole("button", { name: "Compose down" })).toBeEnabled();
   await page.keyboard.press("Escape");
 
   await gotoApp(page, "/admin");
   await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByLabel("Backup passphrase").fill("qualification-passphrase");
   await page.getByRole("button", { name: "Import", exact: true }).click();
   dialog = page.getByRole("alertdialog", { name: "Import configuration" });
   await expect(dialog.getByRole("button", { name: "Import configuration" })).toBeDisabled();
@@ -1006,7 +1510,7 @@ test("destructive network, alert, registry, user, and self-update actions use da
   await expectDangerDialog("Restart ComposeBastion");
 });
 
-test("alerts show silences and history", async ({ page }) => {
+test("alerts show silences and history", { tag: ["@critical", "@alerts"] }, async ({ page }) => {
   await mockApi(page);
   await gotoApp(page, "/alerts");
   await expect(page.getByRole("heading", { name: "Alerts" })).toBeVisible();
@@ -1044,22 +1548,26 @@ test("viewer alerts avoid operator endpoints and show read-only history", async 
   ].includes(request))).toEqual([]);
 });
 
-test("viewer direct restricted routes redirect without issuing mutation requests", async ({ page }) => {
+test("viewer direct restricted routes redirect without issuing mutation requests", { tag: ["@critical", "@rbac"] }, async ({ page }) => {
   const mock = await mockApi(page, { role: "viewer" });
   await gotoApp(page, "/deploy");
   await expect(page).toHaveURL(/\/overview$/);
   await expect(page.getByRole("link", { name: /Deploy/ })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Host", exact: true })).toHaveCount(0);
   await expect(page.locator('button[title="Open SSH terminal"]')).toHaveCount(0);
+  await expect.poll(() => mock.requests.filter((request) => request === "GET /api/github/repos")).toEqual([]);
   await expect.poll(() => mock.requests.filter((request) => /^(POST|PUT|PATCH|DELETE) /.test(request))).toEqual([]);
 });
 
-test("operator sees Docker controls but not terminal or administrator-only sections", async ({ page }) => {
+test("operator sees Docker controls but not terminal or administrator-only sections", { tag: ["@critical", "@rbac"] }, async ({ page }) => {
   const mock = await mockApi(page, { role: "operator" });
   await gotoApp(page, "/hosts");
   await expect(page.getByRole("button", { name: "Host", exact: true })).toBeVisible();
   await expect(page.locator('button[title="Open SSH terminal"]')).toHaveCount(0);
-  await gotoApp(page, "/admin");
+  const openSidebar = page.getByRole("button", { name: "Open sidebar" });
+  if (await openSidebar.isVisible()) await openSidebar.click();
+  await page.getByRole("link", { name: "Admin", exact: true }).click();
+  await expect(page).toHaveURL(/\/admin$/);
   await expect(page.getByRole("button", { name: "Users" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Audit" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Registries" })).toBeVisible();
@@ -1096,6 +1604,872 @@ test("admin about shows V1 licensing details", async ({ page }) => {
   await expect(page.getByRole("link", { name: "support@composebastion.com" })).toBeVisible();
 });
 
+test("configuration export and import remain encrypted, validated, and confirmed", { tag: ["@critical", "@admin"] }, async ({ page }) => {
+  const mock = await mockApi(page);
+  await gotoApp(page, "/settings");
+  await expect(page.getByRole("heading", { name: "Host Settings" })).toBeVisible();
+  const passphrase = "qualification-passphrase";
+  await page.getByLabel("Backup passphrase").fill(passphrase);
+
+  await page.getByRole("button", { name: "Export" }).click();
+  await expect(page.getByRole("status")).toContainText("Config export ready");
+  const backupText = page.getByRole("textbox", { name: "Encrypted config JSON", exact: true });
+  await expect(backupText).toHaveValue(/"encrypted": true/);
+  expect(mock.requestBodies["POST /api/config/export"]?.at(-1)).toEqual({ passphrase });
+
+  await backupText.fill(JSON.stringify({
+    format: "composebastion-config",
+    version: 1,
+    encrypted: true,
+    payload: "ciphertext"
+  }));
+  await page.getByRole("button", { name: "Import", exact: true }).click();
+  const dialog = page.getByRole("alertdialog", { name: "Import configuration" });
+  await dialog.getByRole("textbox").fill("IMPORT");
+  await dialog.getByRole("button", { name: "Import configuration" }).click();
+  await expect(page.getByRole("status")).toContainText("Imported 4 records");
+  expect(mock.requestBodies["POST /api/config/import"]?.at(-1)).toEqual({
+    passphrase,
+    backup: {
+      format: "composebastion-config",
+      version: 1,
+      encrypted: true,
+      payload: "ciphertext"
+    }
+  });
+});
+
+test("session revocation confirms the exact secondary session", { tag: ["@critical", "@admin"] }, async ({ page }) => {
+  const secondarySession = {
+    id: "cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd",
+    ipAddress: "192.0.2.44",
+    userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1",
+    createdAt: new Date(0).toISOString(),
+    lastSeenAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+    current: false
+  };
+  const mock = await mockApi(page, {
+    sessions: [{
+      ...secondarySession,
+      id: "abababab-abab-4bab-8bab-abababababab",
+      ipAddress: "127.0.0.1",
+      current: true
+    }, secondarySession]
+  });
+  await gotoApp(page, "/settings");
+  const secondaryRow = page.locator(".sessionRow", { hasText: "192.0.2.44" });
+  await secondaryRow.getByRole("button", { name: "Revoke" }).click();
+  const dialog = page.getByRole("alertdialog", { name: "Revoke session" });
+  await expect(dialog).toContainText("iOS device");
+  await dialog.getByRole("button", { name: "Revoke" }).click();
+  await expect.poll(() => mock.requests).toContain(`DELETE /api/auth/sessions/${secondarySession.id}`);
+});
+
+test("alert channel creation sends only the credential field for its selected channel type", { tag: ["@critical", "@alerts"] }, async ({ page }) => {
+  const mock = await mockApi(page);
+  await gotoApp(page, "/alerts");
+
+  await page.getByLabel("Channel name").fill("Primary email");
+  await page.getByLabel("Email recipient").fill("alerts@example.com");
+  await page.getByRole("button", { name: "Save Channel" }).click();
+  await expect.poll(() => mock.requestBodies["POST /api/alerts/channels"]?.length ?? 0).toBe(1);
+  expect(mock.requestBodies["POST /api/alerts/channels"]?.[0]).toEqual({
+    name: "Primary email",
+    type: "email",
+    emailTo: "alerts@example.com",
+    enabled: true
+  });
+
+  await expect(page.getByLabel("Channel name")).toHaveValue("");
+  await page.getByLabel("Channel type").selectOption("webhook");
+  await page.getByLabel("Channel name").fill("Primary webhook");
+  await page.getByLabel("Webhook URL").fill("https://hooks.example.test/composebastion");
+  await page.getByRole("button", { name: "Save Channel" }).click();
+  await expect.poll(() => mock.requestBodies["POST /api/alerts/channels"]?.length ?? 0).toBe(2);
+  expect(mock.requestBodies["POST /api/alerts/channels"]?.[1]).toEqual({
+    name: "Primary webhook",
+    type: "webhook",
+    webhookUrl: "https://hooks.example.test/composebastion",
+    enabled: true
+  });
+});
+
+test("alert channel validation blocks malformed input and busy state prevents duplicate submission", async ({ page }) => {
+  let releaseCreate!: () => void;
+  const channelCreateReady = new Promise<void>((resolve) => {
+    releaseCreate = resolve;
+  });
+  const mock = await mockApi(page, { channelCreateReady });
+  await gotoApp(page, "/alerts");
+
+  await page.getByLabel("Channel name").fill("Invalid email");
+  const email = page.getByLabel("Email recipient");
+  await email.fill("not-an-email");
+  await page.getByRole("button", { name: "Save Channel" }).click();
+  expect(await email.evaluate((element: HTMLInputElement) => element.validity.valid)).toBe(false);
+  expect(mock.requestBodies["POST /api/alerts/channels"] ?? []).toHaveLength(0);
+
+  await email.fill("alerts@example.com");
+  const save = page.getByRole("button", { name: "Save Channel" });
+  await save.click();
+  await expect.poll(() => mock.requestBodies["POST /api/alerts/channels"]?.length ?? 0).toBe(1);
+  await expect(save).toBeDisabled();
+  await save.click({ force: true });
+  expect(mock.requestBodies["POST /api/alerts/channels"]).toHaveLength(1);
+
+  releaseCreate();
+  await expect(page.getByLabel("Channel name")).toHaveValue("");
+});
+
+test("alert channel API errors are rendered without an unhandled rejection", async ({ page }) => {
+  await mockApi(page, {
+    failures: {
+      "POST /api/alerts/channels": { status: 503, error: "SMTP receiver is unavailable" }
+    }
+  });
+  await gotoApp(page, "/alerts");
+  await page.getByLabel("Channel name").fill("Unavailable email");
+  await page.getByLabel("Email recipient").fill("alerts@example.com");
+  await page.getByRole("button", { name: "Save Channel" }).click();
+  await expect(page.getByRole("alert")).toContainText("SMTP receiver is unavailable");
+});
+
+test("registry and user mutation failures are visible without unhandled browser errors", { tag: ["@critical", "@admin"] }, async ({ page }) => {
+  const mock = await mockApi(page, {
+    registries: [registry],
+    users: [user, managedUser],
+    failures: {
+      "POST /api/registries": { status: 422, error: "Registry credentials were rejected" },
+      "POST /api/users": { status: 409, error: "A user with that email already exists" }
+    }
+  });
+
+  await gotoApp(page, "/registries");
+  await page.getByLabel("Registry name").fill("Broken registry");
+  await page.getByLabel("Registry URL").fill("https://broken.example.test");
+  await page.getByRole("button", { name: "Save Registry" }).click();
+  await expect(page.getByRole("alert")).toContainText("Registry credentials were rejected");
+
+  await page.getByRole("row", { name: /Private registry/ }).getByRole("button", { name: "Login" }).click();
+  await expect.poll(() => mock.requests).toContain(`POST /api/hosts/${host.id}/registries/${registry.id}/login`);
+
+  // Stay inside the SPA so WebKit does not surface the dashboard's in-flight
+  // registry refreshes as cross-origin page errors while a full navigation
+  // tears down the previous document.
+  await page.getByRole("button", { name: "Users" }).click();
+  await page.getByLabel(`Role for ${managedUser.email}`).selectOption("viewer");
+  await expect.poll(() => mock.requestBodies[`PUT /api/users/${managedUser.id}`]?.at(-1)).toEqual({ role: "viewer" });
+
+  await page.getByLabel("User email").fill("managed@example.com");
+  await page.getByLabel("Temporary password").fill("temporary-password");
+  await page.getByRole("button", { name: "Add" }).click();
+  await expect(page.getByRole("alert")).toContainText("A user with that email already exists");
+});
+
+test("audit and job panels expose filtering, detail, pagination, and contained action errors", async ({ page }) => {
+  const auditEvents = Array.from({ length: 50 }, (_, index) => ({
+    id: `${String(index + 1).padStart(8, "0")}-1111-4111-8111-111111111111`,
+    userId: user.id,
+    hostId: host.id,
+    action: index === 0 ? "config.import" : "host.sync",
+    targetKind: index === 0 ? "config" : "host",
+    targetId: index === 0 ? null : host.id,
+    details: index === 0 ? { passphrase: "[redacted]", imported: 4 } : { status: "completed" },
+    createdAt: new Date(index * 1000).toISOString()
+  }));
+  await mockApi(page, {
+    auditEvents,
+    auditTotal: 75,
+    failures: {
+      "POST /api/jobs/33333333-3333-4333-8333-333333333333/retry": {
+        status: 409,
+        error: "This job is not eligible for retry"
+      }
+    }
+  });
+
+  await gotoApp(page, "/audit");
+  await page.getByLabel("Filter audit events").fill("config.import");
+  await expect(page.getByRole("cell", { name: "config.import" })).toBeVisible();
+  await page.getByText("View redacted details").click();
+  await expect(page.locator("code", { hasText: '"passphrase":"[redacted]"' })).toBeVisible();
+  await page.getByRole("button", { name: "Older events" }).click();
+  await expect(page.getByText("51-75 of 75")).toBeVisible();
+
+  await gotoApp(page, "/jobs");
+  await page.getByLabel("Filter jobs").fill("sync failed");
+  await expect(page.getByText("1 matching")).toBeVisible();
+  await page.getByText("Job details").click();
+  await expect(page.getByText("Created by")).toBeVisible();
+  await page.getByRole("button", { name: "Retry" }).click();
+  await expect(page.getByRole("alert")).toContainText("This job is not eligible for retry");
+});
+
+test("recovery target secrets stay redacted and schedules remain confirmation-protected", { tag: ["@critical", "@backup-restore"] }, async ({ page }) => {
+  const mock = await mockApi(page, {
+    recoveryTargets: [s3RecoveryTarget, smbRecoveryTarget]
+  });
+  await gotoApp(page, "/recovery-targets");
+
+  const s3Row = page.getByRole("row", { name: /Client object storage/ });
+  await s3Row.getByTitle("Edit target").click();
+  await expect(page.getByPlaceholder("Secret access key (leave blank to keep)")).toHaveValue("");
+  await expect(page.getByText("Clear saved S3 credentials and disable target")).toBeVisible();
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await s3Row.getByTitle("Test target").click();
+  await expect.poll(() => mock.requests).toContain(`POST /api/recovery/targets/${s3RecoveryTarget.id}/test`);
+
+  const smbRow = page.getByRole("row", { name: /Client SMB/ });
+  await smbRow.getByTitle("Edit target").click();
+  await expect(page.getByPlaceholder("Password (leave blank to keep)")).toHaveValue("");
+  await expect(page.getByText("Clear saved password")).toBeVisible();
+
+  await gotoApp(page, "/recovery-schedules");
+  await page.getByRole("row", { name: /Nightly Web/ }).locator("button.danger").click();
+  const dialog = page.getByRole("alertdialog", { name: "Delete schedule" });
+  await dialog.getByRole("button", { name: "Delete" }).click();
+  await expect.poll(() => mock.requests).toContain("DELETE /api/recovery/schedules/cccccccc-cccc-4ccc-8ccc-cccccccccccc");
+});
+
+test("network and volume controls submit explicit create, backup, remove, and prune contracts", async ({ page }) => {
+  const mock = await mockApi(page, {
+    resources: [containerResource, volumeResource, networkResource]
+  });
+  const actionKey = `POST /api/hosts/${host.id}/actions`;
+  const actionBodies = () => (mock.requestBodies[actionKey] ?? []) as Array<{ type?: string; payload?: unknown }>;
+  const actionBody = (type: string) => actionBodies().find((body) => body.type === type);
+
+  await gotoApp(page, "/networks");
+  await page.getByPlaceholder("Network name").fill("qualification-net");
+  await page.locator("form.stack").filter({ has: page.getByPlaceholder("Network name") }).locator("select").selectOption("overlay");
+  await page.getByPlaceholder("Subnet, optional").fill("10.44.0.0/24");
+  await page.getByRole("button", { name: "Create" }).click();
+  await expect.poll(() => actionBody("network.create")).toEqual({
+    type: "network.create",
+    payload: {
+      name: "qualification-net",
+      driver: "overlay",
+      subnet: "10.44.0.0/24",
+      labels: {}
+    }
+  });
+
+  await page.getByTitle("Remove network").click();
+  await page.getByRole("alertdialog", { name: "Remove network" }).getByRole("button", { name: "Remove network" }).click();
+  await expect.poll(() => actionBody("network.remove")).toEqual({
+    type: "network.remove",
+    payload: { networkId: networkResource.externalId }
+  });
+
+  await page.getByRole("button", { name: "Prune Unused" }).click();
+  await page.getByRole("alertdialog", { name: "Prune networks" }).getByRole("button", { name: "Prune" }).click();
+  await expect.poll(() => actionBody("network.prune")).toEqual({ type: "network.prune", payload: {} });
+
+  await gotoApp(page, "/volumes");
+  await page.getByPlaceholder("Volume name").fill("qualification-volume");
+  await page.getByRole("button", { name: "Create" }).click();
+  await expect.poll(() => actionBody("volume.create")).toEqual({
+    type: "volume.create",
+    payload: { name: "qualification-volume", labels: {} }
+  });
+
+  await page.getByTitle("Back up volume").click();
+  await expect.poll(() => mock.requestBodies["POST /api/backups"]?.at(-1)).toEqual({
+    hostId: host.id,
+    volumeName: volumeResource.name
+  });
+
+  await page.getByTitle("Remove volume").click();
+  let dialog = page.getByRole("alertdialog", { name: "Permanently remove volume" });
+  await dialog.getByRole("textbox").fill(volumeResource.name);
+  await dialog.getByRole("button", { name: "Remove volume" }).click();
+  await expect.poll(() => actionBody("volume.remove")).toEqual({
+    type: "volume.remove",
+    payload: { volumeName: volumeResource.name, force: false }
+  });
+
+  await page.getByRole("button", { name: "Prune", exact: true }).click();
+  dialog = page.getByRole("alertdialog", { name: "Prune volumes" });
+  await dialog.getByRole("textbox").fill(host.name);
+  await dialog.getByRole("button", { name: "Prune" }).click();
+  await expect.poll(() => actionBody("volume.prune")).toEqual({ type: "volume.prune", payload: {} });
+});
+
+test("image controls wire scan, pull, favorite, run, cleanup, prune, and confirmed removal", async ({ page }) => {
+  const favoriteImage = {
+    id: "30303030-3030-4030-8030-303030303030",
+    image: "nginx:latest",
+    name: "Nginx",
+    notes: "Qualification fixture",
+    createdAt: new Date(0).toISOString()
+  };
+  const mock = await mockApi(page, {
+    resources: [containerResource, imageResource, networkResource],
+    favoriteImages: [favoriteImage]
+  });
+  const actionKey = `POST /api/hosts/${host.id}/actions`;
+  const actionBodies = () => (mock.requestBodies[actionKey] ?? []) as Array<{ type?: string; payload?: unknown }>;
+  const actionBody = (type: string) => actionBodies().find((body) => body.type === type);
+  await gotoApp(page, "/images");
+
+  const imageRow = page.locator(".imagesTable tbody tr", { hasText: "nginx" });
+  await imageRow.getByTitle("Scan image").click();
+  await expect.poll(() => mock.requestBodies["POST /api/image-scans"]?.at(-1)).toEqual({
+    hostId: host.id,
+    imageReference: "nginx:latest"
+  });
+
+  await imageRow.getByTitle("Pull latest").click();
+  await expect.poll(() => actionBody("image.pull")).toEqual({
+    type: "image.pull",
+    payload: { image: "nginx:latest" }
+  });
+
+  await imageRow.getByTitle("Add to favorites").click();
+  await expect.poll(() => mock.requestBodies["POST /api/favorite-images"]?.at(-1)).toEqual({ image: "nginx:latest" });
+
+  await imageRow.getByTitle("Run image").click();
+  const runDrawer = page.locator(".compactDrawer", { hasText: "Run image" });
+  await expect(runDrawer.getByPlaceholder("Image, e.g. nginx:alpine")).toHaveValue("nginx:latest");
+  await runDrawer.getByPlaceholder("Container name").fill("qualification-nginx");
+  await runDrawer.getByRole("button", { name: "Run", exact: true }).click();
+  await expect.poll(() => actionBody("container.run")).toMatchObject({
+    type: "container.run",
+    payload: {
+      image: "nginx:latest",
+      name: "qualification-nginx",
+      restartPolicy: "unless-stopped",
+      ports: [],
+      env: [],
+      volumes: []
+    }
+  });
+
+  await page.getByRole("button", { name: "Clean unused" }).click();
+  await expect(page.getByLabel("Select nginx:old")).toBeChecked();
+  await page.getByRole("button", { name: "Delete selected" }).click();
+  await page.getByRole("alertdialog", { name: "Clean unused images" }).getByRole("button", { name: "Delete selected" }).click();
+  await expect.poll(() => actionBody("image.cleanup")).toEqual({
+    type: "image.cleanup",
+    payload: {
+      targets: [{ imageId: "sha256:unused", reference: "nginx:old" }]
+    }
+  });
+
+  await page.getByRole("button", { name: "Prune dangling" }).click();
+  await page.getByRole("alertdialog", { name: "Prune dangling layers" }).getByRole("button", { name: "Prune" }).click();
+  await expect.poll(() => actionBody("image.prune")).toEqual({
+    type: "image.prune",
+    payload: { all: false }
+  });
+
+  await imageRow.getByTitle("Remove image").click();
+  const removeDialog = page.getByRole("alertdialog", { name: "Remove image" });
+  await expect(removeDialog).toContainText("nginx:latest");
+  await removeDialog.getByRole("button", { name: "Remove image" }).click();
+  await expect.poll(() => actionBody("image.remove")).toEqual({
+    type: "image.remove",
+    payload: { imageId: imageResource.externalId, force: false }
+  });
+
+  await page.getByRole("button", { name: "Saved images" }).click();
+  await page.getByTitle("Remove favorite").click();
+  await expect.poll(() => mock.requests).toContain(`DELETE /api/favorite-images/${favoriteImage.id}`);
+});
+
+test("image favorite add and delete failures remain contained and visible", async ({ page }) => {
+  const favoriteImage = {
+    id: "30303030-3030-4030-8030-303030303030",
+    image: "nginx:latest",
+    name: "Nginx",
+    notes: "",
+    createdAt: new Date(0).toISOString()
+  };
+  await mockApi(page, {
+    resources: [imageResource],
+    favoriteImages: [favoriteImage],
+    failures: {
+      "POST /api/favorite-images": { status: 503, error: "Favorite storage is unavailable" },
+      [`DELETE /api/favorite-images/${favoriteImage.id}`]: { status: 409, error: "Favorite is in use" }
+    }
+  });
+  await gotoApp(page, "/images");
+
+  const imageRow = page.locator(".imagesTable tbody tr", { hasText: "nginx" });
+  await imageRow.getByTitle("Add to favorites").click();
+  await expect(page.locator(".toast-error", { hasText: "Favorite storage is unavailable" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Saved images" }).click();
+  await page.getByTitle("Remove favorite").click();
+  await expect(page.locator(".toast-error", { hasText: "Favorite is in use" })).toBeVisible();
+});
+
+test("container run and every bulk lifecycle control submit job-backed action bodies", async ({ page }) => {
+  const mock = await mockApi(page, {
+    resources: [containerResource, imageResource, networkResource]
+  });
+  const actionKey = `POST /api/hosts/${host.id}/actions`;
+  const actionBodies = () => (mock.requestBodies[actionKey] ?? []) as Array<{ type?: string; payload?: unknown }>;
+
+  await gotoApp(page, "/containers");
+  await page.getByRole("button", { name: "Run container" }).click();
+  await page.getByRole("button", { name: "Create Container" }).click();
+  await page.getByPlaceholder("Image, e.g. nginx:alpine").fill("alpine:3.21");
+  await page.getByPlaceholder("Container name").fill("qualification-alpine");
+  await page.getByPlaceholder("Ports, one per line: 8080:80/tcp").fill("18080:80/tcp");
+  await page.getByPlaceholder("Environment, one per line: KEY=value").fill("MODE=test");
+  await page.locator("form.composeForm").filter({ has: page.getByPlaceholder("Container name") }).getByRole("button", { name: "Run", exact: true }).click();
+  await expect.poll(() => actionBodies().find((body) => body.type === "container.run")).toMatchObject({
+    type: "container.run",
+    payload: {
+      image: "alpine:3.21",
+      name: "qualification-alpine",
+      ports: [{ hostPort: 18080, containerPort: 80, protocol: "tcp" }],
+      env: [{ key: "MODE", value: "test" }]
+    }
+  });
+
+  for (const item of [
+    { title: "Start selected", dialog: "Start selected containers", confirm: "Start", type: "container.start" },
+    { title: "Stop selected", dialog: "Stop selected containers", confirm: "Stop", type: "container.stop" },
+    { title: "Restart selected", dialog: "Restart selected containers", confirm: "Restart", type: "container.restart" }
+  ]) {
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect(page.getByRole("heading", { name: "Containers" })).toBeVisible();
+    const prior = actionBodies().filter((body) => body.type === item.type).length;
+    await page.getByLabel("Select row").click();
+    await page.getByTitle(item.title, { exact: true }).click();
+    await page.getByRole("alertdialog", { name: item.dialog }).getByRole("button", { name: item.confirm }).click();
+    await expect.poll(() => actionBodies().filter((body) => body.type === item.type).length).toBe(prior + 1);
+    expect(actionBodies().filter((body) => body.type === item.type).at(-1)).toEqual({
+      type: item.type,
+      payload: { containerId: containerResource.externalId }
+    });
+  }
+
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(page.getByRole("heading", { name: "Containers" })).toBeVisible();
+  await page.getByLabel("Select row").click();
+  await page.getByTitle("Delete selected").click();
+  await page.getByRole("alertdialog", { name: "Delete multiple containers" }).getByRole("button", { name: "Delete All" }).click();
+  await expect.poll(() => actionBodies().find((body) => body.type === "container.remove")).toEqual({
+    type: "container.remove",
+    payload: { containerId: containerResource.externalId, force: true, removeVolumes: false }
+  });
+});
+
+test("Compose service settings wire update, deploy, stop, rollback, remove, and forget contracts", async ({ page }) => {
+  const secondVersion = {
+    ...composeVersion,
+    id: "31313131-3131-4131-8131-313131313131",
+    versionNumber: 2,
+    composeYaml: composeStack.composeYaml,
+    note: "Current"
+  };
+  const mock = await mockApi(page, {
+    resources: [containerResource],
+    composeStacks: [{ ...composeStack, currentVersionNumber: 2 }],
+    composeVersions: [secondVersion, composeVersion]
+  });
+  await gotoApp(page, "/services");
+  await page.getByTitle("Advanced deployment settings").click();
+  let drawer = page.getByLabel(`Advanced deployment settings for ${composeStack.name}`);
+
+  await drawer.getByLabel("Display name").fill(composeStack.name);
+  await drawer.getByLabel("Environment").fill("QUALIFIED=true");
+  await drawer.getByRole("button", { name: "Save deployment settings" }).click();
+  await expect.poll(() => mock.requestBodies[`PUT /api/compose/${composeStack.id}`]?.at(-1)).toEqual({
+    name: composeStack.name,
+    projectName: composeStack.projectName,
+    composeYaml: composeStack.composeYaml,
+    env: "QUALIFIED=true"
+  });
+
+  await drawer.getByRole("button", { name: "Redeploy" }).click();
+  await expect.poll(() => mock.requestBodies[`POST /api/compose/${composeStack.id}/deploy`]?.at(-1)).toEqual({});
+  await drawer.getByRole("button", { name: "Stop" }).click();
+  await expect.poll(() => mock.requestBodies[`POST /api/compose/${composeStack.id}/stop`]?.at(-1)).toEqual({});
+
+  const versions = drawer.locator(".subPanel", { hasText: `Versions for ${composeStack.name}` });
+  await versions.locator("tbody tr", { hasText: "v1" }).locator("button.danger").click();
+  await page.getByRole("alertdialog", { name: "Rollback stack" }).getByRole("button", { name: "Rollback" }).click();
+  await expect.poll(() => mock.requestBodies[`POST /api/compose/${composeStack.id}/rollback`]?.at(-1)).toEqual({
+    versionId: composeVersion.id
+  });
+
+  await drawer.getByRole("button", { name: "Remove", exact: true }).click();
+  await page.getByRole("alertdialog", { name: "Remove service from Docker" }).getByRole("button", { name: "Compose down" }).click();
+  await expect.poll(() => mock.requestBodies[`POST /api/compose/${composeStack.id}/remove`]?.at(-1)).toEqual({
+    removeVolumes: false
+  });
+
+  await expect(drawer).toHaveCount(0);
+  await page.getByTitle("Advanced deployment settings").click();
+  drawer = page.getByLabel(`Advanced deployment settings for ${composeStack.name}`);
+  await drawer.getByRole("button", { name: "Forget only" }).click();
+  await page.getByRole("alertdialog", { name: "Forget service record" }).getByRole("button", { name: "Forget only" }).click();
+  await expect.poll(() => mock.requests).toContain(`DELETE /api/compose/${composeStack.id}`);
+});
+
+test("host controls wire check, sync, secret-preserving edit, and confirmed delete", async ({ page }) => {
+  const mock = await mockApi(page);
+  const actionKey = `POST /api/hosts/${host.id}/actions`;
+  await gotoApp(page, "/hosts");
+  const hostRow = page.getByRole("row", { name: /prod-01/ });
+
+  await hostRow.getByTitle("Check host").click();
+  await hostRow.getByTitle("Refresh inventory").click();
+  await expect.poll(() => mock.requestBodies[actionKey]).toEqual(expect.arrayContaining([
+    { type: "host.check", payload: {} },
+    { type: "host.sync", payload: {} }
+  ]));
+
+  await hostRow.getByTitle("Host settings").click();
+  const settings = page.locator(".panel", { has: page.getByRole("heading", { name: "Host Settings" }) });
+  const form = settings.locator("form.composeForm");
+  await form.locator("input").nth(0).fill("prod-qualified");
+  await form.getByPlaceholder("Tags, comma separated").fill("production, client-a");
+  await form.getByRole("button", { name: "Save Host" }).click();
+  await expect.poll(() => mock.requestBodies[`PUT /api/hosts/${host.id}`]?.at(-1)).toEqual({
+    name: "prod-qualified",
+    hostname: host.hostname,
+    port: host.port,
+    username: host.username,
+    connectionMode: "ssh",
+    sshAuthType: "key",
+    dockerSocketPath: host.dockerSocketPath,
+    tags: ["production", "client-a"]
+  });
+
+  await form.getByRole("button", { name: "Delete Host" }).click();
+  await page.getByRole("alertdialog", { name: "Delete host" }).getByRole("button", { name: "Delete host" }).click();
+  await expect.poll(() => mock.requests).toContain(`DELETE /api/hosts/${host.id}`);
+});
+
+test("registry and user positive CRUD preserve exact credentials, roles, and self invariants", async ({ page }) => {
+  const mock = await mockApi(page, {
+    registries: [registry],
+    users: [user, managedUser]
+  });
+  await gotoApp(page, "/registries");
+  await expect(page.getByRole("row", { name: /Private registry/ })).toBeVisible();
+
+  await page.getByLabel("Registry name").fill("Qualification registry");
+  await page.getByLabel("Registry URL").fill("http://registry.internal:5000");
+  await page.getByLabel("Registry username").fill("qualification-bot");
+  await page.getByLabel("Registry password or token").fill("registry-secret");
+  await page.getByRole("checkbox", { name: "Insecure registry" }).check();
+  const registryForm = page.locator("form.composeForm").filter({ has: page.getByLabel("Registry name") });
+  expect(await registryForm.locator(":invalid").evaluateAll((elements) => elements.map((element) => ({
+    label: element.getAttribute("aria-label"),
+    message: (element as HTMLInputElement).validationMessage
+  })))).toEqual([]);
+  const saveRegistryButton = registryForm.getByRole("button", { name: "Save Registry" });
+  await expect(saveRegistryButton).toBeEnabled();
+  await saveRegistryButton.focus();
+  await page.keyboard.press("Enter");
+  await expect.poll(() => mock.requestBodies["POST /api/registries"]?.at(-1)).toEqual({
+    name: "Qualification registry",
+    url: "http://registry.internal:5000",
+    username: "qualification-bot",
+    password: "registry-secret",
+    insecure: true
+  });
+
+  const registryRow = page.getByRole("row", { name: /Private registry/ });
+  await registryRow.getByRole("button", { name: "Login" }).click();
+  await expect.poll(() => mock.requestBodies[`POST /api/hosts/${host.id}/registries/${registry.id}/login`]?.at(-1)).toEqual({});
+  await registryRow.getByTitle(`Delete ${registry.name}`).click();
+  await page.getByRole("alertdialog", { name: "Delete registry" }).getByRole("button", { name: "Delete" }).click();
+  await expect.poll(() => mock.requests).toContain(`DELETE /api/registries/${registry.id}`);
+
+  await gotoApp(page, "/users");
+  await page.getByLabel("User name").fill("Qualification Viewer");
+  await page.getByLabel("Username").fill("qualification-viewer");
+  await page.getByLabel("User email").fill("viewer@example.com");
+  await page.getByLabel("Temporary password").fill("temporary-password");
+  await page.getByLabel("New user role").selectOption("viewer");
+  await page.getByRole("button", { name: "Add" }).click();
+  await expect.poll(() => mock.requestBodies["POST /api/users"]?.at(-1)).toEqual({
+    name: "Qualification Viewer",
+    username: "qualification-viewer",
+    email: "viewer@example.com",
+    password: "temporary-password",
+    role: "viewer"
+  });
+
+  const selfRow = page.getByRole("row", { name: /Admin User/ });
+  await expect(selfRow.getByLabel(`Role for ${user.email}`)).toBeDisabled();
+  await expect(selfRow.getByRole("button", { name: "Disable" })).toBeDisabled();
+  await expect(selfRow.getByLabel(`Delete ${user.email}`)).toBeDisabled();
+
+  const managedRow = page.getByRole("row", { name: /Managed Operator/ });
+  await managedRow.getByLabel(`Role for ${managedUser.email}`).selectOption("admin");
+  await expect.poll(() => mock.requestBodies[`PUT /api/users/${managedUser.id}`]?.at(-1)).toEqual({ role: "admin" });
+  await managedRow.getByRole("button", { name: "Disable" }).click();
+  await page.getByRole("alertdialog", { name: "Disable user" }).getByRole("button", { name: "Disable" }).click();
+  await expect.poll(() => mock.requestBodies[`PUT /api/users/${managedUser.id}`]?.at(-1)).toEqual({ isActive: false });
+  await managedRow.getByLabel(`Delete ${managedUser.email}`).click();
+  await page.getByRole("alertdialog", { name: "Delete user" }).getByRole("button", { name: "Delete" }).click();
+  await expect.poll(() => mock.requests).toContain(`DELETE /api/users/${managedUser.id}`);
+});
+
+test("alert rule, channel, and silence CRUD submit metric and maintenance-window contracts", async ({ page }) => {
+  const mock = await mockApi(page);
+  await gotoApp(page, "/alerts");
+
+  const ruleForm = page.locator("form.stack").filter({ hasText: "Alert Rule" });
+  await ruleForm.getByPlaceholder("Rule name").fill("Sustained memory");
+  await ruleForm.locator("select").nth(0).selectOption("host.memory");
+  await ruleForm.getByPlaceholder("Threshold").fill("90");
+  await ruleForm.getByPlaceholder("Duration").fill("10");
+  await ruleForm.locator("select").last().selectOption("77777777-7777-4777-8777-777777777777");
+  await ruleForm.getByRole("button", { name: "Save Rule" }).click();
+  await expect.poll(() => mock.requestBodies["POST /api/alerts/rules"]?.at(-1)).toEqual({
+    name: "Sustained memory",
+    condition: "host.memory",
+    hostId: host.id,
+    channelId: "77777777-7777-4777-8777-777777777777",
+    enabled: true,
+    params: {
+      comparator: "gte",
+      threshold: 90,
+      durationSeconds: 600
+    }
+  });
+
+  const silenceForm = page.locator("form.inlineForm").filter({ hasText: "Maintenance window" });
+  const expectedEndsAt = await page.evaluate(() => new Date("2099-01-01T00:00").toISOString());
+  await silenceForm.getByPlaceholder("Name").fill("Qualification maintenance");
+  await silenceForm.locator('input[type="datetime-local"]').fill("2099-01-01T00:00");
+  await silenceForm.getByPlaceholder("Reason, optional").fill("production qualification");
+  await silenceForm.getByRole("button", { name: "Silence" }).click();
+  await expect.poll(() => mock.requestBodies["POST /api/alerts/silences"]?.at(-1)).toEqual({
+    name: "Qualification maintenance",
+    endsAt: expectedEndsAt,
+    reason: "production qualification",
+    hostId: host.id
+  });
+
+  const ruleRow = page.getByRole("row", { name: /CPU sustained/ });
+  await ruleRow.locator("button.danger").click();
+  await page.getByRole("alertdialog", { name: "Delete alert rule" }).getByRole("button", { name: "Delete" }).click();
+  await expect.poll(() => mock.requests).toContain("DELETE /api/alerts/rules/88888888-8888-4888-8888-888888888888");
+
+  const channelRow = page.getByRole("row", { name: /Ops email/ });
+  await channelRow.locator("button.danger").click();
+  await page.getByRole("alertdialog", { name: "Delete alert channel" }).getByRole("button", { name: "Delete" }).click();
+  await expect.poll(() => mock.requests).toContain("DELETE /api/alerts/channels/77777777-7777-4777-8777-777777777777");
+
+  const silenceRow = page.getByRole("row", { name: /Maintenance/ });
+  await silenceRow.locator("button.danger").click();
+  await page.getByRole("alertdialog", { name: "Delete alert silence" }).getByRole("button", { name: "Delete" }).click();
+  await expect.poll(() => mock.requests).toContain("DELETE /api/alerts/silences/99999999-9999-4999-8999-999999999999");
+});
+
+test("recovery target and schedule CRUD preserve secrets and submit retention contracts", async ({ page }) => {
+  const mock = await mockApi(page, {
+    recoveryTargets: [s3RecoveryTarget, smbRecoveryTarget]
+  });
+  await gotoApp(page, "/recovery-targets");
+  const storageForm = page.locator("form.inlineForm").filter({ hasText: "Add storage" });
+  await storageForm.getByPlaceholder("Name").fill("Manager local");
+  await storageForm.getByRole("button", { name: "Add storage" }).click();
+  await expect.poll(() => mock.requestBodies["POST /api/recovery/targets"]?.at(-1)).toEqual({
+    name: "Manager local",
+    type: "local",
+    enabled: true
+  });
+
+  const s3Row = page.getByRole("row", { name: /Client object storage/ });
+  await s3Row.getByTitle("Edit target").click();
+  await page.getByPlaceholder("Prefix").fill("client-b");
+  await page.getByRole("button", { name: "Save storage" }).click();
+  await expect.poll(() => mock.requestBodies[`PATCH /api/recovery/targets/${s3RecoveryTarget.id}`]?.at(-1)).toEqual({
+    name: s3RecoveryTarget.name,
+    type: "s3",
+    enabled: true,
+    localCachePolicy: "keep",
+    endpoint: s3RecoveryTarget.endpoint,
+    bucket: s3RecoveryTarget.bucket,
+    region: s3RecoveryTarget.region,
+    prefix: "client-b",
+    forcePathStyle: true,
+    accessKeyId: s3RecoveryTarget.accessKeyId
+  });
+
+  await s3Row.getByTitle("Delete target").click();
+  const targetDialog = page.getByRole("alertdialog", { name: "Delete backup target" });
+  await expect(targetDialog).toContainText(s3RecoveryTarget.name);
+  await targetDialog.getByRole("button", { name: "Delete target" }).click();
+  await expect.poll(() => mock.requests).toContain(`DELETE /api/recovery/targets/${s3RecoveryTarget.id}`);
+
+  await gotoApp(page, "/recovery-schedules");
+  await expect(page.getByTitle("Refresh recovery data")).toBeEnabled();
+  const scheduleForm = page.locator("form.inlineForm").filter({ hasText: "Create schedule" });
+  await expect(scheduleForm.locator("select").nth(0)).toHaveValue(host.id);
+  await expect(scheduleForm.locator("select").nth(1)).toHaveValue(app.id);
+  await scheduleForm.getByPlaceholder("Schedule name").fill("Six-hour qualification");
+  await scheduleForm.locator("select").nth(2).selectOption(s3RecoveryTarget.id);
+  await scheduleForm.locator("select").nth(3).selectOption("6");
+  await scheduleForm.getByTitle("Retention count").fill("14");
+  await scheduleForm.getByRole("radio", { name: "Stop-first" }).check();
+  const enabledCheckbox = scheduleForm.getByRole("checkbox", { name: "Enabled" });
+  await enabledCheckbox.focus();
+  await page.keyboard.press("Space");
+  await expect(enabledCheckbox).not.toBeChecked();
+  expect(await scheduleForm.evaluate((form: HTMLFormElement) => ({
+    valid: form.checkValidity(),
+    invalid: Array.from(form.elements)
+      .filter((element): element is HTMLInputElement | HTMLSelectElement => element instanceof HTMLInputElement || element instanceof HTMLSelectElement)
+      .filter((element) => !element.validity.valid)
+      .map((element) => ({ value: element.value, validationMessage: element.validationMessage }))
+  }))).toEqual({ valid: true, invalid: [] });
+  await scheduleForm.getByRole("button", { name: "Add schedule" }).focus();
+  await page.keyboard.press("Enter");
+  await expect.poll(() => mock.requestBodies["POST /api/recovery/schedules"]?.at(-1)).toEqual({
+    hostId: host.id,
+    name: "Six-hour qualification",
+    appIdentity: {
+      kind: "stack",
+      stackId: app.stackId,
+      projectName: app.projectName,
+      label: app.name
+    },
+    backupTargetId: s3RecoveryTarget.id,
+    intervalMs: 6 * 60 * 60 * 1000,
+    retentionCount: 14,
+    captureMode: "stop_first",
+    enabled: false
+  });
+
+  await page.getByRole("row", { name: /Nightly Web/ }).locator("button.danger").click();
+  await page.getByRole("alertdialog", { name: "Delete schedule" }).getByRole("button", { name: "Delete" }).click();
+  await expect.poll(() => mock.requests).toContain("DELETE /api/recovery/schedules/cccccccc-cccc-4ccc-8ccc-cccccccccccc");
+});
+
+test("recovery profile, capture, verify, and clone restore controls submit durable contracts", async ({ page }) => {
+  const mock = await mockApi(page);
+  await gotoApp(page, "/recovery");
+  await page.getByRole("button", { name: "Analyze" }).click();
+  await expect.poll(() => mock.requestBodies["POST /api/recovery/analyze"]?.at(-1)).toMatchObject({
+    hostId: host.id
+  });
+
+  await page.getByRole("button", { name: "Save profile" }).click();
+  await expect.poll(() => mock.requestBodies["PUT /api/recovery/profiles"]?.at(-1)).toEqual({
+    hostId: host.id,
+    appIdentity: {
+      kind: "stack",
+      stackId: app.stackId,
+      projectName: app.projectName,
+      label: app.name
+    },
+    name: `${app.name} recovery`,
+    includePaths: [],
+    excludePatterns: [],
+    captureMode: "hot",
+    restorePaths: {},
+    preCaptureCommand: null,
+    postCaptureCommand: null
+  });
+
+  await page.getByRole("button", { name: "Delete profile" }).click();
+  await page.getByRole("alertdialog", { name: "Delete recovery profile" }).getByRole("button", { name: "Delete profile" }).click();
+  await expect.poll(() => mock.requests).toContain(`DELETE /api/recovery/profiles/${recoveryProfile.id}`);
+
+  await page.getByRole("button", { name: "Capture" }).click();
+  await expect.poll(() => mock.requestBodies["POST /api/recovery/points"]?.at(-1)).toEqual({
+    hostId: host.id,
+    appIdentity: {
+      kind: "stack",
+      stackId: app.stackId,
+      projectName: app.projectName,
+      label: app.name
+    },
+    extraIncludePaths: [],
+    captureMode: "hot",
+    stopFirst: false,
+    triggerKind: "manual"
+  });
+
+  await page.getByTitle("Verify artifacts").click();
+  await expect.poll(() => mock.requestBodies[`POST /api/recovery/points/${recoveryPoint.id}/verify`]?.at(-1)).toEqual({});
+  await page.getByTitle("Restore clone").click();
+  await page.getByRole("alertdialog", { name: "Restore clone" }).getByRole("button", { name: "Restore clone" }).click();
+  await expect.poll(() => mock.requestBodies["POST /api/recovery/restore"]?.at(-1)).toEqual({
+    recoveryPointId: recoveryPoint.id,
+    targetHostId: host.id,
+    options: { mode: "clone", remapPorts: true }
+  });
+});
+
+test("volume backup, restore, verify, drill, delete, and direct clone controls submit exact bodies", async ({ page }) => {
+  const mock = await mockApi(page, {
+    hosts: [host, fileHost],
+    resources: [containerResource, volumeResource],
+    backups: [backup]
+  });
+  await gotoApp(page, "/recovery-backups");
+  const createBackupForm = page.locator("form.recoveryTaskCard").filter({ hasText: "Create backup" });
+  await createBackupForm.getByPlaceholder("Volume name").fill("web-data");
+  await createBackupForm.getByRole("button", { name: "Create" }).click();
+  await expect.poll(() => mock.requestBodies["POST /api/backups"]?.at(-1)).toEqual({
+    hostId: host.id,
+    volumeName: "web-data",
+    encryption: "none"
+  });
+
+  const backupRow = page.getByRole("row", { name: /web-data/ }).filter({ has: page.getByTitle("Restore", { exact: true }) });
+  await backupRow.getByPlaceholder("Target volume").fill("web-data-restored");
+  await backupRow.getByTitle("Restore", { exact: true }).click();
+  await page.getByRole("alertdialog", { name: "Restore backup" }).getByRole("button", { name: "Restore" }).click();
+  await expect.poll(() => mock.requestBodies[`POST /api/backups/${backup.id}/restore`]?.at(-1)).toEqual({
+    targetHostId: host.id,
+    targetVolumeName: "web-data-restored",
+    overwrite: false
+  });
+
+  await backupRow.getByTitle("Verify checksum and remote copy").click();
+  await expect.poll(() => mock.requestBodies[`POST /api/backups/${backup.id}/verify`]?.at(-1)).toEqual({ testArchive: false });
+  await backupRow.getByTitle("Deep verify archive").click();
+  await expect.poll(() => mock.requestBodies[`POST /api/backups/${backup.id}/verify`]?.at(-1)).toEqual({ testArchive: true });
+  await backupRow.getByTitle("Test restore").click();
+  await expect.poll(() => mock.requestBodies[`POST /api/backups/${backup.id}/drill`]?.at(-1)).toEqual({});
+  await backupRow.getByTitle("Delete backup").click();
+  await page.getByRole("alertdialog", { name: "Delete backup" }).getByRole("button", { name: "Delete" }).click();
+  await expect.poll(() => mock.requests).toContain(`DELETE /api/backups/${backup.id}`);
+
+  await gotoApp(page, "/migrate");
+  await page.getByText("Advanced direct clone tools").click();
+  const volumeClone = page.locator("form.recoveryTaskCard").filter({ hasText: "Clone volume data" });
+  await volumeClone.getByLabel("Target host").selectOption(fileHost.id);
+  await volumeClone.getByLabel("Source volume").selectOption(volumeResource.name);
+  await volumeClone.getByPlaceholder("Target volume").fill("web-data-clone");
+  await volumeClone.getByRole("button", { name: "Clone volume" }).click();
+  await expect.poll(() => mock.requestBodies["POST /api/migrations/volume-clone"]?.at(-1)).toEqual({
+    sourceHostId: host.id,
+    targetHostId: fileHost.id,
+    sourceVolumeName: volumeResource.name,
+    targetVolumeName: "web-data-clone",
+    overwrite: false
+  });
+
+  const containerClone = page.locator("form.recoveryTaskCard").filter({ hasText: "Clone container definition" });
+  await containerClone.getByLabel("Target host").selectOption(fileHost.id);
+  await containerClone.getByLabel("Source container").selectOption(containerResource.externalId);
+  await containerClone.getByPlaceholder("Target name").fill("web-clone");
+  await containerClone.getByRole("button", { name: "Clone container" }).click();
+  await expect.poll(() => mock.requestBodies["POST /api/migrations/container-clone"]?.at(-1)).toEqual({
+    sourceHostId: host.id,
+    targetHostId: fileHost.id,
+    containerId: containerResource.externalId,
+    targetName: "web-clone",
+    start: false
+  });
+});
+
 test("mobile navigation opens and supports keyboard-visible links", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 820 });
   await mockApi(page);
@@ -1105,6 +2479,37 @@ test("mobile navigation opens and supports keyboard-visible links", async ({ pag
   await expect(page.getByRole("navigation", { name: "Main navigation" })).toBeVisible();
   await page.keyboard.press("Tab");
   await expect(page.getByRole("link", { name: /Dashboard/ })).toBeVisible();
+});
+
+test("mobile drawer remains open while initial host selection settles", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 820 });
+  let releaseHosts!: () => void;
+  const hostsReady = new Promise<void>((resolve) => {
+    releaseHosts = resolve;
+  });
+  await page.addInitScript(() => {
+    window.localStorage.removeItem("composebastion.selectedHostId");
+  });
+  await mockApi(page, { hostsReady });
+  await gotoApp(page, "/overview");
+  await expect(page.getByRole("heading", { name: "All Docker hosts" })).toBeVisible();
+
+  await page.getByLabel("Open sidebar").click();
+  const sidebar = page.locator("aside.sidebar");
+  await expect(sidebar).toHaveClass(/\bopen\b/);
+
+  releaseHosts();
+  await expect(page.getByText("1/1 online")).toBeVisible();
+  await page.waitForFunction(
+    (hostId) => window.localStorage.getItem("composebastion.selectedHostId") === hostId,
+    host.id
+  );
+  await expect(sidebar).toHaveClass(/\bopen\b/);
+  const containersLink = page.getByRole("link", { name: "Containers", exact: true });
+  await expect(containersLink).toBeInViewport();
+  await containersLink.click();
+  await expect(page).toHaveURL(/\/containers$/);
+  await expect(sidebar).not.toHaveClass(/\bopen\b/);
 });
 
 test("mobile admin settings remain reachable", async ({ page }) => {
@@ -1208,46 +2613,23 @@ test("dedicated SSH route manages SSH connections", async ({ page }) => {
   await expect(page.getByRole("dialog", { name: "Host SSH terminal for prod-01" })).toBeVisible();
 });
 
-test("tracked GitHub repos expose Clone/Build Deploy for build contexts", async ({ page }) => {
-  const repo = {
-    id: app.repositoryId,
-    name: "Private Web",
-    repositoryUrl: "https://github.com/example/web",
-    owner: "example",
-    repo: "web",
-    branch: "main",
-    composePath: "docker-compose.yml",
-    projectName: "web",
-    env: "",
-    defaultHostId: host.id,
-    hostCloneUrl: "git@github-web:example/web.git",
-    hostCloneDirectory: "/srv/apps/web",
-    lastDeployedAt: null,
-    lastDeployedCommitSha: null,
-    latestCommitSha: null,
-    updateCheckedAt: null,
-    updateCheckError: null,
-    hasGithubToken: true,
-    githubTokenStatus: "valid",
-    githubTokenCheckedAt: new Date(0).toISOString(),
-    githubTokenCheckError: null,
-    lastError: null,
-    createdAt: new Date(0).toISOString(),
-    updatedAt: new Date(0).toISOString()
-  };
-  const mock = await mockApi(page, { githubRepositories: [repo] });
+test("universal deploy analyzes Git, deploys, and saves the source to My Library", { tag: ["@critical", "@deployment"] }, async ({ page }) => {
+  const mock = await mockApi(page);
   await gotoApp(page, "/deploy");
-  await page.getByTitle("Clone/Build deploy with host deploy key").click();
-  const panel = page.locator(".deployPreview", { hasText: "Clone/Build Deploy" });
-  await expect(panel).toBeVisible();
-  await expect(panel).toContainText("build:");
-  await expect(panel.locator("input.monoText").first()).toHaveValue("git@github-web:example/web.git");
-  await expect(panel.locator("input.monoText").nth(1)).toHaveValue("/srv/apps/web");
+  await page.getByLabel("Deployment source").fill("http://10.0.21.40:3000/kobuslabs/linuxclitogui");
+  await page.getByRole("button", { name: "Analyze" }).click();
 
-  await panel.getByRole("button", { name: "Test Host Access" }).click();
-  await expect(panel).toContainText("host git access verified");
-  await panel.getByRole("button", { name: "Clone/Build Deploy", exact: true }).click();
-  await expect.poll(() => mock.requests).toContain(`POST /api/github/repos/${app.repositoryId}/deploy`);
+  const review = page.locator(".universalDeploy", { hasText: "Review deployment" });
+  await expect(review.getByText("Ready to deploy")).toBeVisible();
+  await expect(review.getByRole("heading", { name: "linuxclitogui" })).toBeVisible();
+  await expect(review).toContainText("10.0.21.40:3000/kobuslabs/linuxclitogui:latest");
+  await expect(review).toContainText("8080:8080");
+  await expect.poll(() => mock.requests).toContain("POST /api/deploy/analyses");
+
+  await review.getByRole("button", { name: "Deploy & save" }).click();
+  await expect(page.getByText("linuxclitogui deployed and saved to My Library.")).toBeVisible();
+  await expect(page.locator(".deploymentSourceCard", { hasText: "linuxclitogui" })).toBeVisible();
+  await expect.poll(() => mock.requests).toContain(`POST /api/deploy/analyses/${deploymentAnalysis.id}/deploy`);
 });
 
 test("apps compatibility route renders the services experience", async ({ page }) => {
@@ -1285,13 +2667,13 @@ test("services rename the display name without changing the container", async ({
   await expect(page.getByText("Web").first()).toBeVisible();
   await page.getByTitle("Rename Web").click();
   await expect(page.getByRole("heading", { name: "Rename Web" })).toBeVisible();
-  await page.getByLabel("Display name").fill("Rackpad");
+  await page.getByLabel("Display name").fill("Example App");
   await page.getByRole("button", { name: "Save name" }).click();
   await expect.poll(() => mock.requests).toContain(`PUT /api/apps/${app.id}/name`);
-  await expect(page.getByText("Rackpad").first()).toBeVisible();
+  await expect(page.getByText("Example App").first()).toBeVisible();
 });
 
-test("services expose service-level image tag updates", async ({ page }) => {
+test("services expose service-level image tag updates", { tag: ["@critical", "@docker-lifecycle"] }, async ({ page }) => {
   await mockApi(page, {
     appOverride: {
       source: "image",
@@ -1310,9 +2692,11 @@ test("services expose service-level image tag updates", async ({ page }) => {
     }
   });
   await gotoApp(page, "/services");
-  await page.getByTitle("Update service image tags").click();
+  const updateTrigger = page.getByTitle("Update service image tags");
+  await updateTrigger.click();
   const dialog = page.getByRole("dialog", { name: "Update images for Web" });
   await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Cancel" })).toBeFocused();
   await expect(dialog.getByText("Update Web images")).toBeVisible();
   await expect(dialog.locator(".serviceImageVersionSummary")).toContainText("Current latest channel");
   await expect(dialog.locator(".serviceImageVersionSummary")).toContainText("Latest stable v0.9.7");
@@ -1323,10 +2707,107 @@ test("services expose service-level image tag updates", async ({ page }) => {
   await dialog.getByLabel("Filter tags for nginx").fill("v0.9");
   await expect(dialog.getByRole("button", { name: "v0.9.7" })).toBeVisible();
   await expect(dialog.getByRole("button", { name: "main" })).toHaveCount(0);
+
+  const close = dialog.getByTitle("Close");
+  const submit = dialog.getByRole("button", { name: "Update 1 container" });
+  await close.focus();
+  await page.keyboard.press("Shift+Tab");
+  await expect(submit).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(close).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(updateTrigger).toBeFocused();
+});
+
+test("service image update failures stay in the drawer without unhandled rejection", async ({ page }) => {
+  const mock = await mockApi(page, {
+    appOverride: {
+      source: "image",
+      repositoryId: null,
+      repositoryUrl: null,
+      branch: null,
+      update: {
+        status: "update_available",
+        kind: "image",
+        imageReference: "nginx:latest",
+        currentDigest: "sha256:local",
+        remoteDigest: "sha256:remote",
+        checkedAt: new Date(0).toISOString()
+      }
+    },
+    failures: {
+      [`POST /api/hosts/${host.id}/actions`]: { status: 503, error: "Docker host is unavailable" }
+    }
+  });
+  await gotoApp(page, "/services");
+  await page.getByTitle("Update service image tags").click();
+  const dialog = page.getByRole("dialog", { name: "Update images for Web" });
+  await dialog.getByRole("button", { name: "Update 1 container" }).click();
+  await page.getByRole("alertdialog", { name: "Update Web" }).getByRole("button", { name: "Update service" }).click();
+  await expect(dialog.getByRole("alert")).toHaveText("Docker host is unavailable");
+  await expect(page.locator(".toast-error", { hasText: "Docker host is unavailable" })).toHaveCount(1);
+  await expect(dialog).toBeVisible();
+  await expect.poll(() => mock.requestBodies[`POST /api/hosts/${host.id}/actions`]?.at(-1)).toEqual({
+    type: "container.update",
+    payload: { containerId: containerResource.externalId, targetImage: "nginx:latest" }
+  });
+});
+
+test("container create and detail action failures remain contained and visible", async ({ page }) => {
+  await mockApi(page, {
+    failures: {
+      [`POST /api/hosts/${host.id}/actions`]: { status: 503, error: "Docker mutation service is unavailable" }
+    }
+  });
+  await gotoApp(page, "/containers");
+
+  await page.getByRole("button", { name: "Run container" }).click();
+  await page.getByRole("button", { name: "Create Container" }).click();
+  await page.getByPlaceholder("Image, e.g. nginx:alpine").fill("alpine:3.21");
+  await page.locator("form.composeForm").filter({ has: page.getByPlaceholder("Image, e.g. nginx:alpine") }).getByRole("button", { name: "Run", exact: true }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "Docker mutation service is unavailable" }).first()).toBeVisible();
+
+  await page.getByTitle("Open logs, stats, inspect, and exec").click();
+  const detail = page.locator(".containerDetailDrawer");
+  await detail.getByRole("button", { name: "Start", exact: true }).click();
+  await expect(detail.getByRole("alert").filter({ hasText: "Docker mutation service is unavailable" })).toBeVisible();
+});
+
+test("universal deployment analysis failures render inline without escaping the event boundary", async ({ page }) => {
+  await mockApi(page, {
+    failures: {
+      "POST /api/deploy/analyses": { status: 502, error: "Deployment analyzer is unavailable" }
+    }
+  });
+  await gotoApp(page, "/deploy");
+  await page.getByLabel("Deployment source").fill("ghcr.io/example/qualification:latest");
+  await page.getByRole("button", { name: "Analyze" }).click();
+
+  await expect(page.getByRole("alert").filter({ hasText: "Deployment analyzer is unavailable" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Deploy an app" })).toBeVisible();
+});
+
+test("compose version and proxy failures stay scoped to the advanced service drawer", async ({ page }) => {
+  await mockApi(page, {
+    composeStacks: [composeStack],
+    failures: {
+      [`GET /api/compose/${composeStack.id}/versions`]: { status: 503, error: "Version history is unavailable" },
+      [`GET /api/compose/${composeStack.id}/proxy/snippets`]: { status: 503, error: "Proxy preview is unavailable" }
+    }
+  });
+  await gotoApp(page, "/compose");
+  await page.getByTitle("Advanced deployment settings").click();
+  const drawer = page.getByLabel(`Advanced deployment settings for ${composeStack.name}`);
+
+  await expect(drawer.getByRole("alert").filter({ hasText: "Version history is unavailable" })).toBeVisible();
+  await drawer.getByRole("button", { name: "Preview snippets" }).click();
+  await expect(drawer.getByRole("alert").filter({ hasText: "Proxy preview is unavailable" })).toBeVisible();
+  await expect(drawer).toBeVisible();
 });
 
 test("services allow beta channel refresh when a newer prerelease exists", async ({ page }) => {
-  const image = "ghcr.io/kobii-git/rackpad:beta";
+  const image = "ghcr.io/composebastion-tests/example-app:beta";
   await mockApi(page, {
     containerImage: image,
     imageTags: ["latest", "main", "beta", "dev", "1.7.0-beta.4", "1.7.0-beta.3", "1.6.7", "1.2.2"],
@@ -1353,7 +2834,7 @@ test("services allow beta channel refresh when a newer prerelease exists", async
   await expect(dialog.locator(".serviceImageVersionSummary")).toContainText("Current beta channel");
   await expect(dialog.locator(".serviceImageVersionSummary")).toContainText("Latest prerelease 1.7.0-beta.4");
   await expect(dialog.locator(".serviceImageVersionSummary")).toContainText("Refresh channel 1.7.0-beta.4");
-  await expect(dialog.getByLabel("Target image for ghcr.io/kobii-git/rackpad")).toHaveValue(image);
+  await expect(dialog.getByLabel("Target image for ghcr.io/composebastion-tests/example-app")).toHaveValue(image);
   await expect(dialog.getByRole("button", { name: "Update 1 container" })).toBeEnabled();
 });
 
@@ -1443,6 +2924,49 @@ test("catalog imports external discovery as a review draft", async ({ page }) =>
   await expect(page.locator(".composeEditor").first()).toContainText("replace-with-official-image:latest");
 });
 
+test("catalog load and refresh failures remain contained and disclose unavailability", async ({ page }) => {
+  const mock = await mockApi(page, {
+    failures: {
+      "GET /api/catalog/templates": { status: 503, error: "Catalog service is unavailable" }
+    }
+  });
+  await gotoApp(page, "/catalog");
+
+  await expect(page.getByRole("alert").filter({ hasText: "Catalog service is unavailable" })).toBeVisible();
+  await expect(page.getByText("Catalog unavailable")).toBeVisible();
+  await page.getByRole("button", { name: "Refresh catalog" }).click();
+  await expect.poll(() => mock.requests.filter((request) => request === "GET /api/catalog/templates").length).toBeGreaterThanOrEqual(2);
+  await expect(page.getByRole("alert").filter({ hasText: "Catalog service is unavailable" })).toBeVisible();
+});
+
+test("custom catalog template delete failures remain contained and visible", async ({ page }) => {
+  const customTemplate = {
+    id: "qualification-template",
+    name: "Qualification template",
+    description: "Disposable qualification fixture",
+    category: "utility",
+    docsUrl: "https://example.com/docs",
+    suggestedPorts: ["18080:80"],
+    suggestedVolumes: ["qualification_data:/data"],
+    defaultEnv: {},
+    composeYaml: "services:\n  app:\n    image: nginx:alpine",
+    source: "custom"
+  };
+  await mockApi(page, {
+    catalogTemplates: [customTemplate],
+    failures: {
+      "DELETE /api/catalog/templates/qualification-template": { status: 409, error: "Template is currently in use" }
+    }
+  });
+  await gotoApp(page, "/catalog");
+
+  const row = page.locator("tbody tr", { hasText: "Qualification template" });
+  await row.getByTitle("Delete custom template").click();
+  await page.getByRole("alertdialog", { name: "Delete catalog template" }).getByRole("button", { name: "Delete" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "Template is currently in use" })).toBeVisible();
+  await expect(row).toBeVisible();
+});
+
 test("metrics route follows host scope", async ({ page }) => {
   await mockApi(page);
   await gotoApp(page, "/host-metrics");
@@ -1471,6 +2995,37 @@ test("backups route renders recovery-owned backups with sparse backup pages", as
   await expect(page.getByText(/view failed to load|view failed to render/i)).toHaveCount(0);
 });
 
+test("backup auxiliary failures disclose partial data while fulfilled sections remain usable", async ({ page }) => {
+  await mockApi(page, {
+    failures: {
+      "GET /api/backup-schedules": { status: 503, error: "Schedule service is unavailable" }
+    }
+  });
+  await gotoApp(page, "/backups");
+
+  const alert = page.getByRole("alert").filter({ hasText: "Backup data is partially unavailable" });
+  await expect(alert).toContainText("schedules");
+  await expect(alert).toContainText("Schedule service is unavailable");
+  await expect(page.getByRole("heading", { name: "Backup inventory" })).toBeVisible();
+  await expect(page.getByText("Backup health")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Create", exact: true })).toBeEnabled();
+});
+
+test("backup deletion failures stay visible without an unhandled rejection", async ({ page }) => {
+  await mockApi(page, {
+    backups: [backup],
+    failures: {
+      [`DELETE /api/backups/${backup.id}`]: { status: 409, error: "Backup is protected by retention policy" }
+    }
+  });
+  await gotoApp(page, "/backups");
+
+  await page.getByTitle("Delete backup").click();
+  await page.getByRole("alertdialog", { name: "Delete backup" }).getByRole("button", { name: "Delete" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "Backup is protected by retention policy" })).toBeVisible();
+  await expect(page.getByText(backup.volumeName ?? "", { exact: true })).toBeVisible();
+});
+
 test("restore run surfaces render V1 labels", async ({ page }) => {
   await mockApi(page);
   await gotoApp(page, "/recovery-runs");
@@ -1480,7 +3035,7 @@ test("restore run surfaces render V1 labels", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Recent Restore / Migration Jobs" })).toBeVisible();
 });
 
-test("recovery drill flow uses confirmation before enqueue", async ({ page }) => {
+test("recovery drill flow uses confirmation before enqueue", { tag: ["@critical", "@backup-restore"] }, async ({ page }) => {
   const mock = await mockApi(page);
   await gotoApp(page, "/recovery");
   await page.getByTitle("Run restore drill").click();
@@ -1507,19 +3062,156 @@ test("container detail drawer exposes logs, stats, inspect, and exec tabs", asyn
   await expect(page.locator("form.inlineForm").getByRole("button", { name: "Exec" })).toBeVisible();
 });
 
-test("image update preview dialog opens before container updates", async ({ page }) => {
-  await mockApi(page);
+test("container usage consumes production-shaped streamed updates", { tag: "@sse" }, async ({ page }) => {
+  let releaseSnapshotFallback!: () => void;
+  const snapshotFallbackReady = new Promise<void>((resolve) => {
+    releaseSnapshotFallback = resolve;
+  });
+  await mockApi(page, {
+    usageSnapshot: [{ ID: "unrelated", CPUPerc: "0.1%", MemPerc: "0.2%", MemUsage: "1MiB / 512MiB" }],
+    usageSnapshotFallbackReady: snapshotFallbackReady,
+    usageStreamStats: {
+      ID: "web",
+      CPUPerc: "73.5%",
+      MemPerc: "64.2%",
+      MemUsage: "329MiB / 512MiB"
+    }
+  });
+  try {
+    await gotoApp(page, "/containers");
+    const containerRow = page.locator(".containerTable tbody tr", { hasText: "web" });
+    await expect(containerRow).toContainText("73.5%");
+    await expect(containerRow).toContainText("64.2%");
+  } finally {
+    releaseSnapshotFallback();
+  }
+});
+
+test("Docker lifecycle submits a container stop job", { tag: ["@critical", "@docker-lifecycle"] }, async ({ page }) => {
+  const mock = await mockApi(page);
+  await gotoApp(page, "/containers");
+  const containerRow = page.locator(".containerTable tbody tr", { hasText: "web" });
+  await containerRow.getByTitle("Stop").click();
+  await expect.poll(() => mock.requests).toContain(`POST /api/hosts/${host.id}/actions`);
+});
+
+test("image update preview traps focus and restores its current trigger on every close path", async ({ page }) => {
+  const mock = await mockApi(page);
   await gotoApp(page, "/updates");
   await expect(page.getByRole("heading", { name: "Image Updates" })).toBeVisible();
   await expect(page.getByText(/Scanner: trivy/)).toBeVisible();
   const updateButton = page.getByTitle("Update container");
+  const redeployButton = page.getByTitle("Redeploy Web");
+
   await updateButton.click();
-  const dialog = page.getByRole("dialog", { name: "Update container" });
+  let dialog = page.getByRole("dialog", { name: "Update container" });
   await expect(dialog).toBeVisible();
-  await expect(page.getByLabel("Close update preview")).toBeFocused();
+  const closeButton = dialog.getByLabel("Close update preview");
+  const cancelButton = dialog.getByRole("button", { name: "Cancel" });
+  const confirmButton = dialog.getByRole("button", { name: "Update container" });
+  await expect(cancelButton).toBeFocused();
   await expect(dialog.getByText("update_container")).toBeVisible();
   await expect(dialog.getByText("Mutable tag")).toBeVisible();
-  await page.getByLabel("Close update preview").click();
+
+  await page.keyboard.press("Shift+Tab");
+  await expect(closeButton).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(cancelButton).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(confirmButton).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(closeButton).toBeFocused();
+  await closeButton.click();
   await expect(dialog).toHaveCount(0);
   await expect(updateButton).toBeFocused();
+
+  await redeployButton.click();
+  dialog = page.getByRole("dialog", { name: "Redeploy Web" });
+  await expect(dialog.getByRole("button", { name: "Cancel" })).toBeFocused();
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(redeployButton).toBeFocused();
+
+  await updateButton.click();
+  dialog = page.getByRole("dialog", { name: "Update container" });
+  await expect(dialog.getByRole("button", { name: "Cancel" })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(updateButton).toBeFocused();
+
+  await redeployButton.click();
+  dialog = page.getByRole("dialog", { name: "Redeploy Web" });
+  await expect(dialog.getByRole("button", { name: "Cancel" })).toBeFocused();
+  await dialog.getByRole("button", { name: "Redeploy stack" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(redeployButton).toBeFocused();
+  await expect.poll(() => mock.requests).toContain(`POST /api/compose/${app.stackId}/deploy`);
+});
+
+test("image update confirmation restores focus only after a slow action settles", async ({ page }) => {
+  let releaseUpdate!: () => void;
+  const updateReady = new Promise<void>((resolve) => {
+    releaseUpdate = resolve;
+  });
+  const mock = await mockApi(page, { containerUpdateReady: updateReady });
+  await gotoApp(page, "/updates");
+  const updateButton = page.getByTitle("Update container");
+  await updateButton.click();
+  const dialog = page.getByRole("dialog", { name: "Update container" });
+  await dialog.getByRole("button", { name: "Update container" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect.poll(() => mock.requests).toContain(`POST /api/hosts/${host.id}/actions`);
+  await expect(updateButton).toBeDisabled();
+
+  releaseUpdate();
+  await expect(page.locator(".notice.success[role='status']")).toContainText("Container update successful");
+  await expect(updateButton).toBeEnabled();
+  await expect(updateButton).toBeFocused();
+});
+
+test("image update confirmation consumes failed action rejections and restores focus", async ({ page }) => {
+  const pageErrors: Error[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error));
+  await mockApi(page, { failContainerUpdate: true });
+  await gotoApp(page, "/updates");
+  const updateButton = page.getByTitle("Update container");
+  await updateButton.click();
+  const dialog = page.getByRole("dialog", { name: "Update container" });
+  await dialog.getByRole("button", { name: "Update container" }).click();
+
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator(".notice.error")).toContainText("Container update failed intentionally");
+  await expect(updateButton).toBeEnabled();
+  await expect(updateButton).toBeFocused();
+  await page.waitForTimeout(50);
+  expect(pageErrors).toEqual([]);
+});
+
+test("image update preview failure is rendered without an unhandled rejection and restores focus", async ({ page }) => {
+  const pageErrors: Error[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error));
+  await mockApi(page, { failUpdatePreview: true });
+  await gotoApp(page, "/updates");
+  const updateButton = page.getByTitle("Update container");
+  await updateButton.click();
+
+  await expect(page.getByRole("dialog", { name: "Update container" })).toHaveCount(0);
+  await expect(page.locator(".notice.error")).toContainText("Update preview failed intentionally");
+  await expect(updateButton).toBeEnabled();
+  await expect(updateButton).toBeFocused();
+  await page.waitForTimeout(50);
+  expect(pageErrors).toEqual([]);
+});
+
+test("image update inventory load failures are contained and disclosed", async ({ page }) => {
+  await mockApi(page, {
+    failures: {
+      "GET /api/image-updates": { status: 503, error: "Update inventory is unavailable" }
+    }
+  });
+  await gotoApp(page, "/updates");
+
+  await expect(page.getByRole("alert").filter({ hasText: "Update inventory is unavailable" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Image Updates" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Check now" })).toBeEnabled();
 });

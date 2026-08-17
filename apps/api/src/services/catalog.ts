@@ -10,8 +10,13 @@ import {
   type ExternalCatalogCandidate,
   type ExternalCatalogQuery
 } from "@composebastion/shared";
+import type { PoolClient } from "pg";
 import { query, withTransaction } from "../db/pool.js";
-import { enqueueJobInTransaction, notifyJobQueued } from "./jobs.js";
+import {
+  enqueueJobInTransaction,
+  lockComposeStackForMutation,
+  notifyJobQueued
+} from "./jobs.js";
 import { mapStack } from "./mappers.js";
 import { recordStackVersionInTransaction } from "./stackVersions.js";
 
@@ -324,55 +329,90 @@ async function findCatalogTemplate(templateId: string) {
   return custom.rows[0] ? mapCustomTemplate(custom.rows[0]) : null;
 }
 
-export async function saveCustomCatalogTemplate(input: unknown, createdBy?: string | null) {
+export async function saveCustomCatalogTemplate(
+  input: unknown,
+  createdBy?: string | null,
+  onChanged?: (
+    client: PoolClient,
+    template: CatalogTemplateRecord
+  ) => Promise<void>
+) {
   const body = customCatalogTemplateInputSchema.parse(input);
   if (getCatalogTemplate(body.id)) {
     throw new Error("A built-in catalog template already uses that ID");
   }
-  const saved = await query<any>(
-    `INSERT INTO custom_catalog_templates (
-       id, name, description, category, compose_yaml, default_env,
-       suggested_volumes, suggested_ports, docs_url, created_by, updated_at
-     )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
-     ON CONFLICT (id)
-     DO UPDATE SET
-       name = EXCLUDED.name,
-       description = EXCLUDED.description,
-       category = EXCLUDED.category,
-       compose_yaml = EXCLUDED.compose_yaml,
-       default_env = EXCLUDED.default_env,
-       suggested_volumes = EXCLUDED.suggested_volumes,
-       suggested_ports = EXCLUDED.suggested_ports,
-       docs_url = EXCLUDED.docs_url,
-       updated_at = now()
-     RETURNING *`,
-    [
-      body.id,
-      body.name,
-      body.description,
-      body.category,
-      body.composeYaml,
-      JSON.stringify(body.defaultEnv),
-      body.suggestedVolumes,
-      body.suggestedPorts,
-      body.docsUrl?.trim() || null,
-      createdBy ?? null
-    ]
-  );
-  return mapCustomTemplate(saved.rows[0]);
+  return withTransaction(async (client) => {
+    const saved = await client.query<any>(
+      `INSERT INTO custom_catalog_templates (
+         id, name, description, category, compose_yaml, default_env,
+         suggested_volumes, suggested_ports, docs_url, created_by, updated_at
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+       ON CONFLICT (id)
+       DO UPDATE SET
+         name = EXCLUDED.name,
+         description = EXCLUDED.description,
+         category = EXCLUDED.category,
+         compose_yaml = EXCLUDED.compose_yaml,
+         default_env = EXCLUDED.default_env,
+         suggested_volumes = EXCLUDED.suggested_volumes,
+         suggested_ports = EXCLUDED.suggested_ports,
+         docs_url = EXCLUDED.docs_url,
+         updated_at = now()
+       RETURNING *`,
+      [
+        body.id,
+        body.name,
+        body.description,
+        body.category,
+        body.composeYaml,
+        JSON.stringify(body.defaultEnv),
+        body.suggestedVolumes,
+        body.suggestedPorts,
+        body.docsUrl?.trim() || null,
+        createdBy ?? null
+      ]
+    );
+    const template = mapCustomTemplate(saved.rows[0]);
+    await onChanged?.(client, template);
+    return template;
+  });
 }
 
-export async function deleteCustomCatalogTemplate(templateId: string) {
+export async function deleteCustomCatalogTemplate(
+  templateId: string,
+  onChanged?: (
+    client: PoolClient,
+    result: { ok: true; templateId: string }
+  ) => Promise<void>
+) {
   if (getCatalogTemplate(templateId)) {
     throw new Error("Built-in catalog templates cannot be deleted");
   }
-  const deleted = await query<{ id: string }>("DELETE FROM custom_catalog_templates WHERE id = $1 RETURNING id", [templateId]);
-  if (!deleted.rows[0]) throw new Error("Custom catalog template not found");
-  return { ok: true, templateId: deleted.rows[0].id };
+  return withTransaction(async (client) => {
+    const deleted = await client.query<{ id: string }>(
+      "DELETE FROM custom_catalog_templates WHERE id = $1 RETURNING id",
+      [templateId]
+    );
+    if (!deleted.rows[0]) throw new Error("Custom catalog template not found");
+    const result = { ok: true, templateId: deleted.rows[0].id } as const;
+    await onChanged?.(client, result);
+    return result;
+  });
 }
 
-export async function deployCatalogTemplate(input: unknown, createdBy?: string | null) {
+export async function deployCatalogTemplate(
+  input: unknown,
+  createdBy?: string | null,
+  onQueued?: (
+    client: PoolClient,
+    result: {
+      stack: ReturnType<typeof mapStack>;
+      job: Awaited<ReturnType<typeof enqueueJobInTransaction>>;
+      templateId: string;
+    }
+  ) => Promise<void>
+) {
   const body = catalogDeploySchema.parse(input);
   const template = await findCatalogTemplate(body.templateId);
   if (!template) throw new Error("Catalog template not found");
@@ -382,39 +422,105 @@ export async function deployCatalogTemplate(input: unknown, createdBy?: string |
   const envString = envRecordToString(mergedEnv);
   const name = body.name ?? template.name;
   const proxy = body.proxy;
+  const domains = proxy?.domains ?? [];
+  const exposedService = proxy?.exposedService ?? template.suggestedPorts[0]?.split(":")[1] ?? null;
+  const exposedPort = proxy?.exposedPort
+    ?? (Number(Object.values(template.defaultEnv).find((value) => /^\d+$/.test(value)) ?? 80) || null);
+  const tlsDesired = proxy?.tlsDesired ?? false;
 
   const result = await withTransaction(async (client) => {
-    const stackResult = await client.query(
-      `INSERT INTO compose_stacks (
-         id, host_id, name, project_name, compose_yaml, env, status,
-         domains, exposed_service, exposed_port, tls_desired,
-         update_policy_enabled, update_policy_channel
-       )
-       VALUES ($1, $2, $3, $4, $5, $6, 'created', $7, $8, $9, $10, false, NULL)
-       ON CONFLICT (host_id, project_name)
-       DO UPDATE SET
-         name = EXCLUDED.name,
-         compose_yaml = EXCLUDED.compose_yaml,
-         env = EXCLUDED.env,
-         domains = EXCLUDED.domains,
-         exposed_service = EXCLUDED.exposed_service,
-         exposed_port = EXCLUDED.exposed_port,
-         tls_desired = EXCLUDED.tls_desired,
-         updated_at = now()
-       RETURNING *`,
-      [
-        uuid(),
-        body.hostId,
-        name,
-        body.projectName,
-        composeYaml,
-        envString,
-        proxy?.domains ?? [],
-        proxy?.exposedService ?? template.suggestedPorts[0]?.split(":")[1] ?? null,
-        proxy?.exposedPort ?? (Number(Object.values(template.defaultEnv).find((value) => /^\d+$/.test(value)) ?? 80) || null),
-        proxy?.tlsDesired ?? false
-      ]
+    // Serialize catalog creates for the same host/project. Other stack writers
+    // may not yet use this identity key, so a conflict-safe insert below still
+    // re-runs the shared stack guard before any existing row is changed.
+    await client.query(
+      "SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))",
+      [`compose-stack-identity:${body.hostId}:${body.projectName}`]
     );
+    const existing = await client.query<{ id: string }>(
+      `SELECT id
+       FROM compose_stacks
+       WHERE host_id = $1 AND project_name = $2`,
+      [body.hostId, body.projectName]
+    );
+
+    const updateExistingStack = async (stackId: string) => {
+      const locked = await lockComposeStackForMutation(client, stackId);
+      if (!locked) {
+        throw Object.assign(
+          new Error("The target Compose stack changed while the catalog deployment was being prepared. Retry."),
+          { statusCode: 409 }
+        );
+      }
+      return client.query(
+        `UPDATE compose_stacks
+         SET name = $2,
+             compose_yaml = $3,
+             env = $4,
+             domains = $5,
+             exposed_service = $6,
+             exposed_port = $7,
+             tls_desired = $8,
+             updated_at = now()
+         WHERE id = $1
+         RETURNING *`,
+        [
+          stackId,
+          name,
+          composeYaml,
+          envString,
+          domains,
+          exposedService,
+          exposedPort,
+          tlsDesired
+        ]
+      );
+    };
+
+    let stackResult;
+    if (existing.rows[0]) {
+      stackResult = await updateExistingStack(existing.rows[0].id);
+    } else {
+      stackResult = await client.query(
+        `INSERT INTO compose_stacks (
+           id, host_id, name, project_name, compose_yaml, env, status,
+           domains, exposed_service, exposed_port, tls_desired,
+           update_policy_enabled, update_policy_channel
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, 'created', $7, $8, $9, $10, false, NULL)
+         ON CONFLICT (host_id, project_name) DO NOTHING
+         RETURNING *`,
+        [
+          uuid(),
+          body.hostId,
+          name,
+          body.projectName,
+          composeYaml,
+          envString,
+          domains,
+          exposedService,
+          exposedPort,
+          tlsDesired
+        ]
+      );
+      if (!stackResult.rows[0]) {
+        // A writer that does not participate in the identity advisory lock won
+        // the create race. Treat it exactly like any other existing stack:
+        // lock it and reject active or unreconciled remote work before update.
+        const raced = await client.query<{ id: string }>(
+          `SELECT id
+           FROM compose_stacks
+           WHERE host_id = $1 AND project_name = $2`,
+          [body.hostId, body.projectName]
+        );
+        if (!raced.rows[0]) {
+          throw Object.assign(
+            new Error("The target Compose stack changed while the catalog deployment was being prepared. Retry."),
+            { statusCode: 409 }
+          );
+        }
+        stackResult = await updateExistingStack(raced.rows[0].id);
+      }
+    }
 
     const stack = mapStack(stackResult.rows[0]);
     await recordStackVersionInTransaction(client, {
@@ -429,10 +535,12 @@ export async function deployCatalogTemplate(input: unknown, createdBy?: string |
     const job = await enqueueJobInTransaction(client, {
       type: "compose.deploy",
       hostId: body.hostId,
-      payload: { stackId: stack.id }
+      payload: { stackId: stack.id, pullBeforeDeploy: false }
     }, createdBy);
-    return { stack, job };
+    const queued = { stack, job, templateId: template.id };
+    await onQueued?.(client, queued);
+    return queued;
   });
   await notifyJobQueued(result.job.id);
-  return { ...result, templateId: template.id };
+  return result;
 }

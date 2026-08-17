@@ -34,7 +34,7 @@ function verifyDatabaseUrlPrecedence(label, files) {
       : { overrides: { DATABASE_URL: "" } };
     const config = render(files, options);
     const failures = [];
-    for (const serviceName of ["app", "worker"]) {
+    for (const serviceName of ["database-init", "app", "worker"]) {
       const actual = String(config.services?.[serviceName]?.environment?.DATABASE_URL ?? "");
       if (actual !== derivedDatabaseUrl) {
         failures.push(`${serviceName}.DATABASE_URL: ${mode} override must derive from POSTGRES_PASSWORD; got ${JSON.stringify(actual)}`);
@@ -45,7 +45,7 @@ function verifyDatabaseUrlPrecedence(label, files) {
 
   const config = render(files, { overrides: { DATABASE_URL: explicitDatabaseUrl } });
   const failures = [];
-  for (const serviceName of ["app", "worker"]) {
+  for (const serviceName of ["database-init", "app", "worker"]) {
     const actual = String(config.services?.[serviceName]?.environment?.DATABASE_URL ?? "");
     if (actual !== explicitDatabaseUrl) {
       failures.push(`${serviceName}.DATABASE_URL: explicit override was not preserved exactly; got ${JSON.stringify(actual)}`);
@@ -140,11 +140,74 @@ function publishedPort(service, target) {
 function verifyManager(label, config, expectPublishedPort, expectedImage = null) {
   const app = config.services?.app;
   const worker = config.services?.worker;
+  const storageInit = config.services?.["storage-init"];
+  const databaseInit = config.services?.["database-init"];
   verifyEnvironment(`${label} app`, "app", app, [...sharedServiceEnvironment, ...appOnlyEnvironment], workerOnlyEnvironment);
   verifyEnvironment(`${label} worker`, "worker", worker, [...sharedServiceEnvironment, ...workerOnlyEnvironment], appOnlyEnvironment);
   verifyNoSentinelEnvironmentLeakage(label, config);
 
   const failures = [];
+  if (!storageInit) {
+    failures.push("storage-init: automatic backup ownership migration service is missing");
+  } else {
+    if (storageInit.user !== "0:0") failures.push(`storage-init.user: expected 0:0, got ${storageInit.user ?? "missing"}`);
+    if (storageInit.restart !== "no") failures.push(`storage-init.restart: expected no, got ${storageInit.restart ?? "missing"}`);
+    if (String(storageInit.environment?.COMPOSEBASTION_UID ?? "") !== "1000") {
+      failures.push("storage-init.COMPOSEBASTION_UID: base runtime target must remain 1000");
+    }
+    if (String(storageInit.environment?.COMPOSEBASTION_GID ?? "") !== "1000") {
+      failures.push("storage-init.COMPOSEBASTION_GID: base runtime target must remain 1000");
+    }
+    if (storageInit.read_only !== true) failures.push("storage-init.read_only: expected true");
+    if (!(storageInit.cap_drop ?? []).includes("ALL")) failures.push("storage-init.cap_drop: expected ALL");
+    const capabilities = [...(storageInit.cap_add ?? [])].sort();
+    if (JSON.stringify(capabilities) !== JSON.stringify(["CHOWN", "DAC_READ_SEARCH"])) {
+      failures.push(`storage-init.cap_add: expected only CHOWN,DAC_READ_SEARCH; got ${capabilities.join(",") || "none"}`);
+    }
+    if (!(storageInit.security_opt ?? []).includes("no-new-privileges:true")) {
+      failures.push("storage-init.security_opt: missing no-new-privileges");
+    }
+    const initMount = (storageInit.volumes ?? []).find((volume) => volume.target === "/data/backups");
+    if (initMount?.source !== composeSentinels.COMPOSEBASTION_BACKUP_DIR) {
+      failures.push(`storage-init backup mount: expected ${composeSentinels.COMPOSEBASTION_BACKUP_DIR}, got ${initMount?.source ?? "missing"}`);
+    }
+    if (expectedImage) {
+      if (storageInit.image !== expectedImage) failures.push(`storage-init.image: expected ${expectedImage}, got ${storageInit.image ?? "missing"}`);
+    } else {
+      if (storageInit.image) failures.push("storage-init.image: source production must remain build-based");
+      if (!storageInit.build) failures.push("storage-init.build: source production build configuration is missing");
+    }
+  }
+  if (!databaseInit) {
+    failures.push("database-init: automatic legacy credential reconciliation service is missing");
+  } else {
+    if (databaseInit.user !== "1000:1000") failures.push(`database-init.user: expected 1000:1000, got ${databaseInit.user ?? "missing"}`);
+    if (databaseInit.restart !== "no") failures.push(`database-init.restart: expected no, got ${databaseInit.restart ?? "missing"}`);
+    if (databaseInit.read_only !== true) failures.push("database-init.read_only: expected true");
+    if (!(databaseInit.cap_drop ?? []).includes("ALL")) failures.push("database-init.cap_drop: expected ALL");
+    if (!(databaseInit.security_opt ?? []).includes("no-new-privileges:true")) {
+      failures.push("database-init.security_opt: missing no-new-privileges");
+    }
+    if (String(databaseInit.environment?.POSTGRES_PASSWORD ?? "") !== composeSentinels.POSTGRES_PASSWORD) {
+      failures.push("database-init.POSTGRES_PASSWORD: managed credential is missing");
+    }
+    if (databaseInit.depends_on?.postgres?.condition !== "service_healthy") {
+      failures.push("database-init.depends_on.postgres: expected service_healthy");
+    }
+    const transitionMount = (databaseInit.volumes ?? []).find((volume) => volume.target === "/var/lib/composebastion/upgrade-state");
+    if (transitionMount?.type !== "volume") failures.push("database-init: durable upgrade-state volume is missing");
+    const command = (databaseInit.command ?? []).map(String);
+    if (!command.includes("--state-file")
+        || !command.includes("/var/lib/composebastion/upgrade-state/database-transition.json")) {
+      failures.push("database-init: durable transition receipt path is missing");
+    }
+    if (expectedImage) {
+      if (databaseInit.image !== expectedImage) failures.push(`database-init.image: expected ${expectedImage}, got ${databaseInit.image ?? "missing"}`);
+    } else {
+      if (databaseInit.image) failures.push("database-init.image: source production must remain build-based");
+      if (!databaseInit.build) failures.push("database-init.build: source production build configuration is missing");
+    }
+  }
   const postgresPassword = config.services?.postgres?.environment?.POSTGRES_PASSWORD;
   if (String(postgresPassword ?? "") !== composeSentinels.POSTGRES_PASSWORD) {
     failures.push(`postgres.POSTGRES_PASSWORD: expected ${JSON.stringify(composeSentinels.POSTGRES_PASSWORD)}, got ${JSON.stringify(postgresPassword)}`);
@@ -166,6 +229,12 @@ function verifyManager(label, config, expectPublishedPort, expectedImage = null)
     }
     if (redisDependency?.required !== false) {
       failures.push(`${serviceName}.depends_on.redis.required: Redis must remain an optional wake-up optimization`);
+    }
+    if (service?.depends_on?.["storage-init"]?.condition !== "service_completed_successfully") {
+      failures.push(`${serviceName}.depends_on.storage-init: expected service_completed_successfully`);
+    }
+    if (service?.depends_on?.["database-init"]?.condition !== "service_completed_successfully") {
+      failures.push(`${serviceName}.depends_on.database-init: expected service_completed_successfully`);
     }
   }
   const port = publishedPort(app, 8080);
@@ -207,6 +276,11 @@ function verifyManagerHardening(label, files) {
     const cache = (service?.volumes ?? []).find((volume) => volume.target === "/var/cache/composebastion/trivy");
     if (!backup) failures.push(`${serviceName}: backup storage was removed by hardening overlay`);
     if (cache?.type !== "volume") failures.push(`${serviceName}: Trivy cache is not a volume`);
+  }
+  const storageInit = config.services?.["storage-init"];
+  if (String(storageInit?.environment?.COMPOSEBASTION_UID ?? "") !== composeSentinels.COMPOSEBASTION_UID
+      || String(storageInit?.environment?.COMPOSEBASTION_GID ?? "") !== composeSentinels.COMPOSEBASTION_GID) {
+    failures.push("storage-init: hardened UID/GID does not match app and worker");
   }
   fail(label, failures);
 }

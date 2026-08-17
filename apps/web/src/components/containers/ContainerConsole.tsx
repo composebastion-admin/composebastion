@@ -204,8 +204,8 @@ export function ContainerDetailDrawer({
         ))}
       </div>
 
-      {loadError && <div className="notice error">{loadError}</div>}
-      {action.error && <div className="notice error">{action.error}</div>}
+      {loadError && <div className="notice error" role="alert">{loadError}</div>}
+      {action.error && <div className="notice error" role="alert">{action.error}</div>}
 
       {activeTab === "overview" && (
         <div className="detailStack">
@@ -228,10 +228,10 @@ export function ContainerDetailDrawer({
             </span>
           </div>
           <ButtonRow>
-            {canOperate && <button onClick={() => void quickAction("container.start")}><Play size={16} />Start</button>}
-            {canOperate && <button onClick={() => void quickAction("container.stop")}><Square size={16} />Stop</button>}
-            {canOperate && <button onClick={() => void quickAction("container.restart")}><RotateCcw size={16} />Restart</button>}
-            <button onClick={() => void refreshInspect()}><RefreshCw size={16} />Refresh</button>
+            {canOperate && <button onClick={() => void quickAction("container.start").catch(() => undefined)}><Play size={16} />Start</button>}
+            {canOperate && <button onClick={() => void quickAction("container.stop").catch(() => undefined)}><Square size={16} />Stop</button>}
+            {canOperate && <button onClick={() => void quickAction("container.restart").catch(() => undefined)}><RotateCcw size={16} />Restart</button>}
+            <button onClick={() => void refreshInspect().catch((caught) => setLoadError(caught instanceof Error ? caught.message : String(caught)))}><RefreshCw size={16} />Refresh</button>
           </ButtonRow>
         </div>
       )}
@@ -254,7 +254,7 @@ export function ContainerDetailDrawer({
               <input type="checkbox" checked={followLogs && canFollowLogs} disabled={!canFollowLogs} onChange={(event) => setFollowLogs(event.target.checked)} />
               Follow
             </label>
-            <button onClick={() => void refreshLogs()}><RefreshCw size={16} />Refresh</button>
+            <button onClick={() => void refreshLogs().catch((caught) => setLoadError(caught instanceof Error ? caught.message : String(caught)))}><RefreshCw size={16} />Refresh</button>
             <button onClick={downloadLogs}><Download size={16} />Download</button>
           </div>
           <pre className={`terminal ${wrapLogs ? "" : "nowrap"}`}>{filteredLogs.join("\n") || "No logs yet."}</pre>
@@ -290,7 +290,7 @@ export function ContainerDetailDrawer({
 
       {canOperate && activeTab === "exec" && (
         <div className="detailStack">
-          <form className="inlineForm" onSubmit={exec}>
+          <form className="inlineForm" onSubmit={(event) => void exec(event).catch(() => undefined)}>
             <input value={command} onChange={(event) => setCommand(event.target.value)} />
             <button className="primary"><Terminal size={18} />Exec</button>
           </form>

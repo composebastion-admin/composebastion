@@ -23,6 +23,91 @@ export const migrationRunStatusSchema = recoveryPointStatusSchema;
 export const recoveryCaptureModeSchema = z.enum(["hot", "stop_first"]);
 export const recoveryNetworkModeSchema = z.enum(["clone", "reuse"]);
 
+function containsAsciiControlCharacter(value: string) {
+  return Array.from(value).some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint <= 0x1f || codePoint === 0x7f;
+  });
+}
+
+export function rcloneRemoteNameIssue(value: string): string | null {
+  if (value.length < 1 || value.length > 120) {
+    return "Rclone remote name must be between 1 and 120 characters";
+  }
+  if (value.startsWith("-") || value.startsWith(" ")) {
+    return "Rclone remote name must not start with a hyphen or space";
+  }
+  if (value.endsWith(" ")) {
+    return "Rclone remote name must not end with a space";
+  }
+  if (!/^(?:[\p{L}\p{N}_.+@\x20]|-)+$/u.test(value)) {
+    return "Rclone remote name may contain only letters, numbers, spaces, _, -, ., +, and @";
+  }
+  return null;
+}
+
+export function smbShareIssue(value: string): string | null {
+  if (value.length < 1 || value.length > 255) {
+    return "SMB share must be between 1 and 255 characters";
+  }
+  if (value !== value.trim()) {
+    return "SMB share must not start or end with whitespace";
+  }
+  if (
+    value === "."
+    || value === ".."
+    || containsAsciiControlCharacter(value)
+    || value.includes(":")
+    || value.includes("/")
+    || value.includes("\\")
+  ) {
+    return "SMB share must be a single safe share name";
+  }
+  return null;
+}
+
+export function smbSubPathIssue(value: string): string | null {
+  if (value.length > 512) {
+    return "SMB subpath must not exceed 512 characters";
+  }
+  if (!value) return null;
+  if (value !== value.trim()) {
+    return "SMB subpath must not start or end with whitespace";
+  }
+  if (
+    containsAsciiControlCharacter(value)
+    || value.includes(":")
+    || value.includes("\\")
+  ) {
+    return "SMB subpath contains a reserved character";
+  }
+  const segments = value.split("/");
+  if (segments.some((segment) =>
+    !segment
+    || segment === "."
+    || segment === ".."
+    || segment !== segment.trim()
+  )) {
+    return "SMB subpath must contain only relative path segments";
+  }
+  return null;
+}
+
+export const rcloneRemoteNameSchema = z.string().superRefine((value, ctx) => {
+  const issue = rcloneRemoteNameIssue(value);
+  if (issue) ctx.addIssue({ code: z.ZodIssueCode.custom, message: issue });
+});
+
+export const smbShareSchema = z.string().superRefine((value, ctx) => {
+  const issue = smbShareIssue(value);
+  if (issue) ctx.addIssue({ code: z.ZodIssueCode.custom, message: issue });
+});
+
+export const smbSubPathSchema = z.string().superRefine((value, ctx) => {
+  const issue = smbSubPathIssue(value);
+  if (issue) ctx.addIssue({ code: z.ZodIssueCode.custom, message: issue });
+});
+
 export const recoveryAppIdentitySchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("stack"),
@@ -49,12 +134,42 @@ export const recoveryAppIdentitySchema = z.discriminatedUnion("kind", [
   })
 ]);
 
-const backupTargetLocalConfigSchema = z.object({
-  basePath: z.string().min(1).max(1024).optional()
+const backupTargetLocalConfigSchema = z.object({}).strict();
+
+export const s3EndpointSchema = z.string().url().superRefine((value, ctx) => {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "S3 endpoint must use http or https" });
+  }
+  if (!parsed.hostname) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "S3 endpoint must include a hostname" });
+  }
+  if (
+    parsed.username
+    || parsed.password
+    || parsed.search
+    || parsed.hash
+    || value.includes("?")
+    || value.includes("#")
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "S3 endpoint must not contain embedded credentials, query parameters, or a fragment"
+    });
+  }
+}).transform((value) => {
+  const parsed = new URL(value.trim());
+  const pathname = parsed.pathname === "/" ? "" : parsed.pathname.replace(/\/+$/, "");
+  return `${parsed.origin}${pathname}`;
 });
 
 const backupTargetS3ConfigSchema = z.object({
-  endpoint: z.string().url(),
+  endpoint: s3EndpointSchema,
   bucket: z.string().min(1).max(255),
   region: z.string().max(64).optional(),
   prefix: z.string().max(512).optional(),
@@ -64,8 +179,8 @@ const backupTargetS3ConfigSchema = z.object({
 
 const backupTargetRcloneSmbConfigSchema = z.object({
   server: z.string().min(1).max(255),
-  share: z.string().min(1).max(255),
-  subPath: z.string().max(512).optional(),
+  share: smbShareSchema,
+  subPath: smbSubPathSchema.optional(),
   domain: z.string().max(255).optional(),
   username: z.string().max(255).optional(),
   password: z.string().optional(),
@@ -75,7 +190,7 @@ const backupTargetRcloneSmbConfigSchema = z.object({
 const backupTargetRcloneConfigSchema = z.object({
   provider: rcloneProviderSchema,
   remotePath: z.string().min(1).max(1024).optional(),
-  remoteName: z.string().min(1).max(120).optional(),
+  remoteName: rcloneRemoteNameSchema.optional(),
   rcloneConfig: z.string().min(1).optional(),
   smb: backupTargetRcloneSmbConfigSchema.optional()
 });
@@ -86,17 +201,23 @@ const backupTargetSharedFieldsSchema = z.object({
   localCachePolicy: localCachePolicySchema.default("keep")
 });
 
+const backupTargetLocalFieldsSchema = z.object({
+  name: z.string().min(1).max(80),
+  enabled: z.boolean().default(true),
+  localCachePolicy: z.literal("keep").default("keep")
+});
+
 export const backupTargetCreateSchema = z.union([
-  backupTargetSharedFieldsSchema.extend({
+  backupTargetLocalFieldsSchema.extend({
     type: z.literal("local"),
     kind: z.literal("local").optional(),
-    basePath: z.string().min(1).max(1024).optional(),
+    basePath: z.never().optional(),
     config: backupTargetLocalConfigSchema.optional()
   }),
   backupTargetSharedFieldsSchema.extend({
     type: z.literal("s3"),
     kind: z.literal("s3").optional(),
-    endpoint: z.string().url(),
+    endpoint: s3EndpointSchema,
     bucket: z.string().min(1).max(255),
     region: z.string().max(64).optional(),
     prefix: z.string().max(512).optional(),
@@ -110,30 +231,44 @@ export const backupTargetCreateSchema = z.union([
     kind: z.literal("rclone").optional(),
     provider: rcloneProviderSchema,
     remotePath: z.string().min(1).max(1024).optional(),
-    remoteName: z.string().min(1).max(120).optional(),
+    remoteName: rcloneRemoteNameSchema.optional(),
     rcloneConfig: z.string().min(1).optional(),
     server: z.string().min(1).max(255).optional(),
-    share: z.string().min(1).max(255).optional(),
-    subPath: z.string().max(512).optional(),
+    share: smbShareSchema.optional(),
+    subPath: smbSubPathSchema.optional(),
     domain: z.string().max(255).optional(),
     username: z.string().max(255).optional(),
     password: z.string().optional(),
     port: z.coerce.number().int().min(1).max(65535).optional(),
     config: backupTargetRcloneConfigSchema.optional()
   }).superRefine((value, ctx) => {
+    if (value.config && value.config.provider !== value.provider) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Rclone provider must match config.provider",
+        path: ["config", "provider"]
+      });
+    }
     const provider = value.provider;
     if (provider === "smb") {
       const server = value.server ?? value.config?.smb?.server;
       const share = value.share ?? value.config?.smb?.share;
       if (!server) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "SMB server is required", path: ["server"] });
       if (!share) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "SMB share is required", path: ["share"] });
+      if (value.rcloneConfig || value.config?.rcloneConfig) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "SMB targets do not accept imported rclone config",
+          path: ["rcloneConfig"]
+        });
+      }
       return;
     }
     if (!value.rcloneConfig && !value.config?.rcloneConfig) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Imported rclone config is required for experimental rclone targets", path: ["rcloneConfig"] });
     }
   }),
-  backupTargetSharedFieldsSchema.extend({
+  backupTargetLocalFieldsSchema.extend({
     kind: z.literal("local"),
     config: backupTargetLocalConfigSchema.default({})
   }),
@@ -154,8 +289,29 @@ export const backupTargetCreateSchema = z.union([
     remotePath: z.string().min(1).max(1024).optional(),
     rcloneConfig: z.string().min(1).optional()
   }).superRefine((value, ctx) => {
+    if (value.provider && value.provider !== value.config.provider) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Rclone provider must match config.provider",
+        path: ["provider"]
+      });
+    }
     const provider = value.provider ?? value.config.provider;
-    if (provider !== "smb" && !value.rcloneConfig && !value.config.rcloneConfig) {
+    if (provider === "smb") {
+      if (!value.config.smb?.server) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "SMB server is required", path: ["config", "smb", "server"] });
+      }
+      if (!value.config.smb?.share) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "SMB share is required", path: ["config", "smb", "share"] });
+      }
+      if (value.rcloneConfig || value.config.rcloneConfig) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "SMB targets do not accept imported rclone config",
+          path: ["rcloneConfig"]
+        });
+      }
+    } else if (!value.rcloneConfig && !value.config.rcloneConfig) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Imported rclone config is required for experimental rclone targets", path: ["rcloneConfig"] });
     }
   })
@@ -164,24 +320,28 @@ export const backupTargetCreateSchema = z.union([
 export const backupTargetUpdateSchema = z.object({
   name: z.string().min(1).max(80).optional(),
   enabled: z.boolean().optional(),
-  endpoint: z.string().url().optional(),
+  endpoint: s3EndpointSchema.optional(),
   bucket: z.string().min(1).max(255).optional(),
   region: z.string().max(64).nullable().optional(),
   prefix: z.string().max(512).nullable().optional(),
   forcePathStyle: z.boolean().optional(),
-  basePath: z.string().min(1).max(1024).nullable().optional(),
-  config: z.union([backupTargetLocalConfigSchema, backupTargetS3ConfigSchema, backupTargetRcloneConfigSchema]).optional(),
+  basePath: z.never().optional(),
+  config: z.union([
+    backupTargetS3ConfigSchema.strict(),
+    backupTargetRcloneConfigSchema.strict(),
+    z.object({}).strict()
+  ]).optional(),
   accessKeyId: z.string().min(1).max(255).nullable().optional(),
   secretAccessKey: z.string().min(1).nullable().optional()
 }).extend({
   provider: rcloneProviderSchema.nullable().optional(),
   remotePath: z.string().min(1).max(1024).nullable().optional(),
-  remoteName: z.string().min(1).max(120).nullable().optional(),
+  remoteName: rcloneRemoteNameSchema.nullable().optional(),
   rcloneConfig: z.string().min(1).nullable().optional(),
   localCachePolicy: localCachePolicySchema.optional(),
   server: z.string().min(1).max(255).nullable().optional(),
-  share: z.string().min(1).max(255).nullable().optional(),
-  subPath: z.string().max(512).nullable().optional(),
+  share: smbShareSchema.nullable().optional(),
+  subPath: smbSubPathSchema.nullable().optional(),
   domain: z.string().max(255).nullable().optional(),
   username: z.string().max(255).nullable().optional(),
   password: z.string().nullable().optional(),
@@ -257,6 +417,10 @@ export const recoveryPointListItemSchema = z.object({
   profileId: idSchema.nullable().optional(),
   artifactCount: z.number().int().nonnegative(),
   completedArtifactCount: z.number().int().nonnegative(),
+  remoteArtifactCount: z.number().int().nonnegative().optional(),
+  remoteUploadFailureCount: z.number().int().nonnegative().optional(),
+  localRetainedArtifactCount: z.number().int().nonnegative().optional(),
+  localRemovedArtifactCount: z.number().int().nonnegative().optional(),
   totalBytes: z.number().nullable(),
   error: z.string().nullable(),
   metadata: z.record(z.unknown()),
@@ -312,6 +476,7 @@ export const recoveryProfileInputSchema = z.object({
 export const recoveryProfileSchema = recoveryProfileInputSchema.extend({
   id: idSchema,
   name: z.string(),
+  sensitiveFieldsRedacted: z.boolean().optional(),
   createdAt: z.string(),
   updatedAt: z.string()
 });

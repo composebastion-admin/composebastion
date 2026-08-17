@@ -6,6 +6,10 @@ const writeAuditEvent = vi.fn();
 const getHostForWorker = vi.fn();
 const runRecoveryCreate = vi.fn();
 const runRecoveryRestore = vi.fn();
+const cleanupCompletedRestore = vi.fn();
+const retainCompletedRestore = vi.fn();
+const retainCompletedRestoreForReconciliation = vi.fn();
+const resolveRecoverySourceRestartObligation = vi.fn();
 const resolveAppContext = vi.fn();
 const getMigrationRecoveryPoint = vi.fn();
 const createMigrationRecoveryPoint = vi.fn();
@@ -31,11 +35,38 @@ vi.mock("../src/services/hosts.js", () => ({
 }));
 
 vi.mock("../src/services/recoveryCapture.js", () => ({
+  resolveRecoverySourceRestartObligation: (...args: unknown[]) =>
+    resolveRecoverySourceRestartObligation(...args),
   runRecoveryCreate: (...args: unknown[]) => runRecoveryCreate(...args)
 }));
 
 vi.mock("../src/services/recoveryRestore.js", () => ({
-  runRecoveryRestore: (...args: unknown[]) => runRecoveryRestore(...args)
+  RecoveryRestoreCleanupRequiredError:
+    class RecoveryRestoreCleanupRequiredError extends Error {
+      readonly code =
+        "RECOVERY_RESTORE_CLEANUP_REQUIRED";
+      constructor(
+        message: string,
+        readonly cleanup: {
+          cleanup: () => Promise<void>;
+          retain: () => Promise<void>;
+          retainForReconciliation: () => Promise<void>;
+        },
+        readonly remoteOutcomeUnknown: boolean,
+        cause?: unknown
+      ) {
+        super(message, { cause });
+      }
+    },
+  runRecoveryRestoreWithCleanup: async (...args: unknown[]) => ({
+    restore: await runRecoveryRestore(...args),
+    cleanup: {
+      cleanup: (...cleanupArgs: unknown[]) => cleanupCompletedRestore(...cleanupArgs),
+      retain: (...retainArgs: unknown[]) => retainCompletedRestore(...retainArgs),
+      retainForReconciliation: (...retainArgs: unknown[]) =>
+        retainCompletedRestoreForReconciliation(...retainArgs)
+    }
+  })
 }));
 
 vi.mock("../src/services/recoveryAppContext.js", () => ({
@@ -163,9 +194,18 @@ async function unexpectedCommand(command: string) {
   return { code: 1, stdout: "", stderr: `unexpected command: ${command}` };
 }
 
+function isRestartArmSql(sql: unknown) {
+  const value = String(sql);
+  return value.includes("UPDATE recovery_points")
+    && value.includes("migration_run_id = $2")
+    && value.includes("sourceRestartResolution");
+}
+
 describe("migration execute standalone restore verification", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    cleanupCompletedRestore.mockResolvedValue(undefined);
+    resolveRecoverySourceRestartObligation.mockResolvedValue(undefined);
 
     query.mockImplementation(async (sql: string) => {
       if (sql.includes("SELECT * FROM migration_runs")) return { rows: [migrationRow] };
@@ -247,6 +287,7 @@ describe("migration execute standalone restore verification", () => {
     expect(result.restore.standaloneContainersRestored).toBe(1);
     expect(runRecoveryCreate).not.toHaveBeenCalled();
     expect(runRecoveryRestore).toHaveBeenCalledWith(targetHostId, expect.objectContaining({ recoveryPointId }));
+    expect(cleanupCompletedRestore).not.toHaveBeenCalled();
     expect(syncDockerInventory).toHaveBeenCalledWith(targetHostId);
     expect(result.inventory.synced).toBe(true);
     expect(revalidateMigrationPlan).toHaveBeenNthCalledWith(1, expect.objectContaining({ id: migrationRunId }), {
@@ -340,6 +381,7 @@ describe("migration execute standalone restore verification", () => {
     })).rejects.toThrow("Target deployed, but inventory did not sync before completion");
 
     expect(syncDockerInventory).toHaveBeenCalledWith(targetHostId);
+    expect(cleanupCompletedRestore).toHaveBeenCalledOnce();
     expect(query).toHaveBeenCalledWith(
       expect.stringContaining("UPDATE migration_runs SET status = 'failed'"),
       [migrationRunId, expect.stringContaining("inventory did not sync")]
@@ -398,6 +440,7 @@ describe("migration execute standalone restore verification", () => {
       remapPorts: true
     })).rejects.toThrow("Restored compose containers are not using restored volume");
 
+    expect(cleanupCompletedRestore).toHaveBeenCalledOnce();
     expect(query).toHaveBeenCalledWith(
       expect.stringContaining("UPDATE migration_runs SET status = 'failed'"),
       [migrationRunId, expect.stringContaining("demoapp-restore-00000000_data")]
@@ -429,12 +472,109 @@ describe("migration execute standalone restore verification", () => {
     }), migrationRunId, { primary: true, executionFence: undefined });
     expect(runRecoveryCreate).toHaveBeenCalledWith(sourceHostId, finalRecoveryPointId, {
       stopFirst: true,
-      restartAfterStopFirst: false
+      restartAfterStopFirst: false,
+      deferRestartObligationResolution: true
     });
     expect(runRecoveryRestore).toHaveBeenCalledWith(targetHostId, expect.objectContaining({ recoveryPointId: finalRecoveryPointId }));
+    expect(resolveRecoverySourceRestartObligation).toHaveBeenCalledWith(
+      finalRecoveryPointId,
+      {
+        sourceLeftStopped: true,
+        containerIds: ["source-web"],
+        resolution: "intentionally_left_stopped"
+      },
+      undefined
+    );
     expect(result.recoveryPointId).toBe(finalRecoveryPointId);
     expect(result.sourceLeftStopped).toBe(true);
+    expect(query.mock.calls.some(([sql]) =>
+      String(sql).includes("SET status = 'completed'")
+    )).toBe(true);
   });
+
+  it("defers worker-bound migration publication to fenced job completion", async () => {
+    const operationJobId = "66666666-6666-4666-8666-666666666666";
+    createMigrationRecoveryPoint.mockResolvedValueOnce({ id: finalRecoveryPointId });
+    runSshCommand.mockImplementation(async (_ssh: unknown, command: string) => {
+      if (command.includes("docker inspect 'source-web'")) {
+        return { code: 0, stdout: inspectPayload("web", true), stderr: "" };
+      }
+      if (command.includes(`docker inspect '${restoredName}'`)) {
+        return { code: 0, stdout: inspectPayload(restoredName, true), stderr: "" };
+      }
+      return unexpectedCommand(command);
+    });
+    const executionFence = {
+      jobId: operationJobId,
+      attemptCount: 1,
+      assertActive: vi.fn(async () => undefined),
+      withActiveLease: async <T>(
+        callback: (client: import("pg").PoolClient) => Promise<T>
+      ) => callback({
+        query: (...args: Parameters<typeof query>) => query(...args)
+      } as unknown as import("pg").PoolClient)
+    };
+
+    const { runMigrationExecute } = await import("../src/services/migrationExecute.js");
+    const result = await runMigrationExecute(sourceHostId, migrationRunId, {
+      strategy: "safe_move",
+      stopSource: false,
+      remapPorts: true,
+      executionFence,
+      operationJobId
+    });
+
+    expect(result).toMatchObject({
+      migrationRunId,
+      recoveryPointId: finalRecoveryPointId,
+      sourceLeftStopped: true
+    });
+    expect(runRecoveryRestore).toHaveBeenCalledWith(
+      targetHostId,
+      expect.objectContaining({ recoveryPointId: finalRecoveryPointId }),
+      executionFence,
+      expect.objectContaining({
+        operationJobId,
+        migrationRunId,
+        beforeRemoteMutation: expect.any(Function)
+      })
+    );
+    expect(resolveRecoverySourceRestartObligation).not.toHaveBeenCalled();
+    expect(query.mock.calls.some(([sql]) =>
+      String(sql).includes("SET status = 'completed'")
+    )).toBe(false);
+    expect(cleanupCompletedRestore).not.toHaveBeenCalled();
+    expect(retainCompletedRestore).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["without an execution fence", undefined],
+    ["with a different job fence", {
+      jobId: "77777777-7777-4777-8777-777777777777",
+      attemptCount: 1,
+      assertActive: vi.fn(async () => undefined),
+      withActiveLease: vi.fn()
+    }]
+  ])(
+    "rejects worker-bound migration publication %s",
+    async (_description, executionFence) => {
+      const operationJobId = "66666666-6666-4666-8666-666666666666";
+      const { runMigrationExecute } = await import("../src/services/migrationExecute.js");
+
+      await expect(runMigrationExecute(sourceHostId, migrationRunId, {
+        strategy: "safe_move",
+        stopSource: false,
+        remapPorts: true,
+        operationJobId,
+        ...(executionFence ? { executionFence } : {})
+      })).rejects.toThrow(
+        "A worker-bound migration requires an execution fence for the same operation job"
+      );
+
+      expect(query).not.toHaveBeenCalled();
+      expect(runRecoveryRestore).not.toHaveBeenCalled();
+    }
+  );
 
   it("creates a final stop-first capture for safe moves without an eager source stop", async () => {
     query.mockImplementation(async (sql: string) => {
@@ -478,7 +618,8 @@ describe("migration execute standalone restore verification", () => {
     expect(stopContainersWithRestartOnFailure).not.toHaveBeenCalled();
     expect(runRecoveryCreate).toHaveBeenCalledWith(sourceHostId, finalRecoveryPointId, {
       stopFirst: true,
-      restartAfterStopFirst: false
+      restartAfterStopFirst: false,
+      deferRestartObligationResolution: true
     });
     expect(runRecoveryRestore).toHaveBeenCalledWith(targetHostId, expect.objectContaining({ recoveryPointId: finalRecoveryPointId }));
     expect(result.sourceLeftStopped).toBe(true);
@@ -527,7 +668,8 @@ describe("migration execute standalone restore verification", () => {
     expect(runRecoveryCreate).toHaveBeenNthCalledWith(1, sourceHostId, preCopyPointId, { stopFirst: false });
     expect(runRecoveryCreate).toHaveBeenNthCalledWith(2, sourceHostId, finalRecoveryPointId, {
       stopFirst: true,
-      restartAfterStopFirst: false
+      restartAfterStopFirst: false,
+      deferRestartObligationResolution: true
     });
     expect(stopContainersWithRestartOnFailure).not.toHaveBeenCalled();
     expect(result.recoveryPointId).toBe(finalRecoveryPointId);
@@ -555,6 +697,16 @@ describe("migration execute standalone restore verification", () => {
     })).rejects.toThrow("final capture failed; source restarted");
 
     expect(startContainersOneByOne).toHaveBeenCalledWith(sourceHostId, ["source-web"]);
+    expect(resolveRecoverySourceRestartObligation).toHaveBeenCalledWith(
+      finalRecoveryPointId,
+      {
+        sourceLeftStopped: false,
+        containerIds: ["source-web"],
+        resolution: "restarted"
+      },
+      undefined,
+      true
+    );
     expect(runRecoveryRestore).not.toHaveBeenCalled();
     expect(query).toHaveBeenCalledWith(
       expect.stringContaining("UPDATE migration_runs SET status = 'failed'"),
@@ -661,22 +813,20 @@ describe("migration execute standalone restore verification", () => {
     })).rejects.toThrow("Migration data restore incomplete");
 
     expect(runRecoveryRestore).toHaveBeenCalled();
+    expect(cleanupCompletedRestore).toHaveBeenCalledOnce();
     expect(query).toHaveBeenCalledWith(
       expect.stringContaining("UPDATE migration_runs SET status = 'failed'"),
       [migrationRunId, expect.stringContaining("expected 0 Docker volume(s) and 1 host folder(s)")]
     );
   });
 
-  it("cleans up standalone target containers and restarts source after failed move verification", async () => {
+  it("cleans the completed standalone restore and restarts source after failed move verification", async () => {
     runSshCommand.mockImplementation(async (_ssh: unknown, command: string) => {
       if (command.includes("docker inspect 'source-web'")) {
         return { code: 0, stdout: inspectPayload("web", true), stderr: "" };
       }
       if (command.includes(`docker inspect '${restoredName}'`)) {
         return { code: 1, stdout: "", stderr: "missing target container" };
-      }
-      if (command.includes(`docker rm --force '${restoredName}'`)) {
-        return { code: 0, stdout: "", stderr: "" };
       }
       return unexpectedCommand(command);
     });
@@ -691,11 +841,788 @@ describe("migration execute standalone restore verification", () => {
     const commands = runSshCommand.mock.calls.map((call) => String(call[1]));
     expect(stopContainersWithRestartOnFailure).not.toHaveBeenCalled();
     expect(startContainersOneByOne).toHaveBeenCalledWith(sourceHostId, ["source-web"]);
-    expect(commands.some((command) => command.includes(`docker rm --force '${restoredName}'`))).toBe(true);
+    expect(cleanupCompletedRestore).toHaveBeenCalledOnce();
+    expect(commands.some((command) => command.includes(`docker rm --force '${restoredName}'`))).toBe(false);
     expect(commands.some((command) => command.includes("docker compose"))).toBe(false);
     expect(query).toHaveBeenCalledWith(
       expect.stringContaining("UPDATE migration_runs SET status = 'failed'"),
       [migrationRunId, expect.stringContaining("source restarted")]
     );
+  });
+
+  it("unions successful capture stopped IDs with pre-inspect restart IDs for the completed move obligation", async () => {
+    resolveAppContext.mockResolvedValue({
+      label: "Standalone",
+      projectName: null,
+      stackId: null,
+      composeYaml: null,
+      env: "",
+      workingDir: null,
+      composePath: null,
+      containerIds: ["source-web", "source-sidecar"],
+      volumeNames: []
+    });
+    createMigrationRecoveryPoint.mockResolvedValueOnce({ id: finalRecoveryPointId });
+    runRecoveryCreate.mockResolvedValueOnce({
+      recoveryPointId: finalRecoveryPointId,
+      sourceLeftStopped: true,
+      stoppedContainerIds: ["source-sidecar"]
+    });
+    runSshCommand.mockImplementation(async (_ssh: unknown, command: string) => {
+      if (command.includes("docker inspect 'source-web'")) {
+        return { code: 0, stdout: inspectPayload("web", true), stderr: "" };
+      }
+      if (command.includes("docker inspect 'source-sidecar'")) {
+        return { code: 1, stdout: "", stderr: "transient inspect miss" };
+      }
+      if (command.includes(`docker inspect '${restoredName}'`)) {
+        return { code: 0, stdout: inspectPayload(restoredName, true), stderr: "" };
+      }
+      return unexpectedCommand(command);
+    });
+
+    const { runMigrationExecute } = await import("../src/services/migrationExecute.js");
+    const result = await runMigrationExecute(sourceHostId, migrationRunId, {
+      strategy: "safe_move",
+      stopSource: false,
+      remapPorts: true
+    });
+
+    expect(resolveRecoverySourceRestartObligation).toHaveBeenCalledWith(
+      finalRecoveryPointId,
+      {
+        sourceLeftStopped: true,
+        containerIds: ["source-web", "source-sidecar"],
+        resolution: "intentionally_left_stopped"
+      },
+      undefined
+    );
+    expect(result.sourceLeftStopped).toBe(true);
+    expect(startContainersOneByOne).not.toHaveBeenCalled();
+  });
+
+  it("restarts the union of inspected and capture-authoritative source IDs after restore validation fails", async () => {
+    resolveAppContext.mockResolvedValue({
+      label: "Standalone",
+      projectName: null,
+      stackId: null,
+      composeYaml: null,
+      env: "",
+      workingDir: null,
+      composePath: null,
+      containerIds: ["source-web", "source-sidecar"],
+      volumeNames: []
+    });
+    createMigrationRecoveryPoint.mockResolvedValueOnce({ id: finalRecoveryPointId });
+    runRecoveryCreate.mockResolvedValueOnce({
+      recoveryPointId: finalRecoveryPointId,
+      sourceLeftStopped: true,
+      stoppedContainerIds: ["source-sidecar"]
+    });
+    getMigrationRecoveryPoint.mockResolvedValue({
+      ...recoveryPointDetail,
+      artifactCount: 1,
+      completedArtifactCount: 1,
+      artifacts: [{
+        kind: "host_folder",
+        status: "completed",
+        error: null,
+        metadata: { sourcePath: "/srv/demoapp" },
+        storageKey: "points/demoapp/host-folder.tar.gz"
+      }]
+    });
+    runSshCommand.mockImplementation(async (_ssh: unknown, command: string) => {
+      if (command.includes("docker inspect 'source-web'")) {
+        return { code: 0, stdout: inspectPayload("web", true), stderr: "" };
+      }
+      if (command.includes("docker inspect 'source-sidecar'")) {
+        return { code: 1, stdout: "", stderr: "transient inspect miss" };
+      }
+      return unexpectedCommand(command);
+    });
+
+    const { runMigrationExecute } = await import("../src/services/migrationExecute.js");
+    await expect(runMigrationExecute(sourceHostId, migrationRunId, {
+      strategy: "safe_move",
+      stopSource: false,
+      remapPorts: true
+    })).rejects.toThrow("Migration data restore incomplete");
+
+    expect(cleanupCompletedRestore).toHaveBeenCalledOnce();
+    expect(startContainersOneByOne).toHaveBeenCalledWith(
+      sourceHostId,
+      ["source-web", "source-sidecar"]
+    );
+    expect(resolveRecoverySourceRestartObligation).toHaveBeenCalledWith(
+      finalRecoveryPointId,
+      {
+        sourceLeftStopped: false,
+        containerIds: ["source-web", "source-sidecar"],
+        resolution: "restarted"
+      },
+      undefined,
+      true
+    );
+  });
+
+  it("restarts capture-authoritative source IDs after later inventory confirmation fails", async () => {
+    query.mockImplementation(async (sql: string) => {
+      if (sql.includes("SELECT * FROM migration_runs")) return { rows: [migrationRow] };
+      if (sql.includes("FROM resource_snapshots") && sql.includes("kind = 'container'")) {
+        return { rows: [] };
+      }
+      return { rows: [] };
+    });
+    createMigrationRecoveryPoint.mockResolvedValueOnce({ id: finalRecoveryPointId });
+    runRecoveryCreate.mockResolvedValueOnce({
+      recoveryPointId: finalRecoveryPointId,
+      sourceLeftStopped: true,
+      stoppedContainerIds: ["source-web"]
+    });
+    runSshCommand.mockImplementation(async (_ssh: unknown, command: string) => {
+      if (command.includes("docker inspect 'source-web'")) {
+        return { code: 0, stdout: inspectPayload("web", false), stderr: "" };
+      }
+      if (command.includes(`docker inspect '${restoredName}'`)) {
+        return { code: 0, stdout: inspectPayload(restoredName, true), stderr: "" };
+      }
+      return unexpectedCommand(command);
+    });
+
+    const { runMigrationExecute } = await import("../src/services/migrationExecute.js");
+    await expect(runMigrationExecute(sourceHostId, migrationRunId, {
+      strategy: "safe_move",
+      stopSource: false,
+      remapPorts: true,
+      inventoryPollAttempts: 1,
+      inventoryPollDelayMs: 0
+    })).rejects.toThrow("inventory did not sync");
+
+    expect(cleanupCompletedRestore).toHaveBeenCalledOnce();
+    expect(startContainersOneByOne).toHaveBeenCalledWith(sourceHostId, ["source-web"]);
+    expect(resolveRecoverySourceRestartObligation).toHaveBeenCalledWith(
+      finalRecoveryPointId,
+      {
+        sourceLeftStopped: false,
+        containerIds: ["source-web"],
+        resolution: "restarted"
+      },
+      undefined,
+      true
+    );
+  });
+
+  it("retains the exact reconciliation evidence when target cleanup only partially succeeds", async () => {
+    const cleanupSecret = "cleanup-secret";
+    cleanupCompletedRestore.mockRejectedValueOnce(
+      new Error(
+        `partial removal failed at https://operator:${cleanupSecret}@target.example.test/resource?token=${cleanupSecret} ${
+          "detail".repeat(1_000)
+        }`
+      )
+    );
+    runSshCommand.mockImplementation(async (_ssh: unknown, command: string) => {
+      if (command.includes("docker inspect 'source-web'")) {
+        return { code: 0, stdout: inspectPayload("web", true), stderr: "" };
+      }
+      if (command.includes(`docker inspect '${restoredName}'`)) {
+        return { code: 1, stdout: "", stderr: "target verification failed" };
+      }
+      return unexpectedCommand(command);
+    });
+
+    const { runMigrationExecute } = await import("../src/services/migrationExecute.js");
+    await expect(runMigrationExecute(sourceHostId, migrationRunId, {
+      strategy: "clone",
+      stopSource: false,
+      remapPorts: true
+    })).rejects.toThrow("target cleanup failed");
+
+    const evidenceWrite = query.mock.calls.find(([sql]) =>
+      String(sql).includes("SET error = $2")
+    );
+    const evidenceMarker = String((evidenceWrite?.[1] as unknown[] | undefined)?.[1]);
+    const failureWrite = query.mock.calls.findLast(([sql]) =>
+      String(sql).includes("SET status = 'failed'")
+    );
+    const finalError = String((failureWrite?.[1] as unknown[] | undefined)?.[1]);
+
+    expect(evidenceMarker).toContain("Automatic migration compensation remains armed");
+    expect(finalError).toContain(evidenceMarker);
+    expect(finalError).toContain("\"targetVerified\":false");
+    expect(finalError).toContain(`\"targetContainerNames\":[\"${restoredName}\"]`);
+    expect(finalError).not.toContain(cleanupSecret);
+    expect(finalError.length).toBeLessThan(20_000);
+  });
+
+  it("retains every resource identity and count beyond 100 entries without truncating long paths", async () => {
+    const volumeMap = Object.fromEntries(
+      Array.from({ length: 125 }, (_, index) => [
+        `source-volume-${index}`,
+        `restored-volume-${index}`
+      ])
+    );
+    const longBindPath = `/srv/${"long-segment/".repeat(80)}application-data`;
+    const bindSecret = "bind-path-secret";
+    const credentialBearingBindPath =
+      `/srv/cache/https://operator:${bindSecret}@storage.example.test/archive?token=${bindSecret}`;
+    runRecoveryRestore.mockResolvedValueOnce({
+      mode: "clone",
+      projectName: null,
+      restoredVolumes: 125,
+      restoredBindMounts: 2,
+      composeRestored: false,
+      standaloneContainersRestored: 1,
+      restoredContainerNames: [restoredName],
+      volumeMap,
+      networkMap: {
+        source: "restored-network"
+      },
+      bindMap: {
+        "/srv/source": longBindPath,
+        "/srv/credential-source": credentialBearingBindPath
+      },
+      portRemap: {}
+    });
+    runSshCommand.mockImplementation(async (_ssh: unknown, command: string) => {
+      if (command.includes("docker inspect 'source-web'")) {
+        return { code: 0, stdout: inspectPayload("web", true), stderr: "" };
+      }
+      return unexpectedCommand(command);
+    });
+
+    const { runMigrationExecute } = await import("../src/services/migrationExecute.js");
+    await expect(runMigrationExecute(sourceHostId, migrationRunId, {
+      strategy: "clone",
+      stopSource: false,
+      remapPorts: true
+    })).rejects.toThrow("Migration restore did not produce a target project name");
+
+    const evidenceWrite = query.mock.calls.find(([sql]) =>
+      String(sql).includes("SET error = $2")
+    );
+    const evidenceMarker = String((evidenceWrite?.[1] as unknown[] | undefined)?.[1]);
+    const evidence = JSON.parse(
+      evidenceMarker.slice(evidenceMarker.indexOf("{"))
+    ) as {
+      targetVolumeCount: number;
+      targetVolumeNames: string[];
+      targetNetworkCount: number;
+      targetNetworkNames: string[];
+      targetBindMountCount: number;
+      targetBindMountPaths: string[];
+    };
+
+    expect(evidence.targetVolumeCount).toBe(125);
+    expect(evidence.targetVolumeNames).toHaveLength(125);
+    expect(evidence.targetVolumeNames.at(-1)).toBe("restored-volume-124");
+    expect(evidence.targetNetworkCount).toBe(1);
+    expect(evidence.targetNetworkNames).toEqual(["restored-network"]);
+    expect(evidence.targetBindMountCount).toBe(2);
+    expect(evidence.targetBindMountPaths[0]).toBe(longBindPath);
+    expect(evidence.targetBindMountPaths[0]?.length).toBeGreaterThan(512);
+    expect(JSON.stringify(evidence.targetBindMountPaths)).not.toContain(bindSecret);
+  });
+
+  it("blocks source restart and retains exact reconciliation evidence when target cleanup fails", async () => {
+    cleanupCompletedRestore.mockRejectedValueOnce(new Error("target volume removal failed"));
+    createMigrationRecoveryPoint.mockResolvedValueOnce({ id: finalRecoveryPointId });
+    runRecoveryCreate.mockResolvedValueOnce({
+      recoveryPointId: finalRecoveryPointId,
+      sourceLeftStopped: true,
+      stoppedContainerIds: ["source-web"]
+    });
+    runSshCommand.mockImplementation(async (_ssh: unknown, command: string) => {
+      if (command.includes("docker inspect 'source-web'")) {
+        return { code: 0, stdout: inspectPayload("web", true), stderr: "" };
+      }
+      if (command.includes(`docker inspect '${restoredName}'`)) {
+        return { code: 1, stdout: "", stderr: "target verification failed" };
+      }
+      return unexpectedCommand(command);
+    });
+
+    const { runMigrationExecute } = await import("../src/services/migrationExecute.js");
+    await expect(runMigrationExecute(sourceHostId, migrationRunId, {
+      strategy: "safe_move",
+      stopSource: false,
+      remapPorts: true
+    })).rejects.toThrow("source remains stopped until target cleanup is reconciled manually");
+
+    const evidenceWrite = query.mock.calls.find(([sql]) =>
+      String(sql).includes("SET error = $2")
+    );
+    const evidenceMarker = String((evidenceWrite?.[1] as unknown[] | undefined)?.[1]);
+    const failureWrite = query.mock.calls.findLast(([sql]) =>
+      String(sql).includes("SET status = 'failed'")
+    );
+    const finalError = String((failureWrite?.[1] as unknown[] | undefined)?.[1]);
+
+    expect(cleanupCompletedRestore).toHaveBeenCalledOnce();
+    expect(startContainersOneByOne).not.toHaveBeenCalled();
+    expect(finalError).toContain("target cleanup failed");
+    expect(finalError).toContain(evidenceMarker);
+    expect(finalError).toContain("source remains stopped until target cleanup is reconciled manually");
+    expect(finalError).toContain("\"sourceLeftStopped\":true");
+    expect(finalError).toContain(`\"sourceStoppedContainerIds\":[\"source-web\"]`);
+    const armCalls = query.mock.calls.filter(([sql]) => isRestartArmSql(sql));
+    expect(armCalls).toHaveLength(2);
+    const blockedMetadata = JSON.parse(
+      String((armCalls.at(-1)?.[1] as unknown[] | undefined)?.[2])
+    );
+    expect(blockedMetadata).toMatchObject({
+      sourceRestartPending: true,
+      sourceRestartContainerIds: ["source-web"],
+      sourceRestartReconciliationState: "blocked_target_cleanup",
+      sourceRestartTargetCleanupBlocked: true,
+      sourceRestartTargetCleanupError: "target volume removal failed"
+    });
+    expect(armCalls.every(([sql]) =>
+      String(sql).includes("IS DISTINCT FROM 'running'")
+    )).toBe(true);
+  });
+
+  it("restarts the full authoritative source set when final completion is rejected and the run is still running", async () => {
+    resolveAppContext.mockResolvedValue({
+      label: "Standalone",
+      projectName: null,
+      stackId: null,
+      composeYaml: null,
+      env: "",
+      workingDir: null,
+      composePath: null,
+      containerIds: ["source-web", "source-sidecar"],
+      volumeNames: []
+    });
+    query.mockImplementation(async (sql: string) => {
+      if (sql.includes("SELECT status FROM migration_runs")) return { rows: [{ status: "running" }] };
+      if (sql.includes("SELECT * FROM migration_runs")) return { rows: [migrationRow] };
+      if (sql.includes("FROM resource_snapshots") && sql.includes("kind = 'container'")) {
+        return {
+          rows: [{
+            external_id: restoredName,
+            name: restoredName,
+            data: { Names: restoredName, State: "running", Labels: {} }
+          }]
+        };
+      }
+      if (sql.includes("SET status = 'completed'")) {
+        throw new Error("completion transaction rejected");
+      }
+      return { rows: [] };
+    });
+    createMigrationRecoveryPoint.mockResolvedValueOnce({ id: finalRecoveryPointId });
+    runRecoveryCreate.mockResolvedValueOnce({
+      recoveryPointId: finalRecoveryPointId,
+      sourceLeftStopped: true,
+      stoppedContainerIds: ["source-sidecar"]
+    });
+    runSshCommand.mockImplementation(async (_ssh: unknown, command: string) => {
+      if (command.includes("docker inspect 'source-web'")) {
+        return { code: 0, stdout: inspectPayload("web", true), stderr: "" };
+      }
+      if (command.includes("docker inspect 'source-sidecar'")) {
+        return { code: 1, stdout: "", stderr: "transient inspect miss" };
+      }
+      if (command.includes(`docker inspect '${restoredName}'`)) {
+        return { code: 0, stdout: inspectPayload(restoredName, true), stderr: "" };
+      }
+      return unexpectedCommand(command);
+    });
+
+    const { runMigrationExecute } = await import("../src/services/migrationExecute.js");
+    await expect(runMigrationExecute(sourceHostId, migrationRunId, {
+      strategy: "safe_move",
+      stopSource: false,
+      remapPorts: true
+    })).rejects.toThrow("completion transaction rejected; source restarted");
+
+    expect(cleanupCompletedRestore).toHaveBeenCalledOnce();
+    expect(startContainersOneByOne).toHaveBeenCalledWith(
+      sourceHostId,
+      ["source-web", "source-sidecar"]
+    );
+    const armCalls = query.mock.calls.filter(([sql]) => isRestartArmSql(sql));
+    expect(armCalls).toHaveLength(2);
+    const blockedMetadata = JSON.parse(
+      String((armCalls[0]?.[1] as unknown[] | undefined)?.[2])
+    );
+    const pendingMetadata = JSON.parse(
+      String((armCalls[1]?.[1] as unknown[] | undefined)?.[2])
+    );
+    expect(blockedMetadata).toMatchObject({
+      sourceRestartPending: true,
+      sourceRestartContainerIds: ["source-web", "source-sidecar"],
+      sourceRestartReconciliationState: "blocked_target_cleanup",
+      sourceRestartTargetCleanupBlocked: true
+    });
+    expect(pendingMetadata).toMatchObject({
+      sourceRestartPending: true,
+      sourceRestartContainerIds: ["source-web", "source-sidecar"],
+      restartFailedIds: [],
+      sourceRestartReconciliationState: "pending",
+      sourceRestartTargetCleanupBlocked: false
+    });
+    expect(String(armCalls[1]?.[0])).toContain(
+      "sourceRestartReconciliationState' = 'blocked_target_cleanup'"
+    );
+    expect(String(armCalls[1]?.[0])).toContain(
+      "sourceRestartTargetCleanupBlocked' = 'true'"
+    );
+    const blockedCallIndex = query.mock.calls.indexOf(armCalls[0]!);
+    const pendingCallIndex = query.mock.calls.indexOf(armCalls[1]!);
+    expect(query.mock.invocationCallOrder[blockedCallIndex])
+      .toBeLessThan(cleanupCompletedRestore.mock.invocationCallOrder[0]!);
+    expect(cleanupCompletedRestore.mock.invocationCallOrder[0])
+      .toBeLessThan(query.mock.invocationCallOrder[pendingCallIndex]!);
+    expect(query.mock.invocationCallOrder[pendingCallIndex])
+      .toBeLessThan(startContainersOneByOne.mock.invocationCallOrder[0]!);
+    expect(resolveRecoverySourceRestartObligation).toHaveBeenLastCalledWith(
+      finalRecoveryPointId,
+      {
+        sourceLeftStopped: false,
+        containerIds: ["source-web", "source-sidecar"],
+        resolution: "restarted"
+      },
+      undefined,
+      true
+    );
+  });
+
+  it("keeps only the unresolved source IDs pending when rollback restarts only part of the source", async () => {
+    resolveAppContext.mockResolvedValue({
+      label: "Standalone",
+      projectName: null,
+      stackId: null,
+      composeYaml: null,
+      env: "",
+      workingDir: null,
+      composePath: null,
+      containerIds: ["source-web", "source-sidecar"],
+      volumeNames: []
+    });
+    query.mockImplementation(async (sql: string) => {
+      if (sql.includes("SELECT status FROM migration_runs")) return { rows: [{ status: "running" }] };
+      if (sql.includes("SELECT * FROM migration_runs")) return { rows: [migrationRow] };
+      if (sql.includes("FROM resource_snapshots") && sql.includes("kind = 'container'")) {
+        return {
+          rows: [{
+            external_id: restoredName,
+            name: restoredName,
+            data: { Names: restoredName, State: "running", Labels: {} }
+          }]
+        };
+      }
+      if (sql.includes("SET status = 'completed'")) {
+        throw new Error("completion transaction rejected");
+      }
+      return { rows: [] };
+    });
+    createMigrationRecoveryPoint.mockResolvedValueOnce({ id: finalRecoveryPointId });
+    runRecoveryCreate.mockResolvedValueOnce({
+      recoveryPointId: finalRecoveryPointId,
+      sourceLeftStopped: true,
+      stoppedContainerIds: ["source-sidecar"]
+    });
+    startContainersOneByOne.mockRejectedValueOnce(Object.assign(
+      new Error("source-sidecar remained stopped"),
+      { restartFailedIds: ["source-sidecar"] }
+    ));
+    runSshCommand.mockImplementation(async (_ssh: unknown, command: string) => {
+      if (command.includes("docker inspect 'source-web'")) {
+        return { code: 0, stdout: inspectPayload("web", true), stderr: "" };
+      }
+      if (command.includes("docker inspect 'source-sidecar'")) {
+        return { code: 1, stdout: "", stderr: "transient inspect miss" };
+      }
+      if (command.includes(`docker inspect '${restoredName}'`)) {
+        return { code: 0, stdout: inspectPayload(restoredName, true), stderr: "" };
+      }
+      return unexpectedCommand(command);
+    });
+
+    const { runMigrationExecute } = await import("../src/services/migrationExecute.js");
+    await expect(runMigrationExecute(sourceHostId, migrationRunId, {
+      strategy: "safe_move",
+      stopSource: false,
+      remapPorts: true
+    })).rejects.toThrow("rollback failed: source-sidecar remained stopped");
+
+    const armCalls = query.mock.calls.filter(([sql]) => isRestartArmSql(sql));
+    expect(armCalls).toHaveLength(3);
+    const blockedMetadata = JSON.parse(
+      String((armCalls[0]?.[1] as unknown[] | undefined)?.[2])
+    );
+    const pendingMetadata = JSON.parse(
+      String((armCalls[1]?.[1] as unknown[] | undefined)?.[2])
+    );
+    const unresolvedMetadata = JSON.parse(
+      String((armCalls[2]?.[1] as unknown[] | undefined)?.[2])
+    );
+    expect(blockedMetadata).toMatchObject({
+      sourceRestartPending: true,
+      sourceRestartContainerIds: ["source-web", "source-sidecar"],
+      sourceRestartReconciliationState: "blocked_target_cleanup",
+      sourceRestartTargetCleanupBlocked: true
+    });
+    expect(pendingMetadata).toMatchObject({
+      sourceRestartPending: true,
+      sourceRestartContainerIds: ["source-web", "source-sidecar"],
+      restartFailedIds: [],
+      sourceRestartReconciliationState: "pending",
+      sourceRestartTargetCleanupBlocked: false
+    });
+    expect(unresolvedMetadata).toMatchObject({
+      sourceRestartPending: true,
+      sourceRestartContainerIds: ["source-sidecar"],
+      sourceStoppedIds: ["source-sidecar"],
+      restartFailedIds: ["source-sidecar"],
+      sourceRestartReconciliationState: "pending",
+      sourceRestartTargetCleanupBlocked: false
+    });
+  });
+
+  it("retains both sides when known completion failure cannot durably block restart during cleanup", async () => {
+    query.mockImplementation(async (sql: string) => {
+      if (sql.includes("SELECT status FROM migration_runs")) return { rows: [{ status: "running" }] };
+      if (sql.includes("SELECT * FROM migration_runs")) return { rows: [migrationRow] };
+      if (sql.includes("FROM resource_snapshots") && sql.includes("kind = 'container'")) {
+        return {
+          rows: [{
+            external_id: restoredName,
+            name: restoredName,
+            data: { Names: restoredName, State: "running", Labels: {} }
+          }]
+        };
+      }
+      if (sql.includes("SET status = 'completed'")) {
+        throw new Error("completion transaction rejected");
+      }
+      if (isRestartArmSql(sql)) {
+        return { rows: [], rowCount: 0 };
+      }
+      return { rows: [] };
+    });
+    createMigrationRecoveryPoint.mockResolvedValueOnce({ id: finalRecoveryPointId });
+    runRecoveryCreate.mockResolvedValueOnce({
+      recoveryPointId: finalRecoveryPointId,
+      sourceLeftStopped: true,
+      stoppedContainerIds: ["source-web"]
+    });
+    runSshCommand.mockImplementation(async (_ssh: unknown, command: string) => {
+      if (command.includes("docker inspect 'source-web'")) {
+        return { code: 0, stdout: inspectPayload("web", true), stderr: "" };
+      }
+      if (command.includes(`docker inspect '${restoredName}'`)) {
+        return { code: 0, stdout: inspectPayload(restoredName, true), stderr: "" };
+      }
+      return unexpectedCommand(command);
+    });
+
+    const { runMigrationExecute } = await import("../src/services/migrationExecute.js");
+    await expect(runMigrationExecute(sourceHostId, migrationRunId, {
+      strategy: "safe_move",
+      stopSource: false,
+      remapPorts: true
+    })).rejects.toMatchObject({
+      code: "MIGRATION_COMPENSATION_RECONCILIATION_REQUIRED"
+    });
+
+    expect(cleanupCompletedRestore).not.toHaveBeenCalled();
+    expect(startContainersOneByOne).not.toHaveBeenCalled();
+  });
+
+  it("keeps the source stopped when cleanup succeeds but the blocked-to-pending transition is lost", async () => {
+    query.mockImplementation(async (sql: string, values?: unknown[]) => {
+      if (sql.includes("SELECT status FROM migration_runs")) return { rows: [{ status: "running" }] };
+      if (sql.includes("SELECT * FROM migration_runs")) return { rows: [migrationRow] };
+      if (sql.includes("FROM resource_snapshots") && sql.includes("kind = 'container'")) {
+        return {
+          rows: [{
+            external_id: restoredName,
+            name: restoredName,
+            data: { Names: restoredName, State: "running", Labels: {} }
+          }]
+        };
+      }
+      if (sql.includes("SET status = 'completed'")) {
+        throw new Error("completion transaction rejected");
+      }
+      if (
+        isRestartArmSql(sql)
+        && Array.isArray(values)
+        && typeof values[2] === "string"
+        && JSON.parse(values[2]).sourceRestartReconciliationState === "pending"
+      ) {
+        return { rows: [], rowCount: 0 };
+      }
+      return { rows: [] };
+    });
+    createMigrationRecoveryPoint.mockResolvedValueOnce({ id: finalRecoveryPointId });
+    runRecoveryCreate.mockResolvedValueOnce({
+      recoveryPointId: finalRecoveryPointId,
+      sourceLeftStopped: true,
+      stoppedContainerIds: ["source-web"]
+    });
+    runSshCommand.mockImplementation(async (_ssh: unknown, command: string) => {
+      if (command.includes("docker inspect 'source-web'")) {
+        return { code: 0, stdout: inspectPayload("web", true), stderr: "" };
+      }
+      if (command.includes(`docker inspect '${restoredName}'`)) {
+        return { code: 0, stdout: inspectPayload(restoredName, true), stderr: "" };
+      }
+      return unexpectedCommand(command);
+    });
+
+    const { runMigrationExecute } = await import("../src/services/migrationExecute.js");
+    await expect(runMigrationExecute(sourceHostId, migrationRunId, {
+      strategy: "safe_move",
+      stopSource: false,
+      remapPorts: true
+    })).rejects.toMatchObject({
+      code: "MIGRATION_COMPENSATION_RECONCILIATION_REQUIRED"
+    });
+
+    expect(cleanupCompletedRestore).toHaveBeenCalledOnce();
+    expect(startContainersOneByOne).not.toHaveBeenCalled();
+    const armCalls = query.mock.calls.filter(([sql]) => isRestartArmSql(sql));
+    expect(armCalls).toHaveLength(2);
+    expect(JSON.parse(String((armCalls[0]?.[1] as unknown[])?.[2]))).toMatchObject({
+      sourceRestartReconciliationState: "blocked_target_cleanup",
+      sourceRestartTargetCleanupBlocked: true
+    });
+    expect(JSON.parse(String((armCalls[1]?.[1] as unknown[])?.[2]))).toMatchObject({
+      sourceRestartReconciliationState: "pending",
+      sourceRestartTargetCleanupBlocked: false
+    });
+  });
+
+  it("accepts a committed completion after its database response is lost without deleting the verified target", async () => {
+    query.mockImplementation(async (sql: string) => {
+      if (sql.includes("SELECT status FROM migration_runs")) return { rows: [{ status: "completed" }] };
+      if (sql.includes("SELECT * FROM migration_runs")) return { rows: [migrationRow] };
+      if (sql.includes("FROM resource_snapshots") && sql.includes("kind = 'container'")) {
+        return {
+          rows: [{
+            external_id: restoredName,
+            name: restoredName,
+            data: { Names: restoredName, State: "running", Labels: {} }
+          }]
+        };
+      }
+      if (sql.includes("SET status = 'completed'")) {
+        throw new Error("database response lost after commit");
+      }
+      return { rows: [] };
+    });
+    createMigrationRecoveryPoint.mockResolvedValueOnce({ id: finalRecoveryPointId });
+    runRecoveryCreate.mockResolvedValueOnce({
+      recoveryPointId: finalRecoveryPointId,
+      sourceLeftStopped: true,
+      stoppedContainerIds: ["source-web"]
+    });
+    runSshCommand.mockImplementation(async (_ssh: unknown, command: string) => {
+      if (command.includes("docker inspect 'source-web'")) {
+        return { code: 0, stdout: inspectPayload("web", true), stderr: "" };
+      }
+      if (command.includes(`docker inspect '${restoredName}'`)) {
+        return { code: 0, stdout: inspectPayload(restoredName, true), stderr: "" };
+      }
+      return unexpectedCommand(command);
+    });
+
+    const { runMigrationExecute } = await import("../src/services/migrationExecute.js");
+    const result = await runMigrationExecute(sourceHostId, migrationRunId, {
+      strategy: "safe_move",
+      stopSource: false,
+      remapPorts: true
+    });
+
+    expect(result.sourceLeftStopped).toBe(true);
+    expect(cleanupCompletedRestore).not.toHaveBeenCalled();
+    expect(startContainersOneByOne).not.toHaveBeenCalled();
+    expect(query.mock.calls.some(([sql]) => isRestartArmSql(sql))).toBe(false);
+    expect(resolveRecoverySourceRestartObligation).toHaveBeenCalledWith(
+      finalRecoveryPointId,
+      {
+        sourceLeftStopped: true,
+        containerIds: ["source-web"],
+        resolution: "intentionally_left_stopped"
+      },
+      undefined
+    );
+    expect(query.mock.calls.some(([sql]) =>
+      String(sql).includes("UPDATE migration_runs SET status = 'failed'")
+    )).toBe(false);
+  });
+
+  it("retains target and source state with durable evidence when completion status cannot be re-read", async () => {
+    query.mockImplementation(async (sql: string) => {
+      if (sql.includes("SELECT status FROM migration_runs")) {
+        throw new Error("database unavailable during reconciliation");
+      }
+      if (sql.includes("SELECT * FROM migration_runs")) return { rows: [migrationRow] };
+      if (sql.includes("FROM resource_snapshots") && sql.includes("kind = 'container'")) {
+        return {
+          rows: [{
+            external_id: restoredName,
+            name: restoredName,
+            data: { Names: restoredName, State: "running", Labels: {} }
+          }]
+        };
+      }
+      if (sql.includes("SET status = 'completed'")) {
+        throw new Error("completion response unknown");
+      }
+      return { rows: [] };
+    });
+    createMigrationRecoveryPoint.mockResolvedValueOnce({ id: finalRecoveryPointId });
+    runRecoveryCreate.mockResolvedValueOnce({
+      recoveryPointId: finalRecoveryPointId,
+      sourceLeftStopped: true,
+      stoppedContainerIds: ["source-web"]
+    });
+    runSshCommand.mockImplementation(async (_ssh: unknown, command: string) => {
+      if (command.includes("docker inspect 'source-web'")) {
+        return { code: 0, stdout: inspectPayload("web", true), stderr: "" };
+      }
+      if (command.includes(`docker inspect '${restoredName}'`)) {
+        return { code: 0, stdout: inspectPayload(restoredName, true), stderr: "" };
+      }
+      return unexpectedCommand(command);
+    });
+
+    const { runMigrationExecute } = await import("../src/services/migrationExecute.js");
+    await expect(runMigrationExecute(sourceHostId, migrationRunId, {
+      strategy: "safe_move",
+      stopSource: false,
+      remapPorts: true
+    })).rejects.toMatchObject({
+      code: "MIGRATION_COMPLETION_RECONCILIATION_REQUIRED",
+      evidence: {
+        migrationRunId,
+        recoveryPointId: finalRecoveryPointId,
+        targetHostId,
+        targetVerified: true,
+        targetProjectName: projectName,
+        targetContainerNames: [restoredName],
+        sourceLeftStopped: true,
+        sourceStoppedContainerIds: ["source-web"]
+      }
+    });
+
+    expect(cleanupCompletedRestore).not.toHaveBeenCalled();
+    expect(startContainersOneByOne).not.toHaveBeenCalled();
+    expect(query.mock.calls.some(([sql]) => isRestartArmSql(sql))).toBe(false);
+    expect(query.mock.calls.some(([sql]) =>
+      String(sql).includes("UPDATE migration_runs SET status = 'failed'")
+    )).toBe(false);
+    const evidenceWrites = query.mock.calls.filter(([sql]) =>
+      String(sql).includes("Automatic migration compensation remains armed")
+      || String(sql).includes("SET error = $2")
+    );
+    const lastEvidenceValues = evidenceWrites.at(-1)?.[1] as unknown[] | undefined;
+    expect(String(lastEvidenceValues?.[1])).toContain("\"targetVerified\":true");
+    expect(String(lastEvidenceValues?.[1])).toContain(`\"targetContainerNames\":[\"${restoredName}\"]`);
   });
 });

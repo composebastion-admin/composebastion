@@ -25,7 +25,7 @@ import { getScopedHostIds, jobLabel, roleLabel, sleep } from "../lib/hostScope.j
 import { hostlessTabs, type HostScope } from "../lib/navigation.js";
 import type { Theme } from "../lib/theme.js";
 import { tabPath } from "../lib/tabRoute.js";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { useToast } from "./ToastProvider.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
 import { HostForm } from "./dashboard/HostForm.js";
@@ -69,7 +69,6 @@ const recoverySectionTabs: Record<RecoverySection, keyof typeof recoveryTabDefau
 
 const AdminPanel = lazy(async () => ({ default: (await import("./panels/AdminPanel.js")).AdminPanel }));
 const CatalogPanel = lazy(async () => ({ default: (await import("./panels/CatalogPanel.js")).CatalogPanel }));
-const ComposePanel = lazy(async () => ({ default: (await import("./panels/ComposePanel.js")).ComposePanel }));
 const ContainersPanel = lazy(async () => ({ default: (await import("./panels/ContainersPanel.js")).ContainersPanel }));
 const GithubDeployPanel = lazy(async () => ({ default: (await import("./panels/GithubDeployPanel.js")).GithubDeployPanel }));
 const HostFilesPanel = lazy(async () => ({ default: (await import("./panels/HostFilesPanel.js")).HostFilesPanel }));
@@ -110,6 +109,7 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
   const [customHostIds, setCustomHostIds] = useState<string[]>([]);
   const [showHostForm, setShowHostForm] = useState(false);
   const [terminalHost, setTerminalHost] = useState<DockerHost | null>(null);
+  const terminalReturnFocusRef = useRef<HTMLElement | null>(null);
   const [activity, setActivity] = useState<string | null>(null);
   const [resourceListQuery, setResourceListQuery] = useState({ query: "", key: 0 });
   const hostUsage = useContainerUsage(hosts);
@@ -152,7 +152,9 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
         api<{ backups?: Backup[] }>("/api/backups"),
         api<{ jobs?: OperationJob[] }>("/api/jobs?limit=80"),
         api<{ images?: FavoriteImage[] }>("/api/favorite-images"),
-        api<{ repositories?: GithubRepository[] }>("/api/github/repos"),
+        authorization.canOperate
+          ? api<{ repositories?: GithubRepository[] }>("/api/github/repos")
+          : Promise.resolve({ repositories: [] }),
         api<{ apps?: DockerApp[] }>("/api/apps"),
         api<{ readiness?: RecoveryReadiness[] }>("/api/recovery/readiness")
       ]);
@@ -213,7 +215,7 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
     } finally {
       setRefreshing(false);
     }
-  }, [selectedHostId, hostScope, customHostIds]);
+  }, [selectedHostId, hostScope, customHostIds, authorization.canOperate]);
 
   useKeyboardShortcuts({
     setTab,
@@ -223,12 +225,14 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
   });
 
   useEffect(() => {
-    void refresh();
+    void refresh().catch(() => undefined);
   }, [refresh]);
 
   useEffect(() => {
+    // Route changes close the mobile drawer. Background host reconciliation
+    // must not dismiss navigation that the user has just opened.
     setIsSidebarOpen(false);
-  }, [tab, selectedHostId]);
+  }, [tab]);
 
   useEffect(() => () => {
     if (clearActivityTimer.current) window.clearTimeout(clearActivityTimer.current);
@@ -317,8 +321,12 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
   const topbarTitle = tab === "files" ? "Host Files" : recoverySection ? "Recovery Center" : tab === "catalog" ? "Catalog" : scopeTitle;
 
   async function logout() {
-    await postJson("/api/auth/logout", {});
-    onLogout();
+    try {
+      await postJson("/api/auth/logout", {});
+      onLogout();
+    } catch (caught) {
+      pushToast(caught instanceof Error ? caught.message : String(caught), "error");
+    }
   }
 
   async function hostAction(type: string, payload: Record<string, unknown> = {}, hostId = selectedHost?.id) {
@@ -363,6 +371,20 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
     }
   }
 
+  function openHostTerminal(host: DockerHost, returnFocus: HTMLElement) {
+    terminalReturnFocusRef.current = returnFocus;
+    setTerminalHost(host);
+  }
+
+  function closeHostTerminal() {
+    const returnFocus = terminalReturnFocusRef.current;
+    terminalReturnFocusRef.current = null;
+    setTerminalHost(null);
+    window.setTimeout(() => {
+      if (returnFocus && document.contains(returnFocus)) returnFocus.focus({ preventScroll: true });
+    }, 0);
+  }
+
   return (
     <AuthorizationProvider role={user.role}>
     <main className={`appShell ${isSidebarCollapsed ? "sidebarCollapsed" : ""}`}>
@@ -405,9 +427,16 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
             <span className="buttonText">Host</span>
           </button>
         )}
-        {authorization.canOperate && showHostForm && <HostForm runJob={runJob} onCreated={() => { setShowHostForm(false); void refresh(); }} />}
+        {authorization.canOperate && showHostForm && <HostForm runJob={runJob} onCreated={() => { setShowHostForm(false); void refresh().catch(() => undefined); }} />}
 
-        <SideNavigation currentTab={tab} hasHost={Boolean(selectedHost)} onTabChange={setTab} />
+        <SideNavigation
+          currentTab={tab}
+          hasHost={Boolean(selectedHost)}
+          onTabChange={(nextTab) => {
+            setTab(nextTab);
+            setIsSidebarOpen(false);
+          }}
+        />
       </aside>
 
       <section className="workspace">
@@ -475,7 +504,7 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
               <button
                 type="button"
                 className="topbarRefresh"
-                onClick={() => void refresh()}
+                onClick={() => void refresh().catch(() => undefined)}
                 disabled={refreshing}
                 title="Refresh data (r)"
                 aria-label="Refresh data"
@@ -487,16 +516,16 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
         </header>
 
         {loadError && (
-          <div className="notice error noticeRow">
+          <div className="notice error noticeRow" role="alert">
             <span>Could not load dashboard data: {loadError}</span>
-            <button type="button" onClick={() => void refresh()} disabled={refreshing}>
+            <button type="button" onClick={() => void refresh().catch(() => undefined)} disabled={refreshing}>
               <RefreshCw size={14} className={refreshing ? "spin" : undefined} />
               Retry
             </button>
           </div>
         )}
-        {selectedHost?.lastError && <div className="notice error">{selectedHost.lastError}</div>}
-        {action.error && <div className="notice error">{action.error}</div>}
+        {selectedHost?.lastError && <div className="notice error" role="alert">{selectedHost.lastError}</div>}
+        {action.error && <div className="notice error" role="alert">{action.error}</div>}
         {activity && (
           <div className="activityBanner">
             <RefreshCw className="spin" size={16} />
@@ -532,7 +561,6 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
                       if (query) setResourceListQuery((current) => ({ query, key: current.key + 1 }));
                       setTab("containers");
                     }}
-                    onOpenCompose={() => setTab("compose")}
                     optimisticContainerStates={optimisticContainerStates}
                     transitioningContainerIds={transitioningContainerIds}
                     onSetOptimisticStates={setOptimisticStates}
@@ -572,7 +600,7 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
                       setTab("host-metrics");
                     }}
                     onOpenAdmin={() => setTab("admin")}
-                    onOpenTerminal={setTerminalHost}
+                    onOpenTerminal={openHostTerminal}
                   />
                 )}
                 {tab === "ssh" && (
@@ -590,7 +618,7 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
                       setHostScope("selected");
                       setTab("admin");
                     }}
-                    onOpenTerminal={setTerminalHost}
+                    onOpenTerminal={openHostTerminal}
                     refresh={refresh}
                     runJob={runJob}
                   />
@@ -631,7 +659,6 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
                     refresh={refresh}
                   />
                 )}
-                {tab === "compose" && selectedHost && <ComposePanel host={selectedHost} hosts={hosts} stacks={stacks} refresh={refresh} runJob={runJob} />}
                 {tab === "learn" && <LearnPanel />}
                 {recoverySection && (
                   <RecoveryCenterPanel
@@ -670,7 +697,7 @@ export function Dashboard({ user, theme, onToggleTheme, onLogout }: { user: Admi
       {authorization.canUseTerminal && terminalHost && (
         <ErrorBoundary resetKey={terminalHost.id} title="The host terminal failed to load">
           <Suspense fallback={<div className="drawer hostTerminalDrawer"><div className="notice">Loading host terminal...</div></div>}>
-            <HostTerminalDrawer host={terminalHost} onClose={() => setTerminalHost(null)} />
+            <HostTerminalDrawer host={terminalHost} onClose={closeHostTerminal} />
           </Suspense>
         </ErrorBoundary>
       )}

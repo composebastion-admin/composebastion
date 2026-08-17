@@ -2,18 +2,18 @@ name: Publish Images
 
 on:
   push:
-    branches: [main]
+    branches: [main, beta, dev]
     tags:
       - "v*"
   pull_request:
-    branches: [main]
+    branches: [main, beta, dev]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  # Main and tag workflows mutate the same registry aliases, so serialize every
+  # Public branch and tag workflows mutate registry aliases, so serialize every
   # publication. PR-only scans retain independent, cancelable groups.
   group: ${{ github.event_name == 'pull_request' && format('publish-images-pr-{0}', github.ref) || 'publish-images-publication' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -22,6 +22,7 @@ env:
   REGISTRY: ghcr.io
   APP_IMAGE: ghcr.io/${{ github.repository_owner }}/composebastion-app
   AGENT_IMAGE: ghcr.io/${{ github.repository_owner }}/composebastion-agent
+  SYFT_IMAGE: ghcr.io/anchore/syft:v1.50.0@sha256:1288ea4c8b38767b4e620c1e312c8cb26b6e887a99b4f07ab6cd19fc6f225026
 
 jobs:
   metadata:
@@ -41,6 +42,12 @@ jobs:
         with:
           node-version: "24"
 
+      - name: Install integrity-pinned npm
+        run: node scripts/bootstrap-npm.mjs
+
+      - name: Enforce container configuration policy
+        run: npm run check:container-config
+
       - name: Validate aligned release metadata
         run: node scripts/check-release-version.mjs
 
@@ -51,10 +58,19 @@ jobs:
           set -euo pipefail
           version="$(node -p "require('./package.json').version")"
           created="$(git show -s --format=%cI "${GITHUB_SHA}")"
+          if [[ "${GITHUB_REF}" = refs/heads/main && "${version}" == *-* ]]; then
+            echo "::error::The main image alias cannot publish prerelease version ${version}."
+            exit 1
+          fi
+          if [[ "${GITHUB_REF}" = refs/heads/beta && "${version}" != *-* ]]; then
+            echo "::error::The beta image alias requires an explicit prerelease version, got ${version}."
+            exit 1
+          fi
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
           echo "created=${created}" >> "${GITHUB_OUTPUT}"
 
       - name: Validate stable release tag
+        id: stable-tag
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
@@ -74,6 +90,7 @@ jobs:
             echo "::error::Release tag commit is not reachable from origin/main."
             exit 1
           fi
+          echo "stable=true" >> "${GITHUB_OUTPUT}"
 
   build-scan:
     name: Build and scan ${{ matrix.component }} ${{ matrix.arch }}
@@ -175,13 +192,26 @@ jobs:
             layer_blob="blobs/sha256/${layer_digest#sha256:}"
             test "${layer_digest}" = "sha256:$(tar -xOf "${archive}" "${layer_blob}" | sha256sum | cut -d' ' -f1)"
           done
+          if [ "${{ matrix.component }}" = app ]; then
+            expected_title="ComposeBastion"
+          else
+            expected_title="ComposeBastion Agent"
+          fi
           jq -e \
             --arg arch "${{ matrix.arch }}" \
+            --arg title "${expected_title}" \
+            --arg source "https://github.com/composebastion-admin/composebastion" \
+            --arg license "LicenseRef-ComposeBastion-SourceAvailable-PrivateUse-1.0" \
             --arg version "${EXPECTED_VERSION}" \
             --arg revision "${EXPECTED_REVISION}" \
             --arg created "${EXPECTED_CREATED}" \
             '.os == "linux"
              and .architecture == $arch
+             and .config.Labels["org.opencontainers.image.title"] == $title
+             and .config.Labels["org.opencontainers.image.url"] == $source
+             and .config.Labels["org.opencontainers.image.source"] == $source
+             and .config.Labels["org.opencontainers.image.vendor"] == "ComposeBastion Admin"
+             and .config.Labels["org.opencontainers.image.licenses"] == $license
              and .config.Labels["org.opencontainers.image.version"] == $version
              and .config.Labels["org.opencontainers.image.revision"] == $revision
              and .config.Labels["org.opencontainers.image.created"] == $created' \
@@ -212,6 +242,40 @@ jobs:
           vuln-type: "os,library"
           severity: "HIGH,CRITICAL"
 
+      - name: Generate an SPDX SBOM from the exact passing OCI layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          layout="/tmp/release-${{ matrix.component }}-${{ matrix.arch }}-oci"
+          sbom="/tmp/release-${{ matrix.component }}-${{ matrix.arch }}.spdx.json"
+          metadata="/tmp/release-${{ matrix.component }}-${{ matrix.arch }}.json"
+          sbom_output_root="$(mktemp -d)"
+          trap 'rm -rf "${sbom_output_root}"' EXIT
+          sbom_name="$(basename "${sbom}")"
+          generated_sbom="${sbom_output_root}/${sbom_name}"
+          docker run --rm --pull=always \
+            --volume "${layout}:/image:ro" \
+            --volume "${sbom_output_root}:/out" \
+            "${SYFT_IMAGE}" \
+            scan "oci-dir:/image" \
+            --output "spdx-json=/out/${sbom_name}"
+          test -f "${generated_sbom}"
+          test ! -L "${generated_sbom}"
+          jq -e '
+            (.spdxVersion | startswith("SPDX-2."))
+            and (.SPDXID == "SPDXRef-DOCUMENT")
+            and (.name | type == "string" and length > 0)
+            and (.documentNamespace | type == "string" and test("^https://"))
+            and (.packages | type == "array" and length > 0)
+          ' "${generated_sbom}" >/dev/null
+          install -m 0644 "${generated_sbom}" "${sbom}"
+          sbom_sha256="$(sha256sum "${sbom}" | cut -d' ' -f1)"
+          jq \
+            --arg sbomSha256 "${sbom_sha256}" \
+            '. + {sbomFormat:"spdx-json",sbomSha256:$sbomSha256}' \
+            "${metadata}" > "${metadata}.tmp"
+          mv "${metadata}.tmp" "${metadata}"
+
       - name: Upload passing release archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -219,6 +283,7 @@ jobs:
           path: |
             /tmp/release-${{ matrix.component }}-${{ matrix.arch }}.tar
             /tmp/release-${{ matrix.component }}-${{ matrix.arch }}.json
+            /tmp/release-${{ matrix.component }}-${{ matrix.arch }}.spdx.json
           retention-days: 1
           if-no-files-found: error
           overwrite: true
@@ -246,15 +311,24 @@ jobs:
             test "${RESCAN_RESULT}" = skipped
           fi
 
-  publish-main:
-    name: Publish scanned main images
-    if: ${{ always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' }}
+  publish-branch:
+    name: Publish scanned branch images
+    # The aggregate gate deliberately needs a skipped tag-only job on branch
+    # runs. always() prevents that skip from propagating while the explicit
+    # success predicates keep every mutating dependency fail-closed.
+    if: ${{ always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/beta') && needs.metadata.result == 'success' && needs.build-scan.result == 'success' && needs.release-image-gate.result == 'success' }}
     needs: [metadata, build-scan, release-image-gate]
     permissions:
+      attestations: write
+      artifact-metadata: write
       contents: read
+      id-token: write
       packages: write
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout release evidence policy
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
       - name: Download all passing archives
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -266,7 +340,7 @@ jobs:
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Log in to GHCR
-        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -287,8 +361,10 @@ jobs:
             for arch in amd64 arm64; do
               archive="/tmp/release-images/release-${component}-${arch}.tar"
               metadata="/tmp/release-images/release-${component}-${arch}.json"
+              sbom="/tmp/release-images/release-${component}-${arch}.spdx.json"
               test -f "${archive}"
               test -f "${metadata}"
+              test -f "${sbom}"
               jq -e \
                 --arg component "${component}" \
                 --arg arch "${arch}" \
@@ -305,20 +381,57 @@ jobs:
                 "${metadata}" >/dev/null
               expected_archive_sha="$(jq -er .archiveSha256 "${metadata}")"
               expected_digest="$(jq -er .manifestDigest "${metadata}")"
+              expected_sbom_sha="$(jq -er '.sbomSha256 | select(test("^[a-f0-9]{64}$"))' "${metadata}")"
+              test "$(jq -er .sbomFormat "${metadata}")" = spdx-json
               test "$(sha256sum "${archive}" | cut -d' ' -f1)" = "${expected_archive_sha}"
+              test "$(sha256sum "${sbom}" | cut -d' ' -f1)" = "${expected_sbom_sha}"
 
-              platform_tag="run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${arch}"
-              if remote_digest="$(skopeo inspect --authfile "${authfile}" --format '{{.Digest}}' "docker://${image}:${platform_tag}" 2>/dev/null)"; then
-                if [ "${remote_digest}" != "${expected_digest}" ]; then
-                  echo "::error::Run-scoped tag ${image}:${platform_tag} already points to ${remote_digest}, expected ${expected_digest}."
-                  exit 1
-                fi
-              else
-                skopeo copy --authfile "${authfile}" --preserve-digests \
-                  "oci-archive:${archive}" "docker://${image}:${platform_tag}"
-              fi
-              remote_digest="$(skopeo inspect --authfile "${authfile}" --format '{{.Digest}}' "docker://${image}:${platform_tag}")"
+              platform_tag="sha-${GITHUB_SHA}-${arch}"
+              set +e
+              remote_digest="$(bash scripts/inspect-registry-reference.sh \
+                skopeo "${authfile}" "${image}:${platform_tag}")"
+              inspection_status=$?
+              set -e
+              case "${inspection_status}" in
+                0)
+                  if [ "${remote_digest}" != "${expected_digest}" ]; then
+                    echo "::error::Commit platform tag ${image}:${platform_tag} already points to ${remote_digest}, expected ${expected_digest}."
+                    exit 1
+                  fi
+                  ;;
+                3)
+                  skopeo copy --authfile "${authfile}" --preserve-digests \
+                    "oci-archive:${archive}" "docker://${image}:${platform_tag}"
+                  ;;
+                *)
+                  echo "::error::Could not prove whether immutable platform tag ${image}:${platform_tag} exists; refusing to publish."
+                  exit "${inspection_status}"
+                  ;;
+              esac
+              remote_digest="$(bash scripts/inspect-registry-reference.sh \
+                skopeo "${authfile}" "${image}:${platform_tag}")"
               test "${remote_digest}" = "${expected_digest}"
+            done
+          done
+
+      - name: Verify every published platform label and legal root filesystem
+        shell: bash
+        env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+          CREATED: ${{ needs.metadata.outputs.created }}
+        run: |
+          set -euo pipefail
+          for component in app agent; do
+            if [ "${component}" = app ]; then image="${APP_IMAGE}"; else image="${AGENT_IMAGE}"; fi
+            for arch in amd64 arm64; do
+              digest="$(jq -er .manifestDigest "/tmp/release-images/release-${component}-${arch}.json")"
+              bash scripts/verify-published-image.sh \
+                "${component}" \
+                "${arch}" \
+                "${image}@${digest}" \
+                "${VERSION}" \
+                "${GITHUB_SHA}" \
+                "${CREATED}"
             done
           done
 
@@ -332,14 +445,27 @@ jobs:
             amd64_digest="$(jq -er .manifestDigest "/tmp/release-images/release-${component}-amd64.json")"
             arm64_digest="$(jq -er .manifestDigest "/tmp/release-images/release-${component}-arm64.json")"
             index="${image}:sha-${GITHUB_SHA}"
-            if ! docker buildx imagetools inspect "${index}" >/dev/null 2>&1; then
-              docker buildx imagetools create \
-                --tag "${index}" \
-                "${image}:run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-amd64" \
-                "${image}:run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-arm64"
-            fi
-            descriptor="$(docker buildx imagetools inspect "${index}" --format '{{json .Manifest}}')"
-            index_digest="$(jq -er '.digest | select(test("^sha256:[a-f0-9]{64}$"))' <<<"${descriptor}")"
+            set +e
+            existing_index_digest="$(bash scripts/inspect-registry-reference.sh buildx "${index}")"
+            inspection_status=$?
+            set -e
+            case "${inspection_status}" in
+              0)
+                printf 'Immutable index %s already exists at %s.\n' \
+                  "${index}" "${existing_index_digest}"
+                ;;
+              3)
+                docker buildx imagetools create \
+                  --tag "${index}" \
+                  "${image}@${amd64_digest}" \
+                  "${image}@${arm64_digest}"
+                ;;
+              *)
+                echo "::error::Could not prove whether immutable index ${index} exists; refusing to publish."
+                exit "${inspection_status}"
+                ;;
+            esac
+            index_digest="$(bash scripts/inspect-registry-reference.sh buildx "${index}")"
             raw="$(docker buildx imagetools inspect --raw "${image}@${index_digest}")"
             jq -e \
               --arg amd64 "${amd64_digest}" \
@@ -349,26 +475,106 @@ jobs:
                and ([.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest] == [$amd64])
                and ([.manifests[] | select(.platform.os == "linux" and .platform.architecture == "arm64") | .digest] == [$arm64])' \
               <<<"${raw}" >/dev/null
-            echo "${component}_digest=${index_digest}" >> "${GITHUB_OUTPUT}"
+            {
+              echo "${component}_digest=${index_digest}"
+              echo "${component}_amd64_digest=${amd64_digest}"
+              echo "${component}_arm64_digest=${arm64_digest}"
+            } >> "${GITHUB_OUTPUT}"
           done
 
-      - name: Apply main aliases after both immutable indexes exist
+      - name: Attest app index build provenance
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-name: ${{ env.APP_IMAGE }}
+          subject-digest: ${{ steps.indexes.outputs.app_digest }}
+          subject-version: ${{ needs.metadata.outputs.version }}
+          push-to-registry: true
+
+      - name: Attest agent index build provenance
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-name: ${{ env.AGENT_IMAGE }}
+          subject-digest: ${{ steps.indexes.outputs.agent_digest }}
+          subject-version: ${{ needs.metadata.outputs.version }}
+          push-to-registry: true
+
+      - name: Attest app amd64 SBOM
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-name: ${{ env.APP_IMAGE }}
+          subject-digest: ${{ steps.indexes.outputs.app_amd64_digest }}
+          sbom-path: /tmp/release-images/release-app-amd64.spdx.json
+          push-to-registry: true
+
+      - name: Attest app arm64 SBOM
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-name: ${{ env.APP_IMAGE }}
+          subject-digest: ${{ steps.indexes.outputs.app_arm64_digest }}
+          sbom-path: /tmp/release-images/release-app-arm64.spdx.json
+          push-to-registry: true
+
+      - name: Attest agent amd64 SBOM
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-name: ${{ env.AGENT_IMAGE }}
+          subject-digest: ${{ steps.indexes.outputs.agent_amd64_digest }}
+          sbom-path: /tmp/release-images/release-agent-amd64.spdx.json
+          push-to-registry: true
+
+      - name: Attest agent arm64 SBOM
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-name: ${{ env.AGENT_IMAGE }}
+          subject-digest: ${{ steps.indexes.outputs.agent_arm64_digest }}
+          sbom-path: /tmp/release-images/release-agent-arm64.spdx.json
+          push-to-registry: true
+
+      - name: Reconcile branch alias to the attested image pair
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
+          LEGACY_ALIAS_BOOTSTRAP_POLICY: .github/legacy-alias-bootstrap.json
           APP_INDEX_DIGEST: ${{ steps.indexes.outputs.app_digest }}
           AGENT_INDEX_DIGEST: ${{ steps.indexes.outputs.agent_digest }}
+          VERSION: ${{ needs.metadata.outputs.version }}
         run: |
           set -euo pipefail
-          for image in "${APP_IMAGE}" "${AGENT_IMAGE}"; do
-            if [ "${image}" = "${APP_IMAGE}" ]; then digest="${APP_INDEX_DIGEST}"; else digest="${AGENT_INDEX_DIGEST}"; fi
-            docker buildx imagetools create --tag "${image}:main" "${image}@${digest}"
-          done
+          mode="branch"
+          aliases=("${GITHUB_REF_NAME}")
+          if [[ "${GITHUB_REF}" = refs/heads/beta ]]; then
+            if [[ "${VERSION}" != *-* ]]; then
+              echo "::error::The beta branch must publish an explicit SemVer prerelease version."
+              exit 1
+            fi
+            mode="beta"
+            aliases+=("${VERSION}")
+          fi
+          bash scripts/reconcile-image-alias-pair.sh \
+            /tmp/branch-alias-reconciliation.json \
+            "${mode}" \
+            "${APP_IMAGE}" \
+            "${AGENT_IMAGE}" \
+            "${APP_INDEX_DIGEST}" \
+            "${AGENT_INDEX_DIGEST}" \
+            "${aliases[@]}"
+
+      - name: Upload paired branch-alias reconciliation evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: branch-alias-reconciliation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: /tmp/branch-alias-reconciliation.json
+          retention-days: 90
+          if-no-files-found: error
+          overwrite: true
 
   rescan-tag-images:
     name: Rescan tagged ${{ matrix.component }} ${{ matrix.arch }}
     if: ${{ always() && startsWith(github.ref, 'refs/tags/') }}
     needs: metadata
     permissions:
+      attestations: read
       contents: read
       packages: read
     runs-on: ubuntu-latest
@@ -392,7 +598,7 @@ jobs:
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Log in to GHCR for immutable image reads
-        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -413,9 +619,11 @@ jobs:
              and ([.manifests[] | "\(.platform.os)/\(.platform.architecture)"] | sort) == ["linux/amd64", "linux/arm64"]' \
             <<<"${raw}" >/dev/null
           digest="$(jq -er --arg arch "${{ matrix.arch }}" '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == $arch) | .digest] | if length == 1 then .[0] else error("expected exactly one platform digest") end' <<<"${raw}")"
-          echo "reference=${image}@${digest}" >> "${GITHUB_OUTPUT}"
-          echo "index_digest=${index_digest}" >> "${GITHUB_OUTPUT}"
-          echo "platform_digest=${digest}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "reference=${image}@${digest}"
+            echo "index_digest=${index_digest}"
+            echo "platform_digest=${digest}"
+          } >> "${GITHUB_OUTPUT}"
 
       - name: Verify immutable image labels
         shell: bash
@@ -426,9 +634,68 @@ jobs:
         run: |
           set -euo pipefail
           docker pull --platform "linux/${{ matrix.arch }}" "${IMAGE_REFERENCE}"
+          if [ "${{ matrix.component }}" = app ]; then
+            expected_title="ComposeBastion"
+          else
+            expected_title="ComposeBastion Agent"
+          fi
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.title" }}' "${IMAGE_REFERENCE}")" = "${expected_title}"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.url" }}' "${IMAGE_REFERENCE}")" = "https://github.com/composebastion-admin/composebastion"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.source" }}' "${IMAGE_REFERENCE}")" = "https://github.com/composebastion-admin/composebastion"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.vendor" }}' "${IMAGE_REFERENCE}")" = "ComposeBastion Admin"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.licenses" }}' "${IMAGE_REFERENCE}")" = "LicenseRef-ComposeBastion-SourceAvailable-PrivateUse-1.0"
           test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "${IMAGE_REFERENCE}")" = "${VERSION}"
           test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "${IMAGE_REFERENCE}")" = "${GITHUB_SHA}"
           test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.created" }}' "${IMAGE_REFERENCE}")" = "${CREATED}"
+          legal_dir="$(mktemp -d)"
+          container_id=""
+          cleanup() {
+            if [ -n "${container_id}" ]; then docker rm -f "${container_id}" >/dev/null 2>&1 || true; fi
+            rm -rf "${legal_dir}"
+          }
+          trap cleanup EXIT
+          container_id="$(docker create "${IMAGE_REFERENCE}")"
+          docker cp "${container_id}:/licenses/." "${legal_dir}/"
+          for artifact in \
+            LICENSE.md \
+            LICENSING_SUMMARY.md \
+            COMMERCIAL-LICENSE.md \
+            NOTICE.md \
+            THIRD-PARTY-NOTICES.md \
+            TRADEMARKS.md; do
+            cmp "${artifact}" "${legal_dir}/${artifact}"
+          done
+          cmp LICENSES/go-modules/manifest.json "${legal_dir}/LICENSES/go-modules/manifest.json"
+          cmp LICENSES/go-modules/manifest.json "${legal_dir}/third-party/go-modules/manifest.json"
+          if [ "${{ matrix.component }}" = app ]; then
+            required_third_party=(
+              trivy-LICENSE.txt
+              trivy-NOTICE.txt
+              oras-go-LICENSE.txt
+              rclone-LICENSE.txt
+              go-LICENSE.txt
+              go-PATENTS.txt
+              go-buildinfo/trivy.modules.tsv
+              go-buildinfo/trivy.artifacts.sha256
+              go-buildinfo/rclone.modules.tsv
+              go-buildinfo/rclone.artifacts.sha256
+            )
+          else
+            required_third_party=(
+              docker-cli-LICENSE.txt
+              docker-cli-NOTICE.txt
+              docker-compose-LICENSE.txt
+              docker-compose-NOTICE.txt
+              go-LICENSE.txt
+              go-PATENTS.txt
+              go-buildinfo/docker-cli.modules.tsv
+              go-buildinfo/docker-compose.modules.tsv
+              go-buildinfo/agent.artifacts.sha256
+            )
+          fi
+          for artifact in "${required_third_party[@]}"; do
+            test -s "${legal_dir}/third-party/${artifact}"
+          done
 
       - name: Scan immutable published digest
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
@@ -441,6 +708,20 @@ jobs:
           ignore-unfixed: false
           vuln-type: "os,library"
           severity: "HIGH,CRITICAL"
+
+      - name: Verify the published platform SBOM attestation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_REFERENCE: ${{ steps.image.outputs.reference }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          signer_workflow="${GITHUB_SERVER_URL#https://}/${GITHUB_REPOSITORY}/.github/workflows/publish-images.yml"
+          gh attestation verify "oci://${IMAGE_REFERENCE}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --predicate-type https://spdx.dev/Document/v2.3 \
+            --signer-workflow "${signer_workflow}" \
+            --source-digest "${GITHUB_SHA}"
 
       - name: Record the exact passing index and platform digests
         shell: bash
@@ -467,18 +748,25 @@ jobs:
 
   promote-tag:
     name: Promote verified stable image indexes
-    if: ${{ always() && startsWith(github.ref, 'refs/tags/') }}
-    needs: [metadata, release-image-gate]
+    # The aggregate gate deliberately needs the skipped branch-build job on a
+    # tag run, so retain explicit success predicates when overriding skip
+    # propagation for the stable mutation.
+    if: ${{ always() && startsWith(github.ref, 'refs/tags/') && needs.metadata.result == 'success' && needs.rescan-tag-images.result == 'success' && needs.release-image-gate.result == 'success' }}
+    needs: [metadata, rescan-tag-images, release-image-gate]
     permissions:
+      attestations: read
       contents: read
       packages: write
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout release evidence policy
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Log in to GHCR
-        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -494,6 +782,8 @@ jobs:
       - name: Verify both immutable indexes before promotion
         id: images
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           mapfile -t records < <(find /tmp/tag-rescans -maxdepth 1 -type f -name 'tag-rescan-*.json' -print | sort)
@@ -512,41 +802,48 @@ jobs:
              and ([.[] | select(.component == "app") | .platformDigest] | unique | length) == 2
              and ([.[] | select(.component == "agent") | .platformDigest] | unique | length) == 2' \
             "${records[@]}" >/dev/null
+          signer_workflow="${GITHUB_SERVER_URL#https://}/${GITHUB_REPOSITORY}/.github/workflows/publish-images.yml"
           for component in app agent; do
             if [ "${component}" = app ]; then image="${APP_IMAGE}"; else image="${AGENT_IMAGE}"; fi
             expected="$(jq -sr --arg component "${component}" '[.[] | select(.component == $component) | .indexDigest] | unique | if length == 1 then .[0] else error("index digest disagreement") end' "${records[@]}")"
             current="$(docker buildx imagetools inspect "${image}:sha-${GITHUB_SHA}" --format '{{json .Manifest}}' | jq -er '.digest')"
             test "${current}" = "${expected}"
+            gh attestation verify "oci://${image}@${expected}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --signer-workflow "${signer_workflow}" \
+              --source-digest "${GITHUB_SHA}"
             echo "${component}_digest=${expected}" >> "${GITHUB_OUTPUT}"
           done
 
-      - name: Apply stable aliases after all scans pass
+      - name: Reconcile stable aliases to the attested image pair
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
+          LEGACY_ALIAS_BOOTSTRAP_POLICY: .github/legacy-alias-bootstrap.json
           VERSION: ${{ needs.metadata.outputs.version }}
           APP_INDEX_DIGEST: ${{ steps.images.outputs.app_digest }}
           AGENT_INDEX_DIGEST: ${{ steps.images.outputs.agent_digest }}
         run: |
           set -euo pipefail
           minor="${VERSION%.*}"
-          for image in "${APP_IMAGE}" "${AGENT_IMAGE}"; do
-            if [ "${image}" = "${APP_IMAGE}" ]; then digest="${APP_INDEX_DIGEST}"; else digest="${AGENT_INDEX_DIGEST}"; fi
-            source="${image}@${digest}"
-            docker buildx imagetools create --tag "${image}:${VERSION}" "${source}"
-          done
-          for image in "${APP_IMAGE}" "${AGENT_IMAGE}"; do
-            if [ "${image}" = "${APP_IMAGE}" ]; then digest="${APP_INDEX_DIGEST}"; else digest="${AGENT_INDEX_DIGEST}"; fi
-            source="${image}@${digest}"
-            docker buildx imagetools create --tag "${image}:v${VERSION}" "${source}"
-          done
-          for image in "${APP_IMAGE}" "${AGENT_IMAGE}"; do
-            if [ "${image}" = "${APP_IMAGE}" ]; then digest="${APP_INDEX_DIGEST}"; else digest="${AGENT_INDEX_DIGEST}"; fi
-            source="${image}@${digest}"
-            docker buildx imagetools create --tag "${image}:${minor}" "${source}"
-          done
-          # Move latest only after both components have every stable version alias.
-          for image in "${APP_IMAGE}" "${AGENT_IMAGE}"; do
-            if [ "${image}" = "${APP_IMAGE}" ]; then digest="${APP_INDEX_DIGEST}"; else digest="${AGENT_INDEX_DIGEST}"; fi
-            source="${image}@${digest}"
-            docker buildx imagetools create --tag "${image}:latest" "${source}"
-          done
+          bash scripts/reconcile-image-alias-pair.sh \
+            /tmp/stable-alias-reconciliation.json \
+            stable \
+            "${APP_IMAGE}" \
+            "${AGENT_IMAGE}" \
+            "${APP_INDEX_DIGEST}" \
+            "${AGENT_INDEX_DIGEST}" \
+            "${VERSION}" \
+            "v${VERSION}" \
+            "${minor}" \
+            latest
+
+      - name: Upload paired stable-alias reconciliation evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: stable-alias-reconciliation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: /tmp/stable-alias-reconciliation.json
+          retention-days: 90
+          if-no-files-found: error
+          overwrite: true

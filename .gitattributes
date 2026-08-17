@@ -1,0 +1,3 @@
+# Preserve reviewed third-party legal texts byte-for-byte. Upstream whitespace
+# and line endings are part of the checksummed attribution evidence.
+LICENSES/go-modules/texts/** -whitespace

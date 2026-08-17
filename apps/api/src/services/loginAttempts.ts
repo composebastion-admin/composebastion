@@ -1,4 +1,5 @@
-import { query } from "../db/pool.js";
+import type { PoolClient } from "pg";
+import { query, withTransaction } from "../db/pool.js";
 
 const WINDOW_MS = 15 * 60 * 1000;
 const MAX_IP_FAILURES = 10;
@@ -24,11 +25,19 @@ export function isLoginLockedForSnapshot(snapshot: LoginFailureSnapshot) {
     (snapshot.identifierFailures >= MAX_IDENTIFIER_FAILURES && snapshot.identifierDistinctIps >= MIN_IDENTIFIER_LOCK_IPS);
 }
 
-export async function recordLoginAttempt(identifier: string, ipAddress: string, success: boolean) {
-  await query(
-    `INSERT INTO login_attempts (identifier, ip_address, success) VALUES ($1, $2, $3)`,
-    [normalizeIdentifier(identifier), normalizeIpAddress(ipAddress), success]
-  );
+export async function recordLoginAttempt(
+  identifier: string,
+  ipAddress: string,
+  success: boolean,
+  onRecorded?: (client: PoolClient) => Promise<void>
+) {
+  return withTransaction(async (client) => {
+    await client.query(
+      `INSERT INTO login_attempts (identifier, ip_address, success) VALUES ($1, $2, $3)`,
+      [normalizeIdentifier(identifier), normalizeIpAddress(ipAddress), success]
+    );
+    await onRecorded?.(client);
+  });
 }
 
 export async function isLoginLocked(identifier: string, ipAddress: string) {
@@ -40,11 +49,11 @@ export async function isLoginLocked(identifier: string, ipAddress: string) {
   }>(
     `SELECT
        count(*) FILTER (WHERE COALESCE(ip_address, 'unknown') = $2)::text AS ip_failures,
-       count(*)::text AS identifier_failures,
-       count(DISTINCT COALESCE(ip_address, 'unknown'))::text AS identifier_distinct_ips
+       count(*) FILTER (WHERE lower(identifier) = lower($1))::text AS identifier_failures,
+       count(DISTINCT COALESCE(ip_address, 'unknown'))
+         FILTER (WHERE lower(identifier) = lower($1))::text AS identifier_distinct_ips
      FROM login_attempts
-     WHERE lower(identifier) = lower($1)
-       AND success = false
+     WHERE success = false
        AND attempted_at >= $3`,
     [normalizeIdentifier(identifier), normalizeIpAddress(ipAddress), since]
   );
