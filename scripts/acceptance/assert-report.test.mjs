@@ -15,7 +15,6 @@ const escapedBridgeVersion = acceptanceUpgradeBridge.version.replaceAll(".", "\\
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const assertionScript = path.join(root, "scripts/acceptance/assert-report.mjs");
 const acceptanceResultsDir = path.join(root, "test-results", "acceptance");
-const goManifest = JSON.parse(await readFile(path.join(root, "LICENSES/go-modules/manifest.json"), "utf8"));
 const headSha = "0123456789abcdef0123456789abcdef01234567";
 const treeSha = "89abcdef0123456789abcdef0123456789abcdef";
 const contextDigest = `sha256:${"ab".repeat(32)}`;
@@ -106,17 +105,6 @@ function passingReport() {
       upgrade.detail.rollbackReupgradeHealthy = true;
     }
   }
-  const goGate = goManifest.review?.status === "approved"
-    ? {
-        id: "go-module-legal-review",
-        status: "approved",
-        detail: `Approved by ${goManifest.review.approvedBy} at ${goManifest.review.approvedAt}`
-      }
-    : {
-        id: "go-module-legal-review",
-        status: "manual-required",
-        detail: "Review linked Go module inventories"
-      };
   return {
     candidateVersion: "1.2.0-beta.1",
     status: "passed",
@@ -126,8 +114,7 @@ function passingReport() {
       nonqualifyingReasons: [],
       deferredGates: [
         { id: "real-nas", status: "manual-required", detail: "external fixture" },
-        { id: "real-cloud", status: "manual-required", detail: "external fixture" },
-        goGate
+        { id: "real-cloud", status: "manual-required", detail: "external fixture" }
       ]
     },
     acceptanceManifest: acceptanceScenarioManifest,

@@ -16,11 +16,8 @@ Each image records deterministic linked Go module inventories under
 upstream license/notice texts, SPDX classification candidates, and SHA-256
 checksums under `/licenses/third-party/go-modules/`. Image builds fail if the
 linked inventory differs from that bundle or a required text is missing.
-**Legal review status: pending.** Automated collection and classification are
-review evidence, not qualified legal approval; that dated approval remains a
-stable-release gate.
-The checked-in Go attribution manifest is the source of
-truth for this status and its approval evidence.
+The checked-in Go attribution manifest, required upstream texts, and checksums
+are the release evidence for these linked dependencies.
 
 | Component | Reviewed version/source | License | Image |
 |-----------|-------------------------|---------|-------|

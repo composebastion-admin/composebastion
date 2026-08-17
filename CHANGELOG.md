@@ -28,6 +28,8 @@
   verification of all four app/agent architecture archives before publication.
 - Promoted the beta.3 product source while rebuilding the independently
   versioned, scanned, and attested app/agent image pair with Go 1.26.6.
+- Replaced the manual Go-module approval gate with deterministic attribution,
+  license-text, SPDX, checksum, and linked-inventory verification.
 
 ### Fixed
 - Added one-shot storage and database initialization for the 1.2 runtime-user

@@ -162,7 +162,6 @@ COPY --from=trivy-builder /out/licenses/ /licenses/third-party/
 COPY --from=rclone-builder /out/licenses/ /licenses/third-party/
 COPY LICENSES/go-modules/ /licenses/third-party/go-modules/
 COPY scripts/go-attribution.mjs /tmp/go-attribution.mjs
-COPY scripts/go-attribution-review.mjs /tmp/go-attribution-review.mjs
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/apps/api/package.json ./apps/api/package.json
@@ -200,7 +199,7 @@ RUN set -eux; \
       --manifest /licenses/third-party/go-modules/manifest.json \
       --inventory trivy=/licenses/third-party/go-buildinfo/trivy.modules.tsv \
       --inventory rclone=/licenses/third-party/go-buildinfo/rclone.modules.tsv; \
-    rm /tmp/go-attribution.mjs /tmp/go-attribution-review.mjs
+    rm /tmp/go-attribution.mjs
 USER 1000:1000
 EXPOSE 8080
 CMD ["node", "apps/api/dist/server.js"]

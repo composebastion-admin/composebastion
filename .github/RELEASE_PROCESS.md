@@ -48,7 +48,7 @@ Run the same gates CI expects before release:
 - `npm run check:release-version`
 - `npm run check:public-hygiene`
 - `npm run check:gitleaks`
-- `npm run check:go-attribution:release`
+- `npm run check:go-attribution`
 - `npm run test:go-attribution-policy`
 - `npm run test:container-config-policy`
 - `npm run test:release-image-policy`
@@ -81,13 +81,13 @@ Run the same gates CI expects before release:
 - CodeQL, dependency review, container/image scanning, secret scanning, and
   image publishing checks when configured
 
-Go-module legal approval remains mandatory before `main` or stable-tag image
-publication. It is not a beta publication gate. Real NAS/cloud evidence is
+Automated Go-module attribution verification remains mandatory for every image:
+the linked inventories, upstream texts, SPDX classification candidates, and
+checksums must match the checked-in bundle. No separate manual approval is
+required for `main` or stable-tag publication. Real NAS/cloud evidence is
 collected against a published candidate and is mandatory before making a
 production-qualified claim. It does not block `main` promotion or a stable tag
-whose stated scope is homelab publication. Legal approval and applicable
-production evidence remain deferred for a non-publishing `dev` qualification;
-dev evidence alone is not valid for a public stable release.
+whose stated scope is homelab publication.
 
 ## Version Bumps
 
@@ -209,8 +209,7 @@ dev evidence alone is not valid for a public stable release.
   checked-in manifest and verify the runtime texts and checksums under
   `/licenses/third-party/go-modules/`. Every consuming binary, source URL, SPDX
   expression, version/replacement, required license/notice file, and checksum
-  must be covered. Qualified legal approval must be dated; a pending review
-  blocks `main` and stable-tag publication.
+  must be covered by the automated attribution verification.
 - Keep `support@composebastion.com` as the private contact path for commercial
   licensing and written permission.
 
@@ -243,7 +242,7 @@ npm run openapi:check
 npm run check:release-version
 npm run check:public-hygiene
 npm run check:gitleaks
-npm run check:go-attribution:release
+npm run check:go-attribution
 npm run test:go-attribution-policy
 npm run test:container-config-policy
 npm run test:release-image-policy
@@ -325,10 +324,9 @@ full commit SHA and commit timestamp; and verified runtime legal-artifact
 digests. It does not replace the post-publication comparison of remote
 platform/index digests with the scanned digests.
 
-The strict attribution command above is required for `main` and stable-tag
-publication. A pending review may still be inspected locally and may accompany
-the explicitly prerelease `beta` channel, but it must not be published to
-`main` or a stable tag.
+The attribution command above is required for every release candidate. It
+validates the checked-in module inventory, SPDX expressions, required upstream
+texts, and checksums without a separate manual approval state.
 
 The pinned MinIO and Samba fixtures prove reproducible protocol behavior only.
 A real NAS and a real cloud/S3 target must still be tested and recorded manually

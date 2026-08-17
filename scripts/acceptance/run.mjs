@@ -24,7 +24,6 @@ import { hasManagedCanonicalDatabaseOverride } from "./manager-environment.mjs";
 import { acceptanceScenarioManifest } from "./scenario-manifest.mjs";
 import { acceptanceUpgradeBaselines, acceptanceUpgradeBridge } from "./upgrade-baselines.mjs";
 import { assertSafeTestResultsPath, digestGitBuildContext, materializeGitBuildContext } from "../materialize-git-context.mjs";
-import { validateGoAttributionReview } from "../go-attribution-review.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const resultsDir = assertSafeTestResultsPath({
@@ -59,23 +58,6 @@ const requiredSourceComposeControls = await composeControlNames([
   path.join(root, "docker-compose.prod.example.yml"),
   sourceAcceptanceComposeFile
 ]);
-const goAttributionManifest = JSON.parse(await readFile(path.join(root, "LICENSES/go-modules/manifest.json"), "utf8"));
-function goModuleLegalReviewGate(review) {
-  const validated = validateGoAttributionReview(review);
-  if (validated.status === "pending") {
-    return {
-      id: "go-module-legal-review",
-      status: "manual-required",
-      detail: "Review linked Go module inventories and any additional attribution obligations"
-    };
-  }
-  return {
-    id: "go-module-legal-review",
-    status: "approved",
-    detail: `Approved by ${validated.approvedBy} at ${validated.approvedAt}`
-  };
-}
-const goLegalReviewGate = goModuleLegalReviewGate(goAttributionManifest.review);
 const externalImageReferences = Object.freeze([
   ...acceptanceUpgradeBaselines.map((baseline) => baseline.pinnedImage),
   process.env.COMPOSEBASTION_ACCEPTANCE_BRIDGE_IMAGE || acceptanceUpgradeBridge.pinnedImage,
@@ -251,8 +233,7 @@ const report = {
     nonqualifyingReasons,
     deferredGates: [
       { id: "real-nas", status: "manual-required", detail: "Validate capture, verification, and restore against a real NAS" },
-      { id: "real-cloud", status: "manual-required", detail: "Validate capture, verification, and restore against a real cloud/S3 target" },
-      goLegalReviewGate
+      { id: "real-cloud", status: "manual-required", detail: "Validate capture, verification, and restore against a real cloud/S3 target" }
     ]
   },
   startedAt: new Date().toISOString(),

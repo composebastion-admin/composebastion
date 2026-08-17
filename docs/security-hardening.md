@@ -66,9 +66,9 @@ Use this checklist before exposing ComposeBastion outside a trusted private netw
 
 For a local release candidate, also run the full live acceptance suite and
 scan the app and agent for both supported architectures. Do not tag it until
-repository controls, security clearance, and qualified Go-attribution approval
-are verified. Real NAS and cloud/S3 evidence is required for production approval,
-not for a homelab publication claim.
+repository controls, security clearance, and automated Go-attribution
+verification are verified. Real NAS and cloud/S3 evidence is required for
+production approval, not for a homelab publication claim.
 
 ## Emergency Owner Recovery
 

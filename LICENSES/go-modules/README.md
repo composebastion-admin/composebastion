@@ -5,6 +5,6 @@ rclone, Docker CLI, and Docker Compose binaries shipped by ComposeBastion. The
 manifest maps every entry to its consuming binary, upstream source record, SPDX
 classification candidate, required license/notice texts, and SHA-256 checksums.
 
-The current legal-review status and any qualified approval evidence are recorded
-only in `manifest.json`, which is the source of truth. Automated classification
-and checksum verification are release evidence, not qualified legal approval.
+The checked-in manifest, required upstream texts, SPDX classification candidates,
+and checksums are the release attribution evidence. Image builds verify that the
+linked module inventories match this bundle before publication.

@@ -161,8 +161,7 @@ for (const fragment of [
   'rollbackDependenciesBypassed: true',
   'repoDigest',
   'real-nas',
-  'real-cloud',
-  'go-module-legal-review'
+  'real-cloud'
 ]) {
   if (!acceptanceContractSource.includes(fragment)) throw new Error(`Acceptance runner is missing release evidence invariant: ${fragment}`);
 }

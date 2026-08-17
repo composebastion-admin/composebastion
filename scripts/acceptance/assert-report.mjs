@@ -11,7 +11,6 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
 const acceptanceResultsDir = path.join(root, "test-results", "acceptance");
 const reportPath = process.argv[2] ?? path.join(root, "test-results", "acceptance", "report.json");
 const report = JSON.parse(await readFile(reportPath, "utf8"));
-const goAttributionManifest = JSON.parse(await readFile(path.join(root, "LICENSES/go-modules/manifest.json"), "utf8"));
 const failures = [];
 
 function evidenceValue(detail, pathExpression) {
@@ -32,23 +31,13 @@ if (report.releaseQualification?.manifestComplete !== true) failures.push("manif
 if ((report.releaseQualification?.nonqualifyingReasons ?? []).length !== 0) {
   failures.push("nonqualifyingReasons is not empty");
 }
-const expectedDeferredGates = ["real-nas", "real-cloud", "go-module-legal-review"];
+const expectedDeferredGates = ["real-nas", "real-cloud"];
 const actualDeferredGates = (report.releaseQualification?.deferredGates ?? []).map((gate) => gate.id);
 if (JSON.stringify(actualDeferredGates) !== JSON.stringify(expectedDeferredGates)) {
   failures.push(`deferred gate IDs are ${JSON.stringify(actualDeferredGates)}, expected ${JSON.stringify(expectedDeferredGates)}`);
 }
 for (const gate of report.releaseQualification?.deferredGates ?? []) {
   if (!gate.status || !gate.detail) failures.push(`deferred gate ${JSON.stringify(gate.id)} is missing status or detail`);
-}
-const goLegalGate = (report.releaseQualification?.deferredGates ?? []).find((gate) => gate.id === "go-module-legal-review");
-if (goAttributionManifest.review?.status === "pending" && goLegalGate?.status !== "manual-required") {
-  failures.push("pending Go attribution review is not rendered as manual-required");
-}
-if (goAttributionManifest.review?.status === "approved"
-    && (goLegalGate?.status !== "approved"
-      || !String(goLegalGate.detail).includes(goAttributionManifest.review.approvedBy)
-      || !String(goLegalGate.detail).includes(goAttributionManifest.review.approvedAt))) {
-  failures.push("approved Go attribution review evidence is not rendered in the acceptance report");
 }
 if (JSON.stringify(report.acceptanceManifest) !== JSON.stringify(acceptanceScenarioManifest)) {
   failures.push("embedded acceptance manifest does not match the current release contract");

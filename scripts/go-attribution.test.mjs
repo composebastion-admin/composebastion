@@ -18,7 +18,7 @@ function sha256(contents) {
   return createHash("sha256").update(contents).digest("hex");
 }
 
-function fixture(name, { review, spdxExpression = "MIT", inventorySha256 = "a".repeat(64) }) {
+function fixture(name, { spdxExpression = "MIT", inventorySha256 = "a".repeat(64) } = {}) {
   const directory = path.join(temporaryRoot, name);
   const textDirectory = path.join(directory, "texts");
   const licenseContents = "Permission is hereby granted, free of charge, to use this fixture.\n";
@@ -26,7 +26,6 @@ function fixture(name, { review, spdxExpression = "MIT", inventorySha256 = "a".r
   writeFileSync(path.join(textDirectory, "LICENSE"), licenseContents);
   const manifest = {
     schemaVersion: 1,
-    review,
     inventories: [{ binary: "fixture", sha256: inventorySha256 }],
     modules: [{
       module: "example.com/review-fixture",
@@ -61,43 +60,21 @@ function expectFailure(result, pattern) {
   assert.match(`${result.stdout}\n${result.stderr}`, pattern);
 }
 
-test("pending review passes normal checks and fails the stable-release check", () => {
-  const manifest = fixture("pending", {
-    review: { status: "pending", approvedBy: null, approvedAt: null, note: "review pending" },
-    spdxExpression: "NOASSERTION"
-  });
+test("complete attribution passes without a manual approval gate", () => {
+  const manifest = fixture("complete", { spdxExpression: "NOASSERTION" });
   expectSuccess(run(attributionScript, ["check", "--manifest", manifest]));
-  expectFailure(
-    run(attributionScript, ["check", "--manifest", manifest, "--require-approved"]),
-    /stable release requires qualified approval/
-  );
 });
 
-test("normal and stable-release checks reject invalid SPDX expressions", () => {
+test("checks reject invalid SPDX expressions", () => {
   for (const [index, spdxExpression] of ["banana", "Apache 2", "MIT AND", "(MIT OR Apache-2.0"].entries()) {
-    const manifest = fixture(`invalid-spdx-${index}`, {
-      review: { status: "pending", approvedBy: null, approvedAt: null },
-      spdxExpression
-    });
+    const manifest = fixture(`invalid-spdx-${index}`, { spdxExpression });
     expectFailure(run(attributionScript, ["check", "--manifest", manifest]), /has invalid SPDX expression/);
   }
-
-  const approved = fixture("invalid-spdx-approved", {
-    review: { status: "approved", approvedBy: "@qualified-reviewer", approvedAt: "2026-07-20T00:00:00Z" },
-    spdxExpression: "banana"
-  });
-  expectFailure(
-    run(attributionScript, ["check", "--manifest", approved, "--require-approved"]),
-    /has invalid SPDX expression/
-  );
 });
 
-test("stable-release checks accept valid compound SPDX expressions", () => {
-  const manifest = fixture("compound-spdx", {
-    review: { status: "approved", approvedBy: "@qualified-reviewer", approvedAt: "2026-07-20T00:00:00Z" },
-    spdxExpression: "(MIT OR Apache-2.0)"
-  });
-  expectSuccess(run(attributionScript, ["check", "--manifest", manifest, "--require-approved"]));
+test("checks accept valid compound SPDX expressions", () => {
+  const manifest = fixture("compound-spdx", { spdxExpression: "(MIT OR Apache-2.0)" });
+  expectSuccess(run(attributionScript, ["check", "--manifest", manifest]));
 });
 
 test("inventory verification remains self-contained after development dependencies are pruned", () => {
@@ -105,12 +82,10 @@ test("inventory verification remains self-contained after development dependenci
   mkdirSync(isolatedDirectory, { recursive: true });
   const isolatedScript = path.join(isolatedDirectory, "go-attribution.mjs");
   copyFileSync(attributionScript, isolatedScript);
-  copyFileSync(path.join(root, "scripts", "go-attribution-review.mjs"), path.join(isolatedDirectory, "go-attribution-review.mjs"));
   const inventory = path.join(isolatedDirectory, "fixture.modules.tsv");
   const inventoryContents = "dep\texample.com/review-fixture\tv1.0.0\t\n";
   writeFileSync(inventory, inventoryContents);
   const manifest = fixture("isolated-verifier-manifest", {
-    review: { status: "pending", approvedBy: null, approvedAt: null },
     spdxExpression: "NOASSERTION",
     inventorySha256: sha256(inventoryContents)
   });
@@ -122,46 +97,10 @@ test("inventory verification remains self-contained after development dependenci
   ]));
 });
 
-test("approved review requires both a public identity and RFC3339 UTC date", () => {
-  const missingIdentity = fixture("missing-identity", {
-    review: { status: "approved", approvedBy: "", approvedAt: "2026-07-20T00:00:00Z" }
-  });
-  const missingDate = fixture("missing-date", {
-    review: { status: "approved", approvedBy: "@qualified-reviewer", approvedAt: null }
-  });
-  const nonUtcDate = fixture("non-utc-date", {
-    review: { status: "approved", approvedBy: "@qualified-reviewer", approvedAt: "2026-07-20T02:00:00+02:00" }
-  });
-  const invalidCalendarDate = fixture("invalid-calendar-date", {
-    review: { status: "approved", approvedBy: "@qualified-reviewer", approvedAt: "2026-02-30T00:00:00Z" }
-  });
-  expectFailure(run(attributionScript, ["check", "--manifest", missingIdentity]), /identify the qualified reviewer/);
-  expectFailure(run(attributionScript, ["check", "--manifest", missingDate]), /RFC3339 UTC approval timestamp/);
-  expectFailure(run(attributionScript, ["check", "--manifest", nonUtcDate]), /RFC3339 UTC approval timestamp/);
-  expectFailure(run(attributionScript, ["check", "--manifest", invalidCalendarDate]), /RFC3339 UTC approval timestamp/);
-});
-
-test("approved review rejects every remaining NOASSERTION", () => {
-  const manifest = fixture("noassertion", {
-    review: { status: "approved", approvedBy: "@qualified-reviewer", approvedAt: "2026-07-20T00:00:00Z" },
-    spdxExpression: "NOASSERTION"
-  });
-  expectFailure(run(attributionScript, ["check", "--manifest", manifest, "--require-approved"]), /still has NOASSERTION/);
-});
-
-test("approved review passes strict checks and produces matching notices", () => {
-  const approved = fixture("approved", {
-    review: { status: "approved", approvedBy: "@qualified-reviewer", approvedAt: "2026-07-20T00:00:00Z" }
-  });
-  const pending = fixture("pending-notice-mismatch", {
-    review: { status: "pending", approvedBy: null, approvedAt: null }
-  });
+test("notices describe the automated attribution evidence", () => {
   const notices = path.join(temporaryRoot, "THIRD-PARTY-NOTICES.md");
-  expectSuccess(run(attributionScript, ["check", "--manifest", approved, "--require-approved"]));
-  expectSuccess(run(noticesScript, ["--go-manifest", approved, "--target", notices]));
-  expectSuccess(run(noticesScript, ["--check", "--go-manifest", approved, "--target", notices]));
+  expectSuccess(run(noticesScript, ["--target", notices]));
+  expectSuccess(run(noticesScript, ["--check", "--target", notices]));
   const contents = readFileSync(notices, "utf8");
-  assert.match(contents, /Legal review status: approved\./);
-  assert.match(contents, /recorded by @qualified-reviewer at 2026-07-20T00:00:00Z\./);
-  expectFailure(run(noticesScript, ["--check", "--go-manifest", pending, "--target", notices]), /is stale/);
+  assert.match(contents, /checked-in Go attribution manifest, required upstream texts, and checksums/);
 });

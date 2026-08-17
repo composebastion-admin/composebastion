@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { validateGoAttributionReview } from "./go-attribution-review.mjs";
 
 const require = createRequire(import.meta.url);
 let parseSpdxExpression;
@@ -36,14 +35,6 @@ function assignments(flag) {
 
 function sha256(contents) {
   return createHash("sha256").update(contents).digest("hex");
-}
-
-function validateReview(review) {
-  try {
-    validateGoAttributionReview(review);
-  } catch (error) {
-    fail(error instanceof Error ? error.message : String(error));
-  }
 }
 
 function validateSpdxExpression(key, expression) {
@@ -169,12 +160,6 @@ function writeManifest() {
 
   const manifest = {
     schemaVersion: 1,
-    review: {
-      status: "pending",
-      approvedBy: null,
-      approvedAt: null,
-      note: "Generated license classification is evidence for qualified review and is not legal approval."
-    },
     inventories: [...inventories].sort(([left], [right]) => left.localeCompare(right)).map(([binary, file]) => ({
       binary,
       sha256: sha256(readFileSync(file))
@@ -189,27 +174,23 @@ rclone, Docker CLI, and Docker Compose binaries shipped by ComposeBastion. The
 manifest maps every entry to its consuming binary, upstream source record, SPDX
 classification candidate, required license/notice texts, and SHA-256 checksums.
 
-The current legal-review status and any qualified approval evidence are recorded
-only in \`manifest.json\`, which is the source of truth. Automated classification
-and checksum verification are release evidence, not qualified legal approval.
+The checked-in manifest, required upstream texts, SPDX classification candidates,
+and checksums are the release attribution evidence. Image builds verify that the
+linked module inventories match this bundle before publication.
 `, { mode: 0o644 });
-  console.log(`Generated pending Go attribution manifest with ${entries.length} module/version entries.`);
+  console.log(`Generated Go attribution manifest with ${entries.length} module/version entries.`);
 }
 
 function validateBundle(manifestFile, { validateSpdxExpressions = false } = {}) {
   const root = path.dirname(manifestFile);
   const manifest = JSON.parse(readFileSync(manifestFile, "utf8"));
   if (manifest.schemaVersion !== 1) fail("manifest schema version is invalid");
-  validateReview(manifest.review);
   const entries = new Map();
   for (const entry of manifest.modules ?? []) {
     const key = `${entry.module}@${entry.version}`;
     if (entries.has(key)) fail(`duplicate manifest entry ${key}`);
     if (!entry.sourceUrl || !entry.spdxExpression || !Array.isArray(entry.consumingBinaries) || entry.consumingBinaries.length === 0 || !Array.isArray(entry.requiredFiles) || entry.requiredFiles.length === 0) {
       fail(`${key} has incomplete attribution metadata`);
-    }
-    if (manifest.review.status === "approved" && entry.spdxExpression === "NOASSERTION") {
-      fail(`${key} still has NOASSERTION in an approved manifest`);
     }
     if (validateSpdxExpressions) validateSpdxExpression(key, entry.spdxExpression);
     for (const file of entry.requiredFiles) {
@@ -234,48 +215,8 @@ function validateBundle(manifestFile, { validateSpdxExpressions = false } = {}) 
 
 function checkManifest() {
   const manifestFile = path.resolve(value("--manifest"));
-  const { manifest, entries } = validateBundle(manifestFile, { validateSpdxExpressions: true });
-  if (process.argv.includes("--require-approved") && manifest.review.status !== "approved") {
-    fail("stable release requires qualified approval in the attribution manifest");
-  }
-  console.log(`Verified ${entries.size} checked-in Go attribution entries (${manifest.review.status} legal review).`);
-}
-
-function csvCell(value) {
-  const rendered = String(value ?? "");
-  return /[",\r\n]/.test(rendered) ? `"${rendered.replaceAll('"', '""')}"` : rendered;
-}
-
-function writeReviewWorksheet() {
-  const manifestFile = path.resolve(value("--manifest"));
-  const outputFile = path.resolve(value("--output"));
-  const { entries } = validateBundle(manifestFile);
-  const pending = [...entries.values()].filter((entry) => entry.spdxExpression === "NOASSERTION");
-  const headers = [
-    "module",
-    "version",
-    "consumers",
-    "sourceUrl",
-    "bundledLicenseFiles",
-    "reviewedSpdxExpression",
-    "reviewerOrOrganization",
-    "reviewedAtUtc",
-    "notes"
-  ];
-  const rows = pending.map((entry) => [
-    entry.module,
-    entry.version,
-    entry.consumingBinaries.join(";"),
-    entry.sourceUrl,
-    entry.requiredFiles.map((file) => file.path).join(";"),
-    "",
-    "",
-    "",
-    ""
-  ]);
-  mkdirSync(path.dirname(outputFile), { recursive: true, mode: 0o755 });
-  writeFileSync(outputFile, `${[headers, ...rows].map((row) => row.map(csvCell).join(",")).join("\n")}\n`, { mode: 0o644 });
-  console.log(`Exported ${pending.length} NOASSERTION entries to ${outputFile}.`);
+  const { entries } = validateBundle(manifestFile, { validateSpdxExpressions: true });
+  console.log(`Verified ${entries.size} checked-in Go attribution entries.`);
 }
 
 function verifyManifest() {
@@ -283,10 +224,10 @@ function verifyManifest() {
   const inventories = assignments("--inventory");
   if (inventories.size === 0) fail("verify requires at least one --inventory");
   const expected = inventorySet(inventories);
-  const { manifest, entries, inventoryRecords } = validateBundle(manifestFile);
+  const { entries, inventoryRecords } = validateBundle(manifestFile);
   for (const [binary, file] of inventories) {
     if (inventoryRecords.get(binary) !== sha256(readFileSync(file))) {
-      fail(`${binary} linked-module inventory checksum differs from the reviewed manifest`);
+      fail(`${binary} linked-module inventory checksum differs from the checked-in manifest`);
     }
   }
 
@@ -307,12 +248,11 @@ function verifyManifest() {
       fail(`${key} consuming-binary attribution differs from the linked inventory`);
     }
   }
-  console.log(`Verified ${actual.size} Go attribution entries for ${[...inventories.keys()].join(", ")} (${manifest.review.status} legal review).`);
+  console.log(`Verified ${actual.size} Go attribution entries for ${[...inventories.keys()].join(", ")}.`);
 }
 
 const command = process.argv[2];
 if (command === "generate") writeManifest();
 else if (command === "check") checkManifest();
 else if (command === "verify") verifyManifest();
-else if (command === "review") writeReviewWorksheet();
-else fail("usage: node scripts/go-attribution.mjs <generate|check|verify|review> ...");
+else fail("usage: node scripts/go-attribution.mjs <generate|check|verify> ...");

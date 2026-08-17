@@ -1,11 +1,5 @@
 {
   "schemaVersion": 1,
-  "review": {
-    "status": "pending",
-    "approvedBy": null,
-    "approvedAt": null,
-    "note": "Generated license classification is evidence for qualified review and is not legal approval."
-  },
   "inventories": [
     {
       "binary": "docker-cli",

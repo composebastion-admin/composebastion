@@ -35,7 +35,6 @@
     "check:public-hygiene": "node scripts/check-public-hygiene.mjs",
     "check:gitleaks": "bash scripts/check-gitleaks.sh",
     "check:go-attribution": "node scripts/go-attribution.mjs check --manifest LICENSES/go-modules/manifest.json",
-    "check:go-attribution:release": "node scripts/go-attribution.mjs check --manifest LICENSES/go-modules/manifest.json --require-approved",
     "test:go-attribution-policy": "node --test scripts/go-attribution.test.mjs",
     "test:container-config-policy": "node --test scripts/container-config-policy.test.mjs",
     "test:release-image-policy": "node --test scripts/oci-rootfs.test.mjs",

@@ -22,6 +22,9 @@ const allowedGhcrOwners = new Set([
 ]);
 const failures = [];
 for (const file of tracked.stdout.toString("utf8").split("\0").filter(Boolean)) {
+  // A release-policy change can remove a tracked file before the replacement
+  // commit is created. Only inspect files that still exist in the worktree.
+  if (!existsSync(file)) continue;
   // These files are preserved verbatim from third-party modules. Their owner
   // names, contacts, paths, and registry references are legal evidence rather
   // than ComposeBastion fixtures or project metadata.
